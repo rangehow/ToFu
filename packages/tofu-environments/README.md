@@ -68,11 +68,34 @@ never resubmitted. A terminal success requires a proven zero exit code.
 Native tools expose `compute_plan`, `compute_submit` and `compute_status` through
 the existing environments plugin. The private Hope adapter requires trusted host ports; live GPU acceptance
 is not yet verified. `compute_cancel` requests a scoped stop under exact plan
-authorization. It persists the stop claim before the provider call, never
-replays an unknown stop, and requires terminal readback through compute_status. `JobService.collect` streams declared
+authorization. At the SDK boundary, `JobService.inspect(actor, operation_id)`
+validates the owned record and plan seal without resolving or calling a provider.
+`cancel` records exact-plan Stop intent before attempting provider progress.
+For a planned job this prevents submission; for a job that may have been
+submitted, a persisted `requested` intent is not proof of external cancellation.
+It remains inspectable even when provider resolution fails.
+
+`reconcile_reference` recovers and checkpoints an owned reference without a
+subsequent provider status read. `status` never issues a stop. An embedding can
+explicitly call `progress_cancellation(actor, operation_id)` to advance an existing
+exact-plan intent after reconciliation; it cannot grant fresh cancellation
+authority. A claimed or uncertain stop is never reissued, and a definitive
+rejection requires fresh public authorization. Only terminal readback establishes
+an external outcome; this SDK boundary does not establish provider cancellation,
+drain, or native runtime parity.
+
+Trusted embeddings may pass `submit(..., before_submit=check)` to recheck
+current admission before claiming and immediately before the provider call.
+The no-argument check may raise or return `False` to abort; it is not an
+authorizer. A post-claim refusal is a definitive non-submission. Receipt
+settlement preserves concurrent Stop intent and never repeats the provider write.
+
+`JobService.collect` streams declared
 outputs from an owned successful job into a private directory, checks the total
 byte bound, and seals per-file SHA256/size receipts through the CAS repository.
-Repeated collection must match those receipts. Providers implement
+Repeated collection must match those receipts. Collection pins no-follow POSIX
+directory handles; snapshot cleanup uses Python 3.10 descriptor-relative APIs
+and preserves the primary failure if cleanup also fails. Providers implement
 `read_job_output` with deadlines, owned-job checks and chunks at most 1 MiB;
 credentials and presigned URLs must never enter returned receipts. This generic
 collection API does not supply a platform transport.

@@ -7,7 +7,7 @@ never be promoted to an interactive-latency/capacity pass.
 from __future__ import annotations
 
 import json
-import math
+import signal
 from pathlib import Path
 
 from benchmarks.conversation_provenance import (
@@ -15,12 +15,45 @@ from benchmarks.conversation_provenance import (
     capture_sources,
     qualify_pipeline_sources,
     qualify_provenance,
+    sqlite_identity_failure,
+)
+
+from benchmarks.conversation_receipts import (
+    TERMINAL, authority_path, count, full_sqlite, latency_percentiles, latency_phase_gaps, linux_pid,
+    metric_origin_gaps, number, obj, unexpected_terminal_evidence, workload_complete,
 )
 
 POLICY = json.loads(Path(__file__).with_name('conversation_concurrency_contract.json').read_text())
 
 
+REPORT_FORMAT = 'tofu.conversation-concurrency/v5'
+WRITER_METRICS_BOUNDARIES = ('admission_storage_metrics', 'productive_start_storage_metrics', 'storage_metrics')
+CRASH_CUTPOINTS = ('all_running_before_stream_release', 'after_settlement')
+SQLITE_BOUNDARIES = ('launch', 'admission_storage_metrics', 'reopen_running',
+                     'productive_start_storage_metrics', 'storage_metrics', 'reopen_final', 'final')
+
+
+def crash_coverage(report, authority):
+    receipts = report.get('crash_recovery_receipts')
+    directory = authority_path(authority.get('authority_directory'))
+    if not isinstance(receipts, dict) or not isinstance(directory, str) or not directory:
+        return False
+    chain = []
+    for name in CRASH_CUTPOINTS:
+        row = receipts.get(name)
+        if (not isinstance(row, dict) or type(row.get('exit_code')) is not int
+                or row['exit_code'] != -signal.SIGKILL
+                or authority_path(row.get('authority_directory')) != directory):
+            return False
+        pids = [row.get(key) for key in ('killed_pid', 'reopened_pid')]
+        if not all(map(linux_pid, pids)) or pids[0] == pids[1]:
+            return False
+        chain.append(pids)
+    return chain[0][1] == chain[1][0]
+
+
 def assess(report: dict, *, current_sources: dict | None = None) -> dict:
+    report = obj(report)
     receipt = report.get('provenance')
     # An unsupported receipt cannot be qualified by any checkout inventory.
     # Supported receipts still require a fresh capture, including local edits.
@@ -36,6 +69,13 @@ def assess(report: dict, *, current_sources: dict | None = None) -> dict:
         receipt, backend=report.get('backend'),
         binary_sha256=report.get('binary_sha256'), authority=authority,
         current_sources=current_sources)
+    extra = ('report missing current evidence format; replay historical reports with their pinned checker'
+             if report.get('format') != REPORT_FORMAT else
+             sqlite_identity_failure(report, SQLITE_BOUNDARIES) if report.get('backend') == 'sqlite' else None)
+    if extra:
+        provenance['failures'].append(extra)
+        provenance['frozen_failures'].append(extra)
+        provenance['current_source_qualified'] = provenance['frozen_build_comparable'] = False
     failures = list(provenance['failures'])
     sources = report.get('provenance', {})
     sources = sources.get('sources_before', {}) if isinstance(sources, dict) else {}
@@ -83,57 +123,101 @@ def assess(report: dict, *, current_sources: dict | None = None) -> dict:
     if not latency_eligible:
         failures.append('diagnostic profiling enabled or source provenance changed; latency comparison is not qualified')
     coverage = []
+    sizes = {}
     for field in ('conversations', 'rounds', 'chunk_bytes'):
         required = POLICY['minimum_' + field]
-        if report.get(field, 0) < required:
-            coverage.append(f'{field}: {report.get(field, 0)} < {required}')
-    def measured_restart(field):
         value = report.get(field)
-        return (isinstance(value, (int, float)) and not isinstance(value, bool)
-                and math.isfinite(value) and value >= 0)
+        sizes[field] = value if type(value) is int and value >= 0 else 0
+        if sizes[field] < required:
+            coverage.append(f'{field}: {sizes[field]} < {required}')
+    def measured_restart(field):
+        return number(report.get(field))
 
-    expected_conversations = report.get('conversations', 0)
-    if (not report.get('restart_while_running')
+    expected_conversations = sizes['conversations']
+    if (report.get('restart_while_running') is not True
             or not measured_restart('running_restart_ms')
-            or report.get('peak_simultaneous_running') != expected_conversations
-            or report.get('recovered_running') != expected_conversations):
+            or not count(report.get('peak_simultaneous_running'), expected_conversations)
+            or not count(report.get('recovered_running'), expected_conversations)):
         coverage.append('running crash/reopen not measured for all requested conversations')
     if (not measured_restart('restart_ms')
-            or report.get('recovered_completed') != expected_conversations
-            or report.get('recovered_exact_content') != expected_conversations
+            or not count(report.get('recovered_completed'), expected_conversations)
+            or not count(report.get('recovered_exact_content'), expected_conversations)
             or (report.get('carry_stream_events')
-                and report.get('recovered_exact_replay') != expected_conversations)):
+                and not count(report.get('recovered_exact_replay'), expected_conversations))):
         coverage.append('post-completion crash/reopen not measured for all requested conversations')
     integrity_code = report.get('integrity_returncode')
     if not isinstance(integrity_code, int) or isinstance(integrity_code, bool) or integrity_code != 0:
         coverage.append('integrity verification not completed successfully')
     if authority.get('crash_scope') not in ('sigkill', 'in-process-abandon'):
         coverage.append('process-crash mechanism not verified')
+    if authority.get('crash_scope') == 'sigkill' and not crash_coverage(report, authority):
+        coverage.append('verified SIGKILL and same-store reopen receipts missing or contradictory')
     if authority.get('crash_scope') == 'in-process-abandon':
         coverage.append('in-process abandon is not a process-crash durability test')
+    if (any(type(report.get(key)) is not bool
+            for key in ('terminal_barrier', 'carry_stream_events', 'recover_interrupted'))
+            or report.get('stream_event_kind') not in ('phase', 'delta')
+            or (report.get('terminal_barrier') is False and unexpected_terminal_evidence(report))
+            or TERMINAL in obj(report.get('sqlite_loaded_artifacts'))):
+        coverage.append('workload mode flags malformed')
     if report.get('recover_interrupted'):
         coverage.append('streaming skipped for interrupted recovery')
-    if report.get('stream_interval_ms', float('inf')) > POLICY['maximum_stream_interval_ms']:
+    cadence = report.get('stream_interval_ms')
+    if type(cadence) not in (int, float) or not 0 <= cadence <= POLICY['maximum_stream_interval_ms']:
         coverage.append('scheduled offered load not measured at required cadence')
     if (report.get('rpc_deadline_seconds') != POLICY['rpc_deadline_seconds']
             or authority.get('rpc_deadline_seconds') != POLICY['rpc_deadline_seconds']):
         coverage.append('common RPC deadline not verified for this backend')
     if report.get('durability') != 'strict':
         coverage.append('strict durability not verified')
-    measurements = report.get('latency_ms', {})
+    if report.get('backend') != 'sqlite' and 'sqlite_loaded_artifacts' in report:
+        coverage.append('SQLite mapping evidence on a non-SQLite authority')
+    coverage.extend(metric_origin_gaps(report, CRASH_CUTPOINTS))
+    coverage.extend(latency_phase_gaps(report))
+    boundaries = WRITER_METRICS_BOUNDARIES + ((TERMINAL,) if report.get('terminal_barrier') is True else ())
+    if report.get('backend') == 'tofudb' and not all(
+            isinstance(report.get(key), dict) and report[key].get('walDurability') == 'strict'
+            for key in boundaries):
+        coverage.append('effective native Strict durability missing or mismatched')
+    if report.get('backend') == 'sqlite':
+        witnesses = report.get('sqlite_loaded_artifacts')
+        if obj(authority.get('sqlite_fastpath')).get('active') is not False:
+            coverage.append('SQLite WAL non-relocation not verified')
+        if TERMINAL in boundaries and not full_sqlite(obj(report.get(TERMINAL)).get('writer_configuration_at_open')):
+            coverage.append('SQLite terminal writer WAL/FULL and active coalescing not verified')
+        for boundary in SQLITE_BOUNDARIES:
+            row = witnesses.get(boundary) if isinstance(witnesses, dict) else None
+            config = row.get('writer_configuration_at_open') if isinstance(row, dict) else None
+            if not full_sqlite(config):
+                coverage.append(f'SQLite writer WAL/FULL and active coalescing not verified at {boundary}')
+            if boundary in WRITER_METRICS_BOUNDARIES:
+                metrics = report.get(boundary)
+                provenance_rows = report.get('storage_metrics_provenance')
+                origin = provenance_rows.get(boundary) if isinstance(provenance_rows, dict) else None
+                incarnation = int(boundary != 'admission_storage_metrics')
+                if (not isinstance(row, dict) or not isinstance(metrics, dict)
+                        or not full_sqlite(metrics.get('writer_configuration_at_open'))
+                        or metrics.get('writer_configuration_at_open') != config
+                        or not isinstance(origin, dict) or origin.get('process_id') != row.get('pid')
+                        or origin.get('authority_incarnation') != incarnation):
+                    coverage.append(f'SQLite writer receipt contradicts source metrics or incarnation at {boundary}')
+    measurements = obj(report.get('latency_ms'))
     metrics = {}
     for stage, budget in POLICY['p99_budget_ms'].items():
-        summary = measurements.get(stage, {})
-        expected = report.get('conversations', 0) * (report.get('rounds', 0) if stage == 'stream_scheduled' else 1)
+        summary = obj(measurements.get(stage))
+        expected = expected_conversations * (sizes['rounds'] if stage == 'stream_scheduled' else 1)
         value = summary.get('p99')
-        complete = expected > 0 and summary.get('count') == expected
-        valid = isinstance(value, (int, float)) and math.isfinite(value) and value >= 0
+        complete = expected > 0 and count(summary.get('count'), expected)
+        valid = number(value)
+        if summary and not latency_percentiles(summary, expected):
+            coverage.append(f'{stage}: malformed or unordered latency percentiles')
+            valid = False
         passed = complete and valid and value <= budget
-        metrics[stage] = {'p99_ms': value, 'budget_ms': budget, 'samples': summary.get('count', 0),
+        metrics[stage] = {'p99_ms': value if valid else None, 'complete': complete and valid, 'budget_ms': budget, 'samples': summary.get('count', 0),
                           'expected_samples': expected, 'passed': passed}
         if not passed:
             failures.append(f'{stage}: missing/invalid samples or P99 above {budget} ms')
-    correctness = bool(report.get('correctness_passed'))
+    correctness = report.get('correctness_passed') is True and workload_complete(report, expected_conversations, sizes['rounds'])
     return {'policy': POLICY['format'], 'correctness_passed': correctness,
             'current_source_qualified': provenance['current_source_qualified'],
             'frozen_build_comparable': provenance['frozen_build_comparable'],

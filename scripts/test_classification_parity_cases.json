@@ -1,0 +1,511 @@
+{
+  "$comment": "Hand-authored input of scripts/gen_test_classification.py. One entry per row of the 'Behaviours that are easy to lose' table in docs/RUST_REWRITE_EVIDENCE.md, matched by exact Area and Behaviour text. 'tests' names tracked test files (a path ending in '/' names a directory of them) and, where identifiable, the test functions ('name' or 'Class::name'; JS: the test title) that pin the row. A row without a pinning test keeps 'tests': [] and an explicit 'gap'; a partial pin also carries a 'gap'. The generator validates every path and function.",
+  "cases": [
+    {
+      "area": "Resources",
+      "behaviour": "Admission, concurrency and fan-out are always unlimited; only retention may follow the launch probe",
+      "tests": [
+        {"path": "tests/meta/test_hardware_never_limits_work.py"}
+      ]
+    },
+    {
+      "area": "Resources",
+      "behaviour": "No refusal on RSS, memory headroom or cgroup pressure; no `server_busy`; no worker recycling; executors start every accepted job",
+      "tests": [
+        {"path": "tests/meta/test_hardware_never_limits_work.py"},
+        {"path": "tests/resource_control/test_thousand_conversations.py", "functions": ["test_retired_rss_knobs_cannot_shrink_an_explicit_worker_count"]}
+      ]
+    },
+    {
+      "area": "Resources",
+      "behaviour": "Coordinator delegation ignores a persisted `maxConcurrent`",
+      "tests": [
+        {"path": "tests/project_mod/test_coordinator_workers.py", "functions": ["test_workers_have_no_spend_or_concurrency_ceiling"]}
+      ]
+    },
+    {
+      "area": "Resources",
+      "behaviour": "Tofu-started work writes `oom_score_adj=1000`; server processes keep the inherited value",
+      "tests": [
+        {"path": "tests/project_mod/test_work_process_oom_priority.py"}
+      ]
+    },
+    {
+      "area": "Resources",
+      "behaviour": "Durable state is reclaimed only by reachability, never by budget; 1,000 idle conversations add no resident state",
+      "tests": [
+        {"path": "tests/resource_control/test_thousand_conversations.py", "functions": ["test_all_execution_owners_admit_a_thousand_conversations"]}
+      ]
+    },
+    {
+      "area": "Defensive",
+      "behaviour": "A failing `__str__` cannot replace the original failure or its recovery class",
+      "tests": [
+        {"path": "tests/tasks_pkg/test_tool_diagnostic_recovery.py", "functions": [
+          "test_unprintable_failure_keeps_original_classification_and_settlement",
+          "test_secondary_unprintable_diagnostic_failure_cannot_replace_tool_result"
+        ]}
+      ]
+    },
+    {
+      "area": "Defensive",
+      "behaviour": "Tool calls take no workspace lease; per-path mutex for one read-modify-write, sorted, reentrant; calls in a round run in parallel",
+      "tests": [
+        {"path": "tests/project_mod/test_tool_calls_take_no_workspace_lease.py"}
+      ]
+    },
+    {
+      "area": "Defensive",
+      "behaviour": "Fair shared/exclusive admission lapses on its own; a holder never yields to itself",
+      "tests": [
+        {"path": "tests/project_mod/test_workspace_lease_conflict_model.py"}
+      ]
+    },
+    {
+      "area": "Defensive",
+      "behaviour": "Atomic writers own the temp descriptor and close it in every path; ENOENT during a racing replace on FUSE is not absence",
+      "tests": [
+        {"path": "tests/json_store/test_atomic_writer_lifecycle.py"},
+        {"path": "tests/json_store/test_replace_window_reads.py"}
+      ]
+    },
+    {
+      "area": "Defensive",
+      "behaviour": "Heartbeat persistence cannot block the serving loop",
+      "tests": [
+        {"path": "tests/server/test_heartbeat_persistence_isolation.py"}
+      ]
+    },
+    {
+      "area": "Defensive",
+      "behaviour": "Storage socket replies, half-closes, then waits for client EOF",
+      "tests": [
+        {"path": "tests/storage/test_storage_server_overload.py", "functions": [
+          "test_request_without_keep_alive_keeps_the_one_shot_half_close",
+          "test_client_that_keeps_reply_socket_open_cannot_retain_handler",
+          "test_fragmented_response_finishes_before_bounded_handler_release"
+        ]}
+      ]
+    },
+    {
+      "area": "Defensive",
+      "behaviour": "A finalizer (`Drop`) never blocks; an interrupted close restores the open state",
+      "tests": [
+        {"path": "tests/tofudb/test_embedded_runtime_lifecycle.py", "functions": [
+          "test_an_interrupted_close_leaves_the_runtime_open_and_closable",
+          "test_the_finalizer_never_waits_for_a_runtime_left_mid_close",
+          "test_the_finalizer_never_joins_and_closes_only_a_quiescent_runtime"
+        ]}
+      ]
+    },
+    {
+      "area": "Defensive",
+      "behaviour": "Timeout, cancellation, exit status and error kind are reported independently",
+      "tests": [
+        {"path": "tests/tasks_pkg/test_run_command_descendant_retirement.py", "functions": [
+          "test_finished_command_keeps_its_result_and_stops_what_it_left_running",
+          "test_unconfirmed_retirement_keeps_the_result_and_the_record"
+        ]}
+      ],
+      "gap": "Only the second half of DEFENSIVE_PATTERNS.md 'Report orthogonal outcomes independently' (a command's result survives its group's retirement) has a located test. No test was found that asserts timed_out, cancellation, exit status and error kind of one tool round are reported as independent facts (round_entry status in lib/tasks_pkg/tool_dispatch/_pipeline.py)."
+    },
+    {
+      "area": "Defensive",
+      "behaviour": "Post-commit notices publish after the lock, in commit order, from one publisher",
+      "tests": [
+        {"path": "tests/turn_lifecycle/test_commit_wakeup_publication.py"}
+      ]
+    },
+    {
+      "area": "Defensive",
+      "behaviour": "Signal handling is a self-pipe; 500 SIGTERMs stop the host exactly once",
+      "tests": [
+        {"path": "tests/server/test_execution_host_signal_stop.py"}
+      ]
+    },
+    {
+      "area": "Defensive",
+      "behaviour": "Helpers spawn from the code loaded at boot, never the live checkout (in Rust: a spawned helper matches the running binary's digest)",
+      "tests": [
+        {"path": "tests/runtime_pinned_helper_source/test_pinned_helper_source.py", "functions": [
+          "test_spawn_path_keeps_import_time_source_after_checkout_update",
+          "test_removed_copy_or_directory_is_rewritten_from_memory",
+          "test_versions_loaded_by_different_callers_never_overwrite_each_other"
+        ]}
+      ]
+    },
+    {
+      "area": "Defensive",
+      "behaviour": "Untrusted output gets random exclusive paths in a 0700 directory; children get a scrubbed environment",
+      "tests": [
+        {"path": "tests/meta/test_child_environment_builder.py", "functions": ["test_tofu_started_work_passes_an_explicit_environment"]},
+        {"path": "tests/tools/test_process_environment.py", "functions": ["test_diagnostic_uses_exact_command_environment_and_hides_credentials"]}
+      ],
+      "gap": "Only the scrubbed/explicit child environment half has located tests. No test was found that pins files derived from model, tool or remote output to a random exclusive-create name inside a 0700 directory (DEFENSIVE_PATTERNS.md 'Untrusted output gets no predictable path and no inherited secrets')."
+    },
+    {
+      "area": "Defensive",
+      "behaviour": "Chaos fault contracts keep their documented outcomes",
+      "tests": [
+        {"path": "tests/chaos/"}
+      ]
+    },
+    {
+      "area": "Settlement",
+      "behaviour": "Terminal state is monotonic; settlement and terminal projection commit together; a terminal queue drain dispatches at most one successor",
+      "tests": [
+        {"path": "tests/turn_lifecycle/test_turn_lifecycle.py", "functions": ["test_terminal_projection_and_attempt_cas_share_one_turn"]}
+      ],
+      "gap": "TURN_SETTLEMENT.md 'Invariants to test' names the primary suite only; no test function in it was identified by name for terminal monotonicity or for 'a terminal queue drain dispatches at most one successor'."
+    },
+    {
+      "area": "Settlement",
+      "behaviour": "One `ABORT_CAUSES` table; an unknown reason reads as a person's Stop and logs ERROR once",
+      "tests": [
+        {"path": "tests/turn_lifecycle/test_abort_cause_table.py"}
+      ]
+    },
+    {
+      "area": "Settlement",
+      "behaviour": "A failed terminal commit replays the retained terminal event; nothing reaches the browser before commit",
+      "tests": [
+        {"path": "tests/turn_lifecycle/test_turn_lifecycle.py", "functions": [
+          "test_terminal_storage_outage_retries_turn_before_diagnostics",
+          "test_terminal_rejection_retains_ownership_until_maintenance_ack",
+          "test_terminal_lost_ack_requires_durable_witness_before_once_only_release"
+        ]},
+        {"path": "tests/turn_lifecycle/test_terminal_event_retry.py", "functions": ["test_terminal_transport_retry_returns_the_original_success"]}
+      ]
+    },
+    {
+      "area": "Settlement",
+      "behaviour": "Interruption recovery rewinds to the last protocol-valid boundary and resends byte-identically: no prefill, no synthetic \"continue\"",
+      "tests": [
+        {"path": "tests/llm/test_upstream_turn_replay.py"}
+      ]
+    },
+    {
+      "area": "Settlement",
+      "behaviour": "A Stop ack means accepted, not settled; late frames raise typed cancellation, never `server_busy`",
+      "tests": [
+        {"path": "tests/tasks_pkg/test_internal_delivery_error_attribution.py", "functions": [
+          "test_cancelled_delivery_settles_interrupted_without_capacity_error",
+          "test_late_delivery_cancellation_preserves_stamped_terminal"
+        ]}
+      ]
+    },
+    {
+      "area": "Settlement",
+      "behaviour": "`git_guard` refusals stay failed with no automatic retry",
+      "tests": [
+        {"path": "tests/tools/test_tool_not_available_envelope.py", "functions": ["test_git_guard_remains_failed_and_conditionally_retryable"]},
+        {"path": "tests/turn_lifecycle/test_upstream_auto_recovery.py", "functions": [
+          "test_automatic_recovery_respects_the_shared_failure_policy",
+          "test_blocked_recovery_does_not_reset_content_or_spend_an_attempt"
+        ]}
+      ]
+    },
+    {
+      "area": "Settlement",
+      "behaviour": "Background-command receipt and queue-row removal commit in one transaction; ACK only after verified completion",
+      "tests": [
+        {"path": "tests/background/test_background_delivery_receipt.py", "functions": [
+          "test_receipt_first_event_and_queue_removal_share_one_replay_commit",
+          "test_stale_attempt_never_acknowledges_delivery"
+        ]}
+      ]
+    },
+    {
+      "area": "Settlement",
+      "behaviour": "A steer receipt stays within 64 KiB even for a 1.2 MB Turn",
+      "tests": [
+        {"path": "tests/conversation/test_conversation_command_inject_mode.py", "functions": ["test_large_steer_receipt_is_bounded_and_replay_is_exactly_once"]}
+      ]
+    },
+    {
+      "area": "Fallback",
+      "behaviour": "A content-filter or refusal skips same-model retries, bills `R<n>-REFUSED`, discards partial text and retries once on the fallback",
+      "tests": [
+        {"path": "tests/tasks_pkg/test_model_refusal_fallback.py", "functions": [
+          "test_refusal_discards_partial_output_and_answers_on_fallback",
+          "test_fallback_refusal_also_settles_with_both_attempts_billed"
+        ]}
+      ]
+    },
+    {
+      "area": "Fallback",
+      "behaviour": "A refusal applies to one request; the next returns to the primary except the single request repeating the refused payload; every switch emits `MODEL_FALLBACK`",
+      "tests": [
+        {"path": "tests/tasks_pkg/test_model_refusal_fallback.py", "functions": [
+          "test_next_request_after_refusal_returns_to_primary_and_audits_it",
+          "test_refusal_on_the_return_probe_falls_back_for_that_request_only",
+          "test_next_turn_tries_the_primary_after_a_refused_previous_turn",
+          "test_switch_back_and_fallback_rounds_reach_the_lead_audit"
+        ]}
+      ]
+    },
+    {
+      "area": "Fallback",
+      "behaviour": "Empty or truncated stop is not a content filter; 402 and 429 never stamp one",
+      "tests": [
+        {"path": "tests/tasks_pkg/test_empty_stop_not_content_filter.py"},
+        {"path": "tests/tasks_pkg/test_model_refusal_fallback.py", "functions": ["test_credit_and_rate_limit_stay_out_of_the_refusal_lane"]}
+      ]
+    },
+    {
+      "area": "Fallback",
+      "behaviour": "A resumed Attempt runs on the accepted model, not the last fallback",
+      "tests": [
+        {"path": "tests/tasks_pkg/test_resume_model_continuation.py", "functions": [
+          "test_resume_returns_to_accepted_model_after_a_fallback",
+          "test_run_task_resumes_on_the_accepted_model"
+        ]}
+      ]
+    },
+    {
+      "area": "Tool effects",
+      "behaviour": "Non-read-only calls commit an intent with an exact storage ack before entry; reads pay nothing",
+      "tests": [
+        {"path": "tests/tasks_pkg/test_tool_outcome_finality.py"}
+      ]
+    },
+    {
+      "area": "Tool effects",
+      "behaviour": "`entered` is not success; post-entry exceptions are `unknown`; only typed pre-entry refusals become `not_started`",
+      "tests": [
+        {"path": "tests/tasks_pkg/test_tool_outcome_finality.py"},
+        {"path": "tests/tasks_pkg/test_tool_admission_refusal_effect.py"}
+      ]
+    },
+    {
+      "area": "Tool effects",
+      "behaviour": "A lost-executor `write_file` gets a non-retryable `tool_effect_unknown` receipt; a new write to that target needs an earlier-round inspection and, if still unknown, a human gate",
+      "tests": [
+        {"path": "tests/tasks_pkg/test_file_recovery_admission.py"}
+      ]
+    },
+    {
+      "area": "Tool effects",
+      "behaviour": "After restart, only `unknown`-class cut calls block resume; a call stopped before it ran is repeatable",
+      "tests": [
+        {"path": "tests/tools/test_restart_effect_class.py"}
+      ]
+    },
+    {
+      "area": "Restart",
+      "behaviour": "One commit point (stopping the old worker); past it the manager always ends serving",
+      "tests": [
+        {"path": "tests/server/test_restart_always_serves.py"}
+      ]
+    },
+    {
+      "area": "Restart",
+      "behaviour": "A failed or slow engine build never blocks an application restart",
+      "tests": [
+        {"path": "tests/server/test_execution_composition.py", "functions": [
+          "test_retained_storage_skips_preparation_and_pins_its_engine",
+          "test_engine_failure_retains_the_ready_storage_host_and_replaces_the_application"
+        ]},
+        {"path": "tests/storage/test_native_storage_connection.py", "functions": ["test_application_attaches_to_a_retained_engine_without_admitting_the_checkout"]}
+      ]
+    },
+    {
+      "area": "Restart",
+      "behaviour": "A refused restart names every bridge and reason; outcomes go only to `logs/server-manager.log`",
+      "tests": [
+        {"path": "tests/lifecycle_approval/test_restart_outcome_visible.py"}
+      ]
+    },
+    {
+      "area": "Restart",
+      "behaviour": "Preparation phases and timing fields; the browser warns at 180 s but keeps observing",
+      "tests": [
+        {"path": "tests/server/test_restart_preparation_progress.py", "functions": [
+          "test_preparation_projection_preserves_approval_and_uses_contract",
+          "test_unknown_progress_and_shutdown_records_cannot_create_restart_authority"
+        ]},
+        {"path": "tests/restart_preparation.test.cjs", "functions": [
+          "unknown and older phases cannot replace the last confirmed phase",
+          "automatic retry relays on the same bounded observer and keeps elapsed progress"
+        ]}
+      ],
+      "gap": "No located test pins the 180 s warn-once threshold itself (docs/modules/infra_runtime.md 'Restart observation'); the restart-observation unit test pins phase ordering, retry and non-overlapping observation."
+    },
+    {
+      "area": "Restart",
+      "behaviour": "Quiesced Turns resume exactly once from their checkpoint, including Routers and swarm masters",
+      "tests": [
+        {"path": "tests/conversation/test_restart_resume.py", "functions": [
+          "test_interrupted_chats_resume_from_their_checkpoint_once",
+          "test_the_restart_resume_pass_and_project_dispatch_resume_one_interruption_once"
+        ]},
+        {"path": "tests/swarm/test_swarm_restart_continue.py"}
+      ]
+    },
+    {
+      "area": "Restart",
+      "behaviour": "Landings and exports hold a protected-steps marker; restart never boots a half-landed tree",
+      "tests": [
+        {"path": "tests/lifecycle_approval/test_update_restart_guard.py"}
+      ]
+    },
+    {
+      "area": "Delegation authority",
+      "behaviour": "Forwarded human input is byte-identical text from a genuine human Turn; a router note is never authority",
+      "tests": [
+        {"path": "tests/router/test_lead_delegation.py"}
+      ]
+    },
+    {
+      "area": "Delegation authority",
+      "behaviour": "Live restart needs a human decision or the owner's revocable Global Router grant, bound to one router and revision; every use audited",
+      "tests": [
+        {"path": "tests/router/test_owner_delegation.py"},
+        {"path": "tests/router/test_delegated_action.py"}
+      ]
+    },
+    {
+      "area": "Delegation authority",
+      "behaviour": "Continuations keep the full role catalog; owner-only decisions are gated at execution",
+      "tests": [
+        {"path": "tests/project_mod/test_continuation_catalog.py"},
+        {"path": "tests/meta/test_lead_owner_only_boundaries.py"}
+      ]
+    },
+    {
+      "area": "Delegation authority",
+      "behaviour": "Synthetic users never inherit human authorization",
+      "tests": [
+        {"path": "tests/conversation/test_worker_attempt_real_start.py", "functions": ["test_synthetic_caller_cannot_borrow_owner_resume_authority"]},
+        {"path": "tests/conversation/test_coordinator_session_control.py", "functions": ["test_synthetic_source_and_stale_revision_cannot_launch"]},
+        {"path": "tests/channels/test_channel_initiator.py", "functions": ["test_stored_channel_turn_keeps_its_initiator_and_is_never_human_authority"]},
+        {"path": "tests/compaction/test_compaction_summary_authority.py", "functions": ["test_latest_assistant_conclusions_are_not_human_authorization"]},
+        {"path": "tests/project_mod/test_continuation_catalog.py", "functions": ["test_a_nonhuman_wake_forwards_nothing_as_the_owners"]}
+      ]
+    },
+    {
+      "area": "Hope credentials",
+      "behaviour": "The Hope queue ban is re-read on every submit, rerun, clone and retry; a missing policy enforces the default",
+      "tests": [
+        {"path": "tests/tools/test_hope_queue_policy.py"},
+        {"path": "tests/project_mod/test_hope_queue_command_guard.py"}
+      ]
+    },
+    {
+      "area": "Hope credentials",
+      "behaviour": "The Hope token is read in place, never copied or logged, and verified on an endpoint that checks it; the MLP refresh token rotates and must never be copied (a copy revokes the host session); the patrol never renews or prompts",
+      "tests": [
+        {"path": "tests/compute_patrol/test_probe.py", "functions": [
+          "test_the_probe_can_never_prompt_end_to_end_through_main",
+          "test_an_mlp_auth_refusal_is_a_rejected_ticket"
+        ]}
+      ]
+    },
+    {
+      "area": "Compaction",
+      "behaviour": "No wall-clock deadline on summaries; only verified complete outputs qualify; failure keeps the sources; an overfull prompt is refused, never head-truncated",
+      "tests": [
+        {"path": "tests/compaction/test_summary_completion_policy.py"}
+      ]
+    },
+    {
+      "area": "Compaction",
+      "behaviour": "One provider-independent compactor; L1 and L2 planned jointly on a detached candidate, adopted durably",
+      "tests": [
+        {"path": "tests/compaction/test_compaction_joint_projection.py"}
+      ]
+    },
+    {
+      "area": "Compaction",
+      "behaviour": "Credential outages and rotation retry within the documented bound and settle failed attempts authentically",
+      "tests": [
+        {"path": "tests/compaction/test_summary_credential_resilience.py"},
+        {"path": "tests/compaction/test_summary_credential_rotation.py"}
+      ]
+    },
+    {
+      "area": "Compaction",
+      "behaviour": "The full active checklist survives final admission and compaction",
+      "tests": [
+        {"path": "tests/goals/test_checklist_context.py", "functions": [
+          "test_required_checklist_overflow_refuses_instead_of_dispatching_partial_state",
+          "test_compaction_carries_state_without_emitting_another_intervention"
+        ]}
+      ]
+    },
+    {
+      "area": "Network",
+      "behaviour": "Only proven connection-setup failures change route; status codes, read timeouts and ambiguous disconnects never replay",
+      "tests": [
+        {"path": "tests/proxy/test_unified_network.py", "functions": [
+          "test_sync_request_fails_over_before_delivery_with_the_same_body",
+          "test_sync_ambiguous_delivery_never_replays",
+          "test_old_connect_context_does_not_make_a_response_failure_replayable"
+        ]}
+      ]
+    },
+    {
+      "area": "Network",
+      "behaviour": "Provider pacing is FIFO per quota lane and learns limits only from provider signals",
+      "tests": [
+        {"path": "tests/proxy/test_provider_pacing.py"},
+        {"path": "tests/llm_dispatch/test_provider_pacing_loopback.py"}
+      ]
+    },
+    {
+      "area": "Storage",
+      "behaviour": "Replay-safe calls wait out transient errors with no total window while the authority is alive; `request_not_dispatched` must be literal `true`",
+      "tests": [
+        {"path": "tests/storage/test_storage_v2_managed_recovery.py", "functions": ["test_live_authority_is_waited_out_past_every_old_window"]},
+        {"path": "tests/storage/test_storage_client_retry.py", "functions": ["test_command_retries_only_when_server_proves_request_not_dispatched"]},
+        {"path": "tests/agent_core/test_storage_error_contract.py"}
+      ]
+    },
+    {
+      "area": "Storage",
+      "behaviour": "A queued Turn pair runs before any later Turn-less source",
+      "tests": [
+        {"path": "tests/conversation/test_conversation_command_inject_mode.py", "functions": ["test_queued_turns_run_in_turn_order_whatever_a_later_source_priority"]},
+        {"path": "tests/message_queue/test_message_queue.py", "functions": ["TestMessageQueueAPI::test_get_queue_returns_authoritative_order"]}
+      ]
+    },
+    {
+      "area": "Storage",
+      "behaviour": "Canonical JSON bytes (sorted keys, orjson number and string formatting) match where digests, receipts or storage.v1 depend on them",
+      "tests": [
+        {"path": "tests/storage/test_storage_protocol_json.py", "functions": [
+          "test_storage_encoders_reject_non_finite_numbers",
+          "test_storage_encoders_preserve_finite_numbers",
+          "test_frozen_payload_encodes_once_and_both_wire_encoders_splice_those_bytes"
+        ]},
+        {"path": "tests/storage/test_storage_receipt_codec.py", "functions": ["test_small_receipts_keep_legacy_canonical_json_bytes"]},
+        {"path": "tests/tofudb/test_tofudb_receipt_migration.py"}
+      ]
+    },
+    {
+      "area": "Swarm",
+      "behaviour": "Admission waits heartbeat liveness; `AbortedError` lands as CANCELLED with no retry",
+      "tests": [
+        {"path": "tests/swarm/test_swarm_admission_liveness.py", "functions": [
+          "test_another_owner_enters_while_existing_owner_is_still_running",
+          "test_aborted_error_maps_to_cancelled_without_retry"
+        ]}
+      ]
+    },
+    {
+      "area": "Wire",
+      "behaviour": "SSE resume, heartbeat and frame vocabulary; push WebSocket limits and error codes",
+      "tests": [
+        {"path": "tests/sse/"},
+        {"path": "tests/websocket/"},
+        {"path": "tests/control_rpc/test_control_rpc.py"},
+        {"path": "tests/blackbox/test_blackbox_http.py", "functions": [
+          "test_cross_site_push_websocket_upgrade_is_refused",
+          "test_push_websocket_upgrade_follows_the_auth_mode"
+        ]},
+        {"path": "tests/blackbox/test_blackbox_push.py"},
+        {"path": "tests/blackbox/test_blackbox_push_differential.py"}
+      ]
+    }
+  ]
+}

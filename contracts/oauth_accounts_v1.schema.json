@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Direct subscription accounts API",
+  "$defs": {
+    "provider": {"const": "codex"},
+    "revision": {"type": "integer", "minimum": 0},
+    "accountId": {"type": "string", "pattern": "^oa_[a-f0-9]{32}$"},
+    "flowId": {"type": "string", "pattern": "^[a-f0-9]{32}$"},
+    "alias": {"type": "string", "maxLength": 128},
+    "method": {"enum": ["browser", "device"]},
+    "accountStatus": {"enum": ["authorized", "needs_reauth"]},
+    "flowStatus": {"enum": ["pending", "exchanging", "authorized", "error"]},
+    "code": {"type": "string", "minLength": 1, "maxLength": 16384},
+    "state": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "usageBucket": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requests", "tokens", "costUsd", "pricedRequests", "firstUsedAtMs", "lastUsedAtMs"],
+      "properties": {
+        "requests": {"type": "integer", "minimum": 0},
+        "tokens": {"type": "integer", "minimum": 0},
+        "costUsd": {"type": "number", "minimum": 0},
+        "pricedRequests": {"type": "integer", "minimum": 0},
+        "firstUsedAtMs": {"type": ["integer", "null"]},
+        "lastUsedAtMs": {"type": ["integer", "null"]}
+      }
+    },
+    "usage": {
+      "description": "Tofu's local request record; never provider billing.",
+      "type": "object",
+      "required": ["source", "provider"],
+      "properties": {
+        "source": {"const": "local_record"},
+        "provider": {"const": "codex"},
+        "status": {"const": "unavailable"},
+        "accounts": {"type": "object", "additionalProperties": {"$ref": "#/$defs/usageBucket"}},
+        "unknown": {"$ref": "#/$defs/usageBucket"},
+        "window": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["fromMs", "toMs"],
+          "properties": {"fromMs": {"type": "integer"}, "toMs": {"type": "integer"}}
+        },
+        "conversationsScanned": {"type": "integer", "minimum": 0},
+        "truncated": {"type": "boolean"}
+      }
+    }
+  },
+  "x-commands": {
+    "add": {"method": "method", "expected_revision": "revision"},
+    "reauth": {"method": "method", "account_id": "accountId", "expected_revision": "revision"},
+    "rename": {"account_id": "accountId", "alias": "alias", "expected_revision": "revision"},
+    "default": {"account_id": "accountId", "expected_revision": "revision"},
+    "remove": {"account_id": "accountId", "expected_revision": "revision"},
+    "admit_supply": {"account_id": "accountId", "expected_revision": "revision"},
+    "complete": {"flow_id": "flowId", "code": "code", "state": "state"},
+    "poll": {"flow_id": "flowId"}
+  },
+  "x-paths": {
+    "inventory": "/api/v4/oauth/accounts",
+    "command": "/api/v4/oauth/accounts/commands",
+    "flow": "/api/v4/oauth/accounts/flows/{flow_id}"
+  }
+}

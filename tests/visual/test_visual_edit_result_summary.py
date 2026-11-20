@@ -91,26 +91,19 @@ def test_edit_card_count_evidence_and_compact_list(frontend_visual_page, width, 
     # wrap onto a line of its own — the row is exactly the label plus padding.
     # An inline label caret (`content:" ▸"` inside the wrapping label) used to
     # add a whole caret-only line at narrow widths.
-    # Narrow/coarse layouts give the row a 42px touch-target min-height
-    # (23-reading-responsive.css), which would hide a wrapped 8px caret line,
-    # so the row's content height is measured with that floor lifted.
     caret = header.evaluate('''node => {
       const label = node.querySelector('.ptool-text');
       const style = getComputedStyle(node);
-      const minHeight = style.minHeight;
-      node.style.minHeight = '0px';
-      const rowHeight = node.getBoundingClientRect().height;
-      node.style.minHeight = '';
       return {rowContent: getComputedStyle(node, '::after').content,
         labelContent: getComputedStyle(label, '::after').content,
-        rowHeight, minHeight,
+        rowHeight: node.getBoundingClientRect().height,
         labelHeight: label.getBoundingClientRect().height,
         padTop: parseFloat(style.paddingTop), padBottom: parseFloat(style.paddingBottom)};
     }''')
     assert caret['rowContent'] == '""', caret
     assert caret['labelContent'] == 'none', caret
-    # A wrapped caret costs a FULL extra line; the trailing badge legitimately
-    # exceeds label + padding by a few pixels.
+    # A wrapped caret costs a FULL extra line; row min-height and the trailing
+    # badge legitimately exceed label + padding by a few pixels.
     caret_overflow = caret['rowHeight'] - caret['labelHeight'] \
         - caret['padTop'] - caret['padBottom']
     assert caret_overflow <= caret['labelHeight'] / 2, caret

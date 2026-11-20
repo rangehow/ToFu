@@ -42,6 +42,29 @@ def identity(field, row):
     return row[ID_FIELDS.get(field, 'id')]
 
 
+def _recovery_metadata(request):
+    """Immutable selection hints; never a grant or evidence of lane readiness."""
+    delegation = request.get('delegation') or {}
+    return {'recipientKey': key(request['recipientId']),
+            'continuation': bool(delegation.get('policy', {}).get('continuation'))}
+
+
+def _recovery_candidates(page, recipient_key, seen):
+    for item in page:
+        ident = item['id']
+        if ident in seen:
+            raise StorageError('database_integrity', 'Duplicate dispatch assignment index')
+        seen.add(ident)
+        # Old index rows are unknown, not negative evidence. Coordinator
+        # requests are project-wide even when this Worker pass is not.
+        metadata = item.get('recovery')
+        if (recipient_key is None or not isinstance(metadata, dict)
+                or metadata.get('continuation') is not False
+                or not isinstance(metadata.get('recipientKey'), str)
+                or metadata['recipientKey'] == recipient_key):
+            yield item
+
+
 @dataclass
 class Snapshot:
     revision: int
@@ -125,6 +148,61 @@ class SegmentedDispatch:
                     raise StorageError('database_integrity', 'Invalid dispatch page cursor')
                 after = row['key']
             yield [row['value'] for row in page]
+
+    def latest_request_page(self):
+        """Passive first budget-index page; never a complete allowance cohort."""
+        head = self.head()
+        if head is None or head['value']['state']['phase'] != 'ready':
+            return None, []
+        from .repository import _validate_stored_row
+        ident = head['value']['state'].get('latestBudgetId')
+        if not ident:
+            return None, []
+        document = self.get_many([('requestBudgets', ident)])['requestBudgets', ident]
+        if isinstance(document, StorageError):
+            raise document
+        envelope = (document or {}).get('value') or {}
+        budget = envelope.get('record')
+        if (not isinstance(budget, dict) or budget.get('id') != ident
+                or type(envelope.get('sequence')) is not int or envelope['sequence'] < 1):
+            raise StorageError('database_integrity', 'Invalid dispatch request document')
+        _validate_stored_row(budget, 'coordinatorRequestBudget', ident, decoded=True)
+        value = {'binding': deepcopy(self.repo.binding), **{field: [] for field in FIELDS}}
+        value['requestBudgets'].append(budget)
+        prefix = 'assignments:budget:' + key(budget['id']) + ':'
+        page = self.query('list', collection='indexes', prefix=prefix, after_key='',
+                          limit=SPEC['limits']['pageRows'])
+        if not isinstance(page, list) or len(page) > SPEC['limits']['pageRows']:
+            raise StorageError('database_integrity', 'Invalid dispatch page')
+        seen, after = set(), ''
+        for entry in page:
+            item = entry.get('value')
+            if (not isinstance(item, dict) or not isinstance(item.get('id'), str)
+                    or type(item.get('sequence')) is not int or item['sequence'] < 1
+                    or item['id'] in seen
+                    or entry.get('key') != self.repo.key + ':indexes:' + prefix + f"{item['sequence']:020d}"
+                    or entry['key'] <= after):
+                raise StorageError('database_integrity', 'Invalid dispatch budget index')
+            seen.add(item['id'])
+            after = entry['key']
+        documents = self.get_many(('assignments', entry['value']['id']) for entry in page)
+        for entry in page:
+            item = entry['value']
+            document = documents['assignments', item['id']]
+            if isinstance(document, StorageError):
+                raise document
+            envelope = (document or {}).get('value') or {}
+            record = envelope.get('record')
+            if (not isinstance(record, dict) or record.get('id') != item['id']
+                    or type(envelope.get('sequence')) is not int
+                    or envelope['sequence'] != item['sequence']):
+                raise StorageError('database_integrity', 'Dispatch index has dangling/changed evidence')
+            _validate_stored_row(record, 'assignment', record['id'], decoded=True)
+            if record['request'].get('delegation', {}).get('policy', {}).get('requestBudgetId') != budget['id']:
+                raise StorageError('database_integrity', 'Dispatch index belongs to another request')
+            value['assignments'].append(deepcopy(record))
+        self.repo._check_record(value, segmented=True, decoded=True)
+        return budget, value['assignments']
 
     def _legacy(self):
         from .repository import NAMESPACE
@@ -282,13 +360,14 @@ class SegmentedDispatch:
         self.repo._check_record(value, segmented=True, decoded=True)
         return value, Snapshot(head['version'], deepcopy(state), documents, walked)
 
-    def discover(self):
+    def discover(self, *, recipient_id=None):
         """Passive recovery discovery without a snapshot witness (``repository.discover``).
 
         Index rows and their documents commit atomically, documents are never
         removed and sequences never change, so each pair is checked alone. Rows
         a concurrent writer appends during the scan may or may not be included;
-        fewer rows than the head counted before the scan is missing evidence.
+        fewer index entries than the head counted before the scan is missing
+        evidence. Scoped passes materialize only selected documents.
         """
         from .repository import _validate_stored_row
         head = self.head()
@@ -296,27 +375,49 @@ class SegmentedDispatch:
             # The frozen legacy record is one document, consistent by itself.
             value, _ = self.load()
             return (value['assignments'],
-                    {row['sourceAttemptId'] for row in value.get('coordinatorSettlements', [])})
+                    {row['sourceAttemptId'] for row in value.get('coordinatorSettlements', [])
+                     if not row.get('stopReport') or row.get('reportTurnId')})
         counts = head['value']['state']['counts']
+        recipient_key = key(recipient_id) if recipient_id is not None else None
         assignments, seen = [], set()
         for page in self.index_pages('assignments:order:'):
-            rows = self.get_many(('assignments', item['id']) for item in page)
-            for item in page:
+            selected = list(_recovery_candidates(page, recipient_key, seen))
+            rows = self.get_many(('assignments', item['id']) for item in selected)
+            for item in selected:
                 row = rows[('assignments', item['id'])]
                 if isinstance(row, StorageError):
                     raise row
                 envelope = (row or {}).get('value') or {}
                 record = envelope.get('record')
-                if (not isinstance(record, dict) or record.get('id') != item['id'] or item['id'] in seen
+                if (not isinstance(record, dict) or record.get('id') != item['id']
                         or envelope.get('sequence') != item['sequence']):
                     raise StorageError('database_integrity', 'Dispatch index has dangling/changed evidence')
                 _validate_stored_row(record, 'assignment', record['id'], decoded=True)
-                seen.add(item['id'])
+                if 'recovery' in item and item['recovery'] != _recovery_metadata(record['request']):
+                    raise StorageError('database_integrity', 'Dispatch recovery metadata changed')
                 assignments.append(record)
-        settled = {item['id'] for item in self.pages('settlements:order:')}
-        if len(assignments) < counts['assignments'] or len(settled) < counts['coordinatorSettlements']:
+        settled, settlement_count = self._settled_sources()
+        if len(seen) < counts['assignments'] or settlement_count < counts['coordinatorSettlements']:
             raise StorageError('database_integrity', 'Dispatch history index is incomplete')
         return assignments, settled
+
+    def _settled_sources(self):
+        settled, count = set(), 0
+        for page in self.index_pages('settlements:order:'):
+            stops = self.get_many(('coordinatorSettlements', item['id']) for item in page if item.get('stopReport'))
+            for item in page:
+                count += 1
+                if item.get('stopReport'):
+                    row = stops['coordinatorSettlements', item['id']]
+                    if isinstance(row, StorageError):
+                        raise row
+                    record = ((row or {}).get('value') or {}).get('record') or {}
+                    if record.get('sourceAttemptId') != item['id'] or not record.get('stopReport'):
+                        raise StorageError('database_integrity', 'Dispatch stop report evidence is missing')
+                    if not record.get('reportTurnId'):
+                        continue
+                settled.add(item['id'])
+        return settled, count
 
     def _changes(self, field, row, sequence, *, version=0, new=True, metadata=None):
         ident = identity(field, row)
@@ -332,13 +433,20 @@ class SegmentedDispatch:
                     budget = delegation['policy'].get('requestBudgetId')
                     if budget:
                         prefixes.append('assignments:budget:' + key(budget) + ':')
-            result.extend({'collection': 'indexes', 'id': prefix + f'{sequence:020d}',
-                'expected_version': 0, 'value': {'id': ident, 'sequence': sequence}} for prefix in prefixes)
+            for prefix in prefixes:
+                index = {'id': ident, 'sequence': sequence}
+                if prefix == 'assignments:order:':
+                    index['recovery'] = _recovery_metadata(row['request'])
+                if field == 'coordinatorSettlements' and row.get('stopReport') and not row.get('reportTurnId'):
+                    index['stopReport'] = True
+                result.append({'collection': 'indexes', 'id': prefix + f'{sequence:020d}',
+                               'expected_version': 0, 'value': index})
         return result
 
-    def command(self, revision, head, changes, command_id=None):
+    def command(self, revision, head, changes, command_id=None, *, turn_witnesses=None):
         result = self.repo.client(write=True).command('project.dispatch.commit', {**self.scope,
-            'expected_revision': revision, 'head': head, 'changes': changes},
+            'expected_revision': revision, 'head': head, 'changes': changes,
+            **({'turn_witnesses': turn_witnesses} if turn_witnesses else {})},
             command_id or 'project-dispatch-v2:' + uuid.uuid4().hex)
         # This commit is the storage event a pending wake of the project waits for.
         from .pending_wakes import notify_commit
@@ -354,7 +462,7 @@ class SegmentedDispatch:
         notify_commit(self.repo.owner, self.repo.project, written_entries(changes))
         return result
 
-    def commit(self, original, value, snapshot):
+    def commit(self, original, value, snapshot, *, fence_documents=(), turn_witnesses=None):
         state = deepcopy(snapshot.head)
         changes = []
         budget_additions, source_additions = {}, {}
@@ -368,6 +476,8 @@ class SegmentedDispatch:
                     continue
                 stored = snapshot.documents.get((field, ident))
                 if stored:
+                    if field == 'assignments' and row['request'] != old[ident]['request']:
+                        raise StorageError('database_integrity', 'Dispatch assignment request is immutable')
                     sequence, version = stored['value']['sequence'], stored['version']
                 else:
                     state['nextSequence'] += 1
@@ -397,7 +507,16 @@ class SegmentedDispatch:
             changes.append({'collection': 'source_cohorts', 'id': key(source),
                 'expected_version': old['version'] if old else 0,
                 'value': {'sourceAttemptId': source, 'assignmentCount': (old['value']['assignmentCount'] if old else 0) + count}})
-        if state != snapshot.head or snapshot.walked:
+        written = {(item['collection'], item['id']) for item in changes}
+        for field, ident in fence_documents:
+            collection, doc_id = FIELDS[field], key(ident)
+            if (collection, doc_id) not in written:
+                witness = snapshot.documents[field, ident]
+                changes.append({'collection': collection, 'id': doc_id,
+                                'expected_version': witness['version'], 'value': witness['value']})
+        if turn_witnesses:
+            self.command(snapshot.revision, state, changes, turn_witnesses=turn_witnesses)
+        elif state != snapshot.head or snapshot.walked:
             self.command(snapshot.revision, state, changes)
         elif changes:
             self.document_command(changes)

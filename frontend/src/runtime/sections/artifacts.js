@@ -26,6 +26,7 @@
 
 // Temporary lexical presenters; remove with the retained artifact-panel migration.
 import { renderPublishedFile, renderScriptWarning } from '../rich-response/artifact-delivery';
+import { mountArtifactReview } from '../rich-response/artifact-review';
 
 (function () {
   "use strict";
@@ -268,8 +269,8 @@ import { renderPublishedFile, renderScriptWarning } from '../rich-response/artif
   // ── Open / close ────────────────────────────────────────────────────
 
   /**
-   * Open an artifact in the right-side panel by id.  Fetches metadata +
-   * raw content on demand; subsequent opens hit cache.
+   * Open an artifact with fresh metadata, versions and raw content reads.
+   * Raw content is reused only by actions within the current navigation.
    */
   async function open(id) {
     if (!id) return;
@@ -294,7 +295,9 @@ import { renderPublishedFile, renderScriptWarning } from '../rich-response/artif
     const fmtEl   = panel.querySelector("[data-art-format]");
     const subEl   = panel.querySelector("[data-art-subtitle]");
     const bodyEl  = panel.querySelector("[data-art-body]");
+    const versionSel = panel.querySelector("[data-art-version]");
 
+    if (versionSel) { versionSel.hidden = true; versionSel.innerHTML = ""; }
     if (bodyEl) disposeRichResponse(bodyEl);
 
     _disposeDeliveryWarning?.(); _disposeDeliveryWarning = null;
@@ -309,9 +312,6 @@ import { renderPublishedFile, renderScriptWarning } from '../rich-response/artif
       if (_activeId !== id || _openEpoch !== openEpoch) return;
       _renderHeader(panel, meta);
       if (reviewHost) {
-        // The review editor loads with the first opened artifact, not at startup.
-        const { mountArtifactReview } = await import('../rich-response/artifact-review');
-        if (_activeId !== id || _openEpoch !== openEpoch) return;
         reviewHost.hidden = false;
         _disposeReview = mountArtifactReview(reviewHost, {
           load: signal => Api.artifacts.review(id, signal),
@@ -372,8 +372,9 @@ import { renderPublishedFile, renderScriptWarning } from '../rich-response/artif
 
   async function _ensureContent(id) {
     if (_contentCache.has(id)) return _contentCache.get(id);
+    const openEpoch = _openEpoch;
     const text = await Api.artifacts.contentText(id);
-    if (_activeId === id) {
+    if (_activeId === id && _openEpoch === openEpoch) {
       _contentCache.clear(); // one active body, including multi-MiB prototypes
       _contentCache.set(id, text);
     }
@@ -459,9 +460,10 @@ import { renderPublishedFile, renderScriptWarning } from '../rich-response/artif
     const sel = panel.querySelector("[data-art-version]");
     if (!sel) return;
     const openEpoch = _openEpoch;
+    const isCurrent = () => _activeId === meta.id && _openEpoch === openEpoch;
     try {
       const payload = await Api.artifacts.versions(meta.id);
-      if (_activeId !== meta.id || _openEpoch !== openEpoch) return;
+      if (!isCurrent()) return;
       if (!payload) throw new Error("versions fetch failed");
       const chain = (payload && payload.versions) || [];
       if (chain.length <= 1) {
@@ -477,6 +479,7 @@ import { renderPublishedFile, renderScriptWarning } from '../rich-response/artif
       }).join("");
       sel.hidden = false;
     } catch (e) {
+      if (!isCurrent()) return;
       console.debug("[Artifacts] versions fetch failed:", e);
       sel.hidden = true;
       sel.innerHTML = "";
@@ -659,10 +662,13 @@ import { renderPublishedFile, renderScriptWarning } from '../rich-response/artif
   }
 
   async function _togglePin() {
-    if (!_activeId) return;
+    const id = _activeId;
+    const openEpoch = _openEpoch;
+    if (!id) return;
     try {
-      const meta = await _ensureMeta(_activeId);
-      await _setPinned(_activeId, !meta.pinned);
+      const meta = await _ensureMeta(id);
+      if (_activeId !== id || _openEpoch !== openEpoch) return;
+      await _setPinned(id, !meta.pinned, openEpoch);
     } catch (e) {
       console.warn("[Artifacts] pin failed:", e);
     }
@@ -691,11 +697,11 @@ import { renderPublishedFile, renderScriptWarning } from '../rich-response/artif
     }
   }
 
-  async function _setPinned(id, pinned) {
+  async function _setPinned(id, pinned, openEpoch = _openEpoch) {
     const updated = await Api.artifacts.pin(id, pinned);
     if (!updated) throw new Error("pin failed");
     _metaCache.set(id, updated);
-    if (id === _activeId) {
+    if (id === _activeId && _openEpoch === openEpoch) {
       const panel = document.getElementById("artifact-panel");
       if (panel) _renderHeader(panel, updated);
     }
@@ -703,13 +709,17 @@ import { renderPublishedFile, renderScriptWarning } from '../rich-response/artif
   }
 
   async function _toggleSourceView() {
-    if (!_activeId) return;
+    const id = _activeId;
+    const openEpoch = _openEpoch;
+    if (!id) return;
     const panel = document.getElementById("artifact-panel");
     if (!panel) return;
     const bodyEl = panel.querySelector("[data-art-body]");
     const cur = (bodyEl && bodyEl.dataset.sourceView === "1");
-    const meta = await _ensureMeta(_activeId);
-    const content = await _ensureContent(_activeId);
+    const meta = await _ensureMeta(id);
+    if (_activeId !== id || _openEpoch !== openEpoch) return;
+    const content = await _ensureContent(id);
+    if (_activeId !== id || _openEpoch !== openEpoch) return;
     _renderBody(panel, meta, content, /*sourceView=*/ !cur);
     const srcBtn = panel.querySelector('[data-art-action="toggle-source"]');
     if (srcBtn) srcBtn.classList.toggle("artifact-iconbtn-active", !cur);

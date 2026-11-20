@@ -142,7 +142,8 @@ function _agentInteractionChangeBlocked() {
   if (!conv) return false;
   return Boolean(
     (typeof convIsBusy === 'function' && convIsBusy(conv))
-    || conv._translating || conv._genStartCtrl || conv._finishingStream
+    || conv._translating || conv._genStartCtrl
+    || runtimeScope.ConversationTurnStore?.attemptStopState?.(conv)
   );
 }
 if (typeof window !== 'undefined') {
@@ -260,7 +261,7 @@ function _getModelPickerUi(list = document.getElementById('presetDropdownList') 
   if (typeof retainedCompositionLifecycle !== 'undefined') retainedCompositionLifecycle.add(() => _modelPickerUi?.destroy());
   return _modelPickerUi;
 }
-function _modelRoutingDropdownModels(documentValue) { return projectModelPickerCatalog(documentValue); }
+function _modelRoutingDropdownModels(documentValue) { return projectModelPickerCatalog(documentValue, _reasoningControls); }
 function _refreshModelPickerSelection() { _modelPickerUi?.refreshSelection(); }
 /* `authoritative`: the list comes from accepted routing (current or last-good).
  * The config phase can populate before any routing has arrived; that

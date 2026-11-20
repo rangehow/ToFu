@@ -1,7 +1,8 @@
 """Fault injection through real processes: a node lost mid-tool (docs/modules/remote_execution.md,
 "Device routing and permissions").
 
-A real Hypercorn Home and a real ``python -m lib.desktop_agent`` node subprocess:
+A real Hypercorn Home and a real node subprocess, run once with each implementation of
+the one node program (``python -m lib.desktop_agent`` and the Rust ``tofu node``):
 
 1. Home enforcement over the wire: a new node is read-only on the Home even
    though it allows writes itself; raising the Home ceiling lets the write run;
@@ -35,7 +36,16 @@ _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 OWNER = '1'
 
 
-def _start_node(live_server, token, config, log_path, *flags, name):
+@pytest.fixture(params=['python', 'rust'])
+def node_program(request):
+    """The one node program, in either implementation: the Python node or ``tofu node``."""
+    if request.param == 'python':
+        return [sys.executable, '-m', 'lib.desktop_agent']
+    from tests.support.tofu_node import node_command
+    return node_command()
+
+
+def _start_node(program, live_server, token, config, log_path, *flags, name):
     env = dict(os.environ)
     env['TOFU_DESKTOP_CONFIG'] = str(config)
     env['PYTHONPATH'] = _REPO + os.pathsep + env.get('PYTHONPATH', '')
@@ -45,7 +55,7 @@ def _start_node(live_server, token, config, log_path, *flags, name):
         config.write_text(json.dumps({'name': name}))
     log = open(log_path, 'a', encoding='utf-8')  # noqa: SIM115
     proc = subprocess.Popen(
-        [sys.executable, '-m', 'lib.desktop_agent', '--server', live_server,
+        [*program, '--server', live_server,
          '--bridge-token', token, '--poll-interval', '0.2', *flags],
         cwd=_REPO, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     return proc, log
@@ -81,7 +91,7 @@ def _stop(proc, log):
     log.close()
 
 
-def test_node_loss_mid_tool_settles_unavailable_and_never_duplicates(live_server, tmp_path):
+def test_node_loss_mid_tool_settles_unavailable_and_never_duplicates(live_server, tmp_path, node_program):
     from lib.api_keys import create_key
     from lib.desktop import bridge as db
     from lib.desktop import device_policy
@@ -90,7 +100,7 @@ def test_node_loss_mid_tool_settles_unavailable_and_never_duplicates(live_server
                              scopes=['agents:bridge'])
     effect = tmp_path / 'effect.txt'
     victim_cfg, spare_cfg = tmp_path / 'victim.json', tmp_path / 'spare.json'
-    victim, victim_log = _start_node(live_server, token, victim_cfg, tmp_path / 'victim.log',
+    victim, victim_log = _start_node(node_program, live_server, token, victim_cfg, tmp_path / 'victim.log',
                                      '--allow-write', '--allow-exec', name='victim')
     spare = spare_log = None
     try:
@@ -104,7 +114,7 @@ def test_node_loss_mid_tool_settles_unavailable_and_never_duplicates(live_server
                                     {'path': str(target), 'content': 'x', 'device': node_id},
                                     user_id=OWNER)
         assert 'permission_denied' in text and not target.exists()
-        device_policy.set_ceiling(int(OWNER), node_id, {'write': True, 'exec': True})
+        device_policy.set_ceiling(int(OWNER), node_id, {'write': True, 'exec': True}, expected_revision=0)
         text = _agents._run_desktop('desktop_write_file',
                                     {'path': str(target), 'content': 'x', 'device': node_id},
                                     user_id=OWNER)
@@ -135,7 +145,7 @@ def test_node_loss_mid_tool_settles_unavailable_and_never_duplicates(live_server
         # (contracts/desktop_node_registry_v1.schema.json x-identity.binding).
         _row, spare_token = create_key(owner_user_id=int(OWNER), name='routing-fault-spare',
                                        scopes=['agents:bridge'])
-        spare, spare_log = _start_node(live_server, spare_token, spare_cfg, tmp_path / 'spare.log',
+        spare, spare_log = _start_node(node_program, live_server, spare_token, spare_cfg, tmp_path / 'spare.log',
                                        '--allow-write', '--allow-exec', name='spare')
         assert _wait_online(exclude=(node_id,)) is not None
         device_policy.set_defaults(int(OWNER), {'computer': node_id})
@@ -171,7 +181,7 @@ def test_node_loss_mid_tool_settles_unavailable_and_never_duplicates(live_server
 
         # 3) The node returns with the same identity; the resumed turn repeats the call.
         victim_log.close()
-        victim, victim_log = _start_node(live_server, token, victim_cfg, tmp_path / 'victim.log',
+        victim, victim_log = _start_node(node_program, live_server, token, victim_cfg, tmp_path / 'victim.log',
                                          '--allow-write', '--allow-exec', name='victim')
         assert _wait_online(node_id) is not None
         text = _agents._run_desktop('desktop_run_command', {'command': command},

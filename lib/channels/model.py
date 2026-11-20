@@ -489,7 +489,11 @@ class OutboxItem:
 
     def view(self, thread_title: str = '') -> dict[str, Any]:
         """The contract ``OutboxItemView`` projection."""
+        # Text/caption rows retain no explicit ACK provenance; a FILE's ACK covers only that part.
+        evidence = {'sent': 'acceptance_unverified', 'unknown': 'delivery_unconfirmed'}.get(self.state) \
+            if self.thread.startswith('wechat:') else None
         return {
+            **({'deliveryEvidence': evidence} if evidence else {}),
             'id': self.id, 'thread': self.thread, 'threadTitle': thread_title,
             'text': self.text, 'replyTo': self.reply_to, 'state': self.state,
             'origin': {'kind': self.origin.get('kind', 'tool'),
@@ -501,6 +505,7 @@ class OutboxItem:
                 {'index': index, 'name': record['name'], 'type': record['type'], 'size': int(record['size']),
                  'sha256': record['sha256'], 'kind': record['kind'], 'renditionOf': record.get('renditionOf'),
                  'state': record.get('state') or 'pending', 'error': record.get('error'),
+                 **({'confirmation': record['confirmation']} if record.get('confirmation') else {}),
                  **({'project': record['source']['project']} if (record.get('source') or {}).get('project')
                     else {})}
                 for index, record in enumerate(self.extra.get('attachments') or ())],

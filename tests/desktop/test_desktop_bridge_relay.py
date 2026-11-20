@@ -30,7 +30,7 @@ _OWNER_SCRIPT = textwrap.dedent('''
     path = sys.argv[1]
     # The owner (API) process holds the Home policy: allow exec on this node.
     device_policy._default_client = RecordClient()
-    device_policy.set_ceiling(int(%(owner)r), %(agent)r, {'exec': True})
+    device_policy.set_ceiling(int(%(owner)r), %(agent)r, {'exec': True}, expected_revision=0)
     server = bridge_relay.RelayServer(bridge_relay.record_path(path))
     def node():
         held = set()

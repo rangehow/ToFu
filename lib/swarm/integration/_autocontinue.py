@@ -28,11 +28,64 @@ from lib.swarm.integration._state import (
 logger = get_logger(__name__)
 
 
+def _continuation_command_id(session, source_id: str) -> str:
+    specs = list(getattr(session, 'specs', ()))
+    if any(not spec.required_for_completion for spec in specs):
+        # Optional work can outlive multiple required waves. Deduplicate the
+        # durable required frontier, including after rehydration.
+        required_ids = sorted(spec.id for spec in specs if spec.required_for_completion)
+        digest = hashlib.sha256('\0'.join(required_ids).encode()).hexdigest()[:16]
+        source_id = f'{source_id}:required:{digest}'
+    return f'swarm-autocontinue:{source_id}'
+
+
+def can_handoff_idle_wait(task: dict, source_id: str, ids: tuple[str, ...]) -> bool:
+    """Check that an idle poll can use the session's existing settlement wake.
+
+    This is a read-only preflight for a clean end of the *current* turn. The
+    actual wake still validates the committed lane and newly settled results.
+    """
+    import lib.swarm.integration as integration
+    from lib.scheduler.conversation_dispatch import swarm_continuation_available
+    from lib.storage.errors import StorageError
+    from lib.swarm.restart_recovery import read_continuation_turns
+    from lib.tasks_pkg.conversation_delivery import completion_conversation_id
+    from lib.tasks_pkg.wait_interruption import PENDING_INPUT_MODES
+
+    conv_id = completion_conversation_id(task)
+    turn_id, attempt_id = task.get('_turnId'), task.get('_attemptId')
+    if not (integration.SWARM_AUTOCONTINUE_ENABLED and conv_id and turn_id and attempt_id):
+        return False
+    session = integration.get_active_session(conv_id)
+    if (session is None or session.user_id != task.get('_userId')
+            or session.conv_id != conv_id or session.continuation_source != source_id
+            or not session.wait_covers_pending_delivery(ids)):
+        return False
+    try:
+        turns = read_continuation_turns(conv_id, user_id=session.user_id)['turns']
+        tail = turns[-1] if turns else {}
+        if (tail.get('turnId') != turn_id or tail.get('currentAttemptId') != attempt_id
+                or tail.get('actor') != 'assistant' or tail.get('status') != 'running'):
+            return False
+        # The result is not known yet: both success and failure need an existing wake path.
+        if not _durable_chain_allows(turns, _continuation_command_id(session, source_id),
+                                     failure=True, live_parent_turn_id=turn_id):
+            return False
+        available = swarm_continuation_available(conv_id, user_id=session.user_id)
+    except StorageError:
+        logger.warning('[Swarm:%s] cannot verify idle wait continuation; keeping the turn live',
+                       conv_id, exc_info=True)
+        return False
+    return (available and not task.get('aborted')
+            and not agent_inbox.has_pending(conv_id, modes=PENDING_INPUT_MODES))
+
+
 def _maybe_autocontinue(
     swarm_key: str,
     user_id: int,
     *,
     source_id: str,
+    expected_writer=None,
 ) -> None:
     """Start one owner-scoped continuation when settled swarm output is unread."""
     import lib.swarm.integration as integration
@@ -48,22 +101,14 @@ def _maybe_autocontinue(
     try:
         # A wake is never granted on a key whose settling owner is unknown.
         session = integration.get_active_session(swarm_key)
-        if session is None or session.user_id != owner_id:
+        if (session is None or session.user_id != owner_id
+                or (expected_writer is not None and expected_writer != (
+                    session.task_id, vars(session).get('_checkpoint_writer_epoch', 0)))):
             logger.debug(
                 "[Swarm:%s] auto-continuation skipped: no owned settling session",
                 swarm_key,
             )
             return
-        specs = list(getattr(session, 'specs', ()))
-        if any(not spec.required_for_completion for spec in specs):
-            # Optional work can outlive multiple required delivery waves.
-            # Bind deduplication to the durable required frontier; rehydration
-            # reconstructs the same identity, and new required work opens a
-            # new frontier whichever turn launched it.
-            required_ids = sorted(spec.id for spec in specs
-                                  if spec.required_for_completion)
-            digest = hashlib.sha256('\0'.join(required_ids).encode()).hexdigest()[:16]
-            source_id = f'{source_id}:required:{digest}'
         if integration._key_is_live(swarm_key):
             logger.debug(
                 "[Swarm:%s] auto-continuation skipped: conversation is live",
@@ -74,8 +119,9 @@ def _maybe_autocontinue(
         # Only this run's undelivered, stamped success/failure evidence
         # authorizes a wake. Cancellation, legacy unstamped updates and
         # leftovers of other runs never grant recovery permission.
-        updates = [item for item in agent_inbox.pending_items(
-                       swarm_key, modes=['swarm-update'])
+        from lib.swarm.delivery import current_result_hints
+        updates = [item for item in current_result_hints(swarm_key, agent_inbox.pending_items(
+                       swarm_key, modes=['swarm-update']))
                    if item.get('swarm_run_id') == session.task_id]
         if not any(item.get('status') in ('completed', 'failed')
                    for item in updates):
@@ -98,7 +144,7 @@ def _maybe_autocontinue(
             integration._start_autocontinue_turn(
                 swarm_key,
                 owner_id,
-                command_id=f"swarm-autocontinue:{source_id}",
+                command_id=_continuation_command_id(session, source_id),
             )
         finally:
             with _autocontinue_lock:
@@ -112,7 +158,7 @@ def _maybe_autocontinue(
 
 
 def _durable_chain_allows(turns: list[dict], command_id: str, *,
-                          failure: bool) -> bool:
+                          failure: bool, live_parent_turn_id: str | None = None) -> bool:
     """One wake per delivery frontier; one failure-bearing wake per human chain.
 
     Input receipts survive restart. A failed executor admission is not an
@@ -130,7 +176,9 @@ def _durable_chain_allows(turns: list[dict], command_id: str, *,
            for turn in chain):
         return False
     if turns[-1].get('status') in ('pending', 'running'):
-        return False
+        if not (live_parent_turn_id and turns[-1].get('turnId') == live_parent_turn_id
+                and turns[-1].get('status') == 'running'):
+            return False
     from lib.turn_lifecycle import automatic_recovery_blocker
     from lib.tasks_pkg.stream_handler._intent_stall import known_external_blocker
 
@@ -191,7 +239,9 @@ def _start_autocontinue_turn(
         turns = list(page.get("turns") or [])
         if not turns:
             return False
-        updates = agent_inbox.pending_items(conversation_id, modes=['swarm-update'])
+        from lib.swarm.delivery import current_result_hints
+        updates = current_result_hints(conversation_id,
+            agent_inbox.pending_items(conversation_id, modes=['swarm-update']))
         statuses = [item.get('status') for item in updates]
         failure = 'failed' in statuses
         if not failure and 'completed' not in statuses:

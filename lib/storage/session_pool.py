@@ -114,10 +114,12 @@ class SessionPool:
             logger.debug('check reusable failed: %s', _e)
             return False
 
-    def acquire(self, timeout: float):
+    def acquire(self, timeout: float, *, cancellation=None):
         """Claim immediately, then validate the exclusive socket unlocked."""
         deadline = time.monotonic() + max(0.001, timeout)
         while True:
+            if cancellation is not None and cancellation.cancelled:
+                raise OSError('Transport request was cancelled before dispatch')
             session = None
             released_at = None
             with self._condition:
@@ -136,7 +138,8 @@ class SessionPool:
                         raise StorageError('database_timeout',
                             'storage connection budget elapsed', True, 25,
                             request_not_dispatched=True)
-                    session = self._factory(remaining)
+                    session = (self._factory(remaining) if cancellation is None else
+                               self._factory(remaining, cancellation=cancellation))
                     reusable = True
                 else:
                     reusable = self._reusable(session, released_at)

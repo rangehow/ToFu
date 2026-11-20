@@ -174,3 +174,17 @@ def test_tool_details_are_omitted_only_when_the_caller_asks(monkeypatch):
     assert 'command: ls' in full
     assert 'command: ls' not in lean
     assert 'answer' in lean
+
+
+def test_first_short_page_cannot_be_hidden_by_overlap_in_next_page(monkeypatch):
+    authority = _FakeAuthority(_messages(300))
+
+    def reader(*args, **kwargs):
+        snapshot = authority(*args, **kwargs)
+        if 'before_sequence' not in kwargs:
+            snapshot['messages'].pop()
+        return snapshot
+
+    monkeypatch.setattr(export_module, '_read_conversation_snapshot', reader)
+    with pytest.raises(TranscriptExportError, match='conversation_export_incomplete'):
+        render_full_transcript('conv-1', user_id=1)

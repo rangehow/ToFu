@@ -1,12 +1,13 @@
 """Display-time argument enrichment for tool-round labels.
 
 Some tool arguments are machine handles a human cannot read — conversation
-ids, browser tab ids. Execution needs them; the timeline should show what
-they MEAN. This module resolves the human-readable counterpart (the
-conversation's title, the tab's title) under the caller's authority and
-injects it as an underscore-prefixed hint (``_conv_title`` / ``_tab_title``)
-on a COPY of the args, for display handlers only. The enriched copy never
-reaches execution or persistence.
+ids, browser tab ids, ``poll``/``kill`` background handles. Execution needs
+them; the timeline should show what they MEAN. This module resolves the
+human-readable counterpart (the conversation's title, the tab's title, the
+command a ``bg_*`` handle runs) under the caller's authority and injects it
+as an underscore-prefixed hint (``_conv_title`` / ``_tab_title`` /
+``_handle_labels``) on a COPY of the args, for display handlers only. The
+enriched copy never reaches execution or persistence.
 
 Every lookup is best-effort and bounded: a miss, an offline store, or an
 ambiguous multi-device mapping yields no hint, and the handler renders its
@@ -42,6 +43,13 @@ _TAB_LABEL_TOOLS = frozenset({
     'browser_check', 'browser_select_option',
 })
 
+# poll/kill: the handle is an opaque id; the work it names is what a human
+# needs to read ("waiting on WHAT"). Same display-only hint rule.
+_HANDLE_TOOLS = frozenset({'poll', 'kill'})
+_HANDLE_ARG_KEYS = ('id', 'command_id', 'agent_id', 'task_id', 'ids',
+                    'command_ids', 'agent_ids', 'task_ids')
+_HANDLE_LABEL_CLIP = 80
+
 _CONV_TITLE_TTL_SEC = 120.0
 _CONV_TITLE_CAP = 512
 _conv_title_lock = threading.Lock()
@@ -72,6 +80,80 @@ def _conversation_title(owner_user_id: str, conv_id: str) -> str:
             _conv_title_cache.clear()
         _conv_title_cache[key] = (title, now)
     return title
+
+
+def _handle_ids(fn_args) -> list[str]:
+    """Every handle a poll/kill call names, in argument order, without repeats."""
+    seen: list[str] = []
+    for key in _HANDLE_ARG_KEYS:
+        value = fn_args.get(key)
+        values = value if isinstance(value, list) else [value]
+        for item in values:
+            handle = str(item or '').strip()
+            if handle and handle not in seen:
+                seen.append(handle)
+    return seen
+
+
+def _one_line(text: str) -> str:
+    """A command as one readable line: collapsed whitespace, bounded length."""
+    flat = ' '.join(str(text or '').split())
+    if len(flat) <= _HANDLE_LABEL_CLIP:
+        return flat
+    return flat[:_HANDLE_LABEL_CLIP - 1] + '\u2026'
+
+
+def _handle_labels(handle_ids, owner: str, conv_id) -> dict[str, str]:
+    """Map each background-command handle to the command it is running.
+
+    The live registry answers while the command exists in this process; a
+    durable record answers after a restart until recovery settles it. Both
+    are owner-scoped; anything else (swarm agent ids, task ids) keeps no
+    label and the renderer falls back to the raw handle.
+    """
+    labels: dict[str, str] = {}
+    if not handle_ids:
+        return labels
+    from lib.tasks_pkg import background_commands
+    # ``_owned`` compares the stored owner value with strict equality, and a
+    # task may carry it as either a digit string or an int: try the forms the
+    # caller could have stored rather than guessing one.
+    owner_forms = [owner]
+    try:
+        if str(int(owner)) == owner:
+            owner_forms.append(int(owner))
+    except ValueError:
+        pass
+    for handle in handle_ids:
+        if not background_commands.is_background_command_id(handle):
+            continue
+        command = ''
+        for uid in owner_forms:
+            try:
+                snapshot = background_commands.check_background_command(
+                    handle, user_id=uid)
+            except Exception as e:
+                logger.debug('[ToolDisplay] handle lookup failed for %s: %s',
+                             handle, e)
+                snapshot = None
+            if snapshot and snapshot.get('command'):
+                command = str(snapshot['command'])
+                break
+        if not command and conv_id:
+            for uid in owner_forms:
+                try:
+                    record = background_commands.recorded_background_command(
+                        handle, user_id=uid, conv_id=conv_id)
+                except Exception as e:
+                    logger.debug('[ToolDisplay] record lookup failed for %s: '
+                                 '%s', handle, e)
+                    record = None
+                if record and record.get('command'):
+                    command = str(record['command'])
+                    break
+        if command:
+            labels[handle] = _one_line(command)
+    return labels
 
 
 def _owner_of(task) -> str:
@@ -125,6 +207,10 @@ def enrich_display_args(fn_name, fn_args, *, conv_id=None, task=None):
             title = _tab_title_hint(fn_args, owner, task)
             if title:
                 return {**fn_args, '_tab_title': title}
+        if fn_name in _HANDLE_TOOLS:
+            labels = _handle_labels(_handle_ids(fn_args), owner, conv_id)
+            if labels:
+                return {**fn_args, '_handle_labels': labels}
     except Exception as e:
         logger.debug('[ToolDisplay] arg enrichment failed for %s: %s',
                      fn_name, e)

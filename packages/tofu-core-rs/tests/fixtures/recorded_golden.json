@@ -1,0 +1,1552 @@
+[
+ {
+  "scenario": "abort_mid_stream",
+  "step": 0,
+  "protocol": "openai",
+  "sha256": "4454b77fcf8fe7e8aec87232748b47f232922303a0f199842c55c47e8364167e",
+  "bytes": 83081,
+  "url": "http://127.0.0.1:9/v1/chat/completions",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "abort_mid_stream",
+  "step": 0,
+  "protocol": "anthropic",
+  "sha256": "a95ca694160f8564d1e2263b7938995b62b07064439c58c5a334acbdfc080a8d",
+  "bytes": 82005,
+  "url": "http://127.0.0.1:9/v1/messages",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "anthropic-version",
+    "2023-06-01"
+   ],
+   [
+    "x-api-key",
+    "sk-byte-identity"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "abort_mid_stream",
+  "step": 0,
+  "protocol": "responses",
+  "sha256": "e4d21275b75444c25a57a5e9a438fbe223d63a9262f9cd94cde363af68b0ad4b",
+  "bytes": 83352,
+  "url": "http://127.0.0.1:9/v1/responses",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "agent_tool_continuation",
+  "step": 0,
+  "protocol": "openai",
+  "sha256": "232945ccd49e8f75636c29e1def1795005fa0ca2ce31809858cf03b04e4527d0",
+  "bytes": 129173,
+  "url": "http://127.0.0.1:9/v1/chat/completions",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "agent_tool_continuation",
+  "step": 1,
+  "protocol": "openai",
+  "sha256": "1ce0fd8c37b68e722fa4cfd61f7398ebc41960ed8cf979815100897bb6458f1c",
+  "bytes": 130110,
+  "url": "http://127.0.0.1:9/v1/chat/completions",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "agent_tool_continuation",
+  "step": 2,
+  "protocol": "openai",
+  "sha256": "50a31f2a7e922e9eedbd178cb8c40670d8dca92fd05f5c49f549a08d726aa1a6",
+  "bytes": 130612,
+  "url": "http://127.0.0.1:9/v1/chat/completions",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "agent_tool_continuation",
+  "step": 0,
+  "protocol": "anthropic",
+  "sha256": "4c4686861b547cc911afe487a1ff27d97dbfddf30ba898485b451ef1aad203b6",
+  "bytes": 127169,
+  "url": "http://127.0.0.1:9/v1/messages",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "anthropic-version",
+    "2023-06-01"
+   ],
+   [
+    "x-api-key",
+    "sk-byte-identity"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "agent_tool_continuation",
+  "step": 1,
+  "protocol": "anthropic",
+  "sha256": "aefbef49dcbd289e1409bcc93132c78e8bde772da56931365bbbc163b0317a59",
+  "bytes": 128141,
+  "url": "http://127.0.0.1:9/v1/messages",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "anthropic-version",
+    "2023-06-01"
+   ],
+   [
+    "x-api-key",
+    "sk-byte-identity"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "agent_tool_continuation",
+  "step": 2,
+  "protocol": "anthropic",
+  "sha256": "9d5b425678985eb84a88f3559e333b9b4e2ab37bb83e54b76c3e980dd01433d4",
+  "bytes": 128650,
+  "url": "http://127.0.0.1:9/v1/messages",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "anthropic-version",
+    "2023-06-01"
+   ],
+   [
+    "x-api-key",
+    "sk-byte-identity"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "agent_tool_continuation",
+  "step": 0,
+  "protocol": "responses",
+  "sha256": "dd295d93e5cf7538b0ea603b2c302024e8b206a00c6104387282e0c1d1fbb255",
+  "bytes": 129508,
+  "url": "http://127.0.0.1:9/v1/responses",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "agent_tool_continuation",
+  "step": 1,
+  "protocol": "responses",
+  "sha256": "612711dfe552f26d4267926843b440af942937a3f3b70555f6f1d256844e6190",
+  "bytes": 130534,
+  "url": "http://127.0.0.1:9/v1/responses",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "agent_tool_continuation",
+  "step": 2,
+  "protocol": "responses",
+  "sha256": "27541eb2b35e0cc07641c99288bc7b8ee74291aa6aa4ad7dd9c564e5c804264d",
+  "bytes": 131077,
+  "url": "http://127.0.0.1:9/v1/responses",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "async_path",
+  "step": 0,
+  "protocol": "openai",
+  "sha256": "eb04b4436eeeaf5c90356c2391ffecaec592833228f84e29e172ee0fda52b4de",
+  "bytes": 251,
+  "url": "http://127.0.0.1:9/v1/chat/completions",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "async_path",
+  "step": 0,
+  "protocol": "anthropic",
+  "sha256": "9932e3cdc636ef3232d79aa2cb455d89aa2c9851db36415debff09792863b2a3",
+  "bytes": 257,
+  "url": "http://127.0.0.1:9/v1/messages",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "anthropic-version",
+    "2023-06-01"
+   ],
+   [
+    "x-api-key",
+    "sk-byte-identity"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "async_path",
+  "step": 0,
+  "protocol": "responses",
+  "sha256": "ce1b8899d2276b006a025225593f24e575d391abd240b8571a00a12a9b11ad8c",
+  "bytes": 395,
+  "url": "http://127.0.0.1:9/v1/responses",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "edit_file_blocks",
+  "step": 0,
+  "protocol": "openai",
+  "sha256": "99de15f1b216d0321970d9dfa82cf863f61f043299ca24b9c8e97005e9118031",
+  "bytes": 102540,
+  "url": "http://127.0.0.1:9/v1/chat/completions",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "edit_file_blocks",
+  "step": 1,
+  "protocol": "openai",
+  "sha256": "0c9eedb107b9b17aa49fb00d807f84de8e409ff627c35ba5e07c51f7f5617af5",
+  "bytes": 103030,
+  "url": "http://127.0.0.1:9/v1/chat/completions",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "edit_file_blocks",
+  "step": 2,
+  "protocol": "openai",
+  "sha256": "171ca5120c768248ac5115299d4a7abf493d77d3991206de8f7cbf32f510111c",
+  "bytes": 104083,
+  "url": "http://127.0.0.1:9/v1/chat/completions",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "edit_file_blocks",
+  "step": 0,
+  "protocol": "anthropic",
+  "sha256": "140926021c07ad1f4c6c46ae9e105b6ed41b82c0a84edc3f2f2392da3cf641a6",
+  "bytes": 101058,
+  "url": "http://127.0.0.1:9/v1/messages",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "anthropic-version",
+    "2023-06-01"
+   ],
+   [
+    "x-api-key",
+    "sk-byte-identity"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "edit_file_blocks",
+  "step": 1,
+  "protocol": "anthropic",
+  "sha256": "1a9c3ccaff5b797f05202fd6dd2b7c8b23093dd737b6bd179bcde085c4b3863a",
+  "bytes": 101565,
+  "url": "http://127.0.0.1:9/v1/messages",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "anthropic-version",
+    "2023-06-01"
+   ],
+   [
+    "x-api-key",
+    "sk-byte-identity"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "edit_file_blocks",
+  "step": 2,
+  "protocol": "anthropic",
+  "sha256": "5bafcb4d50da9f673719e0067a546c2fcd5197e03322e9df0ee6a7747b78d0c9",
+  "bytes": 102553,
+  "url": "http://127.0.0.1:9/v1/messages",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "anthropic-version",
+    "2023-06-01"
+   ],
+   [
+    "x-api-key",
+    "sk-byte-identity"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "edit_file_blocks",
+  "step": 0,
+  "protocol": "responses",
+  "sha256": "ff9cce2b3ca857d3cbe0539636247ac962613cf689848ab3bd67e89cc5f05576",
+  "bytes": 102839,
+  "url": "http://127.0.0.1:9/v1/responses",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "edit_file_blocks",
+  "step": 1,
+  "protocol": "responses",
+  "sha256": "cca7f746dbddf7b3393caf57f2d9ae599d94211ebf3186d8d0963bc7fb22733d",
+  "bytes": 103348,
+  "url": "http://127.0.0.1:9/v1/responses",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "edit_file_blocks",
+  "step": 2,
+  "protocol": "responses",
+  "sha256": "e6d8ddf1c29c360acea47942f3bab6f616753463f8ba33c3e16681492b65a389",
+  "bytes": 104372,
+  "url": "http://127.0.0.1:9/v1/responses",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "incomplete_tool_stream",
+  "step": 0,
+  "protocol": "openai",
+  "sha256": "602ec8dc2dbd0512abe4e9ee0dc5016c6bb7f683a6898ef3ff45eca0e17f0c59",
+  "bytes": 102503,
+  "url": "http://127.0.0.1:9/v1/chat/completions",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "incomplete_tool_stream",
+  "step": 1,
+  "protocol": "openai",
+  "sha256": "602ec8dc2dbd0512abe4e9ee0dc5016c6bb7f683a6898ef3ff45eca0e17f0c59",
+  "bytes": 102503,
+  "url": "http://127.0.0.1:9/v1/chat/completions",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "incomplete_tool_stream",
+  "step": 2,
+  "protocol": "openai",
+  "sha256": "ac3402aa7ed58a9399f9640823df416268dbe198966894b057dd277f11d32347",
+  "bytes": 103007,
+  "url": "http://127.0.0.1:9/v1/chat/completions",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "incomplete_tool_stream",
+  "step": 0,
+  "protocol": "anthropic",
+  "sha256": "086f72fda36357c5a2606f9926296b2d31edba6e738697a117d072cf9d1e5091",
+  "bytes": 101021,
+  "url": "http://127.0.0.1:9/v1/messages",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "anthropic-version",
+    "2023-06-01"
+   ],
+   [
+    "x-api-key",
+    "sk-byte-identity"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "incomplete_tool_stream",
+  "step": 1,
+  "protocol": "anthropic",
+  "sha256": "086f72fda36357c5a2606f9926296b2d31edba6e738697a117d072cf9d1e5091",
+  "bytes": 101021,
+  "url": "http://127.0.0.1:9/v1/messages",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "anthropic-version",
+    "2023-06-01"
+   ],
+   [
+    "x-api-key",
+    "sk-byte-identity"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "incomplete_tool_stream",
+  "step": 2,
+  "protocol": "anthropic",
+  "sha256": "cc9ddb945207dcda33d8c80d730816ecd44d1aab58b25f2432eab354733c68ad",
+  "bytes": 101557,
+  "url": "http://127.0.0.1:9/v1/messages",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "anthropic-version",
+    "2023-06-01"
+   ],
+   [
+    "x-api-key",
+    "sk-byte-identity"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "incomplete_tool_stream",
+  "step": 0,
+  "protocol": "responses",
+  "sha256": "9b4476ea7afca462963d86a75a83ad5521b1ade1d0a02334e00699941cf3eef5",
+  "bytes": 102802,
+  "url": "http://127.0.0.1:9/v1/responses",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "incomplete_tool_stream",
+  "step": 1,
+  "protocol": "responses",
+  "sha256": "9b4476ea7afca462963d86a75a83ad5521b1ade1d0a02334e00699941cf3eef5",
+  "bytes": 102802,
+  "url": "http://127.0.0.1:9/v1/responses",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "incomplete_tool_stream",
+  "step": 2,
+  "protocol": "responses",
+  "sha256": "2e513516078b7ff0e1eeb94533e84e9424f1556240445e1574b122133486f06d",
+  "bytes": 103395,
+  "url": "http://127.0.0.1:9/v1/responses",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "parallel_tools_timeout",
+  "step": 0,
+  "protocol": "openai",
+  "sha256": "7a212c4a7c9a79a248d1e9b4b5447b6d711cc40f163be46a998467e636d9a182",
+  "bytes": 102503,
+  "url": "http://127.0.0.1:9/v1/chat/completions",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "parallel_tools_timeout",
+  "step": 1,
+  "protocol": "openai",
+  "sha256": "dfbd7a505c6782e102b8e858d9be5dee4ef9c0fc4d696c9c311961a4de73c345",
+  "bytes": 103349,
+  "url": "http://127.0.0.1:9/v1/chat/completions",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "parallel_tools_timeout",
+  "step": 2,
+  "protocol": "openai",
+  "sha256": "f24b48aa7a830c9d94b8e78a9e00780703cf7a0e12a6693f924c29157322819b",
+  "bytes": 103703,
+  "url": "http://127.0.0.1:9/v1/chat/completions",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "parallel_tools_timeout",
+  "step": 0,
+  "protocol": "anthropic",
+  "sha256": "a7918982e965fbf87096895e25c21807c9acc48f3bb21d6b5716206ea45424d8",
+  "bytes": 101021,
+  "url": "http://127.0.0.1:9/v1/messages",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "anthropic-version",
+    "2023-06-01"
+   ],
+   [
+    "x-api-key",
+    "sk-byte-identity"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "parallel_tools_timeout",
+  "step": 1,
+  "protocol": "anthropic",
+  "sha256": "dc93824f563ba2d118bcccdac39376da0a32e35c02516f82c10ef12046df3086",
+  "bytes": 101888,
+  "url": "http://127.0.0.1:9/v1/messages",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "anthropic-version",
+    "2023-06-01"
+   ],
+   [
+    "x-api-key",
+    "sk-byte-identity"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "parallel_tools_timeout",
+  "step": 2,
+  "protocol": "anthropic",
+  "sha256": "677ea4a98f69c2dc5496af251e3af5832d31b7cbdc20108eb270956c99932277",
+  "bytes": 102259,
+  "url": "http://127.0.0.1:9/v1/messages",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "anthropic-version",
+    "2023-06-01"
+   ],
+   [
+    "x-api-key",
+    "sk-byte-identity"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "parallel_tools_timeout",
+  "step": 0,
+  "protocol": "responses",
+  "sha256": "35754645873049b1c4edbad6db35a148deaa88612a1dc31f437e1d4da7d57fe0",
+  "bytes": 102802,
+  "url": "http://127.0.0.1:9/v1/responses",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "parallel_tools_timeout",
+  "step": 1,
+  "protocol": "responses",
+  "sha256": "90a03d7de5351037e14fcdcf7edb4d22d959273f429d1d184b8f2f2fa7666e9b",
+  "bytes": 103744,
+  "url": "http://127.0.0.1:9/v1/responses",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "parallel_tools_timeout",
+  "step": 2,
+  "protocol": "responses",
+  "sha256": "babadb43b744cd27d23fce221c62c404eddd9165179d5275cb07d017cc58caf5",
+  "bytes": 104139,
+  "url": "http://127.0.0.1:9/v1/responses",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "partial_stream_cut",
+  "step": 0,
+  "protocol": "openai",
+  "sha256": "0694c2f71f9ce6219ed55eba6bf6713bdbbc0b7491b48eaae0164fdb9e6dea51",
+  "bytes": 83076,
+  "url": "http://127.0.0.1:9/v1/chat/completions",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "partial_stream_cut",
+  "step": 1,
+  "protocol": "openai",
+  "sha256": "0694c2f71f9ce6219ed55eba6bf6713bdbbc0b7491b48eaae0164fdb9e6dea51",
+  "bytes": 83076,
+  "url": "http://127.0.0.1:9/v1/chat/completions",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "partial_stream_cut",
+  "step": 0,
+  "protocol": "anthropic",
+  "sha256": "254193d53a3b375eed510f7de170ac4ca2d0f87c4420b826e08a55c586fecb50",
+  "bytes": 82000,
+  "url": "http://127.0.0.1:9/v1/messages",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "anthropic-version",
+    "2023-06-01"
+   ],
+   [
+    "x-api-key",
+    "sk-byte-identity"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "partial_stream_cut",
+  "step": 1,
+  "protocol": "anthropic",
+  "sha256": "254193d53a3b375eed510f7de170ac4ca2d0f87c4420b826e08a55c586fecb50",
+  "bytes": 82000,
+  "url": "http://127.0.0.1:9/v1/messages",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "anthropic-version",
+    "2023-06-01"
+   ],
+   [
+    "x-api-key",
+    "sk-byte-identity"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "partial_stream_cut",
+  "step": 0,
+  "protocol": "responses",
+  "sha256": "9a4e426e33555c36d81335376b001e24cb1c098fd50a3c6edff1a6b359b6aa63",
+  "bytes": 83347,
+  "url": "http://127.0.0.1:9/v1/responses",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "partial_stream_cut",
+  "step": 1,
+  "protocol": "responses",
+  "sha256": "9a4e426e33555c36d81335376b001e24cb1c098fd50a3c6edff1a6b359b6aa63",
+  "bytes": 83347,
+  "url": "http://127.0.0.1:9/v1/responses",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "rate_limit_fallback",
+  "step": 0,
+  "protocol": "openai",
+  "sha256": "7fa3ee8591551a4d733850ecf83ee006919cf6464963cf9c483eedf474edaf0f",
+  "bytes": 83074,
+  "url": "http://127.0.0.1:9/v1/chat/completions",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "rate_limit_fallback",
+  "step": 1,
+  "protocol": "openai",
+  "sha256": "7fa3ee8591551a4d733850ecf83ee006919cf6464963cf9c483eedf474edaf0f",
+  "bytes": 83074,
+  "url": "http://127.0.0.1:9/v1/chat/completions",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "rate_limit_fallback",
+  "step": 0,
+  "protocol": "anthropic",
+  "sha256": "4c3ed5bd4d26959e8782100ebec9fcbd43d96af11676b7befb88ce54be9114e9",
+  "bytes": 81998,
+  "url": "http://127.0.0.1:9/v1/messages",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "anthropic-version",
+    "2023-06-01"
+   ],
+   [
+    "x-api-key",
+    "sk-byte-identity"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "rate_limit_fallback",
+  "step": 1,
+  "protocol": "anthropic",
+  "sha256": "4c3ed5bd4d26959e8782100ebec9fcbd43d96af11676b7befb88ce54be9114e9",
+  "bytes": 81998,
+  "url": "http://127.0.0.1:9/v1/messages",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "anthropic-version",
+    "2023-06-01"
+   ],
+   [
+    "x-api-key",
+    "sk-byte-identity"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "rate_limit_fallback",
+  "step": 0,
+  "protocol": "responses",
+  "sha256": "737750b4166f69e25efcd3a78ca40fc1123bee693c74ac6bcbd9c5991f38304a",
+  "bytes": 83345,
+  "url": "http://127.0.0.1:9/v1/responses",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "rate_limit_fallback",
+  "step": 1,
+  "protocol": "responses",
+  "sha256": "737750b4166f69e25efcd3a78ca40fc1123bee693c74ac6bcbd9c5991f38304a",
+  "bytes": 83345,
+  "url": "http://127.0.0.1:9/v1/responses",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "text_reply",
+  "step": 0,
+  "protocol": "openai",
+  "sha256": "a6006d479b53d5e340f0da9de37bc835055a1045fe3a0da844e4f7e63e5e2c57",
+  "bytes": 83072,
+  "url": "http://127.0.0.1:9/v1/chat/completions",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "text_reply",
+  "step": 0,
+  "protocol": "anthropic",
+  "sha256": "499a1c81349d2ed25960ffd962504491efaa92516e6469f3216e564833f6cf9b",
+  "bytes": 81996,
+  "url": "http://127.0.0.1:9/v1/messages",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "anthropic-version",
+    "2023-06-01"
+   ],
+   [
+    "x-api-key",
+    "sk-byte-identity"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "text_reply",
+  "step": 0,
+  "protocol": "responses",
+  "sha256": "e983608737149461f8e0cb0e388cfddccee797557654448dd9cbe373842cf82a",
+  "bytes": 83343,
+  "url": "http://127.0.0.1:9/v1/responses",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "upstream_turn_exhaustion",
+  "step": 0,
+  "protocol": "openai",
+  "sha256": "8bdd7969aae94c6bbbe79c521b0ba67e9b4b536a0b7fc4269e7a3533657b05f6",
+  "bytes": 96537,
+  "url": "http://127.0.0.1:9/v1/chat/completions",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "upstream_turn_exhaustion",
+  "step": 1,
+  "protocol": "openai",
+  "sha256": "8bdd7969aae94c6bbbe79c521b0ba67e9b4b536a0b7fc4269e7a3533657b05f6",
+  "bytes": 96537,
+  "url": "http://127.0.0.1:9/v1/chat/completions",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "upstream_turn_exhaustion",
+  "step": 0,
+  "protocol": "anthropic",
+  "sha256": "223a56e5271353650ab9a7bc76eabb1c8810d2b8aa356aedeec3bb4b5e26d8ef",
+  "bytes": 95560,
+  "url": "http://127.0.0.1:9/v1/messages",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "anthropic-version",
+    "2023-06-01"
+   ],
+   [
+    "x-api-key",
+    "sk-byte-identity"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "upstream_turn_exhaustion",
+  "step": 1,
+  "protocol": "anthropic",
+  "sha256": "223a56e5271353650ab9a7bc76eabb1c8810d2b8aa356aedeec3bb4b5e26d8ef",
+  "bytes": 95560,
+  "url": "http://127.0.0.1:9/v1/messages",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "anthropic-version",
+    "2023-06-01"
+   ],
+   [
+    "x-api-key",
+    "sk-byte-identity"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "upstream_turn_exhaustion",
+  "step": 0,
+  "protocol": "responses",
+  "sha256": "15d5f9858c58c4ccf2eabfee8a61d7ab58e7cd24107e5862d29fdbbb4c8ebbc8",
+  "bytes": 96987,
+  "url": "http://127.0.0.1:9/v1/responses",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "upstream_turn_exhaustion",
+  "step": 1,
+  "protocol": "responses",
+  "sha256": "15d5f9858c58c4ccf2eabfee8a61d7ab58e7cd24107e5862d29fdbbb4c8ebbc8",
+  "bytes": 96987,
+  "url": "http://127.0.0.1:9/v1/responses",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "upstream_turn_recovery",
+  "step": 0,
+  "protocol": "openai",
+  "sha256": "8bdd7969aae94c6bbbe79c521b0ba67e9b4b536a0b7fc4269e7a3533657b05f6",
+  "bytes": 96537,
+  "url": "http://127.0.0.1:9/v1/chat/completions",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "upstream_turn_recovery",
+  "step": 1,
+  "protocol": "openai",
+  "sha256": "8bdd7969aae94c6bbbe79c521b0ba67e9b4b536a0b7fc4269e7a3533657b05f6",
+  "bytes": 96537,
+  "url": "http://127.0.0.1:9/v1/chat/completions",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "upstream_turn_recovery",
+  "step": 0,
+  "protocol": "anthropic",
+  "sha256": "223a56e5271353650ab9a7bc76eabb1c8810d2b8aa356aedeec3bb4b5e26d8ef",
+  "bytes": 95560,
+  "url": "http://127.0.0.1:9/v1/messages",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "anthropic-version",
+    "2023-06-01"
+   ],
+   [
+    "x-api-key",
+    "sk-byte-identity"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "upstream_turn_recovery",
+  "step": 1,
+  "protocol": "anthropic",
+  "sha256": "223a56e5271353650ab9a7bc76eabb1c8810d2b8aa356aedeec3bb4b5e26d8ef",
+  "bytes": 95560,
+  "url": "http://127.0.0.1:9/v1/messages",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "anthropic-version",
+    "2023-06-01"
+   ],
+   [
+    "x-api-key",
+    "sk-byte-identity"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "upstream_turn_recovery",
+  "step": 0,
+  "protocol": "responses",
+  "sha256": "15d5f9858c58c4ccf2eabfee8a61d7ab58e7cd24107e5862d29fdbbb4c8ebbc8",
+  "bytes": 96987,
+  "url": "http://127.0.0.1:9/v1/responses",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "upstream_turn_recovery",
+  "step": 1,
+  "protocol": "responses",
+  "sha256": "15d5f9858c58c4ccf2eabfee8a61d7ab58e7cd24107e5862d29fdbbb4c8ebbc8",
+  "bytes": 96987,
+  "url": "http://127.0.0.1:9/v1/responses",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "write_file_tool",
+  "step": 0,
+  "protocol": "openai",
+  "sha256": "602ec8dc2dbd0512abe4e9ee0dc5016c6bb7f683a6898ef3ff45eca0e17f0c59",
+  "bytes": 102503,
+  "url": "http://127.0.0.1:9/v1/chat/completions",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "write_file_tool",
+  "step": 1,
+  "protocol": "openai",
+  "sha256": "ac3402aa7ed58a9399f9640823df416268dbe198966894b057dd277f11d32347",
+  "bytes": 103007,
+  "url": "http://127.0.0.1:9/v1/chat/completions",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "write_file_tool",
+  "step": 0,
+  "protocol": "anthropic",
+  "sha256": "086f72fda36357c5a2606f9926296b2d31edba6e738697a117d072cf9d1e5091",
+  "bytes": 101021,
+  "url": "http://127.0.0.1:9/v1/messages",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "anthropic-version",
+    "2023-06-01"
+   ],
+   [
+    "x-api-key",
+    "sk-byte-identity"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "write_file_tool",
+  "step": 1,
+  "protocol": "anthropic",
+  "sha256": "cc9ddb945207dcda33d8c80d730816ecd44d1aab58b25f2432eab354733c68ad",
+  "bytes": 101557,
+  "url": "http://127.0.0.1:9/v1/messages",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "anthropic-version",
+    "2023-06-01"
+   ],
+   [
+    "x-api-key",
+    "sk-byte-identity"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "write_file_tool",
+  "step": 0,
+  "protocol": "responses",
+  "sha256": "9b4476ea7afca462963d86a75a83ad5521b1ade1d0a02334e00699941cf3eef5",
+  "bytes": 102802,
+  "url": "http://127.0.0.1:9/v1/responses",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ },
+ {
+  "scenario": "write_file_tool",
+  "step": 1,
+  "protocol": "responses",
+  "sha256": "2e513516078b7ff0e1eeb94533e84e9424f1556240445e1574b122133486f06d",
+  "bytes": 103395,
+  "url": "http://127.0.0.1:9/v1/responses",
+  "headers": [
+   [
+    "Content-Type",
+    "application/json"
+   ],
+   [
+    "Authorization",
+    "Bearer sk-byte-identity"
+   ]
+  ]
+ }
+]

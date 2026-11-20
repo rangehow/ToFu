@@ -66,6 +66,8 @@ class _Sender:
 
     def send(self, thread: ThreadKey, text: str, *, marker: str,
              reply_to_external_id: str | None) -> dict[str, Any]:
+        if reply_to_external_id:
+            return failure('invalid_input', 'This bot cannot send native quote replies')
         transport = self._session.transport()
         record = self._session.store.thread(thread) or {}
         try:
@@ -87,7 +89,60 @@ class _Sender:
         return []  # bot platforms expose no thread history: an unknown send is sent again
 
     def send_attachment(self, thread: ThreadKey, path: str, *, kind: str, marker: str) -> dict[str, Any]:
-        return failure('attachment_rejected', 'Bot channels take no attachments')
+        return failure('attachment_rejected', 'This bot cannot send an unbound attachment')
+
+    def send_bound_part(self, item, text: str, path: str | None, *, marker: str,
+                        submitting) -> dict[str, Any]:
+        """The caption and FILE share the queued credential generation and recipient fence."""
+        session = self._session
+        thread = ThreadKey.parse(item.thread)
+
+        def current():
+            account = session.store.account(thread.channel) or {}
+            return (session.channel == thread.channel == 'wechat'
+                    and account.get('enabled') and not account.get('login')
+                    and session.binding == account_binding(account)
+                    and outbox._attachment_binding_matches(account, item))
+
+        def refusal():
+            if not current():
+                return failure('unsupported_target', 'The 微信 bot binding changed')
+            if session.stopped.is_set():
+                return failure('not_connected', 'The 微信 session is stopping before submission')
+            return None
+
+        admitted = False
+
+        def before_submit():
+            nonlocal admitted
+            rejected = refusal()
+            if rejected is not None:
+                return rejected
+            if not admitted:
+                if not submitting():
+                    return failure('unknown', 'The outbox submission was already claimed')
+                admitted = True
+            return refusal()
+
+        rejected = refusal()
+        if rejected is not None:
+            return rejected
+        record = session.store.thread(thread) or {}
+        if record.get('botReplyBinding') != item.extra['attachmentBinding']:
+            return failure('unsupported_target', 'The current 微信 bot needs a new message in this chat')
+        transport = session.transport()
+        rejected = refusal()
+        if rejected is not None:
+            return rejected
+        reply = dict(record.get('botReply') or {})
+        try:
+            if path is None:
+                return transport.send(thread.kind, ids.peer(thread), text, item_id=marker, reply=reply,
+                                      before_submit=before_submit)
+            return transport.send_attachment(thread.kind, ids.peer(thread), path, item_id=marker, reply=reply,
+                                             before_submit=before_submit, before_transfer=refusal)
+        except NetworkRoutesExhausted:
+            return failure('not_connected', 'No network route to the platform connected')
 
     def history_from(self, thread: ThreadKey, external_id: str) -> list[ChannelEvent]:
         return []
@@ -242,15 +297,22 @@ class BotSession:
                 continue
             events.append(self._event(message, thread))
         if events:
-            ingress.ingest_batch(self.owner, events, store=self.store)
+            media = self.transport() if self.channel == 'wechat' and any(event.media for event in events) else None
+            ingress.ingest_batch(self.owner, events, store=self.store, **({'media': media} if media else {}))
         if checkpoint:
             self.store.update_account(self.channel, lambda account: {**account, **dict(checkpoint)})
         self._wake.set()
 
     def remember_reply(self, thread: ThreadKey, reply: Mapping[str, Any]) -> None:
         value = dict(reply)
-        self.store.update_thread(thread, lambda record: record if record.get('botReply') == value
-                                 else {**record, 'botReply': value})
+        updates = {'botReply': value}
+        if self.channel == 'wechat':
+            account = self.store.account(self.channel) or {}
+            if self.binding != account_binding(account):
+                return
+            updates['botReplyBinding'] = outbox.attachment_binding(account)
+        self.store.update_thread(thread, lambda record: {**record, **updates}
+                                 if any(record.get(k) != v for k, v in updates.items()) else record)
         if self.channel == 'wechat':
             self._mirror_command_chat_reply(thread, value)
 
@@ -289,7 +351,7 @@ class BotSession:
         return ChannelEvent(thread=thread, external_id=external, sender_id=message.sender,
                             sender_name=message.sender_name or message.sender, text=message.text,
                             sent_at_ms=int(external[:10]) * 1000, thread_title=title,
-                            reply_to_message_id=message.quote_message_id, quoted=message.quoted)
+                            reply_to_message_id=message.quote_message_id, quoted=message.quoted, media=message.media)
 
     def _pair(self, message: Inbound, thread: ThreadKey) -> bool:
         """A pending pairing code sent by its author in a private chat binds that author."""

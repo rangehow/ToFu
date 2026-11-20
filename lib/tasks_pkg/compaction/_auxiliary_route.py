@@ -80,10 +80,17 @@ def record_auxiliary_route_success(group, *, owner, tenant):
             health.record_success(candidate)
 
 
+def _exhausted_auxiliary_supply(result, revision, parent_route_identities):
+    result['reason'] = 'no_qualified_authorized_auxiliary_route'
+    if parent_route_identities:
+        result['_exhaustedAuxiliarySupply'] = (revision, parent_route_identities)
+    return result
+
+
 def select_auxiliary_route(result, profiles, *, owner, tenant, input_tokens,
                            output_tokens, capacity_output_tokens, subscription_main=True,
                            main_cost=None, parent_offering_ids=(), parent_route_identities=(),
-                           excluded_routes=(), main_serves_summary=False):
+                           excluded_routes=(), excluded_route_identities=(), main_serves_summary=False):
     from lib.model_routing import (ModelRoutingRepository, OwnerBoundary,
                                    NativeModelSelection, RoutePolicy)
     from lib.model_routing.routing import RouteCandidateCompiler
@@ -142,7 +149,11 @@ def select_auxiliary_route(result, profiles, *, owner, tenant, input_tokens,
             required_capabilities=frozenset({'text'}),
             required_context=input_tokens + output_tokens))
         for candidate in compiled:
-            if candidate_credential_excluded(candidate, excluded_routes, owner=owner, tenant=tenant):
+            identity = route_identity(candidate, authority.revision)
+            # A candidate-local refusal excludes the exact witness, not other
+            # deployments or models that happen to share its credential.
+            if (identity in excluded_route_identities
+                    or candidate_credential_excluded(candidate, excluded_routes, owner=owner, tenant=tenant)):
                 continue
             actual_capacity = candidate_capacity(candidate, input_tokens, capacity_output_tokens)
             if actual_capacity < output_tokens:
@@ -203,7 +214,6 @@ def select_auxiliary_route(result, profiles, *, owner, tenant, input_tokens,
                 'ranking': _RANKING, 'qualityTier': profile.get('quality', 'unknown'),
                 'resourceTier': tier,
             }
-            identity = route_identity(candidate, authority.revision)
             # Organization-billed paid APIs first, owner resources second. Known
             # paid cost or reference proxy first within each class; exact AA
             # next, declared lightness only as a fallback/tie breaker.
@@ -213,8 +223,7 @@ def select_auxiliary_route(result, profiles, *, owner, tenant, input_tokens,
             candidates.append((rank, candidate, cost, basis, evidence, identity,
                                maximum_cost, actual_capacity))
     if not candidates:
-        result['reason'] = 'no_qualified_authorized_auxiliary_route'
-        return result
+        return _exhausted_auxiliary_supply(result, authority.revision, parent_route_identities)
     leader = min(candidates, key=lambda row: row[0])
     # A recorded billing stop (402 key-wide, quota per wire model) or explicit
     # disable in key-stats is refused by the dispatch admission whatever the
@@ -234,11 +243,13 @@ def select_auxiliary_route(result, profiles, *, owner, tenant, input_tokens,
             'declaredPricing': lead.offering.get('actual_pricing') if lead_cost is not None else None,
             'capacityOutputTokens': lead_capacity}
     if not usable:
-        result['reason'] = 'no_qualified_authorized_auxiliary_route'
-        return result
+        return _exhausted_auxiliary_supply(result, authority.revision, parent_route_identities)
     _, candidate, cost, basis, evidence, identity, maximum_cost, actual_capacity = min(usable, key=lambda row: row[0])
     evidence['eligibleRoutes'] = len(usable)
-    result.update(modelId=candidate.model['model_id'], providerId=candidate.provider_id,
+    # Health can recover at the same revision; count finite authority supply
+    # separately from the routes that are usable at this instant.
+    result.update(_auxiliaryWitnessCount=len(candidates),
+                  modelId=candidate.model['model_id'], providerId=candidate.provider_id,
                   requestOwned=True, routeIdentity=identity,
                   reason='authorized_auxiliary_resource_policy',
                   projectedCostUsd=cost, costBasis=basis, selectionBasis=evidence,

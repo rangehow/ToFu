@@ -247,3 +247,131 @@ def test_source_recovery_witness_cannot_be_created_after_application_start(
             os.close(writer)
 
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize('has_pins', [True, False])
+def test_execution_control_reports_frozen_source_only(tmp_path, monkeypatch, has_pins):
+    import os
+    from lib.runtime.pinned_import_source import PinnedImportSource
+    from lib.tasks_pkg import command_control_transport
+    from serverctl_pkg import execution_host, execution_lifespan
+
+    source = tmp_path / 'app.py'
+    source.write_text('VERSION = 1\n')
+    fingerprint = PinnedImportSource([str(tmp_path)]).freeze()
+    source.write_text('VERSION = 2\n')
+    disk = PinnedImportSource([str(tmp_path)]).freeze()
+    assert disk != fingerprint
+
+    def forward(method, task_id, **kwargs):
+        assert method == 'interrupt'
+        return {'interrupted': False}
+
+    gate = SimpleNamespace(apply_command_control=forward, begin_stop=lambda: None, join=lambda: None)
+    monkeypatch.setattr(execution_host, '_claim_gate', lambda *a: gate)
+    monkeypatch.setattr(execution_host, 'process_matches', lambda *a: True)
+    monkeypatch.setattr(execution_host, 'write_record', lambda *a: None)
+
+    class Listener:
+        def __init__(self, service_id, apply):
+            assert service_id == 'primary'
+            self.apply = apply
+
+        async def start(self):
+            assert self.apply('interrupt', 'task', user_id=41) == {'interrupted': False}
+            if has_pins:
+                result = self.apply('retained_source_fingerprint', '', user_id=41)
+                assert result == fingerprint
+                result.clear()
+                assert self.apply('retained_source_fingerprint', '', user_id=41) == fingerprint
+            else:
+                with pytest.raises(RuntimeError, match='unavailable'):
+                    self.apply('retained_source_fingerprint', '', user_id=41)
+            return {}
+
+        async def close(self):
+            pass
+
+    async def lifespan(app, stopped, ready, *, before_shutdown):
+        await ready()
+        await before_shutdown()
+
+    monkeypatch.setattr(command_control_transport, 'CommandControlServer', Listener)
+    monkeypatch.setattr(execution_lifespan, 'run_execution_lifespan', lifespan)
+    extensions = {'tofu_execution_retained_source_fingerprint': fingerprint} if has_pins else {}
+    app = SimpleNamespace(extensions=extensions)
+    reader, writer = os.pipe()
+    try:
+        args = SimpleNamespace(manager_fd=reader, manager_pid=os.getpid(), manager_start=1,
+                               state_file=str(tmp_path / 'unused.json'))
+        record = {'plan': disk, 'serviceId': 'primary'}
+
+        async def exercise():
+            await execution_host._run_application(
+                args, record, asyncio.Event(), threading.Event(), lambda *a: app)
+
+        asyncio.run(exercise())
+        assert record['state'] == 'ready'
+    finally:
+        os.close(reader)
+        os.close(writer)
+
+
+def test_retained_fingerprint_is_not_a_witness_of_pre_pin_imports(tmp_path, monkeypatch):
+    import importlib
+    import linecache
+    import sys
+
+    import runtime_guards
+    from lib.runtime.pinned_import_source import source_identity
+    from serverctl_pkg import execution_host, execution_plan
+
+    early_name = 'synthetic_execution_early'
+    lazy_name = 'synthetic_execution_lazy'
+    early_path = tmp_path / f'{early_name}.py'
+    lazy_path = tmp_path / f'{lazy_name}.py'
+    early_bytes = b'VERSION = "already imported"\n'
+    retained_bytes = b'VERSION = "retained"\n'
+    later_bytes = b'VERSION = "new checkout after admission"\n'
+    early_path.write_bytes(early_bytes)
+    lazy_path.write_bytes(retained_bytes)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv('TOFU_PROJECT_PATH', str(tmp_path))
+    monkeypatch.setattr(runtime_guards, 'load_deployment_configuration',
+                        lambda: SimpleNamespace(process_role='execution'))
+    app = SimpleNamespace(extensions={})
+    monkeypatch.setitem(sys.modules, 'server', SimpleNamespace(
+        app=app, _APPLICATION_IMPORT_ROOTS=[str(tmp_path)],
+        register_server_runtime_lifecycle=lambda *_args, **_kwargs: None))
+
+    def identity(early, lazy):
+        return source_identity([(str(early_path), early), (str(lazy_path), lazy)])
+
+    plan = identity(retained_bytes, retained_bytes)
+    monkeypatch.setattr(execution_plan, 'prepare_plan', lambda *_: plan)
+    monkeypatch.setattr(execution_plan, 'prepare_launch_policy', lambda *_: {})
+
+    try:
+        early = importlib.import_module(early_name)
+        assert early.VERSION == 'already imported'
+        early_path.write_bytes(retained_bytes)
+        assert execution_host.create_application(threading.Event(), plan) is app
+
+        lazy_path.write_bytes(later_bytes)
+        assert importlib.import_module(lazy_name).VERSION == 'retained'
+        assert importlib.import_module(early_name) is early
+        assert early.VERSION == 'already imported'
+
+        dispatch = execution_host._with_source_diagnostic(
+            app, lambda *_args, **_kwargs: pytest.fail('forwarded to a shard'))
+        result = dispatch('retained_source_fingerprint', '', user_id=41)
+        assert result == plan
+        assert result != identity(early_bytes, retained_bytes)  # Actually imported bytes.
+        assert result != identity(retained_bytes, later_bytes)  # Current checkout bytes.
+    finally:
+        pins = app.extensions.get('tofu_execution_import_source')
+        if pins is not None:
+            pins.uninstall()
+        sys.modules.pop(early_name, None)
+        sys.modules.pop(lazy_name, None)
+        linecache.cache.pop(str(lazy_path), None)

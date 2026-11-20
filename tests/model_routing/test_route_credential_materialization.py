@@ -25,7 +25,7 @@ def _prepare(monkeypatch, secrets):
     repository = SimpleNamespace(
         get=lambda owner: SimpleNamespace(document=document, revision=3), resolve_secret=resolve)
     def prepare(**kwargs):
-        handle = SimpleNamespace(slot=SimpleNamespace(), api_key=kwargs['api_key'])
+        handle = SimpleNamespace(slot=SimpleNamespace(oauth=kwargs.get('oauth')), api_key=kwargs['api_key'])
         minted.append(handle)
         return handle
     monkeypatch.setattr(adapter, 'prepare_ephemeral_slot', prepare)

@@ -52,6 +52,51 @@ def publish(tmp_path, name, data, **kwargs):
     return service.publish_file(str(path), '', conv_id='owned', user_id=7, roots=[str(tmp_path)], **kwargs)
 
 
+def test_cited_task_output_has_owned_open_and_download_actions(owned, tmp_path, monkeypatch):
+    from lib.project_mod import modifications
+    from lib.tasks_pkg.workspace_reference_delivery import append_workspace_output_links
+
+    root = str(tmp_path)
+    for name in ('report', 'changed', 'foreign', 'uncited', 'code'):
+        (tmp_path / f'{name}.md').write_bytes(name.encode())
+
+    def row(name, data, task_id='producer'):
+        return {'path': f'{name}.md', 'basePath': root, 'convId': 'owned',
+                'taskId': task_id, 'type': 'write_file', 'postImage': {
+                    'kind': 'content', 'digest': hashlib.blake2b(data, digest_size=32).hexdigest()}}
+
+    rows = [row('report', b'report'), row('changed', b'old'), row('foreign', b'foreign'),
+            row('foreign', b'foreign', 'different-producer'), row('uncited', b'uncited'),
+            row('code', b'code')]
+    monkeypatch.setattr(modifications, '_conversation_history', lambda *_: rows)
+    text = ('[Report][ref], [Changed](changed.md), [Foreign](foreign.md). '
+            '`[Code](code.md)` and [Web](https://example.org/uncited.md).\n\n'
+            '[ref]: ./report.md')
+    task = {'id': 'producer', 'convId': 'owned', '_attemptId': 'attempt', '_userId': 7,
+            '_workspaceRootPolicy': {'primaryPath': root, 'roots': {'main': {'path': root, 'access': 'rw'}}},
+            'content': text}
+    for cfg, reason in [({'planMode': True}, 'stop'), ({}, 'aborted')]:
+        append_workspace_output_links(dict(task, config=cfg), finish_reason=reason)
+        assert not core.list_artifacts('owned')
+    append_workspace_output_links(dict(task, content=text + '\n\n```python\n'), finish_reason='stop')
+    assert not core.list_artifacts('owned')
+    append_workspace_output_links(task, finish_reason='stop')
+    assert task['content'].startswith(text)
+    payload = json.loads(task['content'].split('```tofu-ui\n')[1].split('\n```')[0])
+    rich_schema = Path('contracts/rich_response_v1.schema.json')
+    Draft202012Validator(json.loads(rich_schema.read_text())).validate(payload)
+    block, = payload['blocks']
+    assert block['title'] == 'report.md'
+    assert [action['kind'] for action in block['actions']] == ['open_artifact', 'download_artifact']
+    artifact_id = block['actions'][0]['targetId']
+    assert block['actions'][1]['targetId'] == artifact_id
+    assert len(core.list_artifacts('owned')) == 1
+    (tmp_path / 'report.md').unlink()
+    assert service.load_file(artifact_id, user_id=7)[0] == b'report'
+    with pytest.raises(core.ArtifactNotFoundError):
+        service.load_file(artifact_id, user_id=8)
+
+
 def test_large_self_contained_prototype_receipt_and_source_removal(owned, tmp_path):
     data = (b'<!doctype html><html><head><style>body{color:#123}</style></head><body>'
             + b'<p>prototype</p>' * 220200 + b'</body></html>')

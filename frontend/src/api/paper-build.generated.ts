@@ -50,6 +50,7 @@ export type PaperBuildRequestV1 = {
   file?: string;
   project_root?: string;
   document_id?: string;
+  venue_year?: number;
 };
 
 export type PaperBuildReceiptV1 = {

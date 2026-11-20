@@ -1,0 +1,27 @@
+{
+ "failed": [],
+ "ok": true,
+ "pages": [
+  {
+   "index": 0,
+   "png": {
+    "$blob": "pages/01.png",
+    "kind": "raster"
+   }
+  },
+  {
+   "index": 1,
+   "png": {
+    "$blob": "pages/02.png",
+    "kind": "raster"
+   }
+  },
+  {
+   "index": 2,
+   "png": {
+    "$blob": "pages/03.png",
+    "kind": "raster"
+   }
+  }
+ ]
+}

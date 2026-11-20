@@ -161,6 +161,8 @@ def _pin_engine(engine: Path, root: Path) -> tuple[Path, str]:
             raise SystemExit('engine binary changed while being pinned')
         temporary.chmod(0o500)
         temporary.replace(pinned)
+    if hashlib.sha256(pinned.read_bytes()).hexdigest() != digest:
+        raise SystemExit('cached engine pin does not match the requested engine')
     return pinned, digest
 
 
@@ -195,15 +197,22 @@ def _seed_backup_generation(data_dir: Path, engine: Path) -> str:
 
 
 def _child_environment(root: Path, scratch: Path, engine: Path | None, digest: str, durability: str,
-                       backend: str = 'tofudb', request_profile: bool = False) -> dict[str, str]:
+                       backend: str = 'tofudb', request_profile: bool = False, *,
+                       faultfs: bool = False) -> dict[str, str]:
     keep = ('PATH', 'LANG', 'LC_ALL', 'TERM', 'TZ')
     env = {key: os.environ[key] for key in keep if key in os.environ}
     # The medium is part of the measurement: production processes reach
-    # DolphinFS through its preloaded userspace client (LD_PRELOAD plus
-    # LIBBGFS_*), and benchmarks/agent_storage/faultfs.c emulates a medium
-    # through FAULTFS_*. Dropping them silently measured kernel FUSE instead.
-    env.update({key: value for key, value in os.environ.items()
-                if key == 'LD_PRELOAD' or key.startswith(('LIBBGFS_', 'FAULTFS_'))})
+    # DolphinFS through its preloaded userspace client. Fault injection is
+    # separate: even FAULTFS_STATS can write outside the disposable root.
+    env.update({key: value for key, value in os.environ.items() if key.startswith('LIBBGFS_')})
+    preload = os.environ.get('LD_PRELOAD', '')
+    if faultfs:
+        env.update({key: value for key, value in os.environ.items() if key.startswith('FAULTFS_')})
+    else:
+        preload = ' '.join(entry for entry in re.split(r'[ :]+', preload) if entry
+                           and Path(entry).name != 'faultfs.so')
+    if preload:
+        env['LD_PRELOAD'] = preload
     for name in ('home', 'data', 'project'):
         (root / name).mkdir(parents=True, exist_ok=True, mode=0o700)
     env.update({
@@ -297,13 +306,24 @@ class Harness:
 
     # storage lifecycle -------------------------------------------------------
     def start_storage(self):
+        import lib.storage
         from lib.storage import StorageRuntime, StorageSupervisor
         from lib.storage.service import install_runtime_for_test
+        self.storage_source = Path(lib.storage.__file__).resolve()
+        if not self.storage_source.is_relative_to(PROJECT_ROOT):
+            raise RuntimeError(f'load child imported storage from the wrong checkout: {self.storage_source}')
         supervisor = StorageSupervisor(project_root=self.root / 'project', backend=self.args.backend,
                                        startup_timeout=float(self.args.startup_timeout))
         self.runtime = StorageRuntime(supervisor, auto_restart=False)
         install_runtime_for_test(self.runtime)
         if self.args.backend == 'tofudb':
+            # Offline init/backup executes before the supervisor's serving
+            # admission, so bind the same executable to this checkout here.
+            from serverctl_pkg.native_engine import verify_admissible
+            binary = Path(os.environ['TOFUDB_BIN'])
+            if hashlib.sha256(binary.read_bytes()).hexdigest() != os.environ['TOFUDB_EXPECTED_SHA256']:
+                raise RuntimeError('engine bytes differ from the pinned SHA-256 before fixture seeding')
+            verify_admissible(binary, PROJECT_ROOT)
             backup_store = _seed_backup_generation(self.root / 'project' / 'data', Path(os.environ['TOFUDB_BIN']))
             print(f'backup store before engine start: {backup_store}', flush=True)
         self.runtime.start()
@@ -772,7 +792,8 @@ def child_main(args) -> int:
     except EngineAdmissionRefusedError as exc:
         raise SystemExit(f'{exc}\nThe engine binary must match this checkout\'s engine source: run the harness from '
                          f'a checkout (or `git archive <commit>` export) of the commit the binary was built from.')
-    report['storage_status'] = {k: status.get(k) for k in ('backend', 'pid', 'port', 'state')}
+    report['storage_status'] = {k: status.get(k) for k in ('backend', 'pid', 'port', 'state', 'transport')}
+    report['child_storage_source'] = str(harness.storage_source)
     try:
         if args.reuse_seed and (root / 'seed.json').exists():
             report['seed'] = harness.load_seed()
@@ -820,6 +841,8 @@ def main(argv=None) -> int:
                              "so a TofuDB-vs-Sidecar comparison at equal durability uses 'strict'")
     parser.add_argument('--request-profile', action='store_true',
                         help='record every engine request in system.metrics.requestProfile (adds observer cost)')
+    parser.add_argument('--faultfs', action='store_true',
+                        help='explicitly pass inherited faultfs.so and FAULTFS_* to the measuring child')
     parser.add_argument('--run-id', default='')
     parser.add_argument('--child', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
@@ -848,7 +871,7 @@ def main(argv=None) -> int:
     scratch = Path(tempfile.mkdtemp(prefix='tofudb-load-test-', dir=temporary_root()))
     try:
         environment = _child_environment(root.resolve(), scratch, engine, digest, args.durability,
-                                         args.backend, args.request_profile)
+                                         args.backend, args.request_profile, faultfs=args.faultfs)
         return subprocess.run(command, env=environment, cwd=str(root.resolve())).returncode
     finally:
         shutil.rmtree(scratch, ignore_errors=True)

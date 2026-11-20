@@ -80,10 +80,8 @@ def test_attempt_claim_retries_ambiguous_timeout_with_stable_owner(monkeypatch):
 
 
 def test_dispatchable_recovery_starts_only_explicit_executor_attempts(
-    isolated_chat_sidecar, monkeypatch,
+    chat_sidecar, monkeypatch,
 ):
-    # Recovery scans every owner's attempts, so this test needs an authority
-    # holding no attempts other tests left pending.
     import lib.conversation_sync.command_service as command_service_module
     from lib.conversation_sync.command_service import ConversationTurnCommandService
     from lib.conversation_sync.dispatch_contract import (

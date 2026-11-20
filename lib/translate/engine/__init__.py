@@ -33,6 +33,7 @@ from lib.translate.errors import TranslationContentRefused
 # Sentence-completeness helpers (pure primitives)
 from ._split import (
     _SENTENCE_END_CHARS,
+    _ends_in_open_link,
     _ends_midsentence,
 )
 
@@ -54,6 +55,7 @@ __all__ = [
     '_translate_freetext',    # lib/translate/incremental.py:171 (PRIVATE consumer)
     # sentence-completeness primitives
     '_SENTENCE_END_CHARS',
+    '_ends_in_open_link',
     '_ends_midsentence',
     # provenance helper
     '_build_trace',

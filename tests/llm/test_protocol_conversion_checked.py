@@ -480,7 +480,7 @@ def test_native_visible_text_is_not_optional_metadata(projection):
 
 @pytest.mark.parametrize('completed', [True, False])
 def test_generic_body_keeps_authoritative_historical_reasoning_continuity(completed):
-    """A settled thinking signature can migrate; a live signature stays fenced."""
+    """Responses omits source-private signatures without rewriting Turn status."""
     from lib.llm.body import build_body
     message = {'role': 'assistant', 'content': 'Completed visible answer',
                'reasoning_content': 'Earlier reasoning',
@@ -492,10 +492,10 @@ def test_generic_body_keeps_authoritative_historical_reasoning_continuity(comple
         message, {'role': 'user', 'content': 'Continue the remaining task'},
     ], max_tokens=32, context_window=128000, precomputed_input_tokens=128)
     result = openai_body_to_responses_checked(body, profile='codex')
-    if completed:
-        assert not result.validation_issues
-        assert result.permitted_conversion_losses['historical_thinking_signature_omitted'] == 1
-        assert 'Completed visible answer' in str(result.require_payload()['input'])
-    else:
-        assert result.validation_issues == ('mandatory_continuity_unrepresentable',)
+    assert not result.validation_issues
+    code = ('historical_thinking_signature_omitted' if completed
+            else 'cross_protocol_reasoning_omitted')
+    assert result.permitted_conversion_losses[code] == 1
+    assert 'Completed visible answer' in str(result.require_payload()['input'])
+    assert 'signed-provider-history' not in repr(result.payload)
     assert message == original

@@ -48,7 +48,7 @@ from evaluations.swebench.tofu_kimi_runtime import (
     tofu_kimi_prompt_contract_sha256,
     tofu_kimi_production_custom_tools,
     tofu_kimi_production_tool_catalog,
-    tofu_kimi_production_tool_schema_sha256,
+    tofu_kimi_tool_catalog_sha256,
     tofu_kimi_search_enabled,
     tofu_kimi_tool_schema_sha256,
 )
@@ -817,8 +817,7 @@ class TofuKimiRuntimeAgent(BaseAgent):
             search_enabled = tofu_kimi_search_enabled(self._runtime_config)
             tool_catalog = tofu_kimi_production_tool_catalog(
                 search_enabled=search_enabled)
-            tool_catalog_sha256 = tofu_kimi_production_tool_schema_sha256(
-                search_enabled=search_enabled)
+            tool_catalog_sha256 = tofu_kimi_tool_catalog_sha256(tool_catalog)
             # Injected post-validation, exactly like ``thinking`` above: the
             # manifest digest pins the operator-supplied config; these keys
             # are adapter-computed trial state (the per-trial rootfs path and

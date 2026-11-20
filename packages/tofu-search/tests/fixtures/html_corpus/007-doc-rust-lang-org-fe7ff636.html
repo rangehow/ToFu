@@ -1,0 +1,983 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="A contiguous growable array type, written as `Vec&#60;T&#62;`, short for ‘vector’."><title>Vec in std::vec - Rust</title><script>/* stub */</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-203241e4.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="std" data-themes="" data-resource-suffix="1.100.0" data-rustdoc-version="1.100.0 (0ef1bc386 2026-11-09)" data-channel="1.100.0" data-search-js="search-b167f383.js" data-stringdex-js="stringdex-b5109af9.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js">/* stub */</script><script defer src="sidebar-items1.100.0.js">/* stub */</script><script defer src="../../static.files/main-1814ead3.js">/* stub */</script><noscript><link rel="stylesheet" href="../../static.files/noscript-9f56287d.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc struct"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Vec</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><a class="logo-container" href="../../std/index.html"><img class="rust-logo" src="../../static.files/rust-logo-9a9549ea.svg" alt="logo"></a><h2><a href="../../std/index.html">std</a><span class="version">1.100.0</span></h2></div><div class="version">(0ef1bc386	2026-11-09)</div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Vec</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#examples" title="Examples">Examples</a></li><li><a href="#indexing" title="Indexing">Indexing</a></li><li><a href="#slicing" title="Slicing">Slicing</a></li><li><a href="#capacity-and-reallocation" title="Capacity and reallocation">Capacity and reallocation</a></li><li><a href="#guarantees" title="Guarantees">Guarantees</a></li></ul><h3><a href="#implementations">Associated Functions</a></h3><ul class="block method"><li><a href="#method.new" title="new">new</a></li><li><a href="#method.with_capacity" title="with_capacity">with_capacity</a></li><li><a href="#method.try_with_capacity" title="try_with_capacity">try_with_capacity</a></li><li><a href="#method.from_raw_parts" title="from_raw_parts">from_raw_parts</a></li><li><a href="#method.from_parts" title="from_parts">from_parts</a></li><li><a href="#method.from_fn" title="from_fn">from_fn</a></li><li><a href="#method.with_capacity_in" title="with_capacity_in">with_capacity_in</a></li><li><a href="#method.new_in" title="new_in">new_in</a></li><li><a href="#method.try_with_capacity_in" title="try_with_capacity_in">try_with_capacity_in</a></li><li><a href="#method.from_raw_parts_in" title="from_raw_parts_in">from_raw_parts_in</a></li><li><a href="#method.from_parts_in" title="from_parts_in">from_parts_in</a></li></ul><h3><a href="#implementations">Methods</a></h3><ul class="block method"><li><a href="#method.allocator" title="allocator">allocator</a></li><li><a href="#method.append" title="append">append</a></li><li><a href="#method.as_mut_ptr" title="as_mut_ptr">as_mut_ptr</a></li><li><a href="#method.as_mut_slice" title="as_mut_slice">as_mut_slice</a></li><li><a href="#method.as_non_null" title="as_non_null">as_non_null</a></li><li><a href="#method.as_ptr" title="as_ptr">as_ptr</a></li><li><a href="#method.as_slice" title="as_slice">as_slice</a></li><li><a href="#method.capacity" title="capacity">capacity</a></li><li><a href="#method.clear" title="clear">clear</a></li><li><a href="#method.const_make_global" title="const_make_global">const_make_global</a></li><li><a href="#method.dedup" title="dedup">dedup</a></li><li><a href="#method.dedup_by" title="dedup_by">dedup_by</a></li><li><a href="#method.dedup_by_key" title="dedup_by_key">dedup_by_key</a></li><li><a href="#method.drain" title="drain">drain</a></li><li><a href="#method.extend_from_slice" title="extend_from_slice">extend_from_slice</a></li><li><a href="#method.extend_from_within" title="extend_from_within">extend_from_within</a></li><li><a href="#method.extract_if" title="extract_if">extract_if</a></li><li><a href="#method.insert" title="insert">insert</a></li><li><a href="#method.insert_mut" title="insert_mut">insert_mut</a></li><li><a href="#method.into_array" title="into_array">into_array</a></li><li><a href="#method.into_boxed_slice" title="into_boxed_slice">into_boxed_slice</a></li><li><a href="#method.into_chunks" title="into_chunks">into_chunks</a></li><li><a href="#method.into_flattened" title="into_flattened">into_flattened</a></li><li><a href="#method.into_parts" title="into_parts">into_parts</a></li><li><a href="#method.into_parts_with_allocator" title="into_parts_with_allocator">into_parts_with_allocator</a></li><li><a href="#method.into_raw_parts" title="into_raw_parts">into_raw_parts</a></li><li><a href="#method.into_raw_parts_with_allocator" title="into_raw_parts_with_allocator">into_raw_parts_with_allocator</a></li><li><a href="#method.is_empty" title="is_empty">is_empty</a></li><li><a href="#method.leak" title="leak">leak</a></li><li><a href="#method.len" title="len">len</a></li><li><a href="#method.peek_mut" title="peek_mut">peek_mut</a></li><li><a href="#method.pop" title="pop">pop</a></li><li><a href="#method.pop_if" title="pop_if">pop_if</a></li><li><a href="#method.push" title="push">push</a></li><li><a href="#method.push_mut" title="push_mut">push_mut</a></li><li><a href="#method.push_within_capacity" title="push_within_capacity">push_within_capacity</a></li><li><a href="#method.recycle" title="recycle">recycle</a></li><li><a href="#method.remove" title="remove">remove</a></li><li><a href="#method.reserve" title="reserve">reserve</a></li><li><a href="#method.reserve_exact" title="reserve_exact">reserve_exact</a></li><li><a href="#method.resize" title="resize">resize</a></li><li><a href="#method.resize_with" title="resize_with">resize_with</a></li><li><a href="#method.retain" title="retain">retain</a></li><li><a href="#method.retain_mut" title="retain_mut">retain_mut</a></li><li><a href="#method.set_len" title="set_len">set_len</a></li><li><a href="#method.shrink_to" title="shrink_to">shrink_to</a></li><li><a href="#method.shrink_to_fit" title="shrink_to_fit">shrink_to_fit</a></li><li><a href="#method.spare_capacity_mut" title="spare_capacity_mut">spare_capacity_mut</a></li><li><a href="#method.splice" title="splice">splice</a></li><li><a href="#method.split_at_spare_mut" title="split_at_spare_mut">split_at_spare_mut</a></li><li><a href="#method.split_off" title="split_off">split_off</a></li><li><a href="#method.swap_remove" title="swap_remove">swap_remove</a></li><li><a href="#method.truncate" title="truncate">truncate</a></li><li><a href="#method.try_remove" title="try_remove">try_remove</a></li><li><a href="#method.try_reserve" title="try_reserve">try_reserve</a></li><li><a href="#method.try_reserve_exact" title="try_reserve_exact">try_reserve_exact</a></li><li><a href="#method.try_shrink_to" title="try_shrink_to">try_shrink_to</a></li><li><a href="#method.try_shrink_to_fit" title="try_shrink_to_fit">try_shrink_to_fit</a></li></ul><h3><a href="#deref-methods-%5BT%5D">Methods from Deref&lt;<wbr>Target=[<wbr>T]&gt;</a></h3><ul class="block deref-methods"><li><a href="#method.align_to" title="align_to">align_to</a></li><li><a href="#method.align_to_mut" title="align_to_mut">align_to_mut</a></li><li><a href="#method.array_windows" title="array_windows">array_windows</a></li><li><a href="#method.as_array" title="as_array">as_array</a></li><li><a href="#method.as_chunks" title="as_chunks">as_chunks</a></li><li><a href="#method.as_chunks_mut" title="as_chunks_mut">as_chunks_mut</a></li><li><a href="#method.as_chunks_unchecked" title="as_chunks_unchecked">as_chunks_unchecked</a></li><li><a href="#method.as_chunks_unchecked_mut" title="as_chunks_unchecked_mut">as_chunks_unchecked_mut</a></li><li><a href="#method.as_mut_array" title="as_mut_array">as_mut_array</a></li><li><a href="#method.as_mut_ptr-1" title="as_mut_ptr">as_mut_ptr</a></li><li><a href="#method.as_mut_ptr_range" title="as_mut_ptr_range">as_mut_ptr_range</a></li><li><a href="#method.as_mut_slice-1" title="as_mut_slice">as_mut_slice</a></li><li><a href="#method.as_ptr-1" title="as_ptr">as_ptr</a></li><li><a href="#method.as_ptr_range" title="as_ptr_range">as_ptr_range</a></li><li><a href="#method.as_rchunks" title="as_rchunks">as_rchunks</a></li><li><a href="#method.as_rchunks_mut" title="as_rchunks_mut">as_rchunks_mut</a></li><li><a href="#method.as_simd" title="as_simd">as_simd</a></li><li><a href="#method.as_simd_mut" title="as_simd_mut">as_simd_mut</a></li><li><a href="#method.as_slice-1" title="as_slice">as_slice</a></li><li><a href="#method.binary_search" title="binary_search">binary_search</a></li><li><a href="#method.binary_search_by" title="binary_search_by">binary_search_by</a></li><li><a href="#method.binary_search_by_key" title="binary_search_by_key">binary_search_by_key</a></li><li><a href="#method.chunk_by" title="chunk_by">chunk_by</a></li><li><a href="#method.chunk_by_mut" title="chunk_by_mut">chunk_by_mut</a></li><li><a href="#method.chunks" title="chunks">chunks</a></li><li><a href="#method.chunks_exact" title="chunks_exact">chunks_exact</a></li><li><a href="#method.chunks_exact_mut" title="chunks_exact_mut">chunks_exact_mut</a></li><li><a href="#method.chunks_mut" title="chunks_mut">chunks_mut</a></li><li><a href="#method.clone_from_slice" title="clone_from_slice">clone_from_slice</a></li><li><a href="#method.concat" title="concat">concat</a></li><li><a href="#method.connect" title="connect">connect</a></li><li><a href="#method.contains" title="contains">contains</a></li><li><a href="#method.copy_from_slice" title="copy_from_slice">copy_from_slice</a></li><li><a href="#method.copy_within" title="copy_within">copy_within</a></li><li><a href="#method.element_offset" title="element_offset">element_offset</a></li><li><a href="#method.ends_with" title="ends_with">ends_with</a></li><li><a href="#method.fill" title="fill">fill</a></li><li><a href="#method.fill_with" title="fill_with">fill_with</a></li><li><a href="#method.first" title="first">first</a></li><li><a href="#method.first_chunk" title="first_chunk">first_chunk</a></li><li><a href="#method.first_chunk_mut" title="first_chunk_mut">first_chunk_mut</a></li><li><a href="#method.first_mut" title="first_mut">first_mut</a></li><li><a href="#method.get" title="get">get</a></li><li><a href="#method.get_disjoint_mut" title="get_disjoint_mut">get_disjoint_mut</a></li><li><a href="#method.get_disjoint_unchecked_mut" title="get_disjoint_unchecked_mut">get_disjoint_unchecked_mut</a></li><li><a href="#method.get_mut" title="get_mut">get_mut</a></li><li><a href="#method.get_unchecked" title="get_unchecked">get_unchecked</a></li><li><a href="#method.get_unchecked_mut" title="get_unchecked_mut">get_unchecked_mut</a></li><li><a href="#method.is_empty-1" title="is_empty">is_empty</a></li><li><a href="#method.is_sorted" title="is_sorted">is_sorted</a></li><li><a href="#method.is_sorted_by" title="is_sorted_by">is_sorted_by</a></li><li><a href="#method.is_sorted_by_key" title="is_sorted_by_key">is_sorted_by_key</a></li><li><a href="#method.iter" title="iter">iter</a></li><li><a href="#method.iter_mut" title="iter_mut">iter_mut</a></li><li><a href="#method.join" title="join">join</a></li><li><a href="#method.last" title="last">last</a></li><li><a href="#method.last_chunk" title="last_chunk">last_chunk</a></li><li><a href="#method.last_chunk_mut" title="last_chunk_mut">last_chunk_mut</a></li><li><a href="#method.last_mut" title="last_mut">last_mut</a></li><li><a href="#method.len-1" title="len">len</a></li><li><a href="#method.partial_sort_unstable" title="partial_sort_unstable">partial_sort_unstable</a></li><li><a href="#method.partial_sort_unstable_by" title="partial_sort_unstable_by">partial_sort_unstable_by</a></li><li><a href="#method.partial_sort_unstable_by_key" title="partial_sort_unstable_by_key">partial_sort_unstable_by_key</a></li><li><a href="#method.partition_dedup" title="partition_dedup">partition_dedup</a></li><li><a href="#method.partition_dedup_by" title="partition_dedup_by">partition_dedup_by</a></li><li><a href="#method.partition_dedup_by_key" title="partition_dedup_by_key">partition_dedup_by_key</a></li><li><a href="#method.partition_point" title="partition_point">partition_point</a></li><li><a href="#method.rchunks" title="rchunks">rchunks</a></li><li><a href="#method.rchunks_exact" title="rchunks_exact">rchunks_exact</a></li><li><a href="#method.rchunks_exact_mut" title="rchunks_exact_mut">rchunks_exact_mut</a></li><li><a href="#method.rchunks_mut" title="rchunks_mut">rchunks_mut</a></li><li><a href="#method.repeat" title="repeat">repeat</a></li><li><a href="#method.reverse" title="reverse">reverse</a></li><li><a href="#method.rotate_left" title="rotate_left">rotate_left</a></li><li><a href="#method.rotate_right" title="rotate_right">rotate_right</a></li><li><a href="#method.rsplit" title="rsplit">rsplit</a></li><li><a href="#method.rsplit_mut" title="rsplit_mut">rsplit_mut</a></li><li><a href="#method.rsplit_once" title="rsplit_once">rsplit_once</a></li><li><a href="#method.rsplitn" title="rsplitn">rsplitn</a></li><li><a href="#method.rsplitn_mut" title="rsplitn_mut">rsplitn_mut</a></li><li><a href="#method.select_nth_unstable" title="select_nth_unstable">select_nth_unstable</a></li><li><a href="#method.select_nth_unstable_by" title="select_nth_unstable_by">select_nth_unstable_by</a></li><li><a href="#method.select_nth_unstable_by_key" title="select_nth_unstable_by_key">select_nth_unstable_by_key</a></li><li><a href="#method.shift_left" title="shift_left">shift_left</a></li><li><a href="#method.shift_right" title="shift_right">shift_right</a></li><li><a href="#method.sort" title="sort">sort</a></li><li><a href="#method.sort_by" title="sort_by">sort_by</a></li><li><a href="#method.sort_by_cached_key" title="sort_by_cached_key">sort_by_cached_key</a></li><li><a href="#method.sort_by_key" title="sort_by_key">sort_by_key</a></li><li><a href="#method.sort_unstable" title="sort_unstable">sort_unstable</a></li><li><a href="#method.sort_unstable_by" title="sort_unstable_by">sort_unstable_by</a></li><li><a href="#method.sort_unstable_by_key" title="sort_unstable_by_key">sort_unstable_by_key</a></li><li><a href="#method.split" title="split">split</a></li><li><a href="#method.split_at" title="split_at">split_at</a></li><li><a href="#method.split_at_checked" title="split_at_checked">split_at_checked</a></li><li><a href="#method.split_at_mut" title="split_at_mut">split_at_mut</a></li><li><a href="#method.split_at_mut_checked" title="split_at_mut_checked">split_at_mut_checked</a></li><li><a href="#method.split_at_mut_unchecked" title="split_at_mut_unchecked">split_at_mut_unchecked</a></li><li><a href="#method.split_at_unchecked" title="split_at_unchecked">split_at_unchecked</a></li><li><a href="#method.split_first" title="split_first">split_first</a></li><li><a href="#method.split_first_chunk" title="split_first_chunk">split_first_chunk</a></li><li><a href="#method.split_first_chunk_mut" title="split_first_chunk_mut">split_first_chunk_mut</a></li><li><a href="#method.split_first_mut" title="split_first_mut">split_first_mut</a></li><li><a href="#method.split_inclusive" title="split_inclusive">split_inclusive</a></li><li><a href="#method.split_inclusive_mut" title="split_inclusive_mut">split_inclusive_mut</a></li><li><a href="#method.split_last" title="split_last">split_last</a></li><li><a href="#method.split_last_chunk" title="split_last_chunk">split_last_chunk</a></li><li><a href="#method.split_last_chunk_mut" title="split_last_chunk_mut">split_last_chunk_mut</a></li><li><a href="#method.split_last_mut" title="split_last_mut">split_last_mut</a></li><li><a href="#method.split_mut" title="split_mut">split_mut</a></li><li><a href="#method.split_off-1" title="split_off">split_off</a></li><li><a href="#method.split_off_first" title="split_off_first">split_off_first</a></li><li><a href="#method.split_off_first_mut" title="split_off_first_mut">split_off_first_mut</a></li><li><a href="#method.split_off_last" title="split_off_last">split_off_last</a></li><li><a href="#method.split_off_last_mut" title="split_off_last_mut">split_off_last_mut</a></li><li><a href="#method.split_off_mut" title="split_off_mut">split_off_mut</a></li><li><a href="#method.split_once" title="split_once">split_once</a></li><li><a href="#method.splitn" title="splitn">splitn</a></li><li><a href="#method.splitn_mut" title="splitn_mut">splitn_mut</a></li><li><a href="#method.starts_with" title="starts_with">starts_with</a></li><li><a href="#method.strip_circumfix" title="strip_circumfix">strip_circumfix</a></li><li><a href="#method.strip_prefix" title="strip_prefix">strip_prefix</a></li><li><a href="#method.strip_suffix" title="strip_suffix">strip_suffix</a></li><li><a href="#method.subslice_range" title="subslice_range">subslice_range</a></li><li><a href="#method.swap" title="swap">swap</a></li><li><a href="#method.swap_unchecked" title="swap_unchecked">swap_unchecked</a></li><li><a href="#method.swap_with_slice" title="swap_with_slice">swap_with_slice</a></li><li><a href="#method.to_vec" title="to_vec">to_vec</a></li><li><a href="#method.to_vec_in" title="to_vec_in">to_vec_in</a></li><li><a href="#method.trim_prefix" title="trim_prefix">trim_prefix</a></li><li><a href="#method.trim_suffix" title="trim_suffix">trim_suffix</a></li><li><a href="#method.windows" title="windows">windows</a></li></ul><h3><a href="#trait-implementations">Trait Implementations</a></h3><ul class="block trait-implementation"><li><a href="#impl-AsMut%3CVec%3CT,+A%3E%3E-for-Vec%3CT,+A%3E" title="AsMut&#60;Vec&#60;T, A&#62;&#62;">AsMut&#60;Vec&#60;T, A&#62;&#62;</a></li><li><a href="#impl-AsMut%3C%5BT%5D%3E-for-Vec%3CT,+A%3E" title="AsMut&#60;[T]&#62;">AsMut&#60;[T]&#62;</a></li><li><a href="#impl-AsRef%3CVec%3CT,+A%3E%3E-for-Vec%3CT,+A%3E" title="AsRef&#60;Vec&#60;T, A&#62;&#62;">AsRef&#60;Vec&#60;T, A&#62;&#62;</a></li><li><a href="#impl-AsRef%3C%5BT%5D%3E-for-Vec%3CT,+A%3E" title="AsRef&#60;[T]&#62;">AsRef&#60;[T]&#62;</a></li><li><a href="#impl-Borrow%3C%5BT%5D%3E-for-Vec%3CT,+A%3E" title="Borrow&#60;[T]&#62;">Borrow&#60;[T]&#62;</a></li><li><a href="#impl-BorrowMut%3C%5BT%5D%3E-for-Vec%3CT,+A%3E" title="BorrowMut&#60;[T]&#62;">BorrowMut&#60;[T]&#62;</a></li><li><a href="#impl-Clone-for-Vec%3CT,+A%3E" title="Clone">Clone</a></li><li><a href="#impl-Debug-for-Vec%3CT,+A%3E" title="Debug">Debug</a></li><li><a href="#impl-Default-for-Vec%3CT%3E" title="Default">Default</a></li><li><a href="#impl-Deref-for-Vec%3CT,+A%3E" title="Deref">Deref</a></li><li><a href="#impl-DerefMut-for-Vec%3CT,+A%3E" title="DerefMut">DerefMut</a></li><li><a href="#impl-DerefPure-for-Vec%3CT,+A%3E" title="DerefPure">DerefPure</a></li><li><a href="#impl-Drop-for-Vec%3CT,+A%3E" title="Drop">Drop</a></li><li><a href="#impl-Eq-for-Vec%3CT,+A%3E" title="Eq">Eq</a></li><li><a href="#impl-Extend%3C%26T%3E-for-Vec%3CT,+A%3E" title="Extend&#60;&#38;&#39;a T&#62;">Extend&#60;&#38;&#39;a T&#62;</a></li><li><a href="#impl-Extend%3CT%3E-for-Vec%3CT,+A%3E" title="Extend&#60;T&#62;">Extend&#60;T&#62;</a></li><li><a href="#impl-From%3C%26Vec%3CT%3E%3E-for-Cow%3C'a,+%5BT%5D%3E" title="From&#60;&#38;&#39;a Vec&#60;T&#62;&#62;">From&#60;&#38;&#39;a Vec&#60;T&#62;&#62;</a></li><li><a href="#impl-From%3C%26%5BT;+N%5D%3E-for-Vec%3CT%3E" title="From&#60;&#38;[T; N]&#62;">From&#60;&#38;[T; N]&#62;</a></li><li><a href="#impl-From%3C%26%5BT%5D%3E-for-Vec%3CT%3E" title="From&#60;&#38;[T]&#62;">From&#60;&#38;[T]&#62;</a></li><li><a href="#impl-From%3C%26mut+%5BT;+N%5D%3E-for-Vec%3CT%3E" title="From&#60;&#38;mut [T; N]&#62;">From&#60;&#38;mut [T; N]&#62;</a></li><li><a href="#impl-From%3C%26mut+%5BT%5D%3E-for-Vec%3CT%3E" title="From&#60;&#38;mut [T]&#62;">From&#60;&#38;mut [T]&#62;</a></li><li><a href="#impl-From%3C%26str%3E-for-Vec%3Cu8%3E" title="From&#60;&#38;str&#62;">From&#60;&#38;str&#62;</a></li><li><a href="#impl-From%3CBinaryHeap%3CT,+A%3E%3E-for-Vec%3CT,+A%3E" title="From&#60;BinaryHeap&#60;T, A&#62;&#62;">From&#60;BinaryHeap&#60;T, A&#62;&#62;</a></li><li><a href="#impl-From%3CBox%3C%5BT%5D,+A%3E%3E-for-Vec%3CT,+A%3E" title="From&#60;Box&#60;[T], A&#62;&#62;">From&#60;Box&#60;[T], A&#62;&#62;</a></li><li><a href="#impl-From%3CByteString%3E-for-Vec%3Cu8%3E" title="From&#60;ByteString&#62;">From&#60;ByteString&#62;</a></li><li><a href="#impl-From%3CCString%3E-for-Vec%3Cu8%3E" title="From&#60;CString&#62;">From&#60;CString&#62;</a></li><li><a href="#impl-From%3CCow%3C'a,+%5BT%5D%3E%3E-for-Vec%3CT%3E" title="From&#60;Cow&#60;&#39;a, [T]&#62;&#62;">From&#60;Cow&#60;&#39;a, [T]&#62;&#62;</a></li><li><a href="#impl-From%3CString%3E-for-Vec%3Cu8%3E" title="From&#60;String&#62;">From&#60;String&#62;</a></li><li><a href="#impl-From%3CVec%3CNonZero%3Cu8%3E%3E%3E-for-CString" title="From&#60;Vec&#60;NonZero&#60;u8&#62;&#62;&#62;">From&#60;Vec&#60;NonZero&#60;u8&#62;&#62;&#62;</a></li><li><a href="#impl-From%3CVec%3CT,+A%3E%3E-for-Arc%3C%5BT%5D,+A%3E" title="From&#60;Vec&#60;T, A&#62;&#62;">From&#60;Vec&#60;T, A&#62;&#62;</a></li><li><a href="#impl-From%3CVec%3CT,+A%3E%3E-for-BinaryHeap%3CT,+A%3E" title="From&#60;Vec&#60;T, A&#62;&#62;">From&#60;Vec&#60;T, A&#62;&#62;</a></li><li><a href="#impl-From%3CVec%3CT,+A%3E%3E-for-Box%3C%5BT%5D,+A%3E" title="From&#60;Vec&#60;T, A&#62;&#62;">From&#60;Vec&#60;T, A&#62;&#62;</a></li><li><a href="#impl-From%3CVec%3CT,+A%3E%3E-for-Rc%3C%5BT%5D,+A%3E" title="From&#60;Vec&#60;T, A&#62;&#62;">From&#60;Vec&#60;T, A&#62;&#62;</a></li><li><a href="#impl-From%3CVec%3CT,+A%3E%3E-for-VecDeque%3CT,+A%3E" title="From&#60;Vec&#60;T, A&#62;&#62;">From&#60;Vec&#60;T, A&#62;&#62;</a></li><li><a href="#impl-From%3CVec%3CT%3E%3E-for-Cow%3C'a,+%5BT%5D%3E" title="From&#60;Vec&#60;T&#62;&#62;">From&#60;Vec&#60;T&#62;&#62;</a></li><li><a href="#impl-From%3CVecDeque%3CT,+A%3E%3E-for-Vec%3CT,+A%3E" title="From&#60;VecDeque&#60;T, A&#62;&#62;">From&#60;VecDeque&#60;T, A&#62;&#62;</a></li><li><a href="#impl-From%3C%5BT;+N%5D%3E-for-Vec%3CT%3E" title="From&#60;[T; N]&#62;">From&#60;[T; N]&#62;</a></li><li><a href="#impl-FromIterator%3CT%3E-for-Vec%3CT%3E" title="FromIterator&#60;T&#62;">FromIterator&#60;T&#62;</a></li><li><a href="#impl-Hash-for-Vec%3CT,+A%3E" title="Hash">Hash</a></li><li><a href="#impl-Index%3CI%3E-for-Vec%3CT,+A%3E" title="Index&#60;I&#62;">Index&#60;I&#62;</a></li><li><a href="#impl-IndexMut%3CI%3E-for-Vec%3CT,+A%3E" title="IndexMut&#60;I&#62;">IndexMut&#60;I&#62;</a></li><li><a href="#impl-IntoIterator-for-%26Vec%3CT,+A%3E" title="IntoIterator">IntoIterator</a></li><li><a href="#impl-IntoIterator-for-%26mut+Vec%3CT,+A%3E" title="IntoIterator">IntoIterator</a></li><li><a href="#impl-IntoIterator-for-Vec%3CT,+A%3E" title="IntoIterator">IntoIterator</a></li><li><a href="#impl-Ord-for-Vec%3CT,+A%3E" title="Ord">Ord</a></li><li><a href="#impl-PartialEq%3C%26%5BU;+N%5D%3E-for-Vec%3CT,+A%3E" title="PartialEq&#60;&#38;[U; N]&#62;">PartialEq&#60;&#38;[U; N]&#62;</a></li><li><a href="#impl-PartialEq%3C%26%5BU%5D%3E-for-Vec%3CT,+A%3E" title="PartialEq&#60;&#38;[U]&#62;">PartialEq&#60;&#38;[U]&#62;</a></li><li><a href="#impl-PartialEq%3C%26mut+%5BU%5D%3E-for-Vec%3CT,+A%3E" title="PartialEq&#60;&#38;mut [U]&#62;">PartialEq&#60;&#38;mut [U]&#62;</a></li><li><a href="#impl-PartialEq%3CByteStr%3E-for-Vec%3Cu8%3E" title="PartialEq&#60;ByteStr&#62;">PartialEq&#60;ByteStr&#62;</a></li><li><a href="#impl-PartialEq%3CByteString%3E-for-Vec%3Cu8%3E" title="PartialEq&#60;ByteString&#62;">PartialEq&#60;ByteString&#62;</a></li><li><a href="#impl-PartialEq%3CCow%3C'_,+%5BU%5D%3E%3E-for-Vec%3CT,+A%3E" title="PartialEq&#60;Cow&#60;&#39;_, [U]&#62;&#62;">PartialEq&#60;Cow&#60;&#39;_, [U]&#62;&#62;</a></li><li><a href="#impl-PartialEq%3CVec%3CU,+A2%3E%3E-for-Vec%3CT,+A1%3E" title="PartialEq&#60;Vec&#60;U, A2&#62;&#62;">PartialEq&#60;Vec&#60;U, A2&#62;&#62;</a></li><li><a href="#impl-PartialEq%3CVec%3CU,+A%3E%3E-for-%26%5BT%5D" title="PartialEq&#60;Vec&#60;U, A&#62;&#62;">PartialEq&#60;Vec&#60;U, A&#62;&#62;</a></li><li><a href="#impl-PartialEq%3CVec%3CU,+A%3E%3E-for-%26mut+%5BT%5D" title="PartialEq&#60;Vec&#60;U, A&#62;&#62;">PartialEq&#60;Vec&#60;U, A&#62;&#62;</a></li><li><a href="#impl-PartialEq%3CVec%3CU,+A%3E%3E-for-%5BT%5D" title="PartialEq&#60;Vec&#60;U, A&#62;&#62;">PartialEq&#60;Vec&#60;U, A&#62;&#62;</a></li><li><a href="#impl-PartialEq%3CVec%3CU,+A%3E%3E-for-Cow%3C'_,+%5BT%5D%3E" title="PartialEq&#60;Vec&#60;U, A&#62;&#62;">PartialEq&#60;Vec&#60;U, A&#62;&#62;</a></li><li><a href="#impl-PartialEq%3CVec%3CU,+A%3E%3E-for-VecDeque%3CT,+A%3E" title="PartialEq&#60;Vec&#60;U, A&#62;&#62;">PartialEq&#60;Vec&#60;U, A&#62;&#62;</a></li><li><a href="#impl-PartialEq%3CVec%3Cu8%3E%3E-for-ByteStr" title="PartialEq&#60;Vec&#60;u8&#62;&#62;">PartialEq&#60;Vec&#60;u8&#62;&#62;</a></li><li><a href="#impl-PartialEq%3CVec%3Cu8%3E%3E-for-ByteString" title="PartialEq&#60;Vec&#60;u8&#62;&#62;">PartialEq&#60;Vec&#60;u8&#62;&#62;</a></li><li><a href="#impl-PartialEq%3C%5BU;+N%5D%3E-for-Vec%3CT,+A%3E" title="PartialEq&#60;[U; N]&#62;">PartialEq&#60;[U; N]&#62;</a></li><li><a href="#impl-PartialEq%3C%5BU%5D%3E-for-Vec%3CT,+A%3E" title="PartialEq&#60;[U]&#62;">PartialEq&#60;[U]&#62;</a></li><li><a href="#impl-PartialOrd%3CVec%3CT,+A2%3E%3E-for-Vec%3CT,+A1%3E" title="PartialOrd&#60;Vec&#60;T, A2&#62;&#62;">PartialOrd&#60;Vec&#60;T, A2&#62;&#62;</a></li><li><a href="#impl-TryFrom%3CVec%3CT,+A%3E%3E-for-%5BT;+N%5D" title="TryFrom&#60;Vec&#60;T, A&#62;&#62;">TryFrom&#60;Vec&#60;T, A&#62;&#62;</a></li><li><a href="#impl-TryFrom%3CVec%3CT,+A%3E%3E-for-Box%3C%5BT;+N%5D,+A%3E" title="TryFrom&#60;Vec&#60;T, A&#62;&#62;">TryFrom&#60;Vec&#60;T, A&#62;&#62;</a></li><li><a href="#impl-TryFrom%3CVec%3Cu8%3E%3E-for-String" title="TryFrom&#60;Vec&#60;u8&#62;&#62;">TryFrom&#60;Vec&#60;u8&#62;&#62;</a></li><li><a href="#impl-Write-for-Vec%3Cu8,+A%3E" title="Write">Write</a></li></ul><h3><a href="#synthetic-implementations">Auto Trait Implementations</a></h3><ul class="block synthetic-implementation"><li><a href="#impl-Freeze-for-Vec%3CT,+A%3E" title="Freeze">Freeze</a></li><li><a href="#impl-RefUnwindSafe-for-Vec%3CT,+A%3E" title="RefUnwindSafe">RefUnwindSafe</a></li><li><a href="#impl-Send-for-Vec%3CT,+A%3E" title="Send">Send</a></li><li><a href="#impl-Sync-for-Vec%3CT,+A%3E" title="Sync">Sync</a></li><li><a href="#impl-Unpin-for-Vec%3CT,+A%3E" title="Unpin">Unpin</a></li><li><a href="#impl-UnsafeUnpin-for-Vec%3CT,+A%3E" title="UnsafeUnpin">UnsafeUnpin</a></li><li><a href="#impl-UnwindSafe-for-Vec%3CT,+A%3E" title="UnwindSafe">UnwindSafe</a></li></ul><h3><a href="#blanket-implementations">Blanket Implementations</a></h3><ul class="block blanket-implementation"><li><a href="#impl-Any-for-T" title="Any">Any</a></li><li><a href="#impl-Borrow%3CT%3E-for-T" title="Borrow&#60;T&#62;">Borrow&#60;T&#62;</a></li><li><a href="#impl-BorrowMut%3CT%3E-for-T" title="BorrowMut&#60;T&#62;">BorrowMut&#60;T&#62;</a></li><li><a href="#impl-CloneToUninit-for-T" title="CloneToUninit">CloneToUninit</a></li><li><a href="#impl-From%3CT%3E-for-T" title="From&#60;T&#62;">From&#60;T&#62;</a></li><li><a href="#impl-Into%3CU%3E-for-T" title="Into&#60;U&#62;">Into&#60;U&#62;</a></li><li><a href="#impl-Receiver-for-P" title="Receiver">Receiver</a></li><li><a href="#impl-ToOwned-for-T" title="ToOwned">ToOwned</a></li><li><a href="#impl-TryFrom%3CU%3E-for-T" title="TryFrom&#60;U&#62;">TryFrom&#60;U&#62;</a></li><li><a href="#impl-TryInto%3CU%3E-for-T" title="TryInto&#60;U&#62;">TryInto&#60;U&#62;</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="index.html">In std::<wbr>vec</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">std</a>::<wbr><a href="index.html">vec</a></div><h1>Struct <span class="struct">Vec</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><div class="notable-trait-badge-container"><a class="badge-4"href="../io/trait.Write.html" title="std::io::Write">Write</a></div><span class="since" title="Stable since Rust version 1.0.0">1.0.0</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#442-445">Source</a> </span></div><pre class="rust item-decl"><code>pub struct Vec&lt;T, A = <a class="struct" href="../alloc/struct.Global.html" title="struct std::alloc::Global">Global</a>&gt;<div class="where">where
+    A: <a class="trait" href="../alloc/trait.Allocator.html" title="trait std::alloc::Allocator">Allocator</a>,</div>{ <span class="comment">/* private fields */</span> }</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>A contiguous growable array type, written as <code>Vec&lt;T&gt;</code>, short for ‘vector’.</p>
+<h2 id="examples"><a class="doc-anchor" href="#examples">§</a>Examples</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span><span class="kw-2">mut </span>vec = Vec::new();
+vec.push(<span class="number">1</span>);
+vec.push(<span class="number">2</span>);
+
+<span class="macro">assert_eq!</span>(vec.len(), <span class="number">2</span>);
+<span class="macro">assert_eq!</span>(vec[<span class="number">0</span>], <span class="number">1</span>);
+
+<span class="macro">assert_eq!</span>(vec.pop(), <span class="prelude-val">Some</span>(<span class="number">2</span>));
+<span class="macro">assert_eq!</span>(vec.len(), <span class="number">1</span>);
+
+vec[<span class="number">0</span>] = <span class="number">7</span>;
+<span class="macro">assert_eq!</span>(vec[<span class="number">0</span>], <span class="number">7</span>);
+
+vec.extend([<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]);
+
+<span class="kw">for </span>x <span class="kw">in </span><span class="kw-2">&amp;</span>vec {
+    <span class="macro">println!</span>(<span class="string">"{x}"</span>);
+}
+<span class="macro">assert_eq!</span>(vec, [<span class="number">7</span>, <span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++let+mut+vec+=+Vec::new();%0A++++vec.push(1);%0A++++vec.push(2);%0A++++%0A++++assert_eq!(vec.len(),+2);%0A++++assert_eq!(vec%5B0%5D,+1);%0A++++%0A++++assert_eq!(vec.pop(),+Some(2));%0A++++assert_eq!(vec.len(),+1);%0A++++%0A++++vec%5B0%5D+=+7;%0A++++assert_eq!(vec%5B0%5D,+7);%0A++++%0A++++vec.extend(%5B1,+2,+3%5D);%0A++++%0A++++for+x+in+%26vec+%7B%0A++++++++println!(%22%7Bx%7D%22);%0A++++%7D%0A++++assert_eq!(vec,+%5B7,+1,+2,+3%5D);%0A%7D&amp;edition=2024"></a></div>
+<p>The <a href="../macro.vec.html" title="macro std::vec"><code>vec!</code></a> macro is provided for convenient initialization:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span><span class="kw-2">mut </span>vec1 = <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>];
+vec1.push(<span class="number">4</span>);
+<span class="kw">let </span>vec2 = Vec::from([<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>]);
+<span class="macro">assert_eq!</span>(vec1, vec2);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++let+mut+vec1+=+vec!%5B1,+2,+3%5D;%0A++++vec1.push(4);%0A++++let+vec2+=+Vec::from(%5B1,+2,+3,+4%5D);%0A++++assert_eq!(vec1,+vec2);%0A%7D&amp;edition=2024"></a></div>
+<p>It can also initialize each element of a <code>Vec&lt;T&gt;</code> with a given value.
+This may be more efficient than performing allocation and initialization
+in separate steps, especially when initializing a vector of zeros:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>vec = <span class="macro">vec!</span>[<span class="number">0</span>; <span class="number">5</span>];
+<span class="macro">assert_eq!</span>(vec, [<span class="number">0</span>, <span class="number">0</span>, <span class="number">0</span>, <span class="number">0</span>, <span class="number">0</span>]);
+
+<span class="comment">// The following is equivalent, but potentially slower:
+</span><span class="kw">let </span><span class="kw-2">mut </span>vec = Vec::with_capacity(<span class="number">5</span>);
+vec.resize(<span class="number">5</span>, <span class="number">0</span>);
+<span class="macro">assert_eq!</span>(vec, [<span class="number">0</span>, <span class="number">0</span>, <span class="number">0</span>, <span class="number">0</span>, <span class="number">0</span>]);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++let+vec+=+vec!%5B0;+5%5D;%0A++++assert_eq!(vec,+%5B0,+0,+0,+0,+0%5D);%0A++++%0A++++//+The+following+is+equivalent,+but+potentially+slower:%0A++++let+mut+vec+=+Vec::with_capacity(5);%0A++++vec.resize(5,+0);%0A++++assert_eq!(vec,+%5B0,+0,+0,+0,+0%5D);%0A%7D&amp;edition=2024"></a></div>
+<p>For more information, see
+<a href="#capacity-and-reallocation">Capacity and Reallocation</a>.</p>
+<p>Use a <code>Vec&lt;T&gt;</code> as an efficient stack:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span><span class="kw-2">mut </span>stack = Vec::new();
+
+stack.push(<span class="number">1</span>);
+stack.push(<span class="number">2</span>);
+stack.push(<span class="number">3</span>);
+
+<span class="kw">while let </span><span class="prelude-val">Some</span>(top) = stack.pop() {
+    <span class="comment">// Prints 3, 2, 1
+    </span><span class="macro">println!</span>(<span class="string">"{top}"</span>);
+}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++let+mut+stack+=+Vec::new();%0A++++%0A++++stack.push(1);%0A++++stack.push(2);%0A++++stack.push(3);%0A++++%0A++++while+let+Some(top)+=+stack.pop()+%7B%0A++++++++//+Prints+3,+2,+1%0A++++++++println!(%22%7Btop%7D%22);%0A++++%7D%0A%7D&amp;edition=2024"></a></div><h2 id="indexing"><a class="doc-anchor" href="#indexing">§</a>Indexing</h2>
+<p>The <code>Vec</code> type allows access to values by index, because it implements the
+<a href="../ops/trait.Index.html" title="trait std::ops::Index"><code>Index</code></a> trait. An example will be more explicit:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>v = <span class="macro">vec!</span>[<span class="number">0</span>, <span class="number">2</span>, <span class="number">4</span>, <span class="number">6</span>];
+<span class="macro">println!</span>(<span class="string">"{}"</span>, v[<span class="number">1</span>]); <span class="comment">// it will display '2'</span></code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++let+v+=+vec!%5B0,+2,+4,+6%5D;%0A++++println!(%22%7B%7D%22,+v%5B1%5D);%0A%7D&amp;edition=2024"></a></div>
+<p>However be careful: if you try to access an index which isn’t in the <code>Vec</code>,
+your software will panic! You cannot do this:</p>
+
+<div class="example-wrap should_panic"><a href="#" class="tooltip" title="This example panics">ⓘ</a><pre class="rust rust-example-rendered"><code><span class="kw">let </span>v = <span class="macro">vec!</span>[<span class="number">0</span>, <span class="number">2</span>, <span class="number">4</span>, <span class="number">6</span>];
+<span class="macro">println!</span>(<span class="string">"{}"</span>, v[<span class="number">6</span>]); <span class="comment">// it will panic!</span></code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++let+v+=+vec!%5B0,+2,+4,+6%5D;%0A++++println!(%22%7B%7D%22,+v%5B6%5D);%0A%7D&amp;edition=2024"></a></div>
+<p>Use <a href="../primitive.slice.html#method.get" title="method slice::get"><code>get</code></a> and <a href="../primitive.slice.html#method.get_mut" title="method slice::get_mut"><code>get_mut</code></a> if you want to check whether the index is in
+the <code>Vec</code>.</p>
+<h2 id="slicing"><a class="doc-anchor" href="#slicing">§</a>Slicing</h2>
+<p>A <code>Vec</code> can be mutable. On the other hand, slices are read-only objects.
+To get a <a href="../primitive.slice.html" title="primitive slice">slice</a>, use <a href="../primitive.reference.html" title="primitive reference"><code>&amp;</code></a>. Example:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">fn </span>read_slice(slice: <span class="kw-2">&amp;</span>[usize]) {
+    <span class="comment">// ...
+</span>}
+
+<span class="kw">let </span>v = <span class="macro">vec!</span>[<span class="number">0</span>, <span class="number">1</span>];
+read_slice(<span class="kw-2">&amp;</span>v);
+
+<span class="comment">// ... and that's all!
+// you can also do it like this:
+</span><span class="kw">let </span>u: <span class="kw-2">&amp;</span>[usize] = <span class="kw-2">&amp;</span>v;
+<span class="comment">// or like this:
+</span><span class="kw">let </span>u: <span class="kw-2">&amp;</span>[<span class="kw">_</span>] = <span class="kw-2">&amp;</span>v;</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++fn+read_slice(slice:+%26%5Busize%5D)+%7B%0A++++++++//+...%0A++++%7D%0A++++%0A++++let+v+=+vec!%5B0,+1%5D;%0A++++read_slice(%26v);%0A++++%0A++++//+...+and+that's+all!%0A++++//+you+can+also+do+it+like+this:%0A++++let+u:+%26%5Busize%5D+=+%26v;%0A++++//+or+like+this:%0A++++let+u:+%26%5B_%5D+=+%26v;%0A%7D&amp;edition=2024"></a></div>
+<p>In Rust, it’s more common to pass slices as arguments rather than vectors
+when you just want to provide read access. The same goes for <a href="../string/struct.String.html" title="struct std::string::String"><code>String</code></a> and
+<a href="../primitive.str.html" title="primitive str"><code>&amp;str</code></a>.</p>
+<h2 id="capacity-and-reallocation"><a class="doc-anchor" href="#capacity-and-reallocation">§</a>Capacity and reallocation</h2>
+<p>The capacity of a vector is the amount of space allocated for any future
+elements that will be added onto the vector. This is not to be confused with
+the <em>length</em> of a vector, which specifies the number of actual elements
+within the vector. If a vector’s length exceeds its capacity, its capacity
+will automatically be increased, but its elements will have to be
+reallocated.</p>
+<p>For example, a vector with capacity 10 and length 0 would be an empty vector
+with space for 10 more elements. Pushing 10 or fewer elements onto the
+vector will not change its capacity or cause reallocation to occur. However,
+if the vector’s length is increased to 11, it will have to reallocate, which
+can be slow. For this reason, it is recommended to use <a href="struct.Vec.html#method.with_capacity" title="associated function std::vec::Vec::with_capacity"><code>Vec::with_capacity</code></a>
+whenever possible to specify how big the vector is expected to get.</p>
+<h2 id="guarantees"><a class="doc-anchor" href="#guarantees">§</a>Guarantees</h2>
+<p>The following section is to be read as an addendum of the
+<a href="index.html#memory-layout" title="mod std::vec">memory layout</a> section.</p>
+<p>Due to its incredibly fundamental nature, <code>Vec</code> makes a lot of guarantees
+about its design. This ensures that it’s as low-overhead as possible in
+the general case, and can be correctly manipulated in primitive ways
+by unsafe code.</p>
+<p>A vector containing the elements <code>'a'</code> and <code>'b'</code> with capacity 4 can be
+visualized as below. The top part is the <code>Vec</code> struct, it contains a
+pointer to the head of the allocation in the heap, length and capacity.
+The bottom part is the allocation on the heap, a contiguous memory block.</p>
+<div class="example-wrap"><pre class="language-text"><code>            ptr      len  capacity
+       +--------+--------+--------+
+       | 0x0123 |      2 |      4 |
+       +--------+--------+--------+
+            |
+            v
+Heap   +--------+--------+--------+--------+
+       |    &#39;a&#39; |    &#39;b&#39; | uninit | uninit |
+       +--------+--------+--------+--------+</code></pre></div>
+<ul>
+<li><strong>uninit</strong> represents memory that is not initialized, see <a href="../mem/union.MaybeUninit.html" title="union std::mem::MaybeUninit"><code>MaybeUninit</code></a>.</li>
+<li>Note: the ABI is not stable and <code>Vec</code> makes no guarantees about its memory
+layout (including the order of fields).</li>
+</ul>
+<p><code>Vec</code> will never perform a “small optimization” where elements are actually
+stored on the stack for two reasons:</p>
+<ul>
+<li>
+<p>It would make it more difficult for unsafe code to correctly manipulate
+a <code>Vec</code>. The contents of a <code>Vec</code> wouldn’t have a stable address if it were
+only moved, and it would be more difficult to determine if a <code>Vec</code> had
+actually allocated memory.</p>
+</li>
+<li>
+<p>It would penalize the general case, incurring an additional branch
+on every access.</p>
+</li>
+</ul>
+<p><code>Vec</code> will never automatically shrink itself, even if completely empty. This
+ensures no unnecessary allocations or deallocations occur. Emptying a <code>Vec</code>
+and then filling it back up to the same <a href="struct.Vec.html#method.len" title="method std::vec::Vec::len"><code>len</code></a> should incur no calls to
+the allocator. If you wish to free up unused memory, use
+<a href="struct.Vec.html#method.shrink_to_fit" title="method std::vec::Vec::shrink_to_fit"><code>shrink_to_fit</code></a> or <a href="struct.Vec.html#method.shrink_to" title="method std::vec::Vec::shrink_to"><code>shrink_to</code></a>.</p>
+<p><a href="struct.Vec.html#method.push" title="method std::vec::Vec::push"><code>push</code></a> and <a href="struct.Vec.html#method.insert" title="method std::vec::Vec::insert"><code>insert</code></a> will never (re)allocate if the reported capacity is
+sufficient. <a href="struct.Vec.html#method.push" title="method std::vec::Vec::push"><code>push</code></a> and <a href="struct.Vec.html#method.insert" title="method std::vec::Vec::insert"><code>insert</code></a> <em>will</em> (re)allocate if
+<code><a href="struct.Vec.html#method.len" title="method std::vec::Vec::len">len</a> == <a href="struct.Vec.html#method.capacity" title="method std::vec::Vec::capacity">capacity</a></code>. That is, the reported capacity is completely
+accurate, and can be relied on. It can even be used to manually free the memory
+allocated by a <code>Vec</code> if desired. Bulk insertion methods <em>may</em> reallocate, even
+when not necessary.</p>
+<p><code>Vec</code> does not guarantee any particular growth strategy when reallocating
+when full, nor when <a href="struct.Vec.html#method.reserve" title="method std::vec::Vec::reserve"><code>reserve</code></a> is called. The current strategy is basic
+and it may prove desirable to use a non-constant growth factor. Whatever
+strategy is used will of course guarantee <em>O</em>(1) amortized <a href="struct.Vec.html#method.push" title="method std::vec::Vec::push"><code>push</code></a>.</p>
+<p>It is guaranteed, in order to respect the intentions of the programmer, that
+all of <code>vec![e_1, e_2, ..., e_n]</code>, <code>vec![x; n]</code>, and <a href="struct.Vec.html#method.with_capacity" title="associated function std::vec::Vec::with_capacity"><code>Vec::with_capacity(n)</code></a> produce a <code>Vec</code>
+that requests an allocation of the exact size needed for precisely <code>n</code> elements from the allocator,
+and no other size (such as, for example: a size rounded up to the nearest power of 2).
+The allocator will return an allocation that is at least as large as requested, but it may be larger.</p>
+<p>It is guaranteed that the <a href="struct.Vec.html#method.capacity" title="method std::vec::Vec::capacity"><code>Vec::capacity</code></a> method returns a value that is at least the requested capacity
+and not more than the allocated capacity.</p>
+<p>The method <a href="struct.Vec.html#method.shrink_to_fit" title="method std::vec::Vec::shrink_to_fit"><code>Vec::shrink_to_fit</code></a> will attempt to discard excess capacity an allocator has given to a <code>Vec</code>.
+If <code><a href="struct.Vec.html#method.len" title="method std::vec::Vec::len">len</a> == <a href="struct.Vec.html#method.capacity" title="method std::vec::Vec::capacity">capacity</a></code>, then a <code>Vec&lt;T&gt;</code> can be converted
+to and from a <a href="../boxed/struct.Box.html" title="struct std::boxed::Box"><code>Box&lt;[T]&gt;</code></a> without reallocating or moving the elements.
+<code>Vec</code> exploits this fact as much as reasonable when implementing common conversions
+such as <a href="struct.Vec.html#method.into_boxed_slice" title="method std::vec::Vec::into_boxed_slice"><code>into_boxed_slice</code></a>.</p>
+<p><code>Vec</code> will not specifically overwrite any data that is removed from it,
+but also won’t specifically preserve it. Its uninitialized memory is
+scratch space that it may use however it wants. It will generally just do
+whatever is most efficient or otherwise easy to implement. Do not rely on
+removed data to be erased for security purposes. Even if you drop a <code>Vec</code>, its
+buffer may simply be reused by another allocation. Even if you zero a <code>Vec</code>’s memory
+first, that might not actually happen because the optimizer does not consider
+this a side-effect that must be preserved. There is one case which we will
+not break, however: using <code>unsafe</code> code to write to the excess capacity,
+and then increasing the length to match, is always valid.</p>
+<p>Currently, <code>Vec</code> does not guarantee the order in which elements are dropped.
+The order has changed in the past and may change again.</p>
+</div></details><h2 id="implementations" class="section-header">Implementations<a href="#implementations" class="anchor">§</a></h2><div id="implementations-list"><details class="toggle implementors-toggle" open><summary><section id="impl-Vec%3CT%3E" class="impl"><a class="src rightside" href="../../src/alloc/vec/mod.rs.html#454">Source</a><a href="#impl-Vec%3CT%3E" class="anchor">§</a><h3 class="code-header">impl&lt;T&gt; <a class="struct" href="struct.Vec.html" title="struct std::vec::Vec">Vec</a>&lt;T&gt;</h3></section></summary><div class="impl-items"><details class="toggle method-toggle" open><summary><section id="method.new" class="method"><span class="rightside"><span class="since" title="Stable since Rust version 1.0.0, const since 1.39.0">1.0.0 (const: 1.39.0)</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#470">Source</a></span><h4 class="code-header">pub const fn <a href="#method.new" class="fn">new</a>() -&gt; <a class="struct" href="struct.Vec.html" title="struct std::vec::Vec">Vec</a>&lt;T&gt;</h4></section></summary><div class="docblock"><p>Constructs a new, empty <code>Vec&lt;T&gt;</code>.</p>
+<p>The vector will not allocate until elements are pushed onto it.</p>
+<h5 id="examples-1"><a class="doc-anchor" href="#examples-1">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span><span class="kw-2">mut </span>vec: Vec&lt;i32&gt; = Vec::new();</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0A%23!%5Ballow(unused_mut)%5D%0A%0Afn+main()+%7B%0A++++let+mut+vec:+Vec%3Ci32%3E+=+Vec::new();%0A%7D&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.with_capacity" class="method"><span class="rightside"><span class="since" title="Stable since Rust version 1.0.0, const unstable">1.0.0 (const: <a href="https://github.com/rust-lang/rust/issues/79597" title="Tracking issue for const_heap">unstable</a>)</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#531">Source</a></span><h4 class="code-header">pub fn <a href="#method.with_capacity" class="fn">with_capacity</a>(capacity: <a class="primitive" href="../primitive.usize.html">usize</a>) -&gt; <a class="struct" href="struct.Vec.html" title="struct std::vec::Vec">Vec</a>&lt;T&gt;</h4></section></summary><div class="docblock"><p>Constructs a new, empty <code>Vec&lt;T&gt;</code> with at least the specified capacity.</p>
+<p>The vector will be able to hold at least <code>capacity</code> elements without
+reallocating. This method is allowed to allocate for more elements than
+<code>capacity</code>. If <code>capacity</code> is zero, the vector <a href="index.html#memory-layout" title="mod std::vec">will not allocate</a>.</p>
+<p>It is important to note that although the returned vector has the
+minimum <em>capacity</em> specified, the vector will have a zero <em>length</em>. For
+an explanation of the difference between length and capacity, see
+<em><a href="#capacity-and-reallocation">Capacity and reallocation</a></em>.</p>
+<p>If it is important to know the exact allocated capacity of a <code>Vec</code>,
+always use the <a href="struct.Vec.html#method.capacity" title="method std::vec::Vec::capacity"><code>capacity</code></a> method after construction.</p>
+<p>For <code>Vec&lt;T&gt;</code> where <code>T</code> is a zero-sized type, the vector
+<a href="index.html#memory-layout" title="mod std::vec">will not allocate</a>, and the capacity will always be <code>usize::MAX</code>.</p>
+<h5 id="panics"><a class="doc-anchor" href="#panics">§</a>Panics</h5>
+<p>Panics if the new capacity exceeds <code>isize::MAX</code> <em>bytes</em>.</p>
+<h5 id="examples-2"><a class="doc-anchor" href="#examples-2">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span><span class="kw-2">mut </span>vec = Vec::with_capacity(<span class="number">10</span>);
+
+<span class="comment">// The vector contains no items, even though it has capacity for more
+</span><span class="macro">assert_eq!</span>(vec.len(), <span class="number">0</span>);
+<span class="macro">assert!</span>(vec.capacity() &gt;= <span class="number">10</span>);
+
+<span class="comment">// These are all done without reallocating...
+</span><span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..<span class="number">10 </span>{
+    vec.push(i);
+}
+<span class="macro">assert_eq!</span>(vec.len(), <span class="number">10</span>);
+<span class="macro">assert!</span>(vec.capacity() &gt;= <span class="number">10</span>);
+
+<span class="comment">// ...but this may make the vector reallocate
+</span>vec.push(<span class="number">11</span>);
+<span class="macro">assert_eq!</span>(vec.len(), <span class="number">11</span>);
+<span class="macro">assert!</span>(vec.capacity() &gt;= <span class="number">11</span>);
+
+<span class="comment">// A vector of a zero-sized type will always over-allocate, since no
+// allocation is necessary
+</span><span class="kw">let </span>vec_units = Vec::&lt;()&gt;::with_capacity(<span class="number">10</span>);
+<span class="macro">assert_eq!</span>(vec_units.capacity(), usize::MAX);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++let+mut+vec+=+Vec::with_capacity(10);%0A++++%0A++++//+The+vector+contains+no+items,+even+though+it+has+capacity+for+more%0A++++assert_eq!(vec.len(),+0);%0A++++assert!(vec.capacity()+%3E=+10);%0A++++%0A++++//+These+are+all+done+without+reallocating...%0A++++for+i+in+0..10+%7B%0A++++++++vec.push(i);%0A++++%7D%0A++++assert_eq!(vec.len(),+10);%0A++++assert!(vec.capacity()+%3E=+10);%0A++++%0A++++//+...but+this+may+make+the+vector+reallocate%0A++++vec.push(11);%0A++++assert_eq!(vec.len(),+11);%0A++++assert!(vec.capacity()+%3E=+11);%0A++++%0A++++//+A+vector+of+a+zero-sized+type+will+always+over-allocate,+since+no%0A++++//+allocation+is+necessary%0A++++let+vec_units+=+Vec::%3C()%3E::with_capacity(10);%0A++++assert_eq!(vec_units.capacity(),+usize::MAX);%0A%7D&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.try_with_capacity" class="method"><a class="src rightside" href="../../src/alloc/vec/mod.rs.html#549">Source</a><h4 class="code-header">pub fn <a href="#method.try_with_capacity" class="fn">try_with_capacity</a>(capacity: <a class="primitive" href="../primitive.usize.html">usize</a>) -&gt; <a class="enum" href="../result/enum.Result.html" title="enum std::result::Result">Result</a>&lt;<a class="struct" href="struct.Vec.html" title="struct std::vec::Vec">Vec</a>&lt;T&gt;, <a class="struct" href="../collections/struct.TryReserveError.html" title="struct std::collections::TryReserveError">TryReserveError</a>&gt;</h4></section><span class="item-info"><div class="stab unstable"><span class="emoji">🔬</span><span>This is a nightly-only experimental API. (<code>try_with_capacity</code>&nbsp;<a href="https://github.com/rust-lang/rust/issues/91913">#91913</a>)</span></div></span></summary><div class="docblock"><p>Constructs a new, empty <code>Vec&lt;T&gt;</code> with at least the specified capacity.</p>
+<p>The vector will be able to hold at least <code>capacity</code> elements without
+reallocating. This method is allowed to allocate for more elements than
+<code>capacity</code>. If <code>capacity</code> is zero, the vector <a href="index.html#memory-layout" title="mod std::vec">will not allocate</a>.</p>
+<h5 id="errors"><a class="doc-anchor" href="#errors">§</a>Errors</h5>
+<p>Returns an error if the capacity exceeds <code>isize::MAX</code> <em>bytes</em>,
+or if the allocator reports allocation failure.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.from_raw_parts" class="method"><span class="rightside"><span class="since" title="Stable since Rust version 1.0.0, const unstable">1.0.0 (const: <a href="https://github.com/rust-lang/rust/issues/79597" title="Tracking issue for const_heap">unstable</a>)</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#629">Source</a></span><h4 class="code-header">pub unsafe fn <a href="#method.from_raw_parts" class="fn">from_raw_parts</a>(
+    ptr: <a class="primitive" href="../primitive.pointer.html">*mut T</a>,
+    length: <a class="primitive" href="../primitive.usize.html">usize</a>,
+    capacity: <a class="primitive" href="../primitive.usize.html">usize</a>,
+) -&gt; <a class="struct" href="struct.Vec.html" title="struct std::vec::Vec">Vec</a>&lt;T&gt;</h4></section></summary><div class="docblock"><p>Creates a <code>Vec&lt;T&gt;</code> directly from a pointer, a length, and a capacity.</p>
+<h5 id="safety"><a class="doc-anchor" href="#safety">§</a>Safety</h5>
+<p>The parts must satisfy the invariants described in the <a href="index.html#memory-layout" title="mod std::vec">memory layout</a> section,
+with allocator <a href="../alloc/struct.Global.html" title="struct std::alloc::Global"><code>Global</code></a>.</p>
+<p>Violating them may cause problems like corrupting the allocator’s
+internal data structures. For example it is normally <strong>not</strong> safe
+to build a <code>Vec&lt;u8&gt;</code> from a pointer to a C <code>char</code> array with length
+<code>size_t</code>, doing so is only safe if the array was initially allocated by
+a <code>Vec</code> or <code>String</code>.
+It’s also not safe to build one from a <code>Vec&lt;u16&gt;</code> and its length, because
+the allocator cares about the alignment, and these two types have different
+alignments. The buffer was allocated with alignment 2 (for <code>u16</code>), but after
+turning it into a <code>Vec&lt;u8&gt;</code> it’ll be deallocated with alignment 1. To avoid
+these issues, it is often preferable to do casting/transmuting using
+<a href="../slice/fn.from_raw_parts.html" title="fn std::slice::from_raw_parts"><code>slice::from_raw_parts</code></a> instead.</p>
+<p>The ownership of <code>ptr</code> is effectively transferred to the
+<code>Vec&lt;T&gt;</code> which may then deallocate, reallocate or change the
+contents of memory pointed to by the pointer at will. Ensure
+that nothing else uses the pointer after calling this
+function.</p>
+<h5 id="examples-3"><a class="doc-anchor" href="#examples-3">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::ptr;
+
+<span class="kw">let </span>v = <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>];
+
+<span class="comment">// Deconstruct the vector into parts.
+</span><span class="kw">let </span>(p, len, cap) = v.into_raw_parts();
+
+<span class="kw">unsafe </span>{
+    <span class="comment">// Overwrite memory with 4, 5, 6
+    </span><span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..len {
+        ptr::write(p.add(i), <span class="number">4 </span>+ i);
+    }
+
+    <span class="comment">// Put everything back together into a Vec
+    </span><span class="kw">let </span>rebuilt = Vec::from_raw_parts(p, len, cap);
+    <span class="macro">assert_eq!</span>(rebuilt, [<span class="number">4</span>, <span class="number">5</span>, <span class="number">6</span>]);
+}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++use+std::ptr;%0A++++%0A++++let+v+=+vec!%5B1,+2,+3%5D;%0A++++%0A++++//+Deconstruct+the+vector+into+parts.%0A++++let+(p,+len,+cap)+=+v.into_raw_parts();%0A++++%0A++++unsafe+%7B%0A++++++++//+Overwrite+memory+with+4,+5,+6%0A++++++++for+i+in+0..len+%7B%0A++++++++++++ptr::write(p.add(i),+4+%2B+i);%0A++++++++%7D%0A++++%0A++++++++//+Put+everything+back+together+into+a+Vec%0A++++++++let+rebuilt+=+Vec::from_raw_parts(p,+len,+cap);%0A++++++++assert_eq!(rebuilt,+%5B4,+5,+6%5D);%0A++++%7D%0A%7D&amp;edition=2024"></a></div>
+<p>Using memory that was allocated elsewhere:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::alloc::{alloc, Layout};
+
+<span class="kw">fn </span>main() {
+    <span class="kw">let </span>layout = Layout::array::&lt;u32&gt;(<span class="number">16</span>).expect(<span class="string">"16 u32s take 64 bytes, so it shouldn't overflow"</span>);
+
+    <span class="kw">let </span>vec = <span class="kw">unsafe </span>{
+        <span class="kw">let </span>mem = alloc(layout).cast::&lt;u32&gt;();
+        <span class="kw">if </span>mem.is_null() {
+            <span class="kw">return</span>;
+        }
+
+        mem.write(<span class="number">1_000_000</span>);
+
+        Vec::from_raw_parts(mem, <span class="number">1</span>, <span class="number">16</span>)
+    };
+
+    <span class="macro">assert_eq!</span>(vec, <span class="kw-2">&amp;</span>[<span class="number">1_000_000</span>]);
+    <span class="macro">assert_eq!</span>(vec.capacity(), <span class="number">16</span>);
+}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Ause+std::alloc::%7Balloc,+Layout%7D;%0A%0Afn+main()+%7B%0A++++let+layout+=+Layout::array::%3Cu32%3E(16).expect(%2216+u32s+take+64+bytes,+so+it+shouldn't+overflow%22);%0A%0A++++let+vec+=+unsafe+%7B%0A++++++++let+mem+=+alloc(layout).cast::%3Cu32%3E();%0A++++++++if+mem.is_null()+%7B%0A++++++++++++return;%0A++++++++%7D%0A%0A++++++++mem.write(1_000_000);%0A%0A++++++++Vec::from_raw_parts(mem,+1,+16)%0A++++%7D;%0A%0A++++assert_eq!(vec,+%26%5B1_000_000%5D);%0A++++assert_eq!(vec.capacity(),+16);%0A%7D&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.from_parts" class="method"><span class="rightside"><span class="since" title="Stable since Rust version 1.99.0, const unstable">1.99.0 (const: <a href="https://github.com/rust-lang/rust/issues/79597" title="Tracking issue for const_heap">unstable</a>)</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#709">Source</a></span><h4 class="code-header">pub unsafe fn <a href="#method.from_parts" class="fn">from_parts</a>(
+    ptr: <a class="struct" href="../ptr/struct.NonNull.html" title="struct std::ptr::NonNull">NonNull</a>&lt;T&gt;,
+    length: <a class="primitive" href="../primitive.usize.html">usize</a>,
+    capacity: <a class="primitive" href="../primitive.usize.html">usize</a>,
+) -&gt; <a class="struct" href="struct.Vec.html" title="struct std::vec::Vec">Vec</a>&lt;T&gt;</h4></section></summary><div class="docblock"><p>Creates a <code>Vec&lt;T&gt;</code> directly from a <code>NonNull</code> pointer, a length, and a capacity.</p>
+<h5 id="safety-1"><a class="doc-anchor" href="#safety-1">§</a>Safety</h5>
+<p>The parts must satisfy the invariants described in the <a href="index.html#memory-layout" title="mod std::vec">memory layout</a> section,
+with allocator <a href="../alloc/struct.Global.html" title="struct std::alloc::Global"><code>Global</code></a>.</p>
+<p>Violating them may cause problems like corrupting the allocator’s
+internal data structures. For example it is normally <strong>not</strong> safe
+to build a <code>Vec&lt;u8&gt;</code> from a pointer to a C <code>char</code> array with length
+<code>size_t</code>, doing so is only safe if the array was initially allocated by
+a <code>Vec</code> or <code>String</code>.
+It’s also not safe to build one from a <code>Vec&lt;u16&gt;</code> and its length, because
+the allocator cares about the alignment, and these two types have different
+alignments. The buffer was allocated with alignment 2 (for <code>u16</code>), but after
+turning it into a <code>Vec&lt;u8&gt;</code> it’ll be deallocated with alignment 1. To avoid
+these issues, it is often preferable to do casting/transmuting using
+<a href="../ptr/struct.NonNull.html#method.slice_from_raw_parts" title="associated function std::ptr::NonNull::slice_from_raw_parts"><code>NonNull::slice_from_raw_parts</code></a> instead.</p>
+<p>The ownership of <code>ptr</code> is effectively transferred to the
+<code>Vec&lt;T&gt;</code> which may then deallocate, reallocate or change the
+contents of memory pointed to by the pointer at will. Ensure
+that nothing else uses the pointer after calling this
+function.</p>
+<h5 id="examples-4"><a class="doc-anchor" href="#examples-4">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>v = <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>];
+
+<span class="comment">// Deconstruct the vector into parts.
+</span><span class="kw">let </span>(p, len, cap) = v.into_parts();
+
+<span class="kw">unsafe </span>{
+    <span class="comment">// Overwrite memory with 4, 5, 6
+    </span><span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..len {
+        p.add(i).write(<span class="number">4 </span>+ i);
+    }
+
+    <span class="comment">// Put everything back together into a Vec
+    </span><span class="kw">let </span>rebuilt = Vec::from_parts(p, len, cap);
+    <span class="macro">assert_eq!</span>(rebuilt, [<span class="number">4</span>, <span class="number">5</span>, <span class="number">6</span>]);
+}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++let+v+=+vec!%5B1,+2,+3%5D;%0A++++%0A++++//+Deconstruct+the+vector+into+parts.%0A++++let+(p,+len,+cap)+=+v.into_parts();%0A++++%0A++++unsafe+%7B%0A++++++++//+Overwrite+memory+with+4,+5,+6%0A++++++++for+i+in+0..len+%7B%0A++++++++++++p.add(i).write(4+%2B+i);%0A++++++++%7D%0A++++%0A++++++++//+Put+everything+back+together+into+a+Vec%0A++++++++let+rebuilt+=+Vec::from_parts(p,+len,+cap);%0A++++++++assert_eq!(rebuilt,+%5B4,+5,+6%5D);%0A++++%7D%0A%7D&amp;edition=2024"></a></div>
+<p>Using memory that was allocated elsewhere:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::alloc::{alloc, Layout};
+<span class="kw">use </span>std::ptr::NonNull;
+
+<span class="kw">fn </span>main() {
+    <span class="kw">let </span>layout = Layout::array::&lt;u32&gt;(<span class="number">16</span>).expect(<span class="string">"16 u32s take 64 bytes, so it shouldn't overflow"</span>);
+
+    <span class="kw">let </span>vec = <span class="kw">unsafe </span>{
+        <span class="kw">let </span><span class="prelude-val">Some</span>(mem) = NonNull::new(alloc(layout).cast::&lt;u32&gt;()) <span class="kw">else </span>{
+            <span class="kw">return</span>;
+        };
+
+        mem.write(<span class="number">1_000_000</span>);
+
+        Vec::from_parts(mem, <span class="number">1</span>, <span class="number">16</span>)
+    };
+
+    <span class="macro">assert_eq!</span>(vec, <span class="kw-2">&amp;</span>[<span class="number">1_000_000</span>]);
+    <span class="macro">assert_eq!</span>(vec.capacity(), <span class="number">16</span>);
+}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Ause+std::alloc::%7Balloc,+Layout%7D;%0Ause+std::ptr::NonNull;%0A%0Afn+main()+%7B%0A++++let+layout+=+Layout::array::%3Cu32%3E(16).expect(%2216+u32s+take+64+bytes,+so+it+shouldn't+overflow%22);%0A%0A++++let+vec+=+unsafe+%7B%0A++++++++let+Some(mem)+=+NonNull::new(alloc(layout).cast::%3Cu32%3E())+else+%7B%0A++++++++++++return;%0A++++++++%7D;%0A%0A++++++++mem.write(1_000_000);%0A%0A++++++++Vec::from_parts(mem,+1,+16)%0A++++%7D;%0A%0A++++assert_eq!(vec,+%26%5B1_000_000%5D);%0A++++assert_eq!(vec.capacity(),+16);%0A%7D&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.from_fn" class="method"><span class="rightside"><span class="since" title="Stable since Rust version 1.100.0">1.100.0</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#756-758">Source</a></span><h4 class="code-header">pub fn <a href="#method.from_fn" class="fn">from_fn</a>&lt;F&gt;(length: <a class="primitive" href="../primitive.usize.html">usize</a>, f: F) -&gt; <a class="struct" href="struct.Vec.html" title="struct std::vec::Vec">Vec</a>&lt;T&gt;<div class="where">where
+    F: <a class="trait" href="../ops/trait.FnMut.html" title="trait std::ops::FnMut">FnMut</a>(<a class="primitive" href="../primitive.usize.html">usize</a>) -&gt; T,</div></h4></section></summary><div class="docblock"><p>Creates a <code>Vec&lt;T&gt;</code> where each element is produced by calling <code>f</code> with
+that element’s index while walking forward through the <code>Vec&lt;T&gt;</code>.</p>
+<p>This is essentially the same as writing</p>
+<div class="example-wrap"><pre class="language-text"><code>vec![f(0), f(1), f(2), …, f(length - 2), f(length - 1)]</code></pre></div>
+<p>and is similar to <code>(0..i).map(f)</code>, just for <code>Vec&lt;T&gt;</code>s not iterators.</p>
+<p>If <code>length == 0</code>, this produces an empty <code>Vec&lt;T&gt;</code> without ever calling <code>f</code>.</p>
+<h5 id="example"><a class="doc-anchor" href="#example">§</a>Example</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>vec = Vec::from_fn(<span class="number">5</span>, |i| i);
+
+<span class="comment">// indexes are:  0  1  2  3  4
+</span><span class="macro">assert_eq!</span>(vec, [<span class="number">0</span>, <span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>]);
+
+<span class="kw">let </span>vec2 = Vec::from_fn(<span class="number">8</span>, |i| i * <span class="number">2</span>);
+
+<span class="comment">// indexes are:   0  1  2  3  4  5   6   7
+</span><span class="macro">assert_eq!</span>(vec2, [<span class="number">0</span>, <span class="number">2</span>, <span class="number">4</span>, <span class="number">6</span>, <span class="number">8</span>, <span class="number">10</span>, <span class="number">12</span>, <span class="number">14</span>]);
+
+<span class="kw">let </span>bool_vec = Vec::from_fn(<span class="number">5</span>, |i| i % <span class="number">2 </span>== <span class="number">0</span>);
+
+<span class="comment">// indexes are:       0     1      2     3      4
+</span><span class="macro">assert_eq!</span>(bool_vec, [<span class="bool-val">true</span>, <span class="bool-val">false</span>, <span class="bool-val">true</span>, <span class="bool-val">false</span>, <span class="bool-val">true</span>]);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++let+vec+=+Vec::from_fn(5,+%7Ci%7C+i);%0A++++%0A++++//+indexes+are:++0++1++2++3++4%0A++++assert_eq!(vec,+%5B0,+1,+2,+3,+4%5D);%0A++++%0A++++let+vec2+=+Vec::from_fn(8,+%7Ci%7C+i+*+2);%0A++++%0A++++//+indexes+are:+++0++1++2++3++4++5+++6+++7%0A++++assert_eq!(vec2,+%5B0,+2,+4,+6,+8,+10,+12,+14%5D);%0A++++%0A++++let+bool_vec+=+Vec::from_fn(5,+%7Ci%7C+i+%25+2+==+0);%0A++++%0A++++//+indexes+are:+++++++0+++++1++++++2+++++3++++++4%0A++++assert_eq!(bool_vec,+%5Btrue,+false,+true,+false,+true%5D);%0A%7D&amp;edition=2024"></a></div>
+<p>The <code>Vec&lt;T&gt;</code> is generated in ascending index order, starting from the front
+and going towards the back, so you can use closures with mutable state:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span><span class="kw-2">mut </span>state = <span class="number">1</span>;
+<span class="kw">let </span>a = Vec::from_fn(<span class="number">6</span>, |<span class="kw">_</span>| { <span class="kw">let </span>x = state; state <span class="kw-2">*</span>= <span class="number">2</span>; x });
+
+<span class="macro">assert_eq!</span>(a, [<span class="number">1</span>, <span class="number">2</span>, <span class="number">4</span>, <span class="number">8</span>, <span class="number">16</span>, <span class="number">32</span>]);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++let+mut+state+=+1;%0A++++let+a+=+Vec::from_fn(6,+%7C_%7C+%7B+let+x+=+state;+state+*=+2;+x+%7D);%0A++++%0A++++assert_eq!(a,+%5B1,+2,+4,+8,+16,+32%5D);%0A%7D&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.into_raw_parts" class="method"><span class="rightside"><span class="since" title="Stable since Rust version 1.93.0, const unstable">1.93.0 (const: <a href="https://github.com/rust-lang/rust/issues/79597" title="Tracking issue for const_heap">unstable</a>)</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#801">Source</a></span><h4 class="code-header">pub fn <a href="#method.into_raw_parts" class="fn">into_raw_parts</a>(self) -&gt; (<a class="primitive" href="../primitive.pointer.html">*mut T</a>, <a class="primitive" href="../primitive.usize.html">usize</a>, <a class="primitive" href="../primitive.usize.html">usize</a>)</h4></section></summary><div class="docblock"><p>Decomposes a <code>Vec&lt;T&gt;</code> into its raw components: <code>(pointer, length, capacity)</code>.</p>
+<p>Returns the raw pointer to the underlying data, the length of
+the vector (in elements), and the allocated capacity of the
+data (in elements). These are the same arguments in the same
+order as the arguments to <a href="struct.Vec.html#method.from_raw_parts" title="associated function std::vec::Vec::from_raw_parts"><code>from_raw_parts</code></a>.</p>
+<p>After calling this function, the caller is responsible for the
+memory previously managed by the <code>Vec</code>. Most often, one does
+this by converting the raw pointer, length, and capacity back
+into a <code>Vec</code> with the <a href="struct.Vec.html#method.from_raw_parts" title="associated function std::vec::Vec::from_raw_parts"><code>from_raw_parts</code></a> function; more generally,
+if <code>T</code> is non-zero-sized and the capacity is nonzero, one may use
+any method that calls <a href="../alloc/trait.GlobalAlloc.html#tymethod.dealloc" title="method std::alloc::GlobalAlloc::dealloc"><code>dealloc</code></a> with a layout of
+<code>Layout::array::&lt;T&gt;(capacity)</code>; if <code>T</code> is zero-sized or the
+capacity is zero, nothing needs to be done.</p>
+<h5 id="examples-5"><a class="doc-anchor" href="#examples-5">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>v: Vec&lt;i32&gt; = <span class="macro">vec!</span>[-<span class="number">1</span>, <span class="number">0</span>, <span class="number">1</span>];
+
+<span class="kw">let </span>(ptr, len, cap) = v.into_raw_parts();
+
+<span class="kw">let </span>rebuilt = <span class="kw">unsafe </span>{
+    <span class="comment">// We can now make changes to the components, such as
+    // transmuting the raw pointer to a compatible type.
+    </span><span class="kw">let </span>ptr = ptr <span class="kw">as </span><span class="kw-2">*mut </span>u32;
+
+    Vec::from_raw_parts(ptr, len, cap)
+};
+<span class="macro">assert_eq!</span>(rebuilt, [<span class="number">4294967295</span>, <span class="number">0</span>, <span class="number">1</span>]);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++let+v:+Vec%3Ci32%3E+=+vec!%5B-1,+0,+1%5D;%0A++++%0A++++let+(ptr,+len,+cap)+=+v.into_raw_parts();%0A++++%0A++++let+rebuilt+=+unsafe+%7B%0A++++++++//+We+can+now+make+changes+to+the+components,+such+as%0A++++++++//+transmuting+the+raw+pointer+to+a+compatible+type.%0A++++++++let+ptr+=+ptr+as+*mut+u32;%0A++++%0A++++++++Vec::from_raw_parts(ptr,+len,+cap)%0A++++%7D;%0A++++assert_eq!(rebuilt,+%5B4294967295,+0,+1%5D);%0A%7D&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.into_parts" class="method"><span class="rightside"><span class="since" title="Stable since Rust version 1.99.0, const unstable">1.99.0 (const: <a href="https://github.com/rust-lang/rust/issues/79597" title="Tracking issue for const_heap">unstable</a>)</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#841">Source</a></span><h4 class="code-header">pub fn <a href="#method.into_parts" class="fn">into_parts</a>(self) -&gt; (<a class="struct" href="../ptr/struct.NonNull.html" title="struct std::ptr::NonNull">NonNull</a>&lt;T&gt;, <a class="primitive" href="../primitive.usize.html">usize</a>, <a class="primitive" href="../primitive.usize.html">usize</a>)</h4></section></summary><div class="docblock"><p>Decomposes a <code>Vec&lt;T&gt;</code> into its raw components: <code>(NonNull pointer, length, capacity)</code>.</p>
+<p>Returns the <code>NonNull</code> pointer to the underlying data, the length of
+the vector (in elements), and the allocated capacity of the
+data (in elements). These are the same arguments in the same
+order as the arguments to <a href="struct.Vec.html#method.from_parts" title="associated function std::vec::Vec::from_parts"><code>from_parts</code></a>.</p>
+<p>After calling this function, the caller is responsible for the
+memory previously managed by the <code>Vec</code>. The only way to do
+this is to convert the <code>NonNull</code> pointer, length, and capacity back
+into a <code>Vec</code> with the <a href="struct.Vec.html#method.from_parts" title="associated function std::vec::Vec::from_parts"><code>from_parts</code></a> function, allowing
+the destructor to perform the cleanup.</p>
+<h5 id="examples-6"><a class="doc-anchor" href="#examples-6">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>v: Vec&lt;i32&gt; = <span class="macro">vec!</span>[-<span class="number">1</span>, <span class="number">0</span>, <span class="number">1</span>];
+
+<span class="kw">let </span>(ptr, len, cap) = v.into_parts();
+
+<span class="kw">let </span>rebuilt = <span class="kw">unsafe </span>{
+    <span class="comment">// We can now make changes to the components, such as
+    // transmuting the raw pointer to a compatible type.
+    </span><span class="kw">let </span>ptr = ptr.cast::&lt;u32&gt;();
+
+    Vec::from_parts(ptr, len, cap)
+};
+<span class="macro">assert_eq!</span>(rebuilt, [<span class="number">4294967295</span>, <span class="number">0</span>, <span class="number">1</span>]);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++let+v:+Vec%3Ci32%3E+=+vec!%5B-1,+0,+1%5D;%0A++++%0A++++let+(ptr,+len,+cap)+=+v.into_parts();%0A++++%0A++++let+rebuilt+=+unsafe+%7B%0A++++++++//+We+can+now+make+changes+to+the+components,+such+as%0A++++++++//+transmuting+the+raw+pointer+to+a+compatible+type.%0A++++++++let+ptr+=+ptr.cast::%3Cu32%3E();%0A++++%0A++++++++Vec::from_parts(ptr,+len,+cap)%0A++++%7D;%0A++++assert_eq!(rebuilt,+%5B4294967295,+0,+1%5D);%0A%7D&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.const_make_global" class="method"><a class="src rightside" href="../../src/alloc/vec/mod.rs.html#854-856">Source</a><h4 class="code-header">pub const fn <a href="#method.const_make_global" class="fn">const_make_global</a>(self) -&gt; &amp;'static <a class="primitive" href="../primitive.slice.html">[T]</a><div class="where">where
+    T: <a class="trait" href="../marker/trait.Freeze.html" title="trait std::marker::Freeze">Freeze</a>,</div></h4></section><span class="item-info"><div class="stab unstable"><span class="emoji">🔬</span><span>This is a nightly-only experimental API. (<code>const_heap</code>&nbsp;<a href="https://github.com/rust-lang/rust/issues/79597">#79597</a>)</span></div></span></summary><div class="docblock"><p>Interns the <code>Vec&lt;T&gt;</code>, making the underlying memory read-only. This method should be
+called during compile time. (This is a no-op if called during runtime)</p>
+<p>This method must be called if the memory used by <code>Vec</code> needs to appear in the final
+values of constants.</p>
+</div></details></div></details><details class="toggle implementors-toggle" open><summary><section id="impl-Vec%3CT,+A%3E" class="impl"><a class="src rightside" href="../../src/alloc/vec/mod.rs.html#878">Source</a><a href="#impl-Vec%3CT,+A%3E" class="anchor">§</a><h3 class="code-header">impl&lt;T, A&gt; <a class="struct" href="struct.Vec.html" title="struct std::vec::Vec">Vec</a>&lt;T, A&gt;<div class="where">where
+    A: <a class="trait" href="../alloc/trait.Allocator.html" title="trait std::alloc::Allocator">Allocator</a>,</div></h3></section></summary><div class="impl-items"><details class="toggle method-toggle" open><summary><section id="method.with_capacity_in" class="method"><span class="rightside"><span class="since" title="Stable since Rust version 1.100.0, const unstable">1.100.0 (const: <a href="https://github.com/rust-lang/rust/issues/79597" title="Tracking issue for const_heap">unstable</a>)</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#935">Source</a></span><h4 class="code-header">pub fn <a href="#method.with_capacity_in" class="fn">with_capacity_in</a>(capacity: <a class="primitive" href="../primitive.usize.html">usize</a>, alloc: A) -&gt; <a class="struct" href="struct.Vec.html" title="struct std::vec::Vec">Vec</a>&lt;T, A&gt;</h4></section></summary><div class="docblock"><p>Constructs a new, empty <code>Vec&lt;T, A&gt;</code> with at least the specified capacity
+with the provided allocator.</p>
+<p>The vector will be able to hold at least <code>capacity</code> elements without
+reallocating. This method is allowed to allocate for more elements than
+<code>capacity</code>. If <code>capacity</code> is zero, the vector <a href="index.html#memory-layout" title="mod std::vec">will not allocate</a>.</p>
+<p>It is important to note that although the returned vector has the
+minimum <em>capacity</em> specified, the vector will have a zero <em>length</em>. For
+an explanation of the difference between length and capacity, see
+<em><a href="#capacity-and-reallocation">Capacity and reallocation</a></em>.</p>
+<p>If it is important to know the exact allocated capacity of a <code>Vec</code>,
+always use the <a href="struct.Vec.html#method.capacity" title="method std::vec::Vec::capacity"><code>capacity</code></a> method after construction.</p>
+<p>For <code>Vec&lt;T, A&gt;</code> where <code>T</code> is a zero-sized type, the vector
+<a href="index.html#memory-layout" title="mod std::vec">will not allocate</a>, and the capacity will always be <code>usize::MAX</code>.</p>
+<h5 id="panics-1"><a class="doc-anchor" href="#panics-1">§</a>Panics</h5>
+<p>Panics if the new capacity exceeds <code>isize::MAX</code> <em>bytes</em>.</p>
+<h5 id="examples-7"><a class="doc-anchor" href="#examples-7">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::alloc::System;
+
+<span class="kw">let </span><span class="kw-2">mut </span>vec = Vec::with_capacity_in(<span class="number">10</span>, System);
+
+<span class="comment">// The vector contains no items, even though it has capacity for more
+</span><span class="macro">assert_eq!</span>(vec.len(), <span class="number">0</span>);
+<span class="macro">assert!</span>(vec.capacity() &gt;= <span class="number">10</span>);
+
+<span class="comment">// These are all done without reallocating...
+</span><span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..<span class="number">10 </span>{
+    vec.push(i);
+}
+<span class="macro">assert_eq!</span>(vec.len(), <span class="number">10</span>);
+<span class="macro">assert!</span>(vec.capacity() &gt;= <span class="number">10</span>);
+
+<span class="comment">// ...but this may make the vector reallocate
+</span>vec.push(<span class="number">11</span>);
+<span class="macro">assert_eq!</span>(vec.len(), <span class="number">11</span>);
+<span class="macro">assert!</span>(vec.capacity() &gt;= <span class="number">11</span>);
+
+<span class="comment">// A vector of a zero-sized type will always over-allocate, since no
+// allocation is necessary
+</span><span class="kw">let </span>vec_units = Vec::&lt;(), System&gt;::with_capacity_in(<span class="number">10</span>, System);
+<span class="macro">assert_eq!</span>(vec_units.capacity(), usize::MAX);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++use+std::alloc::System;%0A++++%0A++++let+mut+vec+=+Vec::with_capacity_in(10,+System);%0A++++%0A++++//+The+vector+contains+no+items,+even+though+it+has+capacity+for+more%0A++++assert_eq!(vec.len(),+0);%0A++++assert!(vec.capacity()+%3E=+10);%0A++++%0A++++//+These+are+all+done+without+reallocating...%0A++++for+i+in+0..10+%7B%0A++++++++vec.push(i);%0A++++%7D%0A++++assert_eq!(vec.len(),+10);%0A++++assert!(vec.capacity()+%3E=+10);%0A++++%0A++++//+...but+this+may+make+the+vector+reallocate%0A++++vec.push(11);%0A++++assert_eq!(vec.len(),+11);%0A++++assert!(vec.capacity()+%3E=+11);%0A++++%0A++++//+A+vector+of+a+zero-sized+type+will+always+over-allocate,+since+no%0A++++//+allocation+is+necessary%0A++++let+vec_units+=+Vec::%3C(),+System%3E::with_capacity_in(10,+System);%0A++++assert_eq!(vec_units.capacity(),+usize::MAX);%0A%7D&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.push" class="method"><span class="rightside"><span class="since" title="Stable since Rust version 1.0.0, const unstable">1.0.0 (const: <a href="https://github.com/rust-lang/rust/issues/79597" title="Tracking issue for const_heap">unstable</a>)</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#962">Source</a></span><h4 class="code-header">pub fn <a href="#method.push" class="fn">push</a>(&amp;mut self, value: T)</h4></section></summary><div class="docblock"><p>Appends an element to the back of a collection.</p>
+<h5 id="panics-2"><a class="doc-anchor" href="#panics-2">§</a>Panics</h5>
+<p>Panics if the new capacity exceeds <code>isize::MAX</code> <em>bytes</em>.</p>
+<h5 id="examples-8"><a class="doc-anchor" href="#examples-8">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span><span class="kw-2">mut </span>vec = <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>];
+vec.push(<span class="number">3</span>);
+<span class="macro">assert_eq!</span>(vec, [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++let+mut+vec+=+vec!%5B1,+2%5D;%0A++++vec.push(3);%0A++++assert_eq!(vec,+%5B1,+2,+3%5D);%0A%7D&amp;edition=2024"></a></div><h5 id="time-complexity"><a class="doc-anchor" href="#time-complexity">§</a>Time complexity</h5>
+<p>Takes amortized <em>O</em>(1) time. If the vector’s length would exceed its
+capacity after the push, <em>O</em>(<em>capacity</em>) time is taken to copy the
+vector’s elements to a larger allocation. This expensive operation is
+offset by the <em>capacity</em> <em>O</em>(1) insertions it allows.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.push_mut" class="method"><span class="rightside"><span class="since" title="Stable since Rust version 1.95.0, const unstable">1.95.0 (const: <a href="https://github.com/rust-lang/rust/issues/79597" title="Tracking issue for const_heap">unstable</a>)</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#994">Source</a></span><h4 class="code-header">pub fn <a href="#method.push_mut" class="fn">push_mut</a>(&amp;mut self, value: T) -&gt; <a class="primitive" href="../primitive.reference.html">&amp;mut T</a></h4></section></summary><div class="docblock"><p>Appends an element to the back of a collection, returning a reference to it.</p>
+<h5 id="panics-3"><a class="doc-anchor" href="#panics-3">§</a>Panics</h5>
+<p>Panics if the new capacity exceeds <code>isize::MAX</code> <em>bytes</em>.</p>
+<h5 id="examples-9"><a class="doc-anchor" href="#examples-9">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span><span class="kw-2">mut </span>vec = <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>];
+<span class="kw">let </span>last = vec.push_mut(<span class="number">3</span>);
+<span class="macro">assert_eq!</span>(<span class="kw-2">*</span>last, <span class="number">3</span>);
+<span class="macro">assert_eq!</span>(vec, [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]);
+
+<span class="kw">let </span>last = vec.push_mut(<span class="number">3</span>);
+<span class="kw-2">*</span>last += <span class="number">1</span>;
+<span class="macro">assert_eq!</span>(vec, [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>]);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++let+mut+vec+=+vec!%5B1,+2%5D;%0A++++let+last+=+vec.push_mut(3);%0A++++assert_eq!(*last,+3);%0A++++assert_eq!(vec,+%5B1,+2,+3%5D);%0A++++%0A++++let+last+=+vec.push_mut(3);%0A++++*last+%2B=+1;%0A++++assert_eq!(vec,+%5B1,+2,+3,+4%5D);%0A%7D&amp;edition=2024"></a></div><h5 id="time-complexity-1"><a class="doc-anchor" href="#time-complexity-1">§</a>Time complexity</h5>
+<p>Takes amortized <em>O</em>(1) time. If the vector’s length would exceed its
+capacity after the push, <em>O</em>(<em>capacity</em>) time is taken to copy the
+vector’s elements to a larger allocation. This expensive operation is
+offset by the <em>capacity</em> <em>O</em>(1) insertions it allows.</p>
+</div></details></div></details><details class="toggle implementors-toggle" open><summary><section id="impl-Vec%3CT,+A%3E-1" class="impl"><a class="src rightside" href="../../src/alloc/vec/mod.rs.html#1013">Source</a><a href="#impl-Vec%3CT,+A%3E-1" class="anchor">§</a><h3 class="code-header">impl&lt;T, A&gt; <a class="struct" href="struct.Vec.html" title="struct std::vec::Vec">Vec</a>&lt;T, A&gt;<div class="where">where
+    A: <a class="trait" href="../alloc/trait.Allocator.html" title="trait std::alloc::Allocator">Allocator</a>,</div></h3></section></summary><div class="impl-items"><details class="toggle method-toggle" open><summary><section id="method.new_in" class="method"><span class="rightside"><span class="since" title="Stable since Rust version 1.100.0, const unstable">1.100.0 (const: <a href="https://github.com/rust-lang/rust/issues/163177" title="Tracking issue for allocator_ext">unstable</a>)</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#1028">Source</a></span><h4 class="code-header">pub fn <a href="#method.new_in" class="fn">new_in</a>(alloc: A) -&gt; <a class="struct" href="struct.Vec.html" title="struct std::vec::Vec">Vec</a>&lt;T, A&gt;</h4></section></summary><div class="docblock"><p>Constructs a new, empty <code>Vec&lt;T, A&gt;</code>.</p>
+<p>The vector will not allocate until elements are pushed onto it.</p>
+<h5 id="examples-10"><a class="doc-anchor" href="#examples-10">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::alloc::System;
+
+<span class="kw">let </span>vec: Vec&lt;i32, System&gt; = Vec::new_in(System);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++use+std::alloc::System;%0A++++%0A++++let+vec:+Vec%3Ci32,+System%3E+=+Vec::new_in(System);%0A%7D&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.try_with_capacity_in" class="method"><a class="src rightside" href="../../src/alloc/vec/mod.rs.html#1048">Source</a><h4 class="code-header">pub fn <a href="#method.try_with_capacity_in" class="fn">try_with_capacity_in</a>(
+    capacity: <a class="primitive" href="../primitive.usize.html">usize</a>,
+    alloc: A,
+) -&gt; <a class="enum" href="../result/enum.Result.html" title="enum std::result::Result">Result</a>&lt;<a class="struct" href="struct.Vec.html" title="struct std::vec::Vec">Vec</a>&lt;T, A&gt;, <a class="struct" href="../collections/struct.TryReserveError.html" title="struct std::collections::TryReserveError">TryReserveError</a>&gt;</h4></section><span class="item-info"><div class="stab unstable"><span class="emoji">🔬</span><span>This is a nightly-only experimental API. (<code>allocator_ext</code>&nbsp;<a href="https://github.com/rust-lang/rust/issues/163177">#163177</a>)</span></div></span></summary><div class="docblock"><p>Constructs a new, empty <code>Vec&lt;T, A&gt;</code> with at least the specified capacity
+with the provided allocator.</p>
+<p>The vector will be able to hold at least <code>capacity</code> elements without
+reallocating. This method is allowed to allocate for more elements than
+<code>capacity</code>. If <code>capacity</code> is zero, the vector <a href="index.html#memory-layout" title="mod std::vec">will not allocate</a>.</p>
+<h5 id="errors-1"><a class="doc-anchor" href="#errors-1">§</a>Errors</h5>
+<p>Returns an error if the capacity exceeds <code>isize::MAX</code> <em>bytes</em>,
+or if the allocator reports allocation failure.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.from_raw_parts_in" class="method"><span class="rightside"><span class="since" title="Stable since Rust version 1.100.0, const unstable">1.100.0 (const: <a href="https://github.com/rust-lang/rust/issues/79597" title="Tracking issue for const_heap">unstable</a>)</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#1130-1135">Source</a></span><h4 class="code-header">pub unsafe fn <a href="#method.from_raw_parts_in" class="fn">from_raw_parts_in</a>(
+    ptr: <a class="primitive" href="../primitive.pointer.html">*mut T</a>,
+    length: <a class="primitive" href="../primitive.usize.html">usize</a>,
+    capacity: <a class="primitive" href="../primitive.usize.html">usize</a>,
+    alloc: A,
+) -&gt; <a class="struct" href="struct.Vec.html" title="struct std::vec::Vec">Vec</a>&lt;T, A&gt;</h4></section></summary><div class="docblock"><p>Creates a <code>Vec&lt;T, A&gt;</code> directly from a pointer, a length, a capacity,
+and an allocator.</p>
+<h5 id="safety-2"><a class="doc-anchor" href="#safety-2">§</a>Safety</h5>
+<p>The parts must satisfy the invariants described in the <a href="index.html#memory-layout" title="mod std::vec">memory layout</a> section.</p>
+<p>Violating them may cause problems like corrupting the allocator’s
+internal data structures. For example it is <strong>not</strong> safe
+to build a <code>Vec&lt;u8&gt;</code> from a pointer to a C <code>char</code> array with length <code>size_t</code>.
+It’s also not safe to build one from a <code>Vec&lt;u16&gt;</code> and its length, because
+the allocator cares about the alignment, and these two types have different
+alignments. The buffer was allocated with alignment 2 (for <code>u16</code>), but after
+turning it into a <code>Vec&lt;u8&gt;</code> it’ll be deallocated with alignment 1.</p>
+<p>The ownership of <code>ptr</code> is effectively transferred to the
+<code>Vec&lt;T&gt;</code> which may then deallocate, reallocate or change the
+contents of memory pointed to by the pointer at will. Ensure
+that nothing else uses the pointer after calling this
+function.</p>
+<h5 id="examples-11"><a class="doc-anchor" href="#examples-11">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::alloc::System;
+
+<span class="kw">use </span>std::ptr;
+
+<span class="kw">let </span><span class="kw-2">mut </span>v = Vec::with_capacity_in(<span class="number">3</span>, System);
+v.push(<span class="number">1</span>);
+v.push(<span class="number">2</span>);
+v.push(<span class="number">3</span>);
+
+<span class="comment">// Deconstruct the vector into parts.
+</span><span class="kw">let </span>(p, len, cap, alloc) = v.into_raw_parts_with_allocator();
+
+<span class="kw">unsafe </span>{
+    <span class="comment">// Overwrite memory with 4, 5, 6
+    </span><span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..len {
+        ptr::write(p.add(i), <span class="number">4 </span>+ i);
+    }
+
+    <span class="comment">// Put everything back together into a Vec
+    </span><span class="kw">let </span>rebuilt = Vec::from_raw_parts_in(p, len, cap, alloc.clone());
+    <span class="macro">assert_eq!</span>(rebuilt, [<span class="number">4</span>, <span class="number">5</span>, <span class="number">6</span>]);
+}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++use+std::alloc::System;%0A++++%0A++++use+std::ptr;%0A++++%0A++++let+mut+v+=+Vec::with_capacity_in(3,+System);%0A++++v.push(1);%0A++++v.push(2);%0A++++v.push(3);%0A++++%0A++++//+Deconstruct+the+vector+into+parts.%0A++++let+(p,+len,+cap,+alloc)+=+v.into_raw_parts_with_allocator();%0A++++%0A++++unsafe+%7B%0A++++++++//+Overwrite+memory+with+4,+5,+6%0A++++++++for+i+in+0..len+%7B%0A++++++++++++ptr::write(p.add(i),+4+%2B+i);%0A++++++++%7D%0A++++%0A++++++++//+Put+everything+back+together+into+a+Vec%0A++++++++let+rebuilt+=+Vec::from_raw_parts_in(p,+len,+cap,+alloc.clone());%0A++++++++assert_eq!(rebuilt,+%5B4,+5,+6%5D);%0A++++%7D%0A%7D&amp;edition=2024"></a></div>
+<p>Using memory that was allocated elsewhere:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::alloc::{AllocError, Allocator, Global, Layout};
+
+<span class="kw">fn </span>main() {
+    <span class="kw">let </span>layout = Layout::array::&lt;u32&gt;(<span class="number">16</span>).expect(<span class="string">"16 u32s take 64 bytes, so it shouldn't overflow"</span>);
+
+    <span class="kw">let </span>vec = <span class="kw">unsafe </span>{
+        <span class="kw">let </span>mem = <span class="kw">match </span>Global.allocate(layout) {
+            <span class="prelude-val">Ok</span>(mem) =&gt; mem.cast::&lt;u32&gt;().as_ptr(),
+            <span class="prelude-val">Err</span>(AllocError) =&gt; <span class="kw">return</span>,
+        };
+
+        mem.write(<span class="number">1_000_000</span>);
+
+        Vec::from_raw_parts_in(mem, <span class="number">1</span>, <span class="number">16</span>, Global)
+    };
+
+    <span class="macro">assert_eq!</span>(vec, <span class="kw-2">&amp;</span>[<span class="number">1_000_000</span>]);
+    <span class="macro">assert_eq!</span>(vec.capacity(), <span class="number">16</span>);
+}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Ause+std::alloc::%7BAllocError,+Allocator,+Global,+Layout%7D;%0A%0Afn+main()+%7B%0A++++let+layout+=+Layout::array::%3Cu32%3E(16).expect(%2216+u32s+take+64+bytes,+so+it+shouldn't+overflow%22);%0A%0A++++let+vec+=+unsafe+%7B%0A++++++++let+mem+=+match+Global.allocate(layout)+%7B%0A++++++++++++Ok(mem)+=%3E+mem.cast::%3Cu32%3E().as_ptr(),%0A++++++++++++Err(AllocError)+=%3E+return,%0A++++++++%7D;%0A%0A++++++++mem.write(1_000_000);%0A%0A++++++++Vec::from_raw_parts_in(mem,+1,+16,+Global)%0A++++%7D;%0A%0A++++assert_eq!(vec,+%26%5B1_000_000%5D);%0A++++assert_eq!(vec.capacity(),+16);%0A%7D&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.from_parts_in" class="method"><span class="rightside"><span class="since" title="Stable since Rust version 1.100.0, const unstable">1.100.0 (const: <a href="https://github.com/rust-lang/rust/issues/79597" title="Tracking issue for const_heap">unstable</a>)</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#1222-1227">Source</a></span><h4 class="code-header">pub unsafe fn <a href="#method.from_parts_in" class="fn">from_parts_in</a>(
+    ptr: <a class="struct" href="../ptr/struct.NonNull.html" title="struct std::ptr::NonNull">NonNull</a>&lt;T&gt;,
+    length: <a class="primitive" href="../primitive.usize.html">usize</a>,
+    capacity: <a class="primitive" href="../primitive.usize.html">usize</a>,
+    alloc: A,
+) -&gt; <a class="struct" href="struct.Vec.html" title="struct std::vec::Vec">Vec</a>&lt;T, A&gt;</h4></section></summary><div class="docblock"><p>Creates a <code>Vec&lt;T, A&gt;</code> directly from a <code>NonNull</code> pointer, a length, a capacity,
+and an allocator.</p>
+<h5 id="safety-3"><a class="doc-anchor" href="#safety-3">§</a>Safety</h5>
+<p>The parts must satisfy the invariants described in the <a href="index.html#memory-layout" title="mod std::vec">memory layout</a> section.</p>
+<p>Violating them may cause problems like corrupting the allocator’s
+internal data structures. For example it is <strong>not</strong> safe
+to build a <code>Vec&lt;u8&gt;</code> from a pointer to a C <code>char</code> array with length <code>size_t</code>.
+It’s also not safe to build one from a <code>Vec&lt;u16&gt;</code> and its length, because
+the allocator cares about the alignment, and these two types have different
+alignments. The buffer was allocated with alignment 2 (for <code>u16</code>), but after
+turning it into a <code>Vec&lt;u8&gt;</code> it’ll be deallocated with alignment 1.</p>
+<p>The ownership of <code>ptr</code> is effectively transferred to the
+<code>Vec&lt;T&gt;</code> which may then deallocate, reallocate or change the
+contents of memory pointed to by the pointer at will. Ensure
+that nothing else uses the pointer after calling this
+function.</p>
+<h5 id="examples-12"><a class="doc-anchor" href="#examples-12">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::alloc::System;
+
+<span class="kw">let </span><span class="kw-2">mut </span>v = Vec::with_capacity_in(<span class="number">3</span>, System);
+v.push(<span class="number">1</span>);
+v.push(<span class="number">2</span>);
+v.push(<span class="number">3</span>);
+
+<span class="comment">// Deconstruct the vector into parts.
+</span><span class="kw">let </span>(p, len, cap, alloc) = v.into_parts_with_allocator();
+
+<span class="kw">unsafe </span>{
+    <span class="comment">// Overwrite memory with 4, 5, 6
+    </span><span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..len {
+        p.add(i).write(<span class="number">4 </span>+ i);
+    }
+
+    <span class="comment">// Put everything back together into a Vec
+    </span><span class="kw">let </span>rebuilt = Vec::from_parts_in(p, len, cap, alloc.clone());
+    <span class="macro">assert_eq!</span>(rebuilt, [<span class="number">4</span>, <span class="number">5</span>, <span class="number">6</span>]);
+}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++use+std::alloc::System;%0A++++%0A++++let+mut+v+=+Vec::with_capacity_in(3,+System);%0A++++v.push(1);%0A++++v.push(2);%0A++++v.push(3);%0A++++%0A++++//+Deconstruct+the+vector+into+parts.%0A++++let+(p,+len,+cap,+alloc)+=+v.into_parts_with_allocator();%0A++++%0A++++unsafe+%7B%0A++++++++//+Overwrite+memory+with+4,+5,+6%0A++++++++for+i+in+0..len+%7B%0A++++++++++++p.add(i).write(4+%2B+i);%0A++++++++%7D%0A++++%0A++++++++//+Put+everything+back+together+into+a+Vec%0A++++++++let+rebuilt+=+Vec::from_parts_in(p,+len,+cap,+alloc.clone());%0A++++++++assert_eq!(rebuilt,+%5B4,+5,+6%5D);%0A++++%7D%0A%7D&amp;edition=2024"></a></div>
+<p>Using memory that was allocated elsewhere:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::alloc::{AllocError, Allocator, Global, Layout};
+
+<span class="kw">fn </span>main() {
+    <span class="kw">let </span>layout = Layout::array::&lt;u32&gt;(<span class="number">16</span>).expect(<span class="string">"16 u32s take 64 bytes, so it shouldn't overflow"</span>);
+
+    <span class="kw">let </span>vec = <span class="kw">unsafe </span>{
+        <span class="kw">let </span>mem = <span class="kw">match </span>Global.allocate(layout) {
+            <span class="prelude-val">Ok</span>(mem) =&gt; mem.cast::&lt;u32&gt;(),
+            <span class="prelude-val">Err</span>(AllocError) =&gt; <span class="kw">return</span>,
+        };
+
+        mem.write(<span class="number">1_000_000</span>);
+
+        Vec::from_parts_in(mem, <span class="number">1</span>, <span class="number">16</span>, Global)
+    };
+
+    <span class="macro">assert_eq!</span>(vec, <span class="kw-2">&amp;</span>[<span class="number">1_000_000</span>]);
+    <span class="macro">assert_eq!</span>(vec.capacity(), <span class="number">16</span>);
+}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Ause+std::alloc::%7BAllocError,+Allocator,+Global,+Layout%7D;%0A%0Afn+main()+%7B%0A++++let+layout+=+Layout::array::%3Cu32%3E(16).expect(%2216+u32s+take+64+bytes,+so+it+shouldn't+overflow%22);%0A%0A++++let+vec+=+unsafe+%7B%0A++++++++let+mem+=+match+Global.allocate(layout)+%7B%0A++++++++++++Ok(mem)+=%3E+mem.cast::%3Cu32%3E(),%0A++++++++++++Err(AllocError)+=%3E+return,%0A++++++++%7D;%0A%0A++++++++mem.write(1_000_000);%0A%0A++++++++Vec::from_parts_in(mem,+1,+16,+Global)%0A++++%7D;%0A%0A++++assert_eq!(vec,+%26%5B1_000_000%5D);%0A++++assert_eq!(vec.capacity(),+16);%0A%7D&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.into_raw_parts_with_allocator" class="method"><span class="rightside"><span class="since" title="Stable since Rust version 1.100.0, const unstable">1.100.0 (const: <a href="https://github.com/rust-lang/rust/issues/79597" title="Tracking issue for const_heap">unstable</a>)</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#1275">Source</a></span><h4 class="code-header">pub fn <a href="#method.into_raw_parts_with_allocator" class="fn">into_raw_parts_with_allocator</a>(self) -&gt; (<a class="primitive" href="../primitive.pointer.html">*mut T</a>, <a class="primitive" href="../primitive.usize.html">usize</a>, <a class="primitive" href="../primitive.usize.html">usize</a>, A)</h4></section></summary><div class="docblock"><p>Decomposes a <code>Vec&lt;T&gt;</code> into its raw components: <code>(pointer, length, capacity, allocator)</code>.</p>
+<p>Returns the raw pointer to the underlying data, the length of the vector (in elements),
+the allocated capacity of the data (in elements), and the allocator. These are the same
+arguments in the same order as the arguments to <a href="struct.Vec.html#method.from_raw_parts_in" title="associated function std::vec::Vec::from_raw_parts_in"><code>from_raw_parts_in</code></a>.</p>
+<p>After calling this function, the caller is responsible for the
+memory previously managed by the <code>Vec</code>. The only way to do
+this is to convert the raw pointer, length, and capacity back
+into a <code>Vec</code> with the <a href="struct.Vec.html#method.from_raw_parts_in" title="associated function std::vec::Vec::from_raw_parts_in"><code>from_raw_parts_in</code></a> function, allowing
+the destructor to perform the cleanup.</p>
+<h5 id="examples-13"><a class="doc-anchor" href="#examples-13">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::alloc::System;
+
+<span class="kw">let </span><span class="kw-2">mut </span>v: Vec&lt;i32, System&gt; = Vec::new_in(System);
+v.push(-<span class="number">1</span>);
+v.push(<span class="number">0</span>);
+v.push(<span class="number">1</span>);
+
+<span class="kw">let </span>(ptr, len, cap, alloc) = v.into_raw_parts_with_allocator();
+
+<span class="kw">let </span>rebuilt = <span class="kw">unsafe </span>{
+    <span class="comment">// We can now make changes to the components, such as
+    // transmuting the raw pointer to a compatible type.
+    </span><span class="kw">let </span>ptr = ptr <span class="kw">as </span><span class="kw-2">*mut </span>u32;
+
+    Vec::from_raw_parts_in(ptr, len, cap, alloc)
+};
+<span class="macro">assert_eq!</span>(rebuilt, [<span class="number">4294967295</span>, <span class="number">0</span>, <span class="number">1</span>]);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++use+std::alloc::System;%0A++++%0A++++let+mut+v:+Vec%3Ci32,+System%3E+=+Vec::new_in(System);%0A++++v.push(-1);%0A++++v.push(0);%0A++++v.push(1);%0A++++%0A++++let+(ptr,+len,+cap,+alloc)+=+v.into_raw_parts_with_allocator();%0A++++%0A++++let+rebuilt+=+unsafe+%7B%0A++++++++//+We+can+now+make+changes+to+the+components,+such+as%0A++++++++//+transmuting+the+raw+pointer+to+a+compatible+type.%0A++++++++let+ptr+=+ptr+as+*mut+u32;%0A++++%0A++++++++Vec::from_raw_parts_in(ptr,+len,+cap,+alloc)%0A++++%7D;%0A++++assert_eq!(rebuilt,+%5B4294967295,+0,+1%5D);%0A%7D&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.into_parts_with_allocator" class="method"><span class="rightside"><span class="since" title="Stable since Rust version 1.100.0, const unstable">1.100.0 (const: <a href="https://github.com/rust-lang/rust/issues/79597" title="Tracking issue for const_heap">unstable</a>)</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#1324">Source</a></span><h4 class="code-header">pub fn <a href="#method.into_parts_with_allocator" class="fn">into_parts_with_allocator</a>(self) -&gt; (<a class="struct" href="../ptr/struct.NonNull.html" title="struct std::ptr::NonNull">NonNull</a>&lt;T&gt;, <a class="primitive" href="../primitive.usize.html">usize</a>, <a class="primitive" href="../primitive.usize.html">usize</a>, A)</h4></section></summary><div class="docblock"><p>Decomposes a <code>Vec&lt;T&gt;</code> into its raw components: <code>(NonNull pointer, length, capacity, allocator)</code>.</p>
+<p>Returns the <code>NonNull</code> pointer to the underlying data, the length of the vector (in elements),
+the allocated capacity of the data (in elements), and the allocator. These are the same
+arguments in the same order as the arguments to <a href="struct.Vec.html#method.from_parts_in" title="associated function std::vec::Vec::from_parts_in"><code>from_parts_in</code></a>.</p>
+<p>After calling this function, the caller is responsible for the
+memory previously managed by the <code>Vec</code>. The only way to do
+this is to convert the <code>NonNull</code> pointer, length, and capacity back
+into a <code>Vec</code> with the <a href="struct.Vec.html#method.from_parts_in" title="associated function std::vec::Vec::from_parts_in"><code>from_parts_in</code></a> function, allowing
+the destructor to perform the cleanup.</p>
+<h5 id="examples-14"><a class="doc-anchor" href="#examples-14">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::alloc::System;
+
+<span class="kw">let </span><span class="kw-2">mut </span>v: Vec&lt;i32, System&gt; = Vec::new_in(System);
+v.push(-<span class="number">1</span>);
+v.push(<span class="number">0</span>);
+v.push(<span class="number">1</span>);
+
+<span class="kw">let </span>(ptr, len, cap, alloc) = v.into_parts_with_allocator();
+
+<span class="kw">let </span>rebuilt = <span class="kw">unsafe </span>{
+    <span class="comment">// We can now make changes to the components, such as
+    // transmuting the raw pointer to a compatible type.
+    </span><span class="kw">let </span>ptr = ptr.cast::&lt;u32&gt;();
+
+    Vec::from_parts_in(ptr, len, cap, alloc)
+};
+<span class="macro">assert_eq!</span>(rebuilt, [<span class="number">4294967295</span>, <span class="number">0</span>, <span class="number">1</span>]);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++use+std::alloc::System;%0A++++%0A++++let+mut+v:+Vec%3Ci32,+System%3E+=+Vec::new_in(System);%0A++++v.push(-1);%0A++++v.push(0);%0A++++v.push(1);%0A++++%0A++++let+(ptr,+len,+cap,+alloc)+=+v.into_parts_with_allocator();%0A++++%0A++++let+rebuilt+=+unsafe+%7B%0A++++++++//+We+can+now+make+changes+to+the+components,+such+as%0A++++++++//+transmuting+the+raw+pointer+to+a+compatible+type.%0A++++++++let+ptr+=+ptr.cast::%3Cu32%3E();%0A++++%0A++++++++Vec::from_parts_in(ptr,+len,+cap,+alloc)%0A++++%7D;%0A++++assert_eq!(rebuilt,+%5B4294967295,+0,+1%5D);%0A%7D&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.capacity" class="method"><span class="rightside"><span class="since" title="Stable since Rust version 1.0.0, const since 1.87.0">1.0.0 (const: 1.87.0)</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#1356">Source</a></span><h4 class="code-header">pub const fn <a href="#method.capacity" class="fn">capacity</a>(&amp;self) -&gt; <a class="primitive" href="../primitive.usize.html">usize</a></h4></section></summary><div class="docblock"><p>Returns the total number of elements the vector can hold without
+reallocating.</p>
+<h5 id="examples-15"><a class="doc-anchor" href="#examples-15">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span><span class="kw-2">mut </span>vec: Vec&lt;i32&gt; = Vec::with_capacity(<span class="number">10</span>);
+vec.push(<span class="number">42</span>);
+<span class="macro">assert!</span>(vec.capacity() &gt;= <span class="number">10</span>);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++let+mut+vec:+Vec%3Ci32%3E+=+Vec::with_capacity(10);%0A++++vec.push(42);%0A++++assert!(vec.capacity()+%3E=+10);%0A%7D&amp;edition=2024"></a></div>
+<p>A vector with zero-sized elements will always have a capacity of usize::MAX:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="attr">#[derive(Clone)]
+</span><span class="kw">struct </span>ZeroSized;
+
+<span class="kw">fn </span>main() {
+    <span class="macro">assert_eq!</span>(std::mem::size_of::&lt;ZeroSized&gt;(), <span class="number">0</span>);
+    <span class="kw">let </span>v = <span class="macro">vec!</span>[ZeroSized; <span class="number">0</span>];
+    <span class="macro">assert_eq!</span>(v.capacity(), usize::MAX);
+}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0A%23%5Bderive(Clone)%5D%0Astruct+ZeroSized;%0A%0Afn+main()+%7B%0A++++assert_eq!(std::mem::size_of::%3CZeroSized%3E(),+0);%0A++++let+v+=+vec!%5BZeroSized;+0%5D;%0A++++assert_eq!(v.capacity(),+usize::MAX);%0A%7D&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.reserve" class="method"><span class="rightside"><span class="since" title="Stable since Rust version 1.0.0">1.0.0</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#1380">Source</a></span><h4 class="code-header">pub fn <a href="#method.reserve" class="fn">reserve</a>(&amp;mut self, additional: <a class="primitive" href="../primitive.usize.html">usize</a>)</h4></section></summary><div class="docblock"><p>Reserves capacity for at least <code>additional</code> more elements to be inserted
+in the given <code>Vec&lt;T&gt;</code>. The collection may reserve more space to
+speculatively avoid frequent reallocations. After calling <code>reserve</code>,
+capacity will be greater than or equal to <code>self.len() + additional</code>.
+Does nothing if capacity is already sufficient.</p>
+<h5 id="panics-4"><a class="doc-anchor" href="#panics-4">§</a>Panics</h5>
+<p>Panics if the new capacity exceeds <code>isize::MAX</code> <em>bytes</em>.</p>
+<h5 id="examples-16"><a class="doc-anchor" href="#examples-16">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span><span class="kw-2">mut </span>vec = <span class="macro">vec!</span>[<span class="number">1</span>];
+vec.reserve(<span class="number">10</span>);
+<span class="macro">assert!</span>(vec.capacity() &gt;= <span class="number">11</span>);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++let+mut+vec+=+vec!%5B1%5D;%0A++++vec.reserve(10);%0A++++assert!(vec.capacity()+%3E=+11);%0A%7D&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.reserve_exact" class="method"><span class="rightside"><span class="since" title="Stable since Rust version 1.0.0">1.0.0</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#1410">Source</a></span><h4 class="code-header">pub fn <a href="#method.reserve_exact" class="fn">reserve_exact</a>(&amp;mut self, additional: <a class="primitive" href="../primitive.usize.html">usize</a>)</h4></section></summary><div class="docblock"><p>Reserves the minimum capacity for at least <code>additional</code> more elements to
+be inserted in the given <code>Vec&lt;T&gt;</code>. Unlike <a href="struct.Vec.html#method.reserve" title="method std::vec::Vec::reserve"><code>reserve</code></a>, this will not
+deliberately over-allocate to speculatively avoid frequent allocations.
+After calling <code>reserve_exact</code>, capacity will be greater than or equal to
+<code>self.len() + additional</code>. Does nothing if the capacity is already
+sufficient.</p>
+<p>Note that the allocator may give the collection more space than it
+requests. Therefore, capacity can not be relied upon to be precisely
+minimal. Prefer <a href="struct.Vec.html#method.reserve" title="method std::vec::Vec::reserve"><code>reserve</code></a> if future insertions are expected.</p>
+<h5 id="panics-5"><a class="doc-anchor" href="#panics-5">§</a>Panics</h5>
+<p>Panics if the new capacity exceeds <code>isize::MAX</code> <em>bytes</em>.</p>
+<h5 id="examples-17"><a class="doc-anchor" href="#examples-17">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span><span class="kw-2">mut </span>vec = <span class="macro">vec!</span>[<span class="number">1</span>];
+vec.reserve_exact(<span class="number">10</span>);
+<span class="macro">assert!</span>(vec.capacity() &gt;= <span class="number">11</span>);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++let+mut+vec+=+vec!%5B1%5D;%0A++++vec.reserve_exact(10);%0A++++assert!(vec.capacity()+%3E=+11);%0A%7D&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.try_reserve" class="method"><span class="rightside"><span class="since" title="Stable since Rust version 1.57.0">1.57.0</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#1447">Source</a></span><h4 class="code-header">pub fn <a href="#method.try_reserve" class="fn">try_reserve</a>(&amp;mut self, additional: <a class="primitive" href="../primitive.usize.html">usize</a>) -&gt; <a class="enum" href="../result/enum.Result.html" title="enum std::result::Result">Result</a>&lt;<a class="primitive" href="../primitive.unit.html">()</a>, <a class="struct" href="../collections/struct.TryReserveError.html" title="struct std::collections::TryReserveError">TryReserveError</a>&gt;</h4></section></summary><div class="docblock"><p>Tries to reserve capacity for at least <code>additional</code> more elements to be inserted
+in the given <code>Vec&lt;T&gt;</code>. The collection may reserve more space to speculatively avoid
+frequent reallocations. After calling <code>try_reserve</code>, capacity will be
+greater than or equal to <code>self.len() + additional</code> if it returns
+<code>Ok(())</code>. Does nothing if capacity is already sufficient. This method
+preserves the contents even if an error occurs.</p>
+<h5 id="errors-2"><a class="doc-anchor" href="#errors-2">§</a>Errors</h5>
+<p>If the capacity overflows, or the allocator reports a failure, then an error
+is returned.</p>
+<h5 id="examples-18"><a class="doc-anchor" href="#examples-18">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::collections::TryReserveError;
+
+<span class="kw">fn </span>process_data(data: <span class="kw-2">&amp;</span>[u32]) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u32&gt;, TryReserveError&gt; {
+    <span class="kw">let </span><span class="kw-2">mut </span>output = Vec::new();
+
+    <span class="comment">// Pre-reserve the memory, exiting if we can't
+    </span>output.try_reserve(data.len())<span class="question-mark">?</span>;
+
+    <span class="comment">// Now we know this can't OOM in the middle of our complex work
+    </span>output.extend(data.iter().map(|<span class="kw-2">&amp;</span>val| {
+        val * <span class="number">2 </span>+ <span class="number">5 </span><span class="comment">// very complicated
+    </span>}));
+
+    <span class="prelude-val">Ok</span>(output)
+}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++use+std::collections::TryReserveError;%0A++++%0A++++fn+process_data(data:+%26%5Bu32%5D)+-%3E+Result%3CVec%3Cu32%3E,+TryReserveError%3E+%7B%0A++++++++let+mut+output+=+Vec::new();%0A++++%0A++++++++//+Pre-reserve+the+memory,+exiting+if+we+can't%0A++++++++output.try_reserve(data.len())?;%0A++++%0A++++++++//+Now+we+know+this+can't+OOM+in+the+middle+of+our+complex+work%0A++++++++output.extend(data.iter().map(%7C%26val%7C+%7B%0A++++++++++++val+*+2+%2B+5+//+very+complicated%0A++++++++%7D));%0A++++%0A++++++++Ok(output)%0A++++%7D%0A++++process_data(%26%5B1,+2,+3%5D).expect(%22this+test+needs+12+bytes,+so+it+shouldn't+fail%22);%0A%7D&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.try_reserve_exact" class="method"><span class="rightside"><span class="since" title="Stable since Rust version 1.57.0">1.57.0</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#1490">Source</a></span><h4 class="code-header">pub fn <a href="#method.try_reserve_exact" class="fn">try_reserve_exact</a>(
+    &amp;mut self,
+    additional: <a class="primitive" href="../primitive.usize.html">usize</a>,
+) -&gt; <a class="enum" href="../result/enum.Result.html" title="enum std::result::Result">Result</a>&lt;<a class="primitive" href="../primitive.unit.html">()</a>, <a class="struct" href="../collections/struct.TryReserveError.html" title="struct std::collections::TryReserveError">TryReserveError</a>&gt;</h4></section></summary><div class="docblock"><p>Tries to reserve the minimum capacity for at least <code>additional</code>
+elements to be inserted in the given <code>Vec&lt;T&gt;</code>. Unlike <a href="struct.Vec.html#method.try_reserve" title="method std::vec::Vec::try_reserve"><code>try_reserve</code></a>,
+this will not deliberately over-allocate to speculatively avoid frequent
+allocations. After calling <code>try_reserve_exact</code>, capacity will be greater
+than or equal to <code>self.len() + additional</code> if it returns <code>Ok(())</code>.
+Does nothing if the capacity is already sufficient.</p>
+<p>Note that the allocator may give the collection more space than it
+requests. Therefore, capacity can not be relied upon to be precisely
+minimal. Prefer <a href="struct.Vec.html#method.try_reserve" title="method std::vec::Vec::try_reserve"><code>try_reserve</code></a> if future insertions are expected.</p>
+<h5 id="errors-3"><a class="doc-anchor" href="#errors-3">§</a>Errors</h5>
+<p>If the capacity overflows, or the allocator reports a failure, then an error
+is returned.</p>
+<h5 id="examples-19"><a class="doc-anchor" href="#examples-19">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::collections::TryReserveError;
+
+<span class="kw">fn </span>process_data(data: <span class="kw-2">&amp;</span>[u32]) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u32&gt;, TryReserveError&gt; {
+    <span class="kw">let </span><span class="kw-2">mut </span>output = Vec::new();
+
+    <span class="comment">// Pre-reserve the memory, exiting if we can't
+    </span>output.try_reserve_exact(data.len())<span class="question-mark">?</span>;
+
+    <span class="comment">// Now we know this can't OOM in the middle of our complex work
+    </span>output.extend(data.iter().map(|<span class="kw-2">&amp;</span>val| {
+        val * <span class="number">2 </span>+ <span class="number">5 </span><span class="comment">// very complicated
+    </span>}));
+
+    <span class="prelude-val">Ok</span>(output)
+}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++use+std::collections::TryReserveError;%0A++++%0A++++fn+process_data(data:+%26%5Bu32%5D)+-%3E+Result%3CVec%3Cu32%3E,+TryReserveError%3E+%7B%0A++++++++let+mut+output+=+Vec::new();%0A++++%0A++++++++//+Pre-reserve+the+memory,+exiting+if+we+can't%0A++++++++output.try_reserve_exact(data.len())?;%0A++++%0A++++++++//+Now+we+know+this+can't+OOM+in+the+middle+of+our+complex+work%0A++++++++output.extend(data.iter().map(%7C%26val%7C+%7B%0A++++++++++++val+*+2+%2B+5+//+very+complicated%0A++++++++%7D));%0A++++%0A++++++++Ok(output)%0A++++%7D%0A++++process_data(%26%5B1,+2,+3%5D).expect(%22this+test+needs+12+bytes,+so+it+shouldn't+fail%22);%0A%7D&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.shrink_to_fit" class="method"><span class="rightside"><span class="since" title="Stable since Rust version 1.0.0">1.0.0</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#1514">Source</a></span><h4 class="code-header">pub fn <a href="#method.shrink_to_fit" class="fn">shrink_to_fit</a>(&amp;mut self)</h4></section></summary><div class="docblock"><p>Shrinks the capacity of the vector as much as possible.</p>
+<p>The behavior of this method depends on the allocator, which may either shrink the vector
+in-place or reallocate. The resulting vector might still have some excess capacity, just as
+is the case for <a href="struct.Vec.html#method.with_capacity" title="associated function std::vec::Vec::with_capacity"><code>with_capacity</code></a>. See <a href="../alloc/trait.Allocator.html#method.shrink" title="method std::alloc::Allocator::shrink"><code>Allocator::shrink</code></a> for more details.</p>
+<h5 id="examples-20"><a class="doc-anchor" href="#examples-20">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span><span class="kw-2">mut </span>vec = Vec::with_capacity(<span class="number">10</span>);
+vec.extend([<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]);
+<span class="macro">assert!</span>(vec.capacity() &gt;= <span class="number">10</span>);
+vec.shrink_to_fit();
+<span class="macro">assert!</span>(vec.capacity() &gt;= <span class="number">3</span>);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++let+mut+vec+=+Vec::with_capacity(10);%0A++++vec.extend(%5B1,+2,+3%5D);%0A++++assert!(vec.capacity()+%3E=+10);%0A++++vec.shrink_to_fit();%0A++++assert!(vec.capacity()+%3E=+3);%0A%7D&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.shrink_to" class="method"><span class="rightside"><span class="since" title="Stable since Rust version 1.56.0">1.56.0</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#1543">Source</a></span><h4 class="code-header">pub fn <a href="#method.shrink_to" class="fn">shrink_to</a>(&amp;mut self, min_capacity: <a class="primitive" href="../primitive.usize.html">usize</a>)</h4></section></summary><div class="docblock"><p>Shrinks the capacity of the vector with a lower bound.</p>
+<p>The capacity will remain at least as large as both the length
+and the supplied value.</p>
+<p>If the current capacity is less than the lower limit, this is a no-op.</p>
+<h5 id="examples-21"><a class="doc-anchor" href="#examples-21">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span><span class="kw-2">mut </span>vec = Vec::with_capacity(<span class="number">10</span>);
+vec.extend([<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]);
+<span class="macro">assert!</span>(vec.capacity() &gt;= <span class="number">10</span>);
+vec.shrink_to(<span class="number">4</span>);
+<span class="macro">assert!</span>(vec.capacity() &gt;= <span class="number">4</span>);
+vec.shrink_to(<span class="number">0</span>);
+<span class="macro">assert!</span>(vec.capacity() &gt;= <span class="number">3</span>);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++let+mut+vec+=+Vec::with_capacity(10);%0A++++vec.extend(%5B1,+2,+3%5D);%0A++++assert!(vec.capacity()+%3E=+10);%0A++++vec.shrink_to(4);%0A++++assert!(vec.capacity()+%3E=+4);%0A++++vec.shrink_to(0);%0A++++assert!(vec.capacity()+%3E=+3);%0A%7D&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.try_shrink_to_fit" class="method"><a class="src rightside" href="../../src/alloc/vec/mod.rs.html#1576">Source</a><h4 class="code-header">pub fn <a href="#method.try_shrink_to_fit" class="fn">try_shrink_to_fit</a>(&amp;mut self) -&gt; <a class="enum" href="../result/enum.Result.html" title="enum std::result::Result">Result</a>&lt;<a class="primitive" href="../primitive.unit.html">()</a>, <a class="struct" href="../collections/struct.TryReserveError.html" title="struct std::collections::TryReserveError">TryReserveError</a>&gt;</h4></section><span class="item-info"><div class="stab unstable"><span class="emoji">🔬</span><span>This is a nightly-only experimental API. (<code>vec_fallible_shrink</code>&nbsp;<a href="https://github.com/rust-lang/rust/issues/152350">#152350</a>)</span></div></span></summary><div class="docblock"><p>Tries to shrink the capacity of the vector as much as possible</p>
+<p>The behavior of this method depends on the allocator, which may either shrink the vector
+in-place or reallocate. The resulting vector might still have some excess capacity, just as
+is the case for <a href="struct.Vec.html#method.with_capacity" title="associated function std::vec::Vec::with_capacity"><code>with_capacity</code></a>. See <a href="../alloc/trait.Allocator.html#method.shrink" title="method std::alloc::Allocator::shrink"><code>Allocator::shrink</code></a> for more details.</p>
+<h5 id="errors-4"><a class="doc-anchor" href="#errors-4">§</a>Errors</h5>
+<p>This function returns an error if the allocator fails to shrink the allocation,
+the vector thereafter is still safe to use, the capacity remains unchanged
+however. See <a href="../alloc/trait.Allocator.html#method.shrink" title="method std::alloc::Allocator::shrink"><code>Allocator::shrink</code></a>.</p>
+<h5 id="examples-22"><a class="doc-anchor" href="#examples-22">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="attr">#![feature(vec_fallible_shrink)]
+
+</span><span class="kw">let </span><span class="kw-2">mut </span>vec = Vec::with_capacity(<span class="number">10</span>);
+vec.extend([<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]);
+<span class="macro">assert!</span>(vec.capacity() &gt;= <span class="number">10</span>);
+vec.try_shrink_to_fit().expect(<span class="string">"for this test, shrink shouldn't fail"</span>);
+<span class="macro">assert!</span>(vec.capacity() &gt;= <span class="number">3</span>);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0A%23!%5Bfeature(vec_fallible_shrink)%5D%0A%0A%0Afn+main()+%7B%0A++++let+mut+vec+=+Vec::with_capacity(10);%0A++++vec.extend(%5B1,+2,+3%5D);%0A++++assert!(vec.capacity()+%3E=+10);%0A++++vec.try_shrink_to_fit().expect(%22for+this+test,+shrink+shouldn't+fail%22);%0A++++assert!(vec.capacity()+%3E=+3);%0A%7D&amp;version=nightly&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.try_shrink_to" class="method"><a class="src rightside" href="../../src/alloc/vec/mod.rs.html#1608">Source</a><h4 class="code-header">pub fn <a href="#method.try_shrink_to" class="fn">try_shrink_to</a>(
+    &amp;mut self,
+    min_capacity: <a class="primitive" href="../primitive.usize.html">usize</a>,
+) -&gt; <a class="enum" href="../result/enum.Result.html" title="enum std::result::Result">Result</a>&lt;<a class="primitive" href="../primitive.unit.html">()</a>, <a class="struct" href="../collections/struct.TryReserveError.html" title="struct std::collections::TryReserveError">TryReserveError</a>&gt;</h4></section><span class="item-info"><div class="stab unstable"><span class="emoji">🔬</span><span>This is a nightly-only experimental API. (<code>vec_fallible_shrink</code>&nbsp;<a href="https://github.com/rust-lang/rust/issues/152350">#152350</a>)</span></div></span></summary><div class="docblock"><p>Shrinks the capacity of the vector with a lower bound.</p>
+<p>The capacity will remain at least as large as both the length
+and the supplied value.</p>
+<p>If the current capacity is less than the lower limit, this is a no-op.</p>
+<h5 id="errors-5"><a class="doc-anchor" href="#errors-5">§</a>Errors</h5>
+<p>This function returns an error if the allocator fails to shrink the allocation,
+the vector thereafter is still safe to use, the capacity remains unchanged
+however. See <a href="../alloc/trait.Allocator.html#method.shrink" title="method std::alloc::Allocator::shrink"><code>Allocator::shrink</code></a>.</p>
+<h5 id="examples-23"><a class="doc-anchor" href="#examples-23">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="attr">#![feature(vec_fallible_shrink)]
+
+</span><span class="kw">let </span><span class="kw-2">mut </span>vec = Vec::with_capacity(<span class="number">10</span>);
+vec.extend([<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]);
+<span class="macro">assert!</span>(vec.capacity() &gt;= <span class="number">10</span>);
+vec.try_shrink_to(<span class="number">4</span>).expect(<span class="string">"for this test, shrink shouldn't fail"</span>);
+<span class="macro">assert!</span>(vec.capacity() &gt;= <span class="number">4</span>);
+vec.try_shrink_to(<span class="number">0</span>).expect(<span class="string">"this is a no-op and thus the allocator isn't involved."</span>);
+<span class="macro">assert!</span>(vec.capacity() &gt;= <span class="number">3</span>);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0A%23!%5Bfeature(vec_fallible_shrink)%5D%0A%0A%0Afn+main()+%7B%0A++++let+mut+vec+=+Vec::with_capacity(10);%0A++++vec.extend(%5B1,+2,+3%5D);%0A++++assert!(vec.capacity()+%3E=+10);%0A++++vec.try_shrink_to(4).expect(%22for+this+test,+shrink+shouldn't+fail%22);%0A++++assert!(vec.capacity()+%3E=+4);%0A++++vec.try_shrink_to(0).expect(%22this+is+a+no-op+and+thus+the+allocator+isn't+involved.%22);%0A++++assert!(vec.capacity()+%3E=+3);%0A%7D&amp;version=nightly&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.into_boxed_slice" class="method"><span class="rightside"><span class="since" title="Stable since Rust version 1.0.0">1.0.0</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#1643">Source</a></span><h4 class="code-header">pub fn <a href="#method.into_boxed_slice" class="fn">into_boxed_slice</a>(self) -&gt; <a class="struct" href="../boxed/struct.Box.html" title="struct std::boxed::Box">Box</a>&lt;<a class="primitive" href="../primitive.slice.html">[T]</a>, A&gt;</h4></section></summary><div class="docblock"><p>Converts the vector into <a href="../boxed/struct.Box.html" title="struct std::boxed::Box"><code>Box&lt;[T]&gt;</code></a>.</p>
+<p>Before doing the conversion, this method discards excess capacity like <a href="struct.Vec.html#method.shrink_to_fit" title="method std::vec::Vec::shrink_to_fit"><code>shrink_to_fit</code></a>.</p>
+<h5 id="examples-24"><a class="doc-anchor" href="#examples-24">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>v = <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>];
+
+<span class="kw">let </span>slice = v.into_boxed_slice();</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++let+v+=+vec!%5B1,+2,+3%5D;%0A++++%0A++++let+slice+=+v.into_boxed_slice();%0A%7D&amp;edition=2024"></a></div>
+<p>Any excess capacity is removed:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span><span class="kw-2">mut </span>vec = Vec::with_capacity(<span class="number">10</span>);
+vec.extend([<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]);
+
+<span class="macro">assert!</span>(vec.capacity() &gt;= <span class="number">10</span>);
+<span class="kw">let </span>slice = vec.into_boxed_slice();
+<span class="macro">assert_eq!</span>(slice.into_vec().capacity(), <span class="number">3</span>);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++let+mut+vec+=+Vec::with_capacity(10);%0A++++vec.extend(%5B1,+2,+3%5D);%0A++++%0A++++assert!(vec.capacity()+%3E=+10);%0A++++let+slice+=+vec.into_boxed_slice();%0A++++assert_eq!(slice.into_vec().capacity(),+3);%0A%7D&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.into_array" class="method"><a class="src rightside" href="../../src/alloc/vec/mod.rs.html#1673">Source</a><h4 class="code-header">pub fn <a href="#method.into_array" class="fn">into_array</a>&lt;const N: <a class="primitive" href="../primitive.usize.html">usize</a>&gt;(self) -&gt; <a class="enum" href="../result/enum.Result.html" title="enum std::result::Result">Result</a>&lt;<a class="struct" href="../boxed/struct.Box.html" title="struct std::boxed::Box">Box</a>&lt;<a class="primitive" href="../primitive.array.html">[T; N]</a>, A&gt;, <a class="struct" href="struct.Vec.html" title="struct std::vec::Vec">Vec</a>&lt;T, A&gt;&gt;</h4></section><span class="item-info"><div class="stab unstable"><span class="emoji">🔬</span><span>This is a nightly-only experimental API. (<code>alloc_slice_into_array</code>&nbsp;<a href="https://github.com/rust-lang/rust/issues/148082">#148082</a>)</span></div></span></summary><div class="docblock"><p>Converts the Vec into a boxed array. This conversion will discard any spare capacity,
+if there is any, see <a href="struct.Vec.html#method.shrink_to_fit" title="method std::vec::Vec::shrink_to_fit"><code>Vec::shrink_to_fit</code></a>.
+If you merely wish for a reference to an array, use <a href="https://doc.rust-lang.org/stable/std/primitive.slice.html#method.as_array"><code>as_array</code></a>.</p>
+<h5 id="errors-6"><a class="doc-anchor" href="#errors-6">§</a>Errors</h5>
+<p>Returns the original <code>Vec&lt;T&gt;</code> in the <code>Err</code> variant if <a href="struct.Vec.html#method.len" title="method std::vec::Vec::len"><code>Vec::len</code></a> does not equal <code>N</code>.</p>
+<h5 id="examples-25"><a class="doc-anchor" href="#examples-25">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="attr">#![feature(alloc_slice_into_array)]
+</span><span class="kw">let </span>vec: Vec&lt;i32&gt; = <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>];
+<span class="kw">let </span>box_array: Box&lt;[i32; <span class="number">3</span>]&gt; = vec.clone().into_array().unwrap();
+<span class="kw">let </span>not_enough_elements: <span class="prelude-ty">Result</span>&lt;Box&lt;[i32; <span class="number">4</span>]&gt;, Vec&lt;i32&gt;&gt; = vec.into_array::&lt;<span class="number">4</span>&gt;();
+<span class="macro">assert_eq!</span>(not_enough_elements, <span class="prelude-val">Err</span>(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]));</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0A%23!%5Bfeature(alloc_slice_into_array)%5D%0A%0Afn+main()+%7B%0A++++let+vec:+Vec%3Ci32%3E+=+vec!%5B1,+2,+3%5D;%0A++++let+box_array:+Box%3C%5Bi32;+3%5D%3E+=+vec.clone().into_array().unwrap();%0A++++let+not_enough_elements:+Result%3CBox%3C%5Bi32;+4%5D%3E,+Vec%3Ci32%3E%3E+=+vec.into_array::%3C4%3E();%0A++++assert_eq!(not_enough_elements,+Err(vec!%5B1,+2,+3%5D));%0A%7D&amp;version=nightly&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.truncate" class="method"><span class="rightside"><span class="since" title="Stable since Rust version 1.0.0">1.0.0</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#1728">Source</a></span><h4 class="code-header">pub fn <a href="#method.truncate" class="fn">truncate</a>(&amp;mut self, len: <a class="primitive" href="../primitive.usize.html">usize</a>)</h4></section></summary><div class="docblock"><p>Shortens the vector, keeping the first <code>len</code> elements and dropping
+the rest.</p>
+<p>If <code>len</code> is greater or equal to the vector’s current length, this has
+no effect.</p>
+<p>The <a href="struct.Vec.html#method.drain" title="method std::vec::Vec::drain"><code>drain</code></a> method can emulate <code>truncate</code>, but causes the excess
+elements to be returned instead of dropped.</p>
+<p>Note that this method has no effect on the allocated capacity
+of the vector.</p>
+<h5 id="examples-26"><a class="doc-anchor" href="#examples-26">§</a>Examples</h5>
+<p>Truncating a five element vector to two elements:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span><span class="kw-2">mut </span>vec = <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>];
+vec.truncate(<span class="number">2</span>);
+<span class="macro">assert_eq!</span>(vec, [<span class="number">1</span>, <span class="number">2</span>]);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++let+mut+vec+=+vec!%5B1,+2,+3,+4,+5%5D;%0A++++vec.truncate(2);%0A++++assert_eq!(vec,+%5B1,+2%5D);%0A%7D&amp;edition=2024"></a></div>
+<p>No truncation occurs when <code>len</code> is greater than the vector’s current
+length:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span><span class="kw-2">mut </span>vec = <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>];
+vec.truncate(<span class="number">8</span>);
+<span class="macro">assert_eq!</span>(vec, [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++let+mut+vec+=+vec!%5B1,+2,+3%5D;%0A++++vec.truncate(8);%0A++++assert_eq!(vec,+%5B1,+2,+3%5D);%0A%7D&amp;edition=2024"></a></div>
+<p>Truncating when <code>len == 0</code> is equivalent to calling the <a href="struct.Vec.html#method.clear" title="method std::vec::Vec::clear"><code>clear</code></a>
+method.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span><span class="kw-2">mut </span>vec = <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>];
+vec.truncate(<span class="number">0</span>);
+<span class="macro">assert_eq!</span>(vec, []);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++let+mut+vec+=+vec!%5B1,+2,+3%5D;%0A++++vec.truncate(0);%0A++++assert_eq!(vec,+%5B%5D);%0A%7D&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.as_slice" class="method"><span class="rightside"><span class="since" title="Stable since Rust version 1.7.0, const since 1.87.0">1.7.0 (const: 1.87.0)</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#1768">Source</a></span><h4 class="code-header">pub const fn <a href="#method.as_slice" class="fn">as_slice</a>(&amp;self) -&gt; &amp;<a class="primitive" href="../primitive.slice.html">[T]</a></h4></section></summary><div class="docblock"><p>Extracts a slice containing the entire vector.</p>
+<p>Equivalent to <code>&amp;s[..]</code>.</p>
+<h5 id="examples-27"><a class="doc-anchor" href="#examples-27">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::io::{<span class="self">self</span>, Write};
+<span class="kw">let </span>buffer = <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">5</span>, <span class="number">8</span>];
+io::sink().write(buffer.as_slice()).unwrap();</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++use+std::io::%7Bself,+Write%7D;%0A++++let+buffer+=+vec!%5B1,+2,+3,+5,+8%5D;%0A++++io::sink().write(buffer.as_slice()).unwrap();%0A%7D&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.as_mut_slice" class="method"><span class="rightside"><span class="since" title="Stable since Rust version 1.7.0, const since 1.87.0">1.7.0 (const: 1.87.0)</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#1804">Source</a></span><h4 class="code-header">pub const fn <a href="#method.as_mut_slice" class="fn">as_mut_slice</a>(&amp;mut self) -&gt; &amp;mut <a class="primitive" href="../primitive.slice.html">[T]</a></h4></section></summary><div class="docblock"><p>Extracts a mutable slice of the entire vector.</p>
+<p>Equivalent to <code>&amp;mut s[..]</code>.</p>
+<h5 id="examples-28"><a class="doc-anchor" href="#examples-28">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::io::{<span class="self">self</span>, Read};
+<span class="kw">let </span><span class="kw-2">mut </span>buffer = <span class="macro">vec!</span>[<span class="number">0</span>; <span class="number">3</span>];
+io::repeat(<span class="number">0b101</span>).read_exact(buffer.as_mut_slice()).unwrap();</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++use+std::io::%7Bself,+Read%7D;%0A++++let+mut+buffer+=+vec!%5B0;+3%5D;%0A++++io::repeat(0b101).read_exact(buffer.as_mut_slice()).unwrap();%0A%7D&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.as_ptr" class="method"><span class="rightside"><span class="since" title="Stable since Rust version 1.37.0, const since 1.87.0">1.37.0 (const: 1.87.0)</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#1887">Source</a></span><h4 class="code-header">pub const fn <a href="#method.as_ptr" class="fn">as_ptr</a>(&amp;self) -&gt; <a class="primitive" href="../primitive.pointer.html">*const T</a></h4></section></summary><div class="docblock"><p>Returns a raw pointer to the vector’s buffer, or a dangling raw pointer
+valid for zero sized reads if the vector <a href="index.html#memory-layout" title="mod std::vec">didn’t allocate</a>.</p>
+<p>The caller must ensure that the vector outlives the pointer this
+function returns, or else it will end up dangling.
+Modifying the vector may cause its buffer to be reallocated,
+which would also make any pointers to it invalid.</p>
+<p>The caller must also ensure that the memory the pointer (non-transitively) points to
+is never written to (except inside an <code>UnsafeCell</code>) using this pointer or any pointer
+derived from it. If you need to mutate the contents of the slice, use <a href="struct.Vec.html#method.as_mut_ptr" title="method std::vec::Vec::as_mut_ptr"><code>as_mut_ptr</code></a>.</p>
+<p>This method guarantees that for the purpose of the aliasing model, this method
+does not materialize a reference to the underlying slice, and thus the returned pointer
+will remain valid when mixed with other calls to <a href="struct.Vec.html#method.as_ptr" title="method std::vec::Vec::as_ptr"><code>as_ptr</code></a>, <a href="struct.Vec.html#method.as_mut_ptr" title="method std::vec::Vec::as_mut_ptr"><code>as_mut_ptr</code></a>,
+and <a href="struct.Vec.html#method.as_non_null" title="method std::vec::Vec::as_non_null"><code>as_non_null</code></a>.
+Note that calling other methods that materialize mutable references to the slice,
+or mutable references to specific elements you are planning on accessing through this pointer,
+as well as writing to those elements, may still invalidate this pointer.
+See the second example below for how this guarantee can be used.</p>
+<h5 id="examples-29"><a class="doc-anchor" href="#examples-29">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>x = <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">4</span>];
+<span class="kw">let </span>x_ptr = x.as_ptr();
+
+<span class="kw">unsafe </span>{
+    <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..x.len() {
+        <span class="macro">assert_eq!</span>(<span class="kw-2">*</span>x_ptr.add(i), <span class="number">1 </span>&lt;&lt; i);
+    }
+}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++let+x+=+vec!%5B1,+2,+4%5D;%0A++++let+x_ptr+=+x.as_ptr();%0A++++%0A++++unsafe+%7B%0A++++++++for+i+in+0..x.len()+%7B%0A++++++++++++assert_eq!(*x_ptr.add(i),+1+%3C%3C+i);%0A++++++++%7D%0A++++%7D%0A%7D&amp;edition=2024"></a></div>
+<p>Due to the aliasing guarantee, the following code is legal:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">unsafe </span>{
+    <span class="kw">let </span><span class="kw-2">mut </span>v = <span class="macro">vec!</span>[<span class="number">0</span>, <span class="number">1</span>, <span class="number">2</span>];
+    <span class="kw">let </span>ptr1 = v.as_ptr();
+    <span class="kw">let _ </span>= ptr1.read();
+    <span class="kw">let </span>ptr2 = v.as_mut_ptr().offset(<span class="number">2</span>);
+    ptr2.write(<span class="number">2</span>);
+    <span class="comment">// Notably, the write to `ptr2` did *not* invalidate `ptr1`
+    // because it mutated a different element:
+    </span><span class="kw">let _ </span>= ptr1.read();
+}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++unsafe+%7B%0A++++++++let+mut+v+=+vec!%5B0,+1,+2%5D;%0A++++++++let+ptr1+=+v.as_ptr();%0A++++++++let+_+=+ptr1.read();%0A++++++++let+ptr2+=+v.as_mut_ptr().offset(2);%0A++++++++ptr2.write(2);%0A++++++++//+Notably,+the+write+to+%60ptr2%60+did+*not*+invalidate+%60ptr1%60%0A++++++++//+because+it+mutated+a+different+element:%0A++++++++let+_+=+ptr1.read();%0A++++%7D%0A%7D&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.as_mut_ptr" class="method"><span class="rightside"><span class="since" title="Stable since Rust version 1.37.0, const since 1.87.0">1.37.0 (const: 1.87.0)</span> · <a class="src" href="../../src/alloc/vec/mod.rs.html#1972">Source</a></span><h4 class="code-header">pub const fn <a href="#method.as_mut_ptr" class="fn">as_mut_ptr</a>(&amp;mut self) -&gt; <a class="primitive" href="../primitive.pointer.html">*mut T</a></h4></section></summary><div class="docblock"><p>Returns a raw mutable pointer to the vector’s buffer, or a dangling
+raw pointer valid for zero sized reads if the vector <a href="index.html#memory-layout" title="mod std::vec">didn’t allocate</a>.</p>
+<p>The caller must ensure that the vector outlives the pointer this
+function returns, or else it will end up dangling.
+Modifying the vector may cause its buffer to be reallocated,
+which would also make any pointers to it invalid.</p>
+<p>This method guarantees that for the purpose of the aliasing model, this method
+does not materialize a reference to the underlying slice, and thus the returned pointer
+will remain valid when mixed with other calls to <a href="struct.Vec.html#method.as_ptr" title="method std::vec::Vec::as_ptr"><code>as_ptr</code></a>, <a href="struct.Vec.html#method.as_mut_ptr" title="method std::vec::Vec::as_mut_ptr"><code>as_mut_ptr</code></a>,
+and <a href="struct.Vec.html#method.as_non_null" title="method std::vec::Vec::as_non_null"><code>as_non_null</code></a>.
+Note that calling other methods that materialize references to the slice,
+or references to specific elements you are planning on accessing through this pointer,
+may still invalidate this pointer.
+See the second example below for how this guarantee can be used.</p>
+<p>The method also guarantees that, as long as <code>T</code> is not zero-sized and the capacity is
+nonzero, the pointer may be passed into <a href="../alloc/trait.GlobalAlloc.html#tymethod.dealloc" title="method std::alloc::GlobalAlloc::dealloc"><code>dealloc</code></a> with a layout of
+<code>Layout::array::&lt;T&gt;(capacity)</code> in order to deallocate the backing memory. If this is done,
+be careful not to run the destructor of the <code>Vec</code>, as dropping it will result in
+double-frees. Wrapping the <code>Vec</code> in a <a href="../mem/struct.ManuallyDrop.html" title="struct std::mem::ManuallyDrop"><code>ManuallyDrop</code></a> is the typical way to achieve this.</p>
+<h5 id="examples-30"><a class="doc-anchor" href="#examples-30">§</a>Examples</h5>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="comment">// Allocate vector big enough for 4 elements.
+</span><span class="kw">let </span>size = <span class="number">4</span>;
+<span class="kw">let </span><span class="kw-2">mut </span>x: Vec&lt;i32&gt; = Vec::with_capacity(size);
+<span class="kw">let </span>x_ptr = x.as_mut_ptr();
+
+<span class="comment">// Initialize elements via raw pointer writes, then set length.
+</span><span class="kw">unsafe </span>{
+    <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..size {
+        <span class="kw-2">*</span>x_ptr.add(i) = i <span class="kw">as </span>i32;
+    }
+    x.set_len(size);
+}
+<span class="macro">assert_eq!</span>(<span class="kw-2">&amp;*</span>x, <span class="kw-2">&amp;</span>[<span class="number">0</span>, <span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++//+Allocate+vector+big+enough+for+4+elements.%0A++++let+size+=+4;%0A++++let+mut+x:+Vec%3Ci32%3E+=+Vec::with_capacity(size);%0A++++let+x_ptr+=+x.as_mut_ptr();%0A++++%0A++++//+Initialize+elements+via+raw+pointer+writes,+then+set+length.%0A++++unsafe+%7B%0A++++++++for+i+in+0..size+%7B%0A++++++++++++*x_ptr.add(i)+=+i+as+i32;%0A++++++++%7D%0A++++++++x.set_len(size);%0A++++%7D%0A++++assert_eq!(%26*x,+%26%5B0,+1,+2,+3%5D);%0A%7D&amp;edition=2024"></a></div>
+<p>Due to the aliasing guarantee, the following code is legal:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">unsafe </span>{
+    <span class="kw">let </span><span class="kw-2">mut </span>v = <span class="macro">vec!</span>[<span class="number">0</span>];
+    <span class="kw">let </span>ptr1 = v.as_mut_ptr();
+    ptr1.write(<span class="number">1</span>);
+    <span class="kw">let </span>ptr2 = v.as_mut_ptr();
+    ptr2.write(<span class="number">2</span>);
+    <span class="comment">// Notably, the write to `ptr2` did *not* invalidate `ptr1`:
+    </span>ptr1.write(<span class="number">3</span>);
+}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++unsafe+%7B%0A++++++++let+mut+v+=+vec!%5B0%5D;%0A++++++++let+ptr1+=+v.as_mut_ptr();%0A++++++++ptr1.write(1);%0A++++++++let+ptr2+=+v.as_mut_ptr();%0A++++++++ptr2.write(2);%0A++++++++//+Notably,+the+write+to+%60ptr2%60+did+*not*+invalidate+%60ptr1%60:%0A++++++++ptr1.write(3);%0A++++%7D%0A%7D&amp;edition=2024"></a></div>
+<p>Deallocating a vector using <a href="../boxed/struct.Box.html" title="struct std::boxed::Box"><code>Box</code></a> (which uses <a href="../alloc/trait.GlobalAlloc.html#tymethod.dealloc" title="method std::alloc::GlobalAlloc::dealloc"><code>dealloc</code></a> internally):</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::mem::{ManuallyDrop, MaybeUninit};
+
+<span class="kw">let </span><span class="kw-2">mut </span>v = ManuallyDrop::new(<span class="macro">vec!</span>[<span class="number">0</span>, <span class="number">1</span>, <span class="number">2</span>]);
+<span class="kw">let </span>ptr = v.as_mut_ptr();
+<span class="kw">let </span>capacity = v.capacity();
+<span class="kw">let </span>slice_ptr: <span class="kw-2">*mut </span>[MaybeUninit&lt;i32&gt;] =
+    std::ptr::slice_from_raw_parts_mut(ptr.cast(), capacity);
+drop(<span class="kw">unsafe </span>{ Box::from_raw(slice_ptr) });</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++use+std::mem::%7BManuallyDrop,+MaybeUninit%7D;%0A++++%0A++++let+mut+v+=+ManuallyDrop::new(vec!%5B0,+1,+2%5D);%0A++++let+ptr+=+v.as_mut_ptr();%0A++++let+capacity+=+v.capacity();%0A++++let+slice_ptr:+*mut+%5BMaybeUninit%3Ci32%3E%5D+=%0A++++++++std::ptr::slice_from_raw_parts_mut(ptr.cast(),+capacity);%0A++++drop(unsafe+%7B+Box::from_raw(slice_ptr)+%7D);%0A%7D&amp;edition=2024"></a></div></div></details><details class="toggle method-toggle" open><summary><section id="method.as_non_null" class="method"><a class="src rightside" href="../../src/alloc/vec/mod.rs.html#2039">Source</a><h4 class="code-header">pub const fn <a href="#method.as_non_null" class="fn">as_non_null</a>(&amp;mut self) -&gt; <a class="struct" href="../ptr/struct.NonNull.html" title="struct std::ptr::NonNull">NonNull</a>&lt;T&gt;</h4></section><span class="item-info"><div class="stab unstable"><span class="emoji">🔬</span><span>This is a nightly-only experimental API. (<code>vec_as_non_null</code>&nbsp;<a href="https://github.com/rust-lang/rust/issues/157843">#157843</a>)</span></div></span></summary><div class="docblock"><p>Returns a <code>NonNull</code> pointer to the vector’s buffer, or a dangling
+<code>NonNull</code> pointer valid for zero sized reads if the vector <a href="index.html#memory-layout" title="mod std::vec">didn’t allocate</a>.</p>

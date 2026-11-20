@@ -137,11 +137,11 @@ def test_a_failed_settlement_drain_is_retained_until_a_later_event_completes_it(
     recipient = worker['request']['recipientId']
     real, failing = r.c.repo.discover, [1]
 
-    def discover():
+    def discover(*, recipient_id=None):
         if failing[0]:
             failing[0] -= 1
             raise StorageError('database_timeout', 'authority unavailable', retryable=True)
-        return real()
+        return real(recipient_id=recipient_id)
     monkeypatch.setattr(r.c.repo, 'discover', discover)
     # The drain's own handler reports this occurrence; the entry keeps the work.
     with pytest.raises(StorageError):

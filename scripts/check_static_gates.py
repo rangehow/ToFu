@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lint gates for changed files: ruff for Python, rustfmt and clippy for Tofu-DB.
+"""Lint gates for changed files: ruff for Python, rustfmt and clippy for gated Rust packages.
 
 Entry point: main ([PATH ...] | --base REF). Paths are repository-relative
 changed files; --base REF compares REF...HEAD. scripts/test_select.py --run
@@ -25,7 +25,11 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-RUST_GATED_PACKAGES = ('packages/tofu-db',)
+RUST_GATED_PACKAGES = ('packages/tofu-db', 'packages/tofu-contracts', 'packages/tofu-front-rs/push',
+                       'packages/tofu-mcp', 'packages/tofu-channel-stdio',
+                       'packages/tofu-manager', 'packages/tofu-search/rust',
+                       'packages/tofu-xtask', 'packages/tofu-storage-client', 'packages/tofu-node',
+                       'packages/tofu-sql-authority')
 _RUST_INPUT_NAMES = frozenset({'Cargo.toml', 'Cargo.lock', 'build.rs', 'clippy.toml',
                                'rustfmt.toml', '.rustfmt.toml'})
 

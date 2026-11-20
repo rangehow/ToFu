@@ -273,11 +273,13 @@ matches remain `ambiguous`; no last-retry guess is allowed.
 `requestContentHash` binds the complete sorted JSON content, including controls
 outside source spans, so a key-sorted archive remains verifiable.
 `wireBodyHash` separately names the exact sealed bytes; parsed JSON cannot
-recover their original key order. Cache evidence joins only when both request
-identities and the transport trace ID match one record. `cacheObservation`
-then exposes that existing detector's verdict and usage; it does not infer a
-new verdict from changed text. Missing, malformed, stale and pruned evidence
-remain explicit statuses.
+recover their original key order. The Inspector can match cache evidence only
+when both sealed request identities and the transport trace ID match exactly
+one supplied record. `CacheRoundRecord` omits the trace ID when either sealed
+digest is missing or invalid. `cacheObservation` exposes the matched detector's
+verdict and usage; it does not infer a new verdict from changed text. This
+mapping does not establish retention or a per-request join to accepted tasks.
+Missing, malformed, stale and pruned evidence remain explicit statuses.
 
 Stage owners are directly discoverable:
 
@@ -392,8 +394,18 @@ For accepted checklist recovery, a changed state alone is not a trigger if its
 complete result remains visible. Its standalone carrier is exempt from tail
 amalgamation so superseded recovery can be removed without rewriting siblings.
 Notes/logs use the loop's `_activeRoundNum`, not the number of tool entries;
-one model round may have many tools or none. Preserved progress explanations
-are explicitly attributed to the accepted todo update, not to system recovery.
+one model round may have many tools or none. Python dispatch and native context
+preparation both stamp it through `record_active_round` before composition,
+using their issued model-round ordinal, including restored rounds. Before startup
+composition, `restore_resume_view` stamps the validated prepared resume frontier
+for Python. A prepared native invocation holds newly committed startup note
+payloads without recording/freezing them until `NativeContextPolicy` receives its
+first issued round; only then does it record them with that native ordinal and
+advance the session-note watermark. A native run without a journal can start at
+zero even when Python's retained continuation frontier is nonzero. Retained
+notes keep their original ordinals and bytes; no history is renumbered. Preserved
+progress explanations are explicitly attributed to the accepted todo update,
+not to system recovery.
 
 | Note kind | When emitted | Body |
 |---|---|---|
@@ -427,6 +439,15 @@ docs/RENDER_CONTRACT.md §System interventions → Context-note grouping.
 
 `tests/context/test_context_composer_notes.py` enforces the emission,
 reuse-suppression, disabled-block, and fire-once semantics above.
+`tests/tasks_pkg/test_resume_view_context.py` exercises ordinary dispatch and
+admission, real request construction and the model-call wrapper with a
+controlled stream-attempt boundary, unequal tool batches and checkpoint resume.
+Literal expectations independent of the checklist renderer check every row,
+status and explanation in each consuming request, including the resumed request. `tests/frontend/test_checklist_dispatch_resume_dom.py`
+renders that same projection through the retained timeline owner in jsdom:
+prior-round tools precede each checklist note, which precedes consuming
+thinking, narration and tools; complete historical/latest payloads survive.
+These fixtures do not exercise provider transport, tool effects or browser layout.
 
 **Continue keeps the Turn's context record.** A resumed attempt restores its
 Turn's checkpointed working view before composing context

@@ -1,8 +1,16 @@
 /** Owner-routing aggregate → model-first display rows. One capability union per model; pending offerings remain provider-scoped. */
-import type { ModelRoutingDocument } from '../../api/api-v1-model-routing.generated';
+import type { ModelRoutingDocument, ReasoningControls } from '../../api/api-v1-model-routing.generated';
 import type { PickerModel } from './types';
-export function projectModelPickerCatalog(value: ModelRoutingDocument | null | undefined): PickerModel[] {
+export function projectModelPickerCatalog(value: ModelRoutingDocument | null | undefined,
+  controls: readonly ReasoningControls[] = []): PickerModel[] {
   if (!value || value.contract_version !== 'tofu.model-routing/v2') return [];
+  // Use the server's verdict for the exact selection, not a browser
+  // approximation of which visible deployments or credentials can be used.
+  const selectionKey = (creator: string, model: string, provider: string, offering: string) =>
+    JSON.stringify([creator, model, provider, offering]);
+  const availability = new Map(controls.map(row => [
+    selectionKey(row.creator_id, row.model_id, row.provider_id, row.offering_id), row.availability,
+  ]));
   const providers = new Map((value.providers || []).map(row => [row.provider_id, row]));
   const accesses = new Map((value.provider_accesses || []).map(row => [row.provider_access_id, row]));
   const creators = new Map((value.creators || []).map(row => [row.creator_id, row]));
@@ -19,7 +27,9 @@ export function projectModelPickerCatalog(value: ModelRoutingDocument | null | u
     const model = ref ? models.get(identity(ref.creator_id, ref.model_id)) : null;
     const name = access.display_name || provider.name || provider.provider_id;
     if (!model) {
-      pending.push({ model_id: offering.pending_model_id || '', creator_id: '', creator_name: '',
+      const modelId = offering.pending_model_id || '';
+      pending.push({ model_id: modelId, creator_id: '', creator_name: '',
+        availability: availability.get(selectionKey('', modelId, provider.provider_id, offering.offering_id)),
         offering_id: offering.offering_id, provider_id: provider.provider_id, provider_name: name,
         capabilities: offering.capabilities || [], thinking_default: (offering.capabilities || []).includes('thinking'),
         brand: provider.brand || '', routing_v2: true, pending_identity: true });
@@ -31,12 +41,14 @@ export function projectModelPickerCatalog(value: ModelRoutingDocument | null | u
       const creator = creators.get(model.creator_id);
       entry = { capabilities: new Set(), row: { model_id: model.model_id, display_name: model.display_name || '', creator_id: model.creator_id,
         creator_name: creator?.name || model.creator_id, offering_id: '', provider_id: '', provider_name: '自动服务商',
+        availability: availability.get(selectionKey(model.creator_id, model.model_id, '', '')),
         provider_options: [], brand: model.creator_id || '', routing_v2: true, pending_identity: false } };
       automatic.set(key, entry);
     }
     for (const capability of offering.capabilities || []) entry.capabilities.add(capability);
     entry.row.provider_options!.push({ provider_id: provider.provider_id, provider_name: name,
-      offering_id: offering.offering_id, brand: provider.brand || '' });
+      offering_id: offering.offering_id, brand: provider.brand || '',
+      availability: availability.get(selectionKey(model.creator_id, model.model_id, provider.provider_id, '')) });
   }
   for (const { row, capabilities } of automatic.values()) {
     row.capabilities = [...capabilities].sort(); row.thinking_default = capabilities.has('thinking');

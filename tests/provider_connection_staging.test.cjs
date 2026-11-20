@@ -74,3 +74,24 @@ test('connection grants preserve existing model denials, metadata and untouched 
   assert.deepEqual(authorization, before);
   assert.deepEqual(authorizeProviderConnection(undefined, 'new'), {connection_ids: ['new'], models: []});
 });
+
+for (const enabled of [true, false]) {
+  test(`exact selector outranks earlier generic same-URL connection (enabled=${enabled})`, () => {
+    const generic = {connection_id: 'generic', provider_access_id: 'a',
+      base_url: 'https://synthetic.invalid/v1', enabled: true,
+      extra_headers: {'x-context-provider': 'kunlun'}};
+    const exact = {...generic, connection_id: 'tokrouter', gateway_namespace: 'tokrouter',
+      enabled, extra_headers: {'x-context-provider': 'tokrouter'}};
+    const before = structuredClone([generic, exact]);
+    const plan = {base_url: generic.base_url, face: 'tokrouter',
+      protocol: 'openai_responses', extra_headers: {'x-context-provider': 'tokrouter'}};
+    if (enabled) {
+      const result = resolveProviderFaceConnection([generic, exact], 'a', plan, ports);
+      assert.equal(result.previous, exact);
+      assert.deepEqual(result.connection.extra_headers, exact.extra_headers);
+    } else {
+      assert.throws(() => resolveProviderFaceConnection([generic, exact], 'a', plan, ports), /disabled:tokrouter/);
+    }
+    assert.deepEqual([generic, exact], before);
+  });
+}

@@ -194,7 +194,7 @@ def _build_poll_tools(
     try:
         from lib.tools.code_exec import CODE_EXEC_TOOL
         from lib.tools.project import PROJECT_TOOLS, READ_FILES_TOOL
-        from lib.tools.search import build_fetch_url_tool, build_search_tool
+        from lib.tools.search import build_fetch_url_tool, search_tool_for_request
 
         tool_list = []
         project_path = tools_config.get('projectPath', '')
@@ -209,7 +209,7 @@ def _build_poll_tools(
         search_mode = tools_config.get('searchMode', '')
         search_enabled = search_mode in ('single', 'multi')
         if search_enabled:
-            tool_list.append(build_search_tool())
+            tool_list.append(search_tool_for_request())
         if tools_config.get('fetchEnabled', False) or search_enabled:
             tool_list.append(build_fetch_url_tool())
 

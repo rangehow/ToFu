@@ -5,8 +5,11 @@ from pathlib import Path
 import unittest
 import unittest.mock
 from types import SimpleNamespace
+
+import pytest
+
 from lib.identity import PrincipalContext
-from lib.model_routing.domain import ModelRef, NativeModelSelection
+from lib.model_routing.domain import ModelRef, ModelRoutingError, NativeModelSelection
 from lib.model_routing.repository import OwnerBoundary, StoredAuthority
 from lib.model_routing.native_route import (
     compile_native_route,
@@ -44,6 +47,50 @@ def selection():
     )
 
 
+@pytest.mark.parametrize(
+    "base_url, headers, transport_error",
+    [
+        pytest.param("https://a.example/v1", {"X-Bad Name": "fixture"},
+                     "native_route_headers", id="header-name-space"),
+        pytest.param("https://a.example/v1", {"X-Selector": "line\nfixture"},
+                     "native_route_headers", id="header-value-newline"),
+        pytest.param("https://a.example/v1#", {}, "native_route_endpoint", id="empty-fragment"),
+        pytest.param("https://a.example/v1?", {}, "native_route_endpoint", id="empty-query"),
+        pytest.param("https://bad host.example/v1", {}, "native_route_endpoint", id="host-space"),
+        pytest.param("https://bad%20host.example/v1", {}, "native_route_endpoint", id="encoded-host-space"),
+    ],
+)
+def test_native_preflight_rejects_invalid_transport_lexemes(
+        base_url, headers, transport_error):
+    repo = Repository()
+    repo.document["credentials"][1]["enabled"] = False
+    repo.document["connections"][0]["base_url"] = base_url
+    repo.document["deployments"][0]["extra_headers"] = headers
+
+    with pytest.raises(ModelRoutingError) as error:
+        compile_native_route(repo, repo.boundary, selection())
+
+    assert error.value.kind == transport_error
+    assert repo.secret_calls == []
+
+
+@pytest.mark.parametrize("base_url", [
+    "https://a.example/v1",
+    "http://127.0.0.1:8000/v1",
+    "http://[::1]:8000/v1",
+    "https://under_score.example/path with space/%3F/%23",
+])
+def test_native_preflight_allows_ordinary_routes(base_url):
+    repo = Repository()
+    repo.document["credentials"][1]["enabled"] = False
+    repo.document["connections"][0]["base_url"] = base_url
+
+    route = compile_native_route(repo, repo.boundary, selection())
+    _, private = route.consume(principal())
+    assert private["endpoint"] == base_url + "/chat/completions"
+    assert repo.secret_calls == [(repo.boundary, "secret-a")]
+
+
 class RouteTests(unittest.IsolatedAsyncioTestCase):
     async def test_counter_preparation_is_detached_and_refuses_before_process(self):
         from unittest.mock import AsyncMock
@@ -76,13 +123,15 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
                               ("https://a.example/anthropic","https://a.example/anthropic/v1/messages"),
                               ("https://a.example/v1/messages","https://a.example/v1/messages")]:
             repo=Repository();repo.document["connections"][0].update(protocol="anthropic",base_url=base)
+            repo.document["deployments"][0]["extra_headers"] = {"Anthropic-Version": "fixture-version"}
             route=compile_native_route(repo,repo.boundary,selection())
             public,private=route.consume(principal())
             self.assertEqual(public["protocol"],"anthropic")
             self.assertEqual(private["endpoint"],endpoint)
             self.assertEqual(private["provider_protocol"],"anthropic")
             self.assertEqual(private["headers"]["x-api-key"],"private-fixture-token")
-            self.assertEqual(private["headers"]["anthropic-version"],"2023-06-01")
+            self.assertEqual(private["headers"]["Anthropic-Version"], "fixture-version")
+            self.assertNotIn("anthropic-version", private["headers"])
             self.assertEqual(len(repo.secret_calls),1)
 
     async def test_responses_replay_is_declared_by_owned_route(self):

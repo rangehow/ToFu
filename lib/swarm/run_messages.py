@@ -22,7 +22,9 @@ logger = get_logger(__name__)
 
 
 class RunMessageError(ValueError):
-    def __init__(self, code: str, message: str, *, submission_state: str = 'rejected'):
+    def __init__(self, code: str, message: str, *, submission_state: str = 'rejected',
+                 category: str = 'run_validation'):
+        self.category = category
         self.code = code
         self.submission_state = submission_state
         super().__init__(message)
@@ -86,7 +88,8 @@ def validate_scope(binding: dict) -> None:
         settings = (conv.metadata.get('settings') or {}) if conv is not None else None
         if (not isinstance(settings, dict) or settings.get('archived') or settings.get('readOnly')
                 or normalize_project_path(settings.get('projectPath') or '') != binding['projectPath']):
-            raise RunMessageError('message_scope_unavailable', 'Original conversation/project scope is no longer available')
+            raise RunMessageError('message_scope_unavailable', 'Original conversation/project scope is no longer available',
+                                  category='conversation_scope')
 
 
 def validate_target(binding: dict, *, active_retained: bool = True,
@@ -107,10 +110,17 @@ def validate_target(binding: dict, *, active_retained: bool = True,
         row = load_session(binding['swarmKey'], required=True,
                            agent_id=binding['agentId'])
         coordinator = binding['agentId'] == binding['swarmRunId']
-        if (row is None or row.get('task_id') != binding['swarmRunId']
-                or row.get('status') in {'quarantined', 'cancelled'}
-                or (row.get('status') == 'terminated' and not coordinator)):
-            raise RunMessageError('message_run_ended', 'Durable execution run is absent, ended or superseded')
+        rejection = None
+        if row is None:
+            rejection = 'session_absent'
+        elif row.get('task_id') != binding['swarmRunId']:
+            rejection = 'session_superseded'
+        elif (row.get('status') in {'quarantined', 'cancelled'}
+              or (row.get('status') == 'terminated' and not coordinator)):
+            rejection = 'session_terminal'
+        if rejection:
+            raise RunMessageError('message_run_ended', 'Durable execution run is absent, ended or superseded',
+                                  category=rejection)
         if coordinator:
             # A worker may finish before the root consumes its final interim
             # message. The root's existing task lifecycle fences consumption.
@@ -120,14 +130,16 @@ def validate_target(binding: dict, *, active_retained: bool = True,
             for agent in row.get('agents') or []:
                 if agent.get('agent_id') == binding['agentId'] and agent.get('status') not in {'running', 'pending', 'interrupted'}:
                     RunMessageRepository(binding).close()
-                    raise RunMessageError('message_run_ended', 'Durable child outcome already ended this run')
+                    raise RunMessageError('message_run_ended', 'Durable child outcome already ended this run',
+                                          category='child_terminal')
     if active_retained and binding['retainedAgentId']:
         from lib.swarm.retained_repository import RetainedAgentRepository
         found = RetainedAgentRepository(binding['owner'], tenant_id=binding['tenant']).get(
             binding['retainedScope'], binding['retainedAgentId'])
         if (found is None or found[0].get('state') != 'busy'
                 or found[0].get('run_id') != binding['retainedRunId']):
-            raise RunMessageError('message_run_superseded', 'Retained assignment was reset, abandoned or superseded')
+            raise RunMessageError('message_run_superseded', 'Retained assignment was reset, abandoned or superseded',
+                                  category='retained_assignment')
 
 
 ROUND_TARGET_FIELD = '_swarmMessageRoundTarget'
@@ -162,9 +174,10 @@ def mailbox_key(owner: int, tenant: str, conversation_id: str, run_id: str, agen
 
 class RunMessageRepository:
     """Append-only receipt history within a bounded logical run. Never truncate."""
-    def __init__(self, binding: dict, *, client=None):
+    def __init__(self, binding: dict, *, client=None, checkpoint_writer_epoch=0):
         require_user_id(binding['owner'], context='run message owner')
         self.binding = copy.deepcopy(binding)
+        self.checkpoint_writer_epoch = checkpoint_writer_epoch
         self.key = mailbox_key(binding['owner'], binding['tenant'], binding['conversationId'],
                                binding['swarmRunId'], binding['agentId'])
         if client is None:
@@ -192,7 +205,18 @@ class RunMessageRepository:
                     or len(item['content']) > LIMITS['messageChars']):
                 raise StorageError('database_integrity', 'Invalid run message receipt')
             ids.add(item['id'])
-        return copy.deepcopy(value), int(row['version'])
+        from lib.swarm.persistence_contract import (SWARM_DISPOSITION_PRIORITY,
+                                                     SWARM_MAILBOX_DISPOSITION_FIELD)
+        snapshot = copy.deepcopy(value)
+        disposition = snapshot.get(SWARM_MAILBOX_DISPOSITION_FIELD)
+        if disposition is not None:
+            if not isinstance(disposition, str) or disposition not in SWARM_DISPOSITION_PRIORITY:
+                raise StorageError('database_integrity', 'Invalid run message disposition')
+            snapshot['closed'] = True
+            for item in snapshot['messages']:
+                if item['state'] == 'submitted':
+                    item['state'] = 'unconfirmed'
+        return snapshot, int(row['version'])
 
     def _publish_changes(self, previous: dict, current: dict, revision: int, ticket: int) -> None:
         from lib.swarm.message_receipts import hold_committed_mailbox, publish_receipt
@@ -229,12 +253,17 @@ class RunMessageRepository:
                     if uncertain_previous is not None:
                         self._publish_changes(uncertain_previous, value, revision, ticket)
                     return value
+                from lib.swarm.persistence_contract import SWARM_MAILBOX_DISPOSITION_FIELD
+                if value.get(SWARM_MAILBOX_DISPOSITION_FIELD) is not None:
+                    raise RunMessageError('message_run_ended', 'The child run was disposed')
                 ticket = observation_ticket()
                 written = True
                 try:
                     self.client(write=True).command('record.put', {
                         'namespace': NAMESPACE, 'key': self.key, 'value': updated,
                         'expected_version': revision,
+                        **({'checkpoint_writer_epoch': self.checkpoint_writer_epoch}
+                           if self.checkpoint_writer_epoch else {}),
                     }, 'swarm-message:' + uuid.uuid4().hex)
                 except StorageError as exc:
                     if exc.code != 'database_conflict' and not exc.retryable:
@@ -329,7 +358,7 @@ def inject_messages(task: dict, messages: list[dict], round_num: int) -> None:
         return
     try:
         validate_round_target(task, binding, round_num=round_num)
-        repository = RunMessageRepository(binding)
+        repository = RunMessageRepository(binding, checkpoint_writer_epoch=task.get('_swarmCheckpointWriterEpoch', 0))
         value, _ = repository.load()
         candidates = [m for m in value['messages'] if m['state'] == 'submitted']
         present = {message_id for m in messages if m.get('_swarmMessageMailbox') == repository.key
@@ -373,7 +402,8 @@ def confirm_input(task: dict, *, round_num: int) -> None:
         return
     try:
         validate_round_target(task, binding, round_num=round_num)
-        RunMessageRepository(binding).confirm(ids, child_task_id=task['id'], round_num=round_num)
+        RunMessageRepository(binding, checkpoint_writer_epoch=task.get('_swarmCheckpointWriterEpoch', 0)).confirm(
+            ids, child_task_id=task['id'], round_num=round_num)
         task.pop('_swarmMessageAttemptIds', None)
     except Exception:
         # Consumption and durable acknowledgement are separate. Preserve the

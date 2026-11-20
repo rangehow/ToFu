@@ -1,0 +1,954 @@
+{
+ "prereg": "evaluations/paper_style_corpus/PREREG_HELDOUT_AB.md",
+ "writer_model": "gpt-5.6-terra",
+ "judges": [
+  "gpt-5.5",
+  "deepseek-v4-pro"
+ ],
+ "judge": "lib.longform.documents.pipeline._judge_pair (rule-free) + lib.production.critic.blind_pairwise (both presentation orders)",
+ "style_items": [
+  "paper.style.abstract-number",
+  "paper.style.intro-quantified",
+  "paper.style.caption-takeaway",
+  "paper.style.limitations-section",
+  "paper.style.intro-findings-first-person"
+ ],
+ "n_units": 50,
+ "provenance": {
+  "A": {
+   "units_with_unsourced_numbers": 0,
+   "unsourced_numbers": 0,
+   "units_with_unsourced_citations": 0,
+   "per_unit": {}
+  },
+  "B": {
+   "units_with_unsourced_numbers": 1,
+   "unsourced_numbers": 1,
+   "units_with_unsourced_citations": 0,
+   "per_unit": {
+    "C3449f48d": {
+     "numbers": [
+      "5"
+     ],
+     "citations": []
+    }
+   }
+  }
+ },
+ "comparisons": {
+  "gpt-5.5": {
+   "n": 50,
+   "candidate_preferred": 21,
+   "no_preference": 25,
+   "baseline_preferred": 4,
+   "sign_test_p": 0.0009,
+   "mean_score": 0.34,
+   "mean_score_ci95": [
+    0.16,
+    0.52
+   ],
+   "mean_rubric_margin": 3.62,
+   "rubric_margin_ci95": [
+    1.76,
+    5.58
+   ]
+  },
+  "gpt-5.5/own_draft": {
+   "n": 8,
+   "candidate_preferred": 1,
+   "no_preference": 7,
+   "baseline_preferred": 0,
+   "sign_test_p": 1.0,
+   "mean_score": 0.125,
+   "mean_score_ci95": [
+    0,
+    0.375
+   ],
+   "mean_rubric_margin": 0.625,
+   "rubric_margin_ci95": [
+    -1.125,
+    2.75
+   ]
+  },
+  "gpt-5.5/heldout_accepted": {
+   "n": 42,
+   "candidate_preferred": 20,
+   "no_preference": 18,
+   "baseline_preferred": 4,
+   "sign_test_p": 0.0015,
+   "mean_score": 0.381,
+   "mean_score_ci95": [
+    0.1905,
+    0.5714
+   ],
+   "mean_rubric_margin": 4.19,
+   "rubric_margin_ci95": [
+    2.0476,
+    6.4524
+   ]
+  },
+  "deepseek-v4-pro": {
+   "n": 50,
+   "candidate_preferred": 21,
+   "no_preference": 23,
+   "baseline_preferred": 6,
+   "sign_test_p": 0.0059,
+   "mean_score": 0.3,
+   "mean_score_ci95": [
+    0.12,
+    0.48
+   ],
+   "mean_rubric_margin": 4.72,
+   "rubric_margin_ci95": [
+    2.78,
+    6.74
+   ]
+  },
+  "deepseek-v4-pro/own_draft": {
+   "n": 8,
+   "candidate_preferred": 0,
+   "no_preference": 7,
+   "baseline_preferred": 1,
+   "sign_test_p": 1.0,
+   "mean_score": -0.125,
+   "mean_score_ci95": [
+    -0.375,
+    0
+   ],
+   "mean_rubric_margin": -0.5,
+   "rubric_margin_ci95": [
+    -2.375,
+    1.25
+   ]
+  },
+  "deepseek-v4-pro/heldout_accepted": {
+   "n": 42,
+   "candidate_preferred": 21,
+   "no_preference": 16,
+   "baseline_preferred": 5,
+   "sign_test_p": 0.0025,
+   "mean_score": 0.381,
+   "mean_score_ci95": [
+    0.1667,
+    0.5714
+   ],
+   "mean_rubric_margin": 5.714,
+   "rubric_margin_ci95": [
+    3.6429,
+    7.8571
+   ]
+  }
+ },
+ "per_unit": {
+  "gpt-5.5": {
+   "knowledge_recovery": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 77,
+     "baseline": 76
+    }
+   },
+   "knowledge_allocation": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 85,
+     "baseline": 83
+    }
+   },
+   "knowledge_repair": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 91,
+     "baseline": 91
+    }
+   },
+   "card_iclr2027": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 87,
+     "baseline": 87
+    }
+   },
+   "parallel_parallelism": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 79,
+     "baseline": 72
+    }
+   },
+   "parallel_c4l": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 78,
+     "baseline": 80
+    }
+   },
+   "parallel_paperA": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 85,
+     "baseline": 88
+    }
+   },
+   "parallel_paperB": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 83,
+     "baseline": 83
+    }
+   },
+   "C1588ea0e": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 72,
+     "baseline": 72
+    }
+   },
+   "C64383a63": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 74,
+     "baseline": 74
+    }
+   },
+   "C9c711adf": {
+    "verdict": "baseline",
+    "position_bias": false,
+    "totals": {
+     "candidate": 57,
+     "baseline": 64
+    }
+   },
+   "C005a6967": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 78,
+     "baseline": 73
+    }
+   },
+   "C04a488fb": {
+    "verdict": "baseline",
+    "position_bias": false,
+    "totals": {
+     "candidate": 74,
+     "baseline": 78
+    }
+   },
+   "C1d57f23e": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 63,
+     "baseline": 56
+    }
+   },
+   "Cc118d677": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 68,
+     "baseline": 67
+    }
+   },
+   "Cc0943596": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 75,
+     "baseline": 56
+    }
+   },
+   "C3845a18b": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 68,
+     "baseline": 70
+    }
+   },
+   "Ca2400ebe": {
+    "verdict": "baseline",
+    "position_bias": false,
+    "totals": {
+     "candidate": 71,
+     "baseline": 81
+    }
+   },
+   "C00e47fb5": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 76,
+     "baseline": 73
+    }
+   },
+   "C017b480c": {
+    "verdict": "baseline",
+    "position_bias": false,
+    "totals": {
+     "candidate": 46,
+     "baseline": 53
+    }
+   },
+   "C4020cb7a": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 70,
+     "baseline": 55
+    }
+   },
+   "C771ea9e3": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 63,
+     "baseline": 62
+    }
+   },
+   "Cf4ceadd6": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 73,
+     "baseline": 71
+    }
+   },
+   "C004e7256": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 51,
+     "baseline": 52
+    }
+   },
+   "C9d7c112f": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 77,
+     "baseline": 61
+    }
+   },
+   "C75bfee07": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 82,
+     "baseline": 82
+    }
+   },
+   "C97b0b0f7": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 72,
+     "baseline": 60
+    }
+   },
+   "Cfbf5fabc": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 70,
+     "baseline": 58
+    }
+   },
+   "C56cbfaab": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 73,
+     "baseline": 73
+    }
+   },
+   "Cd561185c": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 64,
+     "baseline": 64
+    }
+   },
+   "C489b175f": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 51,
+     "baseline": 51
+    }
+   },
+   "C132bb1b6": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 67,
+     "baseline": 60
+    }
+   },
+   "Cb7aabba7": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 55,
+     "baseline": 58
+    }
+   },
+   "C3449f48d": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 58,
+     "baseline": 58
+    }
+   },
+   "Cdf634041": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 71,
+     "baseline": 62
+    }
+   },
+   "C025a3028": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 63,
+     "baseline": 65
+    }
+   },
+   "C02879ae6": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 56,
+     "baseline": 58
+    }
+   },
+   "C341d931d": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 63,
+     "baseline": 58
+    }
+   },
+   "C9d644766": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 51,
+     "baseline": 47
+    }
+   },
+   "C90a0555c": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 68,
+     "baseline": 63
+    }
+   },
+   "Cdcf31686": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 76,
+     "baseline": 66
+    }
+   },
+   "C01c9070b": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 62,
+     "baseline": 55
+    }
+   },
+   "Cd5fb0bf6": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 75,
+     "baseline": 65
+    }
+   },
+   "C65009c7c": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 67,
+     "baseline": 59
+    }
+   },
+   "C6e22ffef": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 69,
+     "baseline": 69
+    }
+   },
+   "Cf6e5cd1a": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 68,
+     "baseline": 57
+    }
+   },
+   "C6b2dbc69": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 71,
+     "baseline": 65
+    }
+   },
+   "C77add634": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 70,
+     "baseline": 42
+    }
+   },
+   "Cde8d914a": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 88,
+     "baseline": 89
+    }
+   },
+   "C4481dd2b": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 84,
+     "baseline": 72
+    }
+   }
+  },
+  "deepseek-v4-pro": {
+   "knowledge_recovery": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 86,
+     "baseline": 84
+    }
+   },
+   "knowledge_allocation": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 93,
+     "baseline": 95
+    }
+   },
+   "knowledge_repair": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 92,
+     "baseline": 91
+    }
+   },
+   "card_iclr2027": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 90,
+     "baseline": 90
+    }
+   },
+   "parallel_parallelism": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 90,
+     "baseline": 87
+    }
+   },
+   "parallel_c4l": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 96,
+     "baseline": 95
+    }
+   },
+   "parallel_paperA": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 91,
+     "baseline": 96
+    }
+   },
+   "parallel_paperB": {
+    "verdict": "baseline",
+    "position_bias": false,
+    "totals": {
+     "candidate": 86,
+     "baseline": 90
+    }
+   },
+   "C1588ea0e": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 93,
+     "baseline": 86
+    }
+   },
+   "C64383a63": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 88,
+     "baseline": 88
+    }
+   },
+   "C9c711adf": {
+    "verdict": "baseline",
+    "position_bias": false,
+    "totals": {
+     "candidate": 74,
+     "baseline": 81
+    }
+   },
+   "C005a6967": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 89,
+     "baseline": 91
+    }
+   },
+   "C04a488fb": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 92,
+     "baseline": 87
+    }
+   },
+   "C1d57f23e": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 87,
+     "baseline": 78
+    }
+   },
+   "Cc118d677": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 93,
+     "baseline": 93
+    }
+   },
+   "Cc0943596": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 87,
+     "baseline": 74
+    }
+   },
+   "C3845a18b": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 89,
+     "baseline": 88
+    }
+   },
+   "Ca2400ebe": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 99,
+     "baseline": 84
+    }
+   },
+   "C00e47fb5": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 92,
+     "baseline": 77
+    }
+   },
+   "C017b480c": {
+    "verdict": "baseline",
+    "position_bias": false,
+    "totals": {
+     "candidate": 68,
+     "baseline": 76
+    }
+   },
+   "C4020cb7a": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 89,
+     "baseline": 70
+    }
+   },
+   "C771ea9e3": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 86,
+     "baseline": 79
+    }
+   },
+   "Cf4ceadd6": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 85,
+     "baseline": 80
+    }
+   },
+   "C004e7256": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 65,
+     "baseline": 58
+    }
+   },
+   "C9d7c112f": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 81,
+     "baseline": 74
+    }
+   },
+   "C75bfee07": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 93,
+     "baseline": 83
+    }
+   },
+   "C97b0b0f7": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 89,
+     "baseline": 75
+    }
+   },
+   "Cfbf5fabc": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 85,
+     "baseline": 67
+    }
+   },
+   "C56cbfaab": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 80,
+     "baseline": 80
+    }
+   },
+   "Cd561185c": {
+    "verdict": "baseline",
+    "position_bias": false,
+    "totals": {
+     "candidate": 74,
+     "baseline": 78
+    }
+   },
+   "C489b175f": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 86,
+     "baseline": 87
+    }
+   },
+   "C132bb1b6": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 85,
+     "baseline": 82
+    }
+   },
+   "Cb7aabba7": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 72,
+     "baseline": 73
+    }
+   },
+   "C3449f48d": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 82,
+     "baseline": 78
+    }
+   },
+   "Cdf634041": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 79,
+     "baseline": 69
+    }
+   },
+   "C025a3028": {
+    "verdict": "baseline",
+    "position_bias": false,
+    "totals": {
+     "candidate": 81,
+     "baseline": 85
+    }
+   },
+   "C02879ae6": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 70,
+     "baseline": 66
+    }
+   },
+   "C341d931d": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 87,
+     "baseline": 78
+    }
+   },
+   "C9d644766": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 73,
+     "baseline": 67
+    }
+   },
+   "C90a0555c": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 86,
+     "baseline": 71
+    }
+   },
+   "Cdcf31686": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 89,
+     "baseline": 80
+    }
+   },
+   "C01c9070b": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 78,
+     "baseline": 66
+    }
+   },
+   "Cd5fb0bf6": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 75,
+     "baseline": 64
+    }
+   },
+   "C65009c7c": {
+    "verdict": "baseline",
+    "position_bias": false,
+    "totals": {
+     "candidate": 79,
+     "baseline": 86
+    }
+   },
+   "C6e22ffef": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 87,
+     "baseline": 87
+    }
+   },
+   "Cf6e5cd1a": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 83,
+     "baseline": 63
+    }
+   },
+   "C6b2dbc69": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 83,
+     "baseline": 79
+    }
+   },
+   "C77add634": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 78,
+     "baseline": 76
+    }
+   },
+   "Cde8d914a": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 91,
+     "baseline": 90
+    }
+   },
+   "C4481dd2b": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 95,
+     "baseline": 83
+    }
+   }
+  }
+ },
+ "outcome": {
+  "primary_significant": true,
+  "second_judge_same_direction": true,
+  "zero_unsourced_numbers_in_B": false,
+  "pass": false
+ }
+}

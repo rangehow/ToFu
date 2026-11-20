@@ -1,9 +1,15 @@
 """Extracted evidence preserves DOM text order and executable code whitespace."""
 
+import hashlib
+import inspect
+import json
 import re
+from pathlib import Path
 
 import pytest
 
+from tofu_search import _native_kernels
+from tofu_search.fetch import html_extract
 from tofu_search.fetch.html_extract import extract_html_text
 
 pytestmark = pytest.mark.unit
@@ -115,14 +121,58 @@ def test_highlighted_code_inside_a_list_preserves_blank_lines_and_indents():
     assert code.strip('\n') in text.split('--- Page Links ---')[0]
 
 
-def test_code_recovery_preserves_literal_fences_and_does_not_repeat(monkeypatch):
-    from tofu_search.fetch import html_extract
+CODE_RECOVERY = json.loads(
+    (Path(__file__).parent / 'fixtures' / 'html_code_recovery.json').read_text(encoding='utf-8'))
 
-    code = 'sample = """```example\n    source\n```"""\nprint(sample)'
-    collapsed = ' '.join(code.split())
-    monkeypatch.setattr(html_extract.trafilatura, 'extract', lambda *a, **k: collapsed)
-    text = extract('<pre>' + code + '</pre><pre>' + code + '</pre>'
-                   '<pre hidden>private hidden example</pre>')
+
+@pytest.fixture(params=['python', 'native'])
+def code_recovery_backend(request, record_property):
+    if request.param == 'python':
+        kernel = html_extract.PYTHON_KERNELS['_assemble_document']
+        source = Path(inspect.getsourcefile(kernel))
+    else:
+        native = _native_kernels.native
+        if native is None:
+            pytest.skip('exact source-pinned tofu_search._native wheel binding absent; Python baseline only')
+        kernel = native.extract_document
+        assert inspect.isbuiltin(kernel), 'native lane must not use a Python fallback'
+        source = Path(native.__file__)
+    record_property('backend', request.param)
+    record_property('backend_path', str(source.resolve()))
+    record_property('backend_sha256', hashlib.sha256(source.read_bytes()).hexdigest())
+    return kernel
+
+
+def assert_code_recovery(result):
+    text, signals = result
+    code = CODE_RECOVERY['code']
     assert text.count(code) == 1
     assert '````\n' + code + '\n````' in text
     assert 'private hidden example' not in text
+    assert [text, signals] == CODE_RECOVERY['expected']
+
+
+def test_code_recovery_preserves_literal_fences_and_does_not_repeat(code_recovery_backend):
+    case = CODE_RECOVERY
+    assert case['html'] == document('<pre>' + case['code'] + '</pre><pre>' + case['code']
+                                    + '</pre><pre hidden>private hidden example</pre>')
+    assert case['main_text'] == ' '.join(case['code'].split())
+    result = code_recovery_backend(*(case[key] for key in
+                                    ('html', 'main_text', 'url', 'max_chars', 'want_rendering')))
+    assert_code_recovery(result)
+
+
+@pytest.mark.parametrize('mutation', ['short_fence', 'duplicate', 'hidden', 'collapsed'])
+def test_code_recovery_golden_rejects_drift(mutation):
+    text, signals = CODE_RECOVERY['expected']
+    code = CODE_RECOVERY['code']
+    if mutation == 'short_fence':
+        text = text.replace('````', '```')
+    elif mutation == 'duplicate':
+        text += '\n' + code
+    elif mutation == 'hidden':
+        text += '\nprivate hidden example'
+    else:
+        text = text.replace(code, CODE_RECOVERY['main_text'])
+    with pytest.raises(AssertionError):
+        assert_code_recovery((text, signals))

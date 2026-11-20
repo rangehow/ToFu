@@ -1,0 +1,61 @@
+{
+  "format": "tofu.first-open-historical-aggregate/v1",
+  "status": "historical rounded aggregate transcribed from retained measurement note; not raw browser evidence",
+  "provenance": {
+    "noteCheckpoint": "6e1666b9ec37",
+    "sourceHeadReported": "07bb4c6273ae744716a56e524c65dcde5c0707c1",
+    "chromiumReported": "149.0.7827.55",
+    "auditReported": "5b330 independently passed medians/causality and 88 recorded hashes; those 88 input hash rows are not recovered by this aggregate",
+    "historicalCertification": "incomplete",
+    "missingHistoricalEvidence": ["original driver identity", "original fixture identity", "original inlined artifact owner identity", "bundler identity", "generated entry identity/bytes", "bundle JS bytes", "CSS bytes", "complete raw evidence/manifest"],
+    "cannotInferFromGitHead": true,
+    "transcriptionPrecisionMs": 0.1,
+    "stageOverlap": "Request intervals below overlap; do not add holds or treat ordering as CPU stage durations. No new timings collected."
+  },
+  "recordedDigestsReported": {
+    "bundleSha256": "165403f4aafa54772c0706c43495b3d3533a4caf824064b3e5f9b259e0dc42b7",
+    "stylesSha256": "20b13f9b22b2674efa1cbe89507e4e80a32bfcd798efb282a5cf975a01ba1001",
+    "smallSourceSha256": "cbb51b397e9d6afe68f4f3213e3bda9f5852d7ce254e7f38748a4b3e0517f25e",
+    "largeSourceSha256": "f221a970b134eb98529b797324d538dc6c368ebcd93284bc60abda9174884bfc",
+    "smallRenderedTextSha256": "b3651f20b77218b57851ebf2b862dea9165cd3a29505ca468758464ebb9c886b",
+    "largeRenderedTextSha256": "2e1efff20fb2ce685ce3de9102393a60c5c90120889340873a30c2318be63c1e"
+  },
+  "fixtureSizesReported": {"small": {"sourceBytes": 1399, "sections": 16, "descendants": 124}, "large": {"sourceBytes": 42768, "sections": 512, "descendants": 3932}},
+  "countsReported": {"perSampleBrowserNetwork": 0, "reportApiPortCalls": {}, "documentApiPortCalls": {"meta": 1, "versions": 1, "raw": 1}, "parsePerFreshSample": 1},
+  "componentColumns": ["markdownInclusive", "markdownEndToDomObserved", "domToVisibleFrame", "clickToVisibleFrame", "clickToNextFrameOpportunity"],
+  "samples": [
+    {"repeat":0,"size":"small","kind":"report","order":"local","componentsMs":{"markdownInclusive":16.8,"markdownEndToDomObserved":6.7,"domToVisibleFrame":0.6,"clickToVisibleFrame":24.7,"clickToNextFrameOpportunity":29.7}},
+    {"repeat":0,"size":"small","kind":"document","order":"versions-first","componentsMs":{"markdownInclusive":17.2,"markdownEndToDomObserved":0.2,"domToVisibleFrame":4.0,"clickToVisibleFrame":43.6,"clickToNextFrameOpportunity":47.4}},
+    {"repeat":0,"size":"small","kind":"document","order":"body-first","componentsMs":{"markdownInclusive":16.5,"markdownEndToDomObserved":0.2,"domToVisibleFrame":3.8,"clickToVisibleFrame":39.7,"clickToNextFrameOpportunity":47.3}},
+    {"repeat":0,"size":"large","kind":"report","order":"local","componentsMs":{"markdownInclusive":48.7,"markdownEndToDomObserved":30.1,"domToVisibleFrame":5.0,"clickToVisibleFrame":84.4,"clickToNextFrameOpportunity":86.8}},
+    {"repeat":0,"size":"large","kind":"document","order":"versions-first","componentsMs":{"markdownInclusive":48.0,"markdownEndToDomObserved":4.0,"domToVisibleFrame":23.2,"clickToVisibleFrame":96.9,"clickToNextFrameOpportunity":103.6}},
+    {"repeat":0,"size":"large","kind":"document","order":"body-first","componentsMs":{"markdownInclusive":41.9,"markdownEndToDomObserved":4.0,"domToVisibleFrame":22.6,"clickToVisibleFrame":88.0,"clickToNextFrameOpportunity":94.1}},
+    {"repeat":1,"size":"small","kind":"report","order":"local","componentsMs":{"markdownInclusive":110.4,"markdownEndToDomObserved":6.0,"domToVisibleFrame":0.6,"clickToVisibleFrame":117.7,"clickToNextFrameOpportunity":118.8}},
+    {"repeat":1,"size":"small","kind":"document","order":"versions-first","componentsMs":{"markdownInclusive":16.7,"markdownEndToDomObserved":0.2,"domToVisibleFrame":4.0,"clickToVisibleFrame":42.5,"clickToNextFrameOpportunity":47.3}},
+    {"repeat":1,"size":"small","kind":"document","order":"body-first","componentsMs":{"markdownInclusive":17.8,"markdownEndToDomObserved":0.2,"domToVisibleFrame":3.7,"clickToVisibleFrame":39.6,"clickToNextFrameOpportunity":47.5}},
+    {"repeat":1,"size":"large","kind":"report","order":"local","componentsMs":{"markdownInclusive":43.1,"markdownEndToDomObserved":28.8,"domToVisibleFrame":4.4,"clickToVisibleFrame":76.9,"clickToNextFrameOpportunity":78.8}},
+    {"repeat":1,"size":"large","kind":"document","order":"versions-first","componentsMs":{"markdownInclusive":44.9,"markdownEndToDomObserved":3.8,"domToVisibleFrame":22.9,"clickToVisibleFrame":92.5,"clickToNextFrameOpportunity":98.4}},
+    {"repeat":1,"size":"large","kind":"document","order":"body-first","componentsMs":{"markdownInclusive":43.4,"markdownEndToDomObserved":3.9,"domToVisibleFrame":22.4,"clickToVisibleFrame":89.4,"clickToNextFrameOpportunity":94.9}},
+    {"repeat":2,"size":"small","kind":"report","order":"local","componentsMs":{"markdownInclusive":16.2,"markdownEndToDomObserved":5.4,"domToVisibleFrame":0.5,"clickToVisibleFrame":22.8,"clickToNextFrameOpportunity":31.1}},
+    {"repeat":2,"size":"small","kind":"document","order":"versions-first","componentsMs":{"markdownInclusive":17.0,"markdownEndToDomObserved":0.1,"domToVisibleFrame":4.2,"clickToVisibleFrame":43.3,"clickToNextFrameOpportunity":47.4}},
+    {"repeat":2,"size":"small","kind":"document","order":"body-first","componentsMs":{"markdownInclusive":16.6,"markdownEndToDomObserved":0.2,"domToVisibleFrame":3.8,"clickToVisibleFrame":39.5,"clickToNextFrameOpportunity":47.7}},
+    {"repeat":2,"size":"large","kind":"report","order":"local","componentsMs":{"markdownInclusive":43.2,"markdownEndToDomObserved":28.7,"domToVisibleFrame":4.4,"clickToVisibleFrame":76.9,"clickToNextFrameOpportunity":78.8}},
+    {"repeat":2,"size":"large","kind":"document","order":"versions-first","componentsMs":{"markdownInclusive":44.3,"markdownEndToDomObserved":3.8,"domToVisibleFrame":22.3,"clickToVisibleFrame":92.8,"clickToNextFrameOpportunity":98.3}},
+    {"repeat":2,"size":"large","kind":"document","order":"body-first","componentsMs":{"markdownInclusive":44.6,"markdownEndToDomObserved":4.0,"domToVisibleFrame":22.5,"clickToVisibleFrame":90.1,"clickToNextFrameOpportunity":96.1}}
+  ],
+  "requestClockColumns": ["repeat", "size", "order", "metaStart", "metaRelease", "versionsStart", "versionsRelease", "rawStart", "rawRelease", "metaDecoded", "shellFrame"],
+  "requestClocksMs": [
+    [0,"small","versions-first",3.7,16.6,17.1,19.9,17.4,22.0,16.7,14.0],
+    [0,"small","body-first",3.8,15.8,16.6,48.8,16.9,18.8,15.9,14.0],
+    [0,"large","versions-first",3.7,16.7,17.2,19.5,17.4,21.3,16.8,14.0],
+    [0,"large","body-first",3.6,16.5,17.0,97.1,17.3,19.3,16.7,14.2],
+    [1,"small","versions-first",3.8,16.2,17.0,19.5,17.2,21.3,16.3,14.2],
+    [1,"small","body-first",3.7,16.1,16.6,48.9,16.9,17.7,16.2,14.1],
+    [1,"large","versions-first",3.9,15.7,16.3,18.6,16.5,20.5,15.8,13.5],
+    [1,"large","body-first",3.6,16.7,17.4,97.7,17.7,19.4,17.1,14.4],
+    [2,"small","versions-first",3.7,17.3,17.9,20.0,18.2,21.7,17.3,14.2],
+    [2,"small","body-first",3.9,16.2,16.7,49.0,16.9,18.7,16.3,14.4],
+    [2,"large","versions-first",3.6,17.2,17.8,20.0,17.9,22.1,17.3,14.1],
+    [2,"large","body-first",3.6,16.3,17.1,99.1,17.4,18.6,16.6,14.1]
+  ]
+}

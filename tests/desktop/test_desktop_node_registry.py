@@ -9,6 +9,7 @@ from __future__ import annotations
 pytest_plugins = ('tests._credential_sidecar',)
 
 import importlib
+import os
 import threading
 
 import pytest
@@ -17,6 +18,15 @@ pytestmark = [pytest.mark.unit, pytest.mark.auth_mode('private')]
 
 OWNER = 31
 OTHER = 32
+
+
+def pytest_generate_tests(metafunc):
+    if 'credential_storage' not in metafunc.fixturenames:
+        return
+    if os.environ.get('TOFU_STORAGE_TEST_POSTGRES') == '1':
+        metafunc.parametrize('credential_storage', ['sqlite', 'postgres'], indirect=True, scope='module')
+    elif os.environ.get('TOFU_TEST_TOFUDB_BIN'):
+        metafunc.parametrize('credential_storage', ['tofudb'], indirect=True, scope='module')
 
 
 def _bearer(owner=OWNER):
@@ -33,7 +43,9 @@ def _data(response):
 @pytest.fixture
 def home(monkeypatch):
     from lib.api_keys import list_keys, revoke_key
-    from lib.desktop import bridge, node_registry
+    from lib.desktop import bridge, device_policy, node_registry
+    from lib.storage import get_storage_client
+    monkeypatch.setattr(device_policy, '_default_client', get_storage_client)
     monkeypatch.setattr(bridge, 'POLL_WAIT_TIMEOUT', 0)
 
     def clear():
@@ -60,9 +72,10 @@ def _mint(cli, auth):
     return _data(r)
 
 
-def _pair(cli, auth, node_id, *, name='box', previous=None, confirm=False):
+def _pair(cli, auth, node_id, *, name='box', previous=None, confirm=False,
+          platform='linux'):
     minted = _mint(cli, auth)
-    body = {'code': minted['code'], 'node_id': node_id, 'name': name, 'platform': 'linux',
+    body = {'code': minted['code'], 'node_id': node_id, 'name': name, 'platform': platform,
             'kind': 'server'}
     if previous:
         body['previous_node_id'] = previous
@@ -75,10 +88,10 @@ def _pair(cli, auth, node_id, *, name='box', previous=None, confirm=False):
     return paired
 
 
-def _poll(cli, token, node_id, *, boot='a' * 32, results=None):
+def _poll(cli, token, node_id, *, boot='a' * 32, results=None, platform='linux'):
     return cli.post('/api/desktop/poll', headers={'X-Bridge-Secret': token}, json={
         'results': results or [], 'streams': [],
-        'agent': {'agent_id': node_id, 'name': node_id, 'platform': 'linux',
+        'agent': {'agent_id': node_id, 'name': node_id, 'platform': platform,
                   'capabilities': {}, 'share_roots': [], 'boot_id': boot}})
 
 
@@ -210,6 +223,27 @@ def test_two_live_processes_of_one_node_refuse_the_earlier_boot(flask_client, ho
     assert _nodes(flask_client, auth)['node-t']['conflict']['reason'] == 'duplicate_boot'
 
 
+@pytest.mark.parametrize('platform', ['linux', 'darwin', 'win32'])
+def test_a_restart_reconnects_the_same_node_on_every_platform(flask_client, home, platform):
+    from lib.desktop import bridge
+    auth = _bearer()
+    node_id = 'node-restart-' + platform
+    paired = _pair(flask_client, auth, node_id, confirm=True, platform=platform)
+    assert _poll(flask_client, paired['token'], node_id, boot='a' * 32,
+                 platform=platform).status_code == 200
+    # A new process of the same node (new boot id, same credential) is a restart,
+    # never an identity conflict, and keeps the paired node id.
+    restarted = _poll(flask_client, paired['token'], node_id, boot='b' * 32,
+                      platform=platform)
+    assert restarted.status_code == 200 and 'node' not in restarted.get_json()
+    assert _poll(flask_client, paired['token'], node_id, boot='b' * 32,
+                 platform=platform).status_code == 200
+    node = _nodes(flask_client, auth)[node_id]
+    assert node['state'] == 'active' and node['platform'] == platform and node['online']
+    assert node['conflict'] is None
+    assert [a['agent_id'] for a in bridge.list_agents(str(OWNER))] == [node_id]
+
+
 def test_re_pairing_an_active_node_is_a_pending_replacement(flask_client, home):
     auth = _bearer()
     old = _pair(flask_client, auth, 'node-x', confirm=True)
@@ -289,6 +323,32 @@ def test_removal_and_token_revocation_forget_the_node_offline_or_not(flask_clien
     assert 'node-tok' not in _nodes(flask_client, auth)
 
 
+def test_remove_reports_conflict_when_durable_row_changes(flask_client, home, monkeypatch):
+    from lib.desktop import device_policy
+    from lib.desktop.node_registry import NodeRegistry
+
+    auth = _bearer()
+    _pair(flask_client, auth, 'node-race', confirm=True)
+    assert _ceiling(flask_client, auth, 'node-race', exec=True).status_code == 200
+    assert _defaults(flask_client, auth, server='node-race').status_code == 200
+    before = device_policy.policy(OWNER, fresh=True)
+    original_commit = device_policy._commit_policy
+
+    def interleave(owner, reader, value, version, nodes, **kwargs):
+        # Change the durable row after removal captured its witness.
+        if nodes and nodes[0].get('next', False) is None:
+            NodeRegistry(OWNER).rename('node-race', 'concurrent name')
+        return original_commit(owner, reader, value, version, nodes, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(device_policy, '_commit_policy', interleave)
+        response = flask_client.delete('/api/v4/desktop/nodes/node-race', headers=auth)
+    assert response.status_code == 409, response.get_data(as_text=True)
+    assert NodeRegistry(OWNER).get('node-race')['name'] == 'concurrent name'
+    assert device_policy.policy(OWNER, fresh=True) == before
+    assert flask_client.delete('/api/v4/desktop/nodes/node-race', headers=auth).status_code == 200
+
+
 def test_pairing_requires_a_node_id_and_a_known_kind(flask_client, home):
     auth = _bearer()
     code = _mint(flask_client, auth)['code']
@@ -347,22 +407,67 @@ def test_a_held_pending_poll_whose_node_was_rejected_is_answered_as_revoked(flas
 # ── Routing/permissions hooks (lib/desktop/device_policy.py, lib/desktop/routing.py) ──
 
 def _ceiling(cli, auth, node_id, **tiers):
+    resp = cli.get('/api/v4/devices/permissions', headers=auth)
+    assert resp.status_code == 200
+    body = resp.get_json()
     return cli.put(f'/api/v4/devices/{node_id}/ceiling', headers=auth,
-                   json={'tiers': {'read': True, **tiers}})
+                   json={'expected_revision': body.get('data', body)['rev'],
+                         'tiers': {'read': True, **tiers}})
 
 
 def _defaults(cli, auth, **kinds):
     return cli.put('/api/v4/devices/defaults', headers=auth, json=kinds)
 
 
+@pytest.mark.home_ceiling
 def test_an_offline_confirmed_node_is_addressable_by_the_policy_routes(flask_client, home):
     auth = _bearer()
     _pair(flask_client, auth, 'node-off', confirm=True)  # never polled
+    _pair(flask_client, auth, 'node-wait')
+    other = _bearer(OTHER)
+    _pair(flask_client, other, 'foreign-off', confirm=True)
+    response = flask_client.get('/api/v4/devices/permissions', headers=auth)
+    assert response.status_code == 200
+    listing = response.get_json()
+    listing = listing.get('data', listing)
+    assert set(listing['permissions']) == {'node-off'}
+    row = listing['permissions']['node-off']
+    assert row['rev'] == listing['rev']
+    assert row['device'] is None
+    assert {tier for tier, allowed in row['home'].items() if allowed} == {'read'}
     assert _ceiling(flask_client, auth, 'node-off', exec=True).status_code == 200
     assert _defaults(flask_client, auth, server='node-off').status_code == 200
     # A pending node is not a device yet.
-    _pair(flask_client, auth, 'node-wait')
     assert _ceiling(flask_client, auth, 'node-wait', exec=True).status_code == 404
+
+
+def test_check_only_metadata_witness_requires_the_correct_state(flask_client, home, monkeypatch):
+    from lib.desktop import device_policy
+    from lib.desktop.node_registry import NodeRegistry
+    from lib.storage.errors import StorageError
+
+    auth = _bearer()
+    _pair(flask_client, auth, 'node-metadata', confirm=True)
+    registry = NodeRegistry(OWNER)
+    row, witness = registry.policy_target('node-metadata')
+    updated = dict(row, name='metadata only')
+    before = device_policy.policy(OWNER, fresh=True)
+    with pytest.raises(StorageError) as error:
+        device_policy.commit_node_metadata(OWNER, dict(witness, active=False, next=updated))
+    assert error.value.code == 'database_protocol_error'
+    assert registry.get('node-metadata') == row
+    device_policy.commit_node_metadata(OWNER, dict(witness, next=updated))
+    assert registry.get('node-metadata') == updated
+    assert device_policy.policy(OWNER, fresh=True) == before
+    # Registry metadata must use the same injected authority as its witness read.
+    def wrong_client(**kwargs):
+        pytest.fail('registry mutation bypassed the injected authority')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(device_policy, '_default_client', wrong_client)
+        registry.rename('node-metadata', 'renamed through registry')
+    assert registry.get('node-metadata')['name'] == 'renamed through registry'
+    assert device_policy.policy(OWNER, fresh=True) == before
 
 
 def test_removal_drops_the_ceiling_and_default_mark(flask_client, home):
@@ -376,24 +481,112 @@ def test_removal_drops_the_ceiling_and_default_mark(flask_client, home):
     assert 'node-gone' not in record['ceilings'] and record['defaults'].get('server') is None
 
 
-def test_a_confirmed_re_pair_keeps_ceiling_and_default(flask_client, home):
+def test_same_id_replacement_starts_read_only(flask_client, home):
     from lib.desktop import device_policy
     auth = _bearer()
     _pair(flask_client, auth, 'node-v1', confirm=True)
-    _ceiling(flask_client, auth, 'node-v1', exec=True, write=True)
-    _defaults(flask_client, auth, server='node-v1')
-    # Same node ID re-paired: keyed by node ID, nothing moves.
+    assert _ceiling(flask_client, auth, 'node-v1', exec=True).status_code == 200
+    assert _defaults(flask_client, auth, server='node-v1').status_code == 200
     _pair(flask_client, auth, 'node-v1')
-    flask_client.post('/api/v4/desktop/nodes/node-v1/confirm', headers=auth, json={})
-    record, _rev = device_policy.policy(OWNER)
-    assert record['ceilings']['node-v1']['exec'] and record['defaults']['server'] == 'node-v1'
-    # A recreated host (new node ID naming its predecessor) inherits both.
-    _pair(flask_client, auth, 'node-v2', previous='node-v1')
-    flask_client.post('/api/v4/desktop/nodes/node-v2/confirm', headers=auth, json={})
-    record, _rev = device_policy.policy(OWNER)
-    assert 'node-v1' not in record['ceilings']
-    assert record['ceilings']['node-v2']['exec'] and record['ceilings']['node-v2']['write']
-    assert record['defaults']['server'] == 'node-v2'
+    assert flask_client.post('/api/v4/desktop/nodes/node-v1/confirm', headers=auth, json={}).status_code == 200
+    record, _rev = device_policy.policy(OWNER, fresh=True)
+    assert 'node-v1' not in record['ceilings'] and record['defaults']['server'] is None
+
+
+def test_distinct_id_repair_transfers_the_exact_offline_predecessors_policy(flask_client, home):
+    from lib.desktop import device_policy
+    auth = _bearer()
+    _pair(flask_client, auth, 'predecessor', confirm=True)
+    assert _ceiling(flask_client, auth, 'predecessor', exec=True).status_code == 200
+    assert _defaults(flask_client, auth, server='predecessor').status_code == 200
+    _pair(flask_client, auth, 'successor', previous='predecessor', confirm=True)
+    record, _rev = device_policy.policy(OWNER, fresh=True)
+    assert set(_nodes(flask_client, auth)) == {'successor'}
+    assert 'predecessor' not in record['ceilings']
+    assert record['ceilings']['successor']['exec'] and record['defaults']['server'] == 'successor'
+
+
+def test_distinct_id_repair_does_not_retire_a_reused_predecessor_id(flask_client, home):
+    from lib.desktop import device_policy
+    auth = _bearer()
+    _pair(flask_client, auth, 'predecessor', confirm=True)
+    _pair(flask_client, auth, 'successor', previous='predecessor')
+    assert flask_client.delete('/api/v4/desktop/nodes/predecessor', headers=auth).status_code == 200
+    _pair(flask_client, auth, 'predecessor', confirm=True)
+    assert _ceiling(flask_client, auth, 'predecessor', exec=True).status_code == 200
+    assert flask_client.post('/api/v4/desktop/nodes/successor/confirm', headers=auth, json={}).status_code == 200
+    record, _rev = device_policy.policy(OWNER, fresh=True)
+    assert set(_nodes(flask_client, auth)) == {'predecessor', 'successor'}
+    assert record['ceilings']['predecessor']['exec'] and 'successor' not in record['ceilings']
+
+
+@pytest.mark.parametrize('write', ['ceiling', 'default'])
+@pytest.mark.parametrize('transition', ['remove', 'replace', 'remove_repair'])
+def test_inflight_write_cannot_cross_an_empty_cleanup(flask_client, home, monkeypatch, write, transition):
+    from lib.desktop import device_policy
+    from lib.desktop.node_registry import NodeRegistry
+    auth = _bearer()
+    _pair(flask_client, auth, 'node-race-policy', confirm=True)
+    registry = NodeRegistry(OWNER)
+    if transition == 'replace':
+        _pair(flask_client, auth, 'node-race-policy')
+    before, rev = device_policy.policy(OWNER, fresh=True)
+    assert 'node-race-policy' not in before['ceilings'] and before['defaults']['server'] is None
+    original_commit = device_policy._commit_policy
+    entered = False
+
+    def interleave(owner, reader, value, version, nodes, **kwargs):
+        nonlocal entered
+        if not entered and nodes and 'next' not in nodes[0]:
+            entered = True
+            if transition == 'replace':
+                registry.confirm('node-race-policy')
+            else:
+                registry.forget('node-race-policy')
+                if transition == 'remove_repair':
+                    registry.record_pairing(node_id='node-race-policy', credential_id='fixture-repair',
+                                            name='repaired', platform='linux', kind='server')
+                    registry.confirm('node-race-policy')
+        return original_commit(owner, reader, value, version, nodes, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(device_policy, '_commit_policy', interleave)
+        response = (_ceiling(flask_client, auth, 'node-race-policy', exec=True) if write == 'ceiling'
+                    else _defaults(flask_client, auth, server='node-race-policy'))
+    assert entered
+    assert response.status_code == 409, response.get_data(as_text=True)
+    current, after = device_policy.policy(OWNER, fresh=True)
+    assert after > rev
+    assert 'node-race-policy' not in current['ceilings'] and current['defaults']['server'] is None
+
+
+@pytest.mark.parametrize('write', ['ceiling', 'default'])
+def test_removal_cleans_a_policy_write_that_won_after_cleanup_read(
+        flask_client, home, monkeypatch, write):
+    from lib.desktop import device_policy
+    from lib.desktop.node_registry import NodeRegistry
+    auth = _bearer()
+    node_id = 'node-write-first'
+    _pair(flask_client, auth, node_id, confirm=True)
+    original_commit = device_policy._commit_policy
+    saved = None
+
+    def interleave(owner, reader, value, version, nodes, **kwargs):
+        nonlocal saved
+        if saved is None and nodes and 'next' in nodes[0]:
+            saved = (_ceiling(flask_client, auth, node_id, exec=True) if write == 'ceiling'
+                     else _defaults(flask_client, auth, server=node_id))
+        return original_commit(owner, reader, value, version, nodes, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(device_policy, '_commit_policy', interleave)
+        assert NodeRegistry(OWNER).forget(node_id)['state'] == 'removed'
+    assert saved is not None and saved.status_code == 200
+    record, _ = device_policy.policy(OWNER, fresh=True)
+    assert node_id not in record['ceilings'] and record['defaults']['server'] is None
+    _pair(flask_client, auth, node_id, confirm=True)
+    record, _ = device_policy.policy(OWNER, fresh=True)
+    assert node_id not in record['ceilings'] and record['defaults']['server'] is None
 
 
 @pytest.mark.home_ceiling

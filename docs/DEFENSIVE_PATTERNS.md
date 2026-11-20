@@ -82,6 +82,42 @@ writer uses the original open descriptor without reopening the staging file
 or materializing an encoded text copy. Keeping independent cleanup loops was
 rejected because every resource fix would otherwise need two implementations.
 
+## Abandoned staging files are reclaimed by their writer
+
+Problem: a process killed between `mkstemp` and `os.replace` leaves its
+`.jsonstore-*.tmp` / `.binstore-*.tmp` staging file forever; `data/config`
+held 32, some holding 0644 copies of credential stores. Decision: staging
+files are reconstructible transport data. A writer holds an exclusive `flock`
+on its staging descriptor from creation until after `os.replace` (it publishes
+before closing). The first publication a process makes into a directory
+sweeps it: every staging file whose lock it can take without blocking has no
+live writer and is unlinked, after checking the name still names the locked
+inode and without following symlinks. A writer that finds its file reclaimed
+between `mkstemp` and its lock creates a new one. One sweep per directory per
+process suffices because abandonment requires the writer's process to die.
+Without flock support neither side can tell, and nothing is removed.
+Alternatives rejected: an age threshold (a tuning knob, and a slow FUSE write
+can outlive any fixed age); PID-tagged names (cannot judge existing files and
+PIDs are reused); a sweep on every write (a directory listing per save).
+Residual: a process still running pre-change code does not lock its staging
+file, so until every process restarts a sweep can, in a microseconds window,
+remove such a writer's in-flight file and make that one write raise.
+`atomic_output_path` (`.output-*.tmp`) is not swept. Spec:
+`tests/json_store/test_abandoned_staging_reclaim.py`.
+
+## Files under the config tree are owner-only
+
+Problem: the never-widen rule protects an existing 0600 file, but a new file
+took its caller's default 0644, and dozens of `data/config` writers pass no
+mode (daily reports and `auth_sources.json` cookies were created 0644).
+Decision: `_publication_mode` drops group/other bits for every path under
+`lib.config_dir.CONFIG_DIR`; credential writers (daily reports,
+`lib/auth_sources.py`, settings save, vault, OAuth token store) also pass
+`mode=0o600` so they stay private wherever their store lives. Alternatives
+rejected: `mode=0o600` at every call site alone (about forty writers; the next
+one forgets); inheriting the parent directory's mode (a fresh tree created
+under umask 022 is 0755). Spec: `tests/json_store/test_private_config_files.py`.
+
 ## A missing store is decided under its writers' lock
 
 Problem: on the data root's FUSE mount (DolphinFS), `open()` racing a

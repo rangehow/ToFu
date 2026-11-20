@@ -1392,7 +1392,19 @@ injection so lineage is sealed) and writes per request the sealed payload's
 SHA-256, headers, lineage evidence, identities and tool names. The 75 lines
 are byte-identical between `2a2c17e24f` and this tree, and between the
 shared branch at merge time and the merged tree (`byte-identity/`).
-`tests/meta/test_byte_identity_measure.py` keeps it complete.
+`tests/meta/test_byte_identity_measure.py` covers the supported wire faces
+with generated synthetic requests, without reading the replay corpus.
+The benchmark verifies complete field digests with the replay owner's
+`json_digest` and uses its `stored_request_path`; field names and full lowercase
+SHA-256 identities are validated before field access, and duplicate JSON members
+refuse. The owner's general loader is not used here because its errors include
+store paths and JSON decoder details. Expected field/scenario read failures
+and CLI output open/write/close failures (`OSError` or `UnicodeError`) produce
+fixed content-free refusals with suppressed exception chaining.
+Rust comparison rows retain only cell/protocol metadata, digests, lengths,
+boolean checks and the first differing byte index, never payload fragments or
+free-form comparator errors. This defensive boundary is not evidence of the
+provenance or parity of any unexamined request store.
 
 ### ABAB (`round_profile.py --no-spy`, 14 pairs, fresh roots)
 
@@ -1902,3 +1914,125 @@ births (the two 6 s gaps of the live log) are not in the reproduced pass.
 - Execution host to ready is 2.9 s of host work plus the manager's plan child
   against the ≤ 2 s target: `import server` and pinning remain.
 
+
+## Native catalog declaration processing
+
+**Problem (located evidence):** `_serialize_native_tool_catalog` validates each
+`decoded_result_schema` by serializing it, then the common wire projector
+serializes it again for description text. **Decision:** reuse that call-local,
+validated string and the common `decoded_result_description` framing function;
+continue running `sanitize_wire_tools` on the documented definition. Native
+metadata rejection still precedes function checks and permission filtering;
+ordinary wire preflight still withdraws invalid metadata without dropping the
+tool. No cache, invalidation lifetime, policy control or result evidence changes.
+**Alternative rejected:** caching the whole catalog adds state without evidence
+of repeated calls in the application entry (currently one call per execution).
+
+`benchmarks/native_catalog_processing.py --parent 15b9ff6ee5 --samples 200`
+loads the exact parent's two catalog functions from Git; without `--parent` it
+loads the candidate functions. Both borrow the same current dependencies and
+12 synthetic declaration fixtures, never execute tools or call storage/providers.
+Fresh processes alternate parent/candidate; complete catalog hashes and unchanged
+borrowed-input hashes gate observations. This is a catalog-kernel comparison,
+not application latency or a claim about the dominant harness cost.
+
+Three alternating local pairs (200 catalogs per process):
+
+| pair | parent serializations/catalog | candidate | parent median thread CPU, µs | candidate | parent median wall, µs | candidate |
+|---|---:|---:|---:|---:|---:|---:|
+| 1 | 24 | 12 | 303.885 | 222.880 | 305.796 | 223.471 |
+| 2 | 24 | 12 | 306.845 | 221.330 | 308.051 | 222.100 |
+| 3 | 24 | 12 | 302.475 | 224.475 | 304.076 | 225.396 |
+
+All six fixture hashes:
+`96d60c61dbf41d39f0fce3e656ac3405bb1c2fe84ffd2b0b1eb9ec7f91d9dc12`;
+complete output hashes:
+`870e6f34312fceb62144fe0ac2c2024f1c20e30973bdad3626f4e206fdb9d4b3`.
+
+Per-fixture deterministic evaluation in
+`tests/tasks_pkg/test_native_catalog_processing.py` (parent/candidate output
+parity, no human intervention, no executed tool calls/retries/tokens in either
+arm; processing counts are the measured difference):
+
+| fixture | exact output | parent serializations | candidate |
+|---|---|---:|---:|
+| empty declaration | match | 2 | 1 |
+| object type | match | 2 | 1 |
+| Unicode title | match | 2 | 1 |
+| nested union | match | 2 | 1 |
+| mixed scalar enum | match | 2 | 1 |
+| tuple normalization | match | 2 | 1 |
+| numeric root keys | match | 2 | 1 |
+| numeric nested keys | match | 2 | 1 |
+| definition/reference | match | 2 | 1 |
+| escaped text | match | 2 | 1 |
+| object intersection | match | 2 | 1 |
+| wide properties | match | 2 | 1 |
+
+The count specification failed with 2 instead of 1 on all 12 parent cases
+before implementation. Focused contracts also pin strict invalid/oversized
+metadata refusal even outside the permission subset, multi-defect error order,
+source/result isolation and continued wire-schema refusal. The benchmark
+self-check is `tests/meta/test_native_catalog_processing_measure.py`.
+
+## Settled Responses function preparation
+
+**Problem (located evidence):** the shared Responses outbound adapter rebuilt
+flattened function-tool dictionaries on every request even when final tool-wire
+projection had already retained the same immutable rows. The normal task path
+supplies that per-task row carrier in
+`orchestrator/_tool_request_metadata.py`; Anthropic already memoizes its own
+translation. This is separate from native declaration serialization (24→12),
+directory assembly, cold initialization and token/fee ledgers.
+
+**Decision:** `_convert_tools` retains one flattened immutable twin in each
+settled source row's existing memo. Alias allocation and collision validation
+still run against the current request's reverse map before reuse; the retained
+entry also checks the resolved alias. Mutable inputs still produce fresh mutable
+outputs. The memo is owned by its row, not a task lookup, process cache or pool;
+a replaced row recomputes and a withdrawn tool cannot be selected from it.
+No route, policy, permission, visibility or retention control is cached.
+
+The executable measurement is
+`tests/llm/test_responses_tool_preparation_reuse.py`. It feeds seven ordinary
+request preparations through `prepare_request`, appending a distinct synthetic
+assistant function call and tool return between requests. The matched fresh arm
+uses the same synthetic catalog, rules, messages and config without retained
+rows. Complete serialized provider bodies must match at each request, including
+history, schema fields, output controls and private-field removal. Keeping all
+returned function rows alive makes distinct identities an exact count of
+new returned flattened rows, not total Python allocations or a timing proxy. The unmodified adapter failed
+with **84 constructions for 12 tools × 7 requests**; the changed adapter performs
+**12**, leaving 72 duplicate constructions unperformed.
+
+Controlled two-request cases retain exact fresh-arm wire parity:
+
+| change after first request | constructions of original function rows across both requests |
+|---|---:|
+| system rules, output budget, Responses feature profile, named tool choice | 12 each |
+| schema, description, strictness, in-place mutable source edit | 13 each |
+| visibility subset, permission catalog withdrawal | 12 each; only two tools sent afterwards |
+| Tool Search mode | 12; discovery additions excluded from this original-row count |
+| reordered catalog | 24; positional settlement deliberately replaces these rows |
+
+The feature-profile case uses the same synthetic GPT-5.6 request history through
+`prepare_request`, transitioning `compatible` → `openai` without OAuth or provider
+I/O. It independently asserts that `include` is absent before the transition and
+is exactly `['reasoning.encrypted_content']` afterwards, in addition to complete
+warm-versus-fresh wire equality and 12 retained original-function rows across the
+two requests. This tests an effective feature-profile change, separately from
+the direct converter's default↔Codex dialect coverage.
+
+Rule/config changes do not invalidate a pure flattened twin when its input row
+and resolved alias have not changed; the complete request is still prepared anew.
+Long-name reverse maps and collisions are checked with warm memo entries;
+ordinary mutable callers never share their returned function dictionaries.
+**Alternative rejected:** caching the entire tool projection would cache live
+visibility/config decisions and need a separate invalidation authority. Extending
+identity reuse across reorder would expand the settled-row owner's scope without
+being needed for stable normal reuse.
+
+These are local synthetic operation counts only: no provider dispatch, real
+prompt/account reads, storage, rollout, latency measurement or invoice-savings
+claim. They establish this one removed repeated preparation, not a dominant
+whole-harness cost or full-loop performance improvement.

@@ -25,10 +25,13 @@ def semantic_authority(request, tmp_path, monkeypatch):
             monkeypatch.setenv("TOFU_STORAGE_TEST_POSTGRES_DSN_FILE", str(dsn_file))
             monkeypatch.setenv("TOFU_STORAGE_PG_READ_POOL", "2")
             monkeypatch.setenv("TOFU_STORAGE_PG_WRITE_POOL", "2")
-        runtime = StorageRuntime(
-            StorageSupervisor(project_root=tmp_path, backend=request.param),
-            auto_restart=False,
-        )
+        command = None
+        if request.param == 'sqlite' and os.environ.get('TOFU_TEST_SQL_AUTHORITY_BIN'):
+            from tests.storage_authority_sql.test_rust_sql_authority_differential import rust_authority_binary
+            command = (str(rust_authority_binary()), 'serve')
+        supervisor = StorageSupervisor(project_root=tmp_path, backend=request.param,
+                                       sql_authority_command=command)
+        runtime = StorageRuntime(supervisor, auto_restart=False)
         # Install through monkeypatch so fixtures that overlay the process-global
         # runtime with a double unwind in LIFO order instead of this teardown
         # stopping their double; the factory stays bound to this authority.
@@ -41,6 +44,15 @@ def semantic_authority(request, tmp_path, monkeypatch):
 
         try:
             runtime.start()
+            if command is not None:
+                import json
+                from tests.support.sql_authority_identity import (
+                    assert_child_identity, bind_candidate_identity, child_identity,
+                )
+                identity = child_identity(supervisor, command)
+                bind_candidate_identity(identity)
+                request.node.user_properties.append(('sql_authority_child', json.dumps(identity, sort_keys=True)))
+                assert_child_identity(identity)
             yield authority_client, 41, None
         finally:
             runtime.stop()

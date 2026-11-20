@@ -39,7 +39,9 @@ from lib.compat.openai import (
     build_openai_response, models_payload, stream_openai_chunks,
     translate_openai_request,
 )
-from lib.compat._common import CompatTerminalFailure
+from lib.compat._common import (
+    CompatModelAttributionUnknown, CompatTerminalFailure,
+)
 from lib.error_envelope import BadRequest
 from lib.idempotency import idempotent_post
 from lib.ids import short_id
@@ -220,13 +222,20 @@ async def chat_completions():
             str(exc), context='compat:openai', log_traceback=False,
             error_kind=exc.verdict.cause,
         )
+    except CompatModelAttributionUnknown as exc:
+        logger.warning('[compat:openai] refusing unattributed answer task=%s',
+                       task_log_tag(task['id']))
+        return api_internal_error(
+            str(exc), context='compat:openai', log_traceback=False,
+            error_kind=exc.cause,
+        )
     out['task_id'] = task['id']  # extension; OpenAI SDKs ignore unknown fields
     try:
         if auth and auth.key_id:
             total = int(out.get('usage', {}).get('total_tokens') or 0)
             record_tokens(auth.key_id, total)
             record_usage(auth.key_id, n_tokens=total,
-                          model=cfg.get('model', '') or '',
+                          model=out['model'] or '',
                           request_count=0)
     except Exception as e:
         logger.debug('[compat:openai] record_tokens failed: %s', e)

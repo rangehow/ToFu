@@ -7,6 +7,8 @@ original mapping. Public events and the task's ``apiRounds`` ledger use
 round for the rest of the task lifetime.
 """
 
+from uuid import uuid4
+
 from lib.cost import accumulate_usage_into, normalize_usage, split_input_tokens
 from lib.log import get_logger
 from lib.tasks_pkg.manager._events import append_event
@@ -25,10 +27,14 @@ def _record_charge(
     accumulate_usage_into(accumulated_usage, usage)
     record = {
         'round': round_id,
+        'usageReceiptId': uuid4().hex,
         'model': model,
         'usage': project_usage_for_round_record(usage),
         'tag': tag,
     }
+    route = _response_route_projection(model, usage)
+    if route.get('providerId'):
+        record['providerId'] = route['providerId']
     if not response_authoring:
         record['responseAuthoring'] = False
     api_rounds.append(record)
@@ -172,6 +178,8 @@ def _response_route_projection(model, usage):
         # Only the already-public last four characters are retained. Never
         # project ``slot.api_key`` or another credential-bearing value here.
         ('keyTail', dispatch.get('key_tail'), 32),
+        ('accountId', dispatch.get('account_id'), 40),
+        ('subscriptionProvider', dispatch.get('subscription_provider'), 32),
     )
     for field, value, maximum in optional_fields:
         text = _bounded_text(value, maximum)

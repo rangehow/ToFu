@@ -63,6 +63,13 @@ _WORKER: threading.Thread | None = None
 _WORKER_WAKE_GENERATION = 0
 _WORKER_STOP_REQUESTED = False
 _WORKER_AUTHORITY_ARMED = False
+# Claimed rows run on the shared demand executor (``max_workers`` is idle reuse,
+# never a concurrency ceiling). The claim itself keeps one row per project:
+# SQL's ready predicate excludes a project with an integrating row, and the
+# native engine holds a project claim key. Independent projects therefore run
+# their merges and gates concurrently.
+_INFLIGHT_ROWS: dict[int, Any] = {}
+_ROW_EXECUTOR: Any = None
 _STATUS_CACHE: dict[tuple[int, str], tuple[float, dict[str, Any]]] = {}
 _STATUS_CACHE_LOCK = threading.Lock()
 _STATUS_CACHE_TTL_SECONDS = 10.0
@@ -72,6 +79,10 @@ IntegrationError = RuntimeError
 
 class IntegrationRequestError(IntegrationError):
     """The request names no usable project path: the caller corrects it (HTTP 400)."""
+
+
+class IntegrationLockBusy(BlockingIOError):
+    """A nonblocking lock acquisition found another holder."""
 
 
 def _control_root() -> Path:
@@ -541,7 +552,7 @@ def _file_lock(key: str, *, cancel=None, wait: bool = True, progress=None,
                 if acquired:
                     break
                 if not wait:
-                    raise BlockingIOError('Workspace lifecycle is active')
+                    raise IntegrationLockBusy('Workspace lifecycle is active')
                 if progress is not None:
                     progress()
                 time.sleep(0.05)
@@ -576,12 +587,12 @@ def _file_lock(key: str, *, cancel=None, wait: bool = True, progress=None,
 
 
 @contextlib.contextmanager
-def _repo_lock(project_root: str, *, cancel=None, progress=None):
+def _repo_lock(project_root: str, *, cancel=None, wait: bool = True, progress=None):
     """Cross-process admission for shared ref/metadata operations."""
     project_root = str(Path(project_root).expanduser().resolve())
     with contextlib.ExitStack() as stack:
         with measure_task_startup('workspace_repo_wait'):
-            stack.enter_context(_file_lock(project_root, cancel=cancel, progress=progress))
+            stack.enter_context(_file_lock(project_root, cancel=cancel, wait=wait, progress=progress))
         yield
 
 
@@ -2000,11 +2011,6 @@ def _integrate_row(row: Mapping[str, Any]) -> None:
             _push(str(root), user_id=owner_user_id)
             return
         candidate, _stable = _ensure_refs(root)
-        target, conflict = _merge_checkpoint(root, candidate, checkpoint, task_id)
-        if conflict:
-            _quarantine(root, fresh, conflict)
-            _push(str(root), user_id=owner_user_id)
-            return
         try:
             selected_policy = select_gate_commands(root)
             command = selected_policy.integration
@@ -2016,6 +2022,30 @@ def _integrate_row(row: Mapping[str, Any]) -> None:
         # narrow and do not join owner metadata. Fetch the owner-scoped row
         # before recording the merged package provenance.
         origin = fresh.get('origin') or owner_row.get('origin') or {}
+
+    # Repository admission linearizes rows and refs, never a merge: two
+    # immutable commits are the only inputs here, and the pre-publication
+    # revalidation below requeues if either moved meanwhile. A worktree-scale
+    # merge (the no-merge-tree fallback materializes one) must not stall task
+    # starts or deliveries of the same project.
+    target, conflict = _merge_checkpoint(root, candidate, checkpoint, task_id)
+    if conflict:
+        with _repo_lock(str(root)):
+            fresh = _state.get_integrating(int(row['id']))
+            if fresh is None:
+                return
+            owner_row = _state.get_workspace(str(root), str(task_id), user_id=owner_user_id)
+            current_origin = owner_row.get('origin') or {}
+            if ((current_origin.get('delivery') or {}) != delivery_authority
+                    or owner_row['checkpoint_sha'] != fresh['checkpoint_sha']):
+                changed = _state.requeue(
+                    row_id=int(fresh['id']),
+                    error='Delivery authority changed during merge; retrying', now=_now())
+            else:
+                changed = _quarantine(root, fresh, conflict)
+        if changed:
+            _push(str(root), user_id=owner_user_id)
+        return
 
     # An immutable target needs no repository admission while it is tested.
     acceptance = {}
@@ -2099,10 +2129,9 @@ def _peek_ready() -> dict | None:
 
 
 
-def process_ready_once() -> bool:
-    row = _claim_next()
-    if row is None:
-        return False
+def _run_integration_row(row: Mapping[str, Any]) -> None:
+    """Execute one claimed row; its failure settles it without its siblings."""
+    global _WORKER_WAKE_GENERATION
     try:
         _integrate_row(row)
     except Exception as exc:
@@ -2120,7 +2149,70 @@ def process_ready_once() -> bool:
                 '[Integration] Project narrative emit failed: %s',
                 narrative_exc)
         _push(row['project_root'], user_id=int(row['user_id']))
+    finally:
+        with _WORKER_CONDITION:
+            _INFLIGHT_ROWS.pop(int(row['id']), None)
+            # A completed row may make its project's next row claimable, and a
+            # sibling project's row may have become visible meanwhile.
+            _WORKER_WAKE_GENERATION += 1
+            _WORKER_CONDITION.notify_all()
+
+
+def process_ready_once() -> bool:
+    row = _claim_next()
+    if row is None:
+        return False
+    _run_integration_row(row)
     return True
+
+
+def _integration_row_executor():
+    global _ROW_EXECUTOR
+    with _WORKER_CONDITION:
+        if _ROW_EXECUTOR is None:
+            from lib.observability import InstrumentedThreadPoolExecutor
+            _ROW_EXECUTOR = InstrumentedThreadPoolExecutor(
+                max_workers=1, metric_pool='integration-row',
+                thread_name_prefix='tofu-integration-row')
+        return _ROW_EXECUTOR
+
+
+def _dispatch_ready_rows() -> bool:
+    """Claim every currently eligible row and start it on the shared executor."""
+    global _WORKER_WAKE_GENERATION
+    executor = _integration_row_executor()
+    started = False
+    while True:
+        row = _claim_next()
+        if row is None:
+            return started
+        row_id = int(row['id'])
+        with _WORKER_CONDITION:
+            _INFLIGHT_ROWS[row_id] = None
+        try:
+            future = executor.submit(_run_integration_row, row)
+        except BaseException:
+            with _WORKER_CONDITION:
+                _INFLIGHT_ROWS.pop(row_id, None)
+                _WORKER_WAKE_GENERATION += 1
+                _WORKER_CONDITION.notify_all()
+            raise
+        with _WORKER_CONDITION:
+            # The row may have finished before its Future was recorded.
+            if row_id in _INFLIGHT_ROWS:
+                _INFLIGHT_ROWS[row_id] = future
+        started = True
+
+
+def _wait_for_inflight_rows(timeout: float) -> bool:
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    with _WORKER_CONDITION:
+        while _INFLIGHT_ROWS:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            _WORKER_CONDITION.wait(remaining)
+        return True
 
 
 def _autorun_enabled() -> bool:
@@ -2193,7 +2285,7 @@ def _worker_loop() -> None:
             try:
                 claim_due = boot_claim_pending or _peek_ready() is not None
                 boot_claim_pending = False
-                progressed = process_ready_once() if claim_due else False
+                progressed = _dispatch_ready_rows() if claim_due else False
                 # Row work runs on per-project lanes; this loop only dispatches.
                 progressed = delivery.resume_due_workspace_deliveries(lanes=True) or progressed
             except StorageError as exc:
@@ -2332,26 +2424,26 @@ def stop_worker(timeout: float = 2.0) -> bool:
     with _WORKER_CONDITION:
         _WORKER_AUTHORITY_ARMED = False
         worker = _WORKER
-        if worker is None:
-            return True
-        _WORKER_STOP_REQUESTED = True
-        _WORKER_WAKE_GENERATION += 1
-        _WORKER_CONDITION.notify_all()
+        if worker is not None:
+            _WORKER_STOP_REQUESTED = True
+            _WORKER_WAKE_GENERATION += 1
+            _WORKER_CONDITION.notify_all()
     try:
         wait_seconds = max(0.0, float(timeout))
     except (TypeError, ValueError, OverflowError):
         wait_seconds = 2.0
     deadline = time.monotonic() + wait_seconds
-    if worker is not threading.current_thread():
+    if worker is not None and worker is not threading.current_thread():
         worker.join(wait_seconds)
-    stopped = not worker.is_alive()
-    if stopped:
+    stopped = worker is None or not worker.is_alive()
+    if stopped and worker is not None:
         with _WORKER_CONDITION:
             if _WORKER is worker:
                 _WORKER = None
+    rows_stopped = _wait_for_inflight_rows(max(0.0, deadline - time.monotonic()))
     from lib.project_mod import delivery
     lanes_stopped = delivery.stop_project_lanes(max(0.0, deadline - time.monotonic()))
-    return stopped and lanes_stopped
+    return stopped and rows_stopped and lanes_stopped
 
 
 def reconcile_candidate_with_head(

@@ -18,7 +18,6 @@ import tracemalloc
 
 import pytest
 
-from lib.conversations.repository import ConversationRepository
 from lib.daily_report import cost
 from lib.daily_report.conversations import _safe_int_ts
 from lib.storage.errors import StorageError
@@ -162,7 +161,7 @@ class _Authority:
             'created_at': conversation['created_at'],
             'updated_at': conversation['updated_at'],
             'settings': settings,
-            'msg_count': len(conversation['messages']), 'rev': 1,
+            'msg_count': len(conversation['messages']), 'rev': conversation.get('rev', 1),
         }
 
     def _list(self, payload):
@@ -210,7 +209,7 @@ class _Authority:
                 if turn_time and not start <= turn_time < end:
                     continue
                 row['timestamp'] = turn_time
-            row.update({key: message[key] for key in _USAGE_FIELDS
+            row.update({key: message[key] for key in (*_USAGE_FIELDS, 'apiRounds')
                         if key in message})
             turns.append(row)
         title_fallback = ''
@@ -300,19 +299,21 @@ def _price(usage, model, provider, *, at):
 def priced(monkeypatch):
     calls = []
 
-    def price(usage, model='', provider='', at=None):
+    def price(usage, model='', provider='', at=None, *, unrounded_cny_components=False):
         calls.append((usage['prompt_tokens'], model, provider, at))
-        return _price(usage, model, provider, at=at)
+        from lib.cost import compute_cost
+        amount = _price(usage, model, provider, at=at)
+        quote = {**compute_cost(usage), 'costCny': amount}
+        if unrounded_cny_components:
+            quote.update(inputCostCny=amount, outputCostCny=0)
+        return quote
 
-    monkeypatch.setattr(cost, '_calc_msg_cost_cny', price)
+    monkeypatch.setattr(cost, '_calc_msg_cost', price)
     return calls
 
 
 def _use(monkeypatch, authority):
-    repository = ConversationRepository(lambda *, write=False: authority)
-    monkeypatch.setattr(
-        'lib.conversations.repository.ConversationRepository',
-        lambda *args, **kwargs: repository)
+    monkeypatch.setattr('lib.storage.get_storage_client', lambda **_: authority)
     return authority
 
 
@@ -358,7 +359,7 @@ def test_projected_costs_equal_the_full_hydration_computation(
     got = cost._scan_costs_in_range(
         start, end, 2026, 8, owner_user_id=OWNER_USER_ID)
 
-    assert got == expected
+    assert got == {day: {**data, "partial": True} for day, data in expected.items()}
     assert sorted(priced) == sorted(oracle_calls)
     # The fixture exercises Turn time, interpolation and title fallback.
     assert set(got) == {2, 3, 5, 7, 9}
@@ -471,9 +472,119 @@ def test_monthly_costs_backfill_and_today_use_the_projection(
     assert _hydrating_calls(authority) == []
     assert today.day in got
     if today.day > 1:
+        assert got[today.day]['cost'] == pytest.approx(
+            _price(_usage(10), 'conversation-model', '',
+                   at=conversations['live']['messages'][0]['timestamp'] / 1000),
+            abs=1e-6)
         assert got[1]['cost'] == pytest.approx(
             _price(_usage(20), 'conversation-model', '',
                    at=conversations['live']['messages'][1]['timestamp'] / 1000),
             abs=1e-4)
-        assert f'{first.isoformat()}' in persisted
+        # A legacy estimate still renders; only complete history gets pinned.
+        assert first.isoformat() not in persisted
     assert today.isoformat() not in persisted
+
+
+def _usage_reads(authority):
+    return [data['conv_id'] for op, data in authority.calls if op == 'conversation.turn_usage']
+
+
+def test_live_day_reuses_unchanged_projections_and_fold(monkeypatch, priced):
+    from lib.pricing._revision import bump_pricing_revision
+
+    day = MONTH.replace(day=7)
+    stamp = _at(7)
+    rows = {
+        f'conv-{i}': _conversation(f'conv-{i}', [
+            {'role': 'assistant', 'timestamp': stamp, 'usage': _usage(i + 1)},
+        ], updated_at=stamp)
+        for i in range(256)
+    }
+    authority = _use(monkeypatch, _Authority(rows))
+    def read():
+        return cost._get_live_day_costs(day, owner_user_id=OWNER_USER_ID)
+
+    cold = read()
+    assert len(_usage_reads(authority)) == len(priced) == 256
+    authority.calls.clear()
+    priced.clear()
+    assert read() == cold
+    assert [op for op, _ in authority.calls] == ['conversation.list']
+    assert not priced  # Even the joined price fold is unchanged.
+
+    # Same timestamp and message count: only the authoritative rev changed.
+    rows['conv-1']['messages'][0]['usage'] = _usage(91)
+    rows['conv-1']['rev'] = 2
+    authority.calls.clear()
+    changed = read()
+    assert _usage_reads(authority) == ['conv-1']
+    assert changed['cost'] > cold['cost']
+    assert changed == cost._LiveDayCosts().read(day, owner_user_id=OWNER_USER_ID)
+
+    # Provider/model pricing changes invalidate the total, not the projected rows.
+    authority.calls.clear()
+    priced.clear()
+    bump_pricing_revision()
+    assert read() == changed
+    assert not _usage_reads(authority) and len(priced) == 256
+
+    # Header-only edits can retain the same transcript revision.
+    rows['conv-1']['settings']['model'] = 'model-x'
+    rows['conv-1']['title'] = 'Renamed'
+    authority.calls.clear()
+    renamed = read()
+    assert _usage_reads(authority) == ['conv-1']
+    assert renamed['conversations']['conv-1']['name'] == 'Renamed'
+    assert renamed['cost'] != changed['cost']
+
+    authority.calls.clear()
+    assert cost._get_live_day_costs(day + dt.timedelta(days=1), owner_user_id=OWNER_USER_ID)[
+        'token_costs']['buckets']['input']['tokens'] == 0
+    assert not _usage_reads(authority)
+
+
+def test_live_day_retracts_deleted_clone_and_reassigns_shared_receipt(monkeypatch):
+    from lib.cost import compute_cost
+
+    day = MONTH.replace(day=7)
+    stamp = _at(7)
+    usage = _usage(1000)
+    quote = compute_cost(usage, pricing_override={'input': 10, 'output': 0, 'currency': 'CNY'})
+    rows = {key: _conversation(key, [{
+        'role': 'assistant', 'timestamp': when, 'usage': usage,
+        'apiRounds': [{'usageReceiptId': 'shared', 'cost': quote}],
+    }], updated_at=when) for key, when in [('original', stamp), ('clone', stamp + 1)]}
+    authority = _use(monkeypatch, _Authority(rows))
+    original = cost._get_live_day_costs(day, owner_user_id=OWNER_USER_ID)
+    assert set(original['conversations']) == {'original'}
+    assert original['cost'] == pytest.approx(0.01)
+    rows.pop('original')
+    authority.calls.clear()
+    after = cost._get_live_day_costs(day, owner_user_id=OWNER_USER_ID)
+    assert set(after['conversations']) == {'clone'}
+    assert after['token_costs'] == original['token_costs']
+    assert not _usage_reads(authority)
+    assert after == cost._LiveDayCosts().read(day, owner_user_id=OWNER_USER_ID)
+
+
+def test_unstable_projection_read_cannot_be_reused(monkeypatch, priced):
+    day = MONTH.replace(day=7)
+    stamp = _at(7)
+    conv = _conversation('racing', [{'role': 'assistant', 'timestamp': stamp, 'usage': _usage(10)}],
+                         updated_at=stamp)
+    authority = _use(monkeypatch, _Authority({'racing': conv}))
+    read = authority._turn_usage
+
+    def read_and_edit(payload):
+        projection = json.loads(json.dumps(read(payload)))
+        conv['messages'][0]['usage'] = _usage(999)
+        conv['rev'] = 2
+        return projection
+
+    monkeypatch.setattr(authority, '_turn_usage', read_and_edit)
+    old = cost._get_live_day_costs(day, owner_user_id=OWNER_USER_ID)
+    monkeypatch.setattr(authority, '_turn_usage', read)
+    authority.calls.clear()
+    current = cost._get_live_day_costs(day, owner_user_id=OWNER_USER_ID)
+    assert _usage_reads(authority) == ['racing']
+    assert current['cost'] > old['cost']

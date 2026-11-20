@@ -31,11 +31,13 @@ ROOT = Path(__file__).resolve().parents[2]
 _EXECUTION_HOST = f'''
 import asyncio, json, sys, threading, time
 import lib.swarm.message_receipts as receipts
+from lib.swarm import persistence
 from lib.swarm.integration import _active_sessions, _session_timestamps, _sessions_lock
 from lib.tasks_pkg.command_control_transport import CommandControlServer
 from lib.tasks_pkg.command_controls import apply_command_control
 
 receipts.resident_snapshot = lambda session, agents, specs: {{'messageReceipts': []}}
+persistence.uses_sql_lifecycle = lambda: False  # This fixture has no SQL authority.
 
 
 class Session:
@@ -176,9 +178,10 @@ def test_routes_reach_the_swarm_in_the_execution_host(execution_host, api_app, m
         assert stopped.status_code == 200
         assert (await stopped.get_json())['data'] == {'stopped': True, 'swarmId': RUN, 'agentId': 'a'}
 
-        assert (await client.post(f'/api/v4/swarm/abort/{KEY}', headers=foreign)).status_code == 404
-        assert (await client.post(f'/api/v4/swarm/abort/{KEY}')).status_code == 200
         assert (await client.post(f'/api/v4/swarm/abort/{KEY}')).status_code == 404
+        assert (await client.post(f'/api/v4/swarm/abort/{RUN}', headers=foreign)).status_code == 404
+        assert (await client.post(f'/api/v4/swarm/abort/{RUN}')).status_code == 200
+        assert (await client.post(f'/api/v4/swarm/abort/{RUN}')).status_code == 404
 
     asyncio.run(exercise())
     assert finish() == {'killed': ['a'], 'aborted': True}

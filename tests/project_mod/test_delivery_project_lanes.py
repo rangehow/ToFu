@@ -1,7 +1,9 @@
 """The integration receiver gives each project its own lane.
 
 One project's slow or doomed capture never delays another project's
-publication. Rows of one project still run one at a time, in row order.
+publication. Rows of one project prepare concurrently; the repository lock
+still orders each row's delta-sized publication, and a backlog reclamation
+runs only while no delivery row waits or runs.
 """
 import threading
 import time
@@ -137,28 +139,23 @@ def pending_rows(*tasks):
             for index, (project, task) in enumerate(tasks, start=1)]
 
 
-def test_one_projects_rows_run_serially_in_row_order_beside_other_projects(
+def test_one_projects_rows_prepare_concurrently_beside_other_projects(
         fresh_schedule, monkeypatch):
     serve_pages(monkeypatch, pending_rows(('alpha', 'alpha-1'), ('alpha', 'alpha-2'),
                                           ('beta', 'beta-1')))
     started = {task: threading.Event() for task in ('alpha-1', 'alpha-2', 'beta-1')}
     release_first = threading.Event()
-    order, active, overlaps = [], set(), []
+    order = []
     lock = threading.Lock()
 
     def settle(row, current):
-        task_id, project = row['task_id'], Path(row['project_root']).name
+        task_id = row['task_id']
         with lock:
-            if any(other.startswith(project) for other in active):
-                overlaps.append(task_id)
-            active.add(task_id)
             order.append(task_id)
         started[task_id].set()
         if task_id == 'alpha-1':
             assert release_first.wait(60)
-        with lock:
-            active.discard(task_id)
-        return current
+        return {**current, 'state': 'preserved'}
 
     monkeypatch.setattr(delivery, '_settle_registered', settle)
     delivery.request_workspace_delivery_scan()
@@ -167,27 +164,27 @@ def test_one_projects_rows_run_serially_in_row_order_beside_other_projects(
     try:
         assert started['alpha-1'].wait(30)
         assert started['beta-1'].wait(30), "beta's row waited for alpha's busy lane"
-        assert not started['alpha-2'].wait(0.5), "alpha's second row overtook its first"
+        assert started['alpha-2'].wait(30), "alpha's second row waited for its first"
     finally:
         release_first.set()
-    assert started['alpha-2'].wait(30)
     assert delivery.stop_project_lanes(timeout=30)
-    assert overlaps == []
-    assert [task for task in order if task.startswith('alpha')] == ['alpha-1', 'alpha-2']
+    assert sorted(order) == ['alpha-1', 'alpha-2', 'beta-1']
 
 
 def test_a_busy_lane_keeps_rows_found_by_later_passes(fresh_schedule, monkeypatch):
     """A lane still busy when the pass reaches its next page queues, never drops, the rows."""
     serve_pages(monkeypatch, pending_rows(('alpha', 'alpha-1'), ('alpha', 'alpha-2')), size=1)
     release_first, first_started, both = threading.Event(), threading.Event(), threading.Event()
-    settled = []
+    settled, lock = [], threading.Lock()
 
     def settle(row, current):
-        settled.append(row['task_id'])
-        if len(settled) == 1:
+        with lock:
+            settled.append(row['task_id'])
+            count = len(settled)
+        if count == 1:
             first_started.set()
             assert release_first.wait(60)
-        if len(settled) == 2:
+        if count == 2:
             both.set()
         return {**current, 'state': 'preserved'}
 
@@ -202,7 +199,7 @@ def test_a_busy_lane_keeps_rows_found_by_later_passes(fresh_schedule, monkeypatc
         release_first.set()
     assert both.wait(30)
     assert delivery.stop_project_lanes(timeout=30)
-    assert settled == ['alpha-1', 'alpha-2']
+    assert sorted(settled) == ['alpha-1', 'alpha-2']
 
 
 def test_a_row_in_flight_is_not_queued_again(fresh_schedule, monkeypatch):
@@ -245,14 +242,16 @@ def test_a_source_retained_under_an_earlier_rule_waits_for_the_lanes_deliveries(
     pending = {**pending_rows(('alpha', 'alpha-delivery'))[0], 'id': 2}
     serve_pages(monkeypatch, [retained(1, 'kept-earlier'), pending,
                               retained(3, 'kept-now', sourceRetirementRule=RECLAMATION_RULE)])
-    order, finished = [], threading.Event()
+    order, finished, lock = [], threading.Event(), threading.Lock()
 
     def settle(row, current):
-        order.append(('deliver', row['task_id']))
+        with lock:
+            order.append(('deliver', row['task_id']))
         return {**current, 'state': 'preserved'}
 
     def reclaim(row, *, reconsider=False):
-        order.append(('reclaim', row['task_id'], reconsider))
+        with lock:
+            order.append(('reclaim', row['task_id'], reconsider))
         if reconsider:
             finished.set()
 
@@ -266,22 +265,24 @@ def test_a_source_retained_under_an_earlier_rule_waits_for_the_lanes_deliveries(
                      ('reclaim', 'kept-earlier', True)]
 
 
-def test_stopping_lanes_drops_queued_rows_and_joins_running_work(fresh_schedule, monkeypatch):
+def test_stopping_lanes_joins_running_rows(fresh_schedule, monkeypatch):
     serve_pages(monkeypatch, pending_rows(('alpha', 'alpha-1'), ('alpha', 'alpha-2')))
-    release, started = threading.Event(), threading.Event()
-    settled = []
+    release, entered = threading.Event(), threading.Semaphore(0)
+    settled, lock = [], threading.Lock()
 
     def settle(row, current):
-        settled.append(row['task_id'])
-        started.set()
+        with lock:
+            settled.append(row['task_id'])
+        entered.release()
         assert release.wait(60)
-        return current
+        return {**current, 'state': 'preserved'}
 
     monkeypatch.setattr(delivery, '_settle_registered', settle)
     delivery.request_workspace_delivery_scan()
     delivery.resume_due_workspace_deliveries(lanes=True)
-    assert started.wait(30)
+    assert entered.acquire(timeout=30) and entered.acquire(timeout=30)
     assert delivery.stop_project_lanes(timeout=0.2) is False, 'a lane inside row work is still running'
     release.set()
     assert delivery.stop_project_lanes(timeout=30) is True
-    assert settled == ['alpha-1'], 'stopping drops queued rows; their receipts stay durable debt'
+    assert sorted(settled) == ['alpha-1', 'alpha-2'], \
+        'running rows keep their durable receipts and are joined, not dropped'

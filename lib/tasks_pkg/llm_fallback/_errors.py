@@ -31,6 +31,22 @@ def _is_gateway_error(exc: BaseException) -> bool:
     return isinstance(exc, _RL) and bool(getattr(exc, 'is_gateway', False))
 
 
+def _is_permission_error(exc: BaseException) -> bool:
+    """True for a provider/account permission refusal (HTTP 401/403).
+
+    A permission rejection says the account may not use this model; it is not
+    a content decision and not a transient outage. Keeping it typed lets the
+    fallback path continue on the configured model while the terminal error
+    names the refusal instead of blaming whichever model answered last.
+    """
+    try:
+        from lib.llm.llm_errors import PermissionError_
+    except Exception as import_error:
+        logger.debug('lib.llm import failed in permission check: %s', import_error)
+        return False
+    return isinstance(exc, PermissionError_)
+
+
 def _is_request_payload_error(exc: BaseException) -> bool:
     """True when changing models cannot repair the rejected request.
 
@@ -78,6 +94,7 @@ def _settle_failed_fallback(
     thinking_enabled,
     round_num,
     blocked_error: ProtocolConversionError | None = None,
+    primary_error: BaseException | None = None,
 ):
     """Return a normal loop break carrying a typed terminal fallback error.
 
@@ -89,16 +106,45 @@ def _settle_failed_fallback(
     bounded failure bounded while preserving manual Retry.
     A continuity-blocked fallback reports the primary error and policy.
     """
-    envelope = format_llm_error_for_user(
-        error,
-        model=original_model if blocked_error is not None else fallback_model,
-        context=(
-            f'fallback-unrepresentable ({original_model}→{fallback_model})'
-            if blocked_error is not None
-            else f'both-failed ({original_model}→{fallback_model})'
-        ),
-        source='llm-fallback',
+    # Both models refusing the same request for permission makes the primary
+    # refusal the actionable cause: otherwise the terminal error names only
+    # the last model and the account/model-permission denial looks like that
+    # fallback's own defect. Report the primary refusal and keep the
+    # fallback's refusal as separate evidence. A non-permission fallback
+    # failure keeps its own terminal kind (e.g. a gateway outage).
+    primary_permission_refused = (
+        blocked_error is None
+        and _is_permission_error(primary_error)
+        and _is_permission_error(error)
     )
+    if primary_permission_refused:
+        envelope = format_llm_error_for_user(
+            primary_error,
+            model=original_model,
+            context=f'primary-permission ({original_model}→{fallback_model})',
+            source='llm-fallback',
+        )
+        fallback_envelope = format_llm_error_for_user(
+            error,
+            model=fallback_model,
+            context='fallback-failed',
+            source='llm-fallback',
+        )
+        envelope['fallbackDetail'] = (
+            fallback_envelope.get('detail') or str(error)
+        )[:300]
+        envelope['fallbackFailureKind'] = fallback_envelope.get('kind', 'generic')
+    else:
+        envelope = format_llm_error_for_user(
+            error,
+            model=original_model if blocked_error is not None else fallback_model,
+            context=(
+                f'fallback-unrepresentable ({original_model}→{fallback_model})'
+                if blocked_error is not None
+                else f'both-failed ({original_model}→{fallback_model})'
+            ),
+            source='llm-fallback',
+        )
     envelope.update(
         {
             'autoRetryExhausted': True,

@@ -143,14 +143,9 @@ def test_make_unit_entrypoint_keeps_the_timeout_plugin_active(tmp_path):
         '-c', os.path.join(_ROOT, 'pyproject.toml'),
         '--confcutdir', str(tmp_path), '-p', 'no:cacheprovider',
     ])
-    # An enclosing make (CI's `make test-unit SHARD=k/n`) exports its
-    # command-line variables (MAKEFLAGS and the recipe environment); this gate
-    # run is its own and runs every collected test.
-    environment = {key: value for key, value in os.environ.items()
-                   if key not in {'MAKEFLAGS', 'MFLAGS', 'MAKELEVEL'}}
     completed = subprocess.run(
-        ['make', '--no-print-directory', 'test-unit', 'JOBS=0', 'SHARD=', f'PYTEST={command}'],
-        cwd=_ROOT, capture_output=True, text=True, timeout=20, env=environment,
+        ['make', '--no-print-directory', 'test-unit', 'JOBS=0', f'PYTEST={command}'],
+        cwd=_ROOT, capture_output=True, text=True, timeout=20,
     )
     assert completed.returncode != 0
     assert 'Timeout' in completed.stdout and '1 failed' in completed.stdout, (

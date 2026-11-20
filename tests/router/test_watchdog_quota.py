@@ -328,10 +328,155 @@ def test_only_a_watchdog_turn_dispatches_inside_the_appid_avoidance(world, monke
     opened, _closed = _episode(world.owner)
     _report(world, opened)
     seen = []
-    monkeypatch.setattr(_stream, 'dispatch_stream', lambda *a, **kw: seen.append(throttled_appids()))
+    def dispatch(*args, **kwargs):
+        seen.append(throttled_appids())
+        return {'role': 'assistant', 'content': 'ok'}, 'stop', {}
+
+    monkeypatch.setattr(_stream, 'dispatch_stream', dispatch)
     watchdog_turn = {'id': 't-watchdog', '_userId': world.owner,
                      'config': {'projectPath': world.watchdog['projectPath']}}
     worker_turn = {'id': 't-worker', '_userId': world.owner, 'config': {'projectPath': str(tmp_path)}}
-    _stream._watchdog_aware_dispatch_stream(watchdog_turn, {})
-    _stream._watchdog_aware_dispatch_stream(worker_turn, {})
+    for task in (watchdog_turn, worker_turn):
+        result = _stream._watchdog_aware_dispatch_stream(task, {})
+        assert result.message == {'role': 'assistant', 'content': 'ok'}
     assert seen == [frozenset({('example-corp', CREDENTIAL)}), None]
+
+
+# ── Settlement: alerts close on evidence when no holder's episode can close them ──
+
+
+def _lane_alert(world, *, provider='provider-a', credential='credential-a', model='alpha-wire-a',
+                key_tail='aaaa', reporter='shard-live', opened_at_ms=1_794_200_000_000):
+    """Open one producer alert as a live process's watch would, and return its signal."""
+    lane = hashlib.sha256(json.dumps([provider, credential, model]).encode()).hexdigest()[:16]
+    return _report(world, {'owner': world.owner, 'providerId': provider, 'lane': lane, 'credential': credential,
+                           'keyTail': key_tail, 'model': model, 'openedAtMs': opened_at_ms,
+                           'detail': 'rejected and held', 'reporter': reporter})
+
+
+def _routing(document_change=None):
+    """The owner's model routing: provider-a's credential-a serves alpha-wire-a."""
+    import copy
+    from lib.model_routing import InMemoryModelRoutingRepository, OwnerBoundary
+    from tests.model_routing.test_model_routing_contract import _full_document
+    from tests.support.model_registration import complete_registration
+    document = complete_registration(_full_document())
+    if document_change is not None:
+        document_change(document)
+    repository = InMemoryModelRoutingRepository()
+    owners = {}
+
+    class _PerOwner:
+        def get(self, boundary):
+            if boundary.owner_user_id not in owners:
+                repository.compare_and_swap(boundary, copy.deepcopy(document), expected_revision=0)
+                owners[boundary.owner_user_id] = True
+            return repository.get(boundary)
+    assert OwnerBoundary.create(1).owner_user_id == 1
+    return _PerOwner()
+
+
+def _unroutable(repository, *, key_enabled=True):
+    from functools import partial
+    from lib.router.watchdog.quota import lane_unroutable
+    return partial(lane_unroutable, repository=repository, key_enabled=lambda *_a, **_kw: key_enabled)
+
+
+def test_an_alert_whose_lane_is_still_routable_and_held_stays_open(world):
+    """Genuinely ongoing: a live holder and a routable lane are no evidence to close anything."""
+    from lib.router.watchdog.quota import open_quota_appids, settle_quota_alerts
+    from lib.router.watchdog.signals import FaultSignals
+    signal = _lane_alert(world)
+    assert settle_quota_alerts(world.owner, unroutable=_unroutable(_routing())) == []
+    assert FaultSignals(world.owner).get(signal['signalId'])['state'] == 'open'
+    assert open_quota_appids(world.owner) == frozenset({('provider-a', 'credential-a')})
+
+
+@pytest.mark.parametrize('reserve', [
+    pytest.param(lambda d: d['credentials'][0].update(enabled=False), id='credential-disabled'),
+    pytest.param(lambda d: d['credentials'][0]['authorization'].update(connection_ids=[]), id='reserved-off-connection'),
+    pytest.param(lambda d: d['credentials'][0]['authorization']['models'][0].update(
+        excluded_wire_model_ids=['alpha-wire-a']), id='wire-model-excluded'),
+])
+def test_a_reserved_key_supersedes_its_alert_by_policy(world, reserve):
+    from lib.router.watchdog.quota import open_quota_appids, settle_quota_alerts
+    from lib.router.watchdog.signals import FaultSignals
+    signal = _lane_alert(world)
+    assert settle_quota_alerts(world.owner, unroutable=_unroutable(_routing(reserve))) == [signal['signalId']]
+    resolved = FaultSignals(world.owner).get(signal['signalId'])
+    assert resolved['state'] == 'resolved'
+    assert resolved['resolution'].startswith('Superseded by policy') and 'no probe' in resolved['resolution']
+    assert open_quota_appids(world.owner) == frozenset()
+    assert len(world.woken) == 1   # closing wakes nobody
+    # The holder's own later close finds nothing left to close; a new episode is a new alert.
+    assert _lane_alert(world, opened_at_ms=1_794_200_900_000)['signalId'] != signal['signalId']
+
+
+def test_a_key_the_dispatcher_no_longer_admits_supersedes_its_alert(world):
+    """…5409 out of credit: a billing stop disables the key for the day, so nothing routes there."""
+    from lib.router.watchdog.quota import settle_quota_alerts
+    from lib.router.watchdog.signals import FaultSignals
+    signal = _lane_alert(world)
+    settle_quota_alerts(world.owner, unroutable=_unroutable(_routing(), key_enabled=False))
+    resolved = FaultSignals(world.owner).get(signal['signalId'])
+    assert resolved['state'] == 'resolved' and 'no longer admits this key' in resolved['resolution']
+
+
+def test_an_unreadable_routing_authority_or_unknown_credential_proves_nothing(world):
+    from lib.router.watchdog.quota import lane_unroutable
+    alert = {'providerId': 'provider-a', 'credential': 'configured-pool-key', 'model': 'alpha-wire-a'}
+    always = lambda *_a, **_kw: True  # noqa: E731
+
+    class _Down:
+        def get(self, boundary):
+            raise RuntimeError('authority unavailable')
+    assert lane_unroutable(world.owner, alert, repository=_routing(), key_enabled=always) is None
+    assert lane_unroutable(world.owner, {**alert, 'credential': 'credential-a'}, repository=_Down(),
+                           key_enabled=always) is None
+
+
+def test_a_dead_holder_alert_closes_on_settlement_without_another_report(world):
+    from lib.process_owner import process_owner
+    from lib.router.watchdog.quota import settle_quota_alerts
+    from lib.router.watchdog.signals import FaultSignals
+    from lib.storage.generated_worker_job_contract import WORKER_PROCESS_OWNER_PREFIX
+    process = process_owner()
+    if process is None:
+        pytest.skip('no process identity on this host')
+    dead = (WORKER_PROCESS_OWNER_PREFIX + ':'.join(str(process[field]) for field in
+                                                   ('boot', 'pid_namespace', 'pid'))
+            + f':{int(process["started"]) + 1}:' + 'f' * 32)
+    signal = _lane_alert(world, reporter=dead)
+    assert settle_quota_alerts(world.owner, unroutable=_unroutable(_routing())) == [signal['signalId']]
+    resolved = FaultSignals(world.owner).get(signal['signalId'])
+    assert resolved['state'] == 'resolved' and 'has exited' in resolved['resolution']
+
+
+def test_quota_signals_no_open_alert_holds_are_superseded(world):
+    """The live shape: signals from before the per-lane alert record, whose processes exited at a restart."""
+    from lib.router.watchdog.quota import QUOTA_ERROR_KIND, settle_quota_alerts
+    from lib.router.watchdog.signals import TURN_FAULT_KINDS, FaultSignals
+    signals = FaultSignals(world.owner)
+    legacy = [signals.record('quota', ['example-corp', f'lane-{n}', 1_794_960_000_000 + n],
+                             {'role': 'quota', 'keyTail': '5409', 'model': 'kimi-k3.1-pro'},
+                             {'kind': QUOTA_ERROR_KIND, 'detail': 'legacy', 'hint': ''})[0]
+              for n in range(3)]
+    held = _lane_alert(world)
+    other = signals.record('turn', ['c', 't', 'a'], {'role': 'worker', 'conversationId': 'c'},
+                           {'kind': sorted(TURN_FAULT_KINDS)[0], 'detail': '', 'hint': ''})[0]
+    resolved = settle_quota_alerts(world.owner, unroutable=_unroutable(_routing()))
+    assert sorted(resolved) == sorted(signal['signalId'] for signal in legacy)
+    for signal in legacy:
+        after = signals.get(signal['signalId'])
+        assert after['state'] == 'resolved' and after['resolution'].startswith('Superseded')
+    assert signals.get(held['signalId'])['state'] == 'open'
+    assert signals.get(other['signalId'])['state'] == 'open'
+
+
+def test_settlement_never_raises(world):
+    from lib.router.watchdog.quota import settle_quota_alerts
+    _lane_alert(world)
+
+    def broken(*_a, **_kw):
+        raise RuntimeError('boom')
+    assert settle_quota_alerts(world.owner, unroutable=broken) == []

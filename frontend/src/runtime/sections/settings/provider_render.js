@@ -615,6 +615,16 @@ function _onV2KeyToggle(providerId, credentialId, enabled) {
   var item = context ? context.credentials.find(function(candidate) {
     return String(candidate.row.credential_id || '') === String(credentialId);
   }) : null;
+  var saved = typeof _stgModelRoutingSavedJson === 'string' && _stgModelRoutingSavedJson
+    ? JSON.parse(_stgModelRoutingSavedJson) : null;
+  var savedCredential = saved && (saved.credentials || []).find(function(row) {
+    return row.credential_id === credentialId;
+  });
+  if (item && savedCredential && !savedCredential.enabled) {
+    _setModelRoutingCollectionField('credentials', item.index, 'enabled', !!enabled, 'boolean');
+    if (enabled) showToast('已重新启用 — 保存后生效。');
+    return;
+  }
   if (item && !item.row.enabled && enabled) {
     // Durable-disabled credential: a runtime override cannot resurrect it
     // (the dispatcher never mints a slot for a disabled credential), so
@@ -1196,6 +1206,7 @@ function _getProviderMutations() {
   if (!_providerMutations) {
     _providerMutations = createProviderMutations({
       document: function() { return _stgModelRouting; },
+      canonical: function() { return Api.modelRouting.get(); },
       mutate: runModelRoutingMutation,
       save: function(providerId, bundle, revision) { return Api.modelRouting.saveProvider(providerId, bundle, revision); },
       remove: function(providerId, revision) { return Api.modelRouting.deleteProvider(providerId, revision); },
@@ -1238,7 +1249,7 @@ async function _saveNewProviderCredential(context, apiKey, render) {
     if (!context) throw new Error(t('settings.providerSelectionChanged'));
     var result = await _getProviderMutations().addCredential(
       context.provider.provider_id, context.access.provider_access_id, apiKey);
-    _notifyProviderMutation(result, '已添加凭证。', render === false ? null : _renderProvidersTab);
+    _notifyProviderMutation(result, '已添加凭证（未启用）。请启用，然后保存。', render === false ? null : _renderProvidersTab);
     return result;
   } catch (error) {
     showAlert('添加凭证失败：' + String(error && error.message || error));

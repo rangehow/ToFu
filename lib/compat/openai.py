@@ -19,11 +19,13 @@ import time
 from typing import AsyncGenerator
 
 from lib.compat._common import (
+    CompatModelAttributionUnknown,
     CompatTerminalFailure,
     apply_common_cfg,
     apply_thinking_cfg,
     apply_tools_and_personal_defaults,
     require_deliverable_terminal,
+    responding_models,
     short_id,
 )
 from lib.compat.openai_projection import (
@@ -149,18 +151,35 @@ def _assistant_message(task: dict) -> dict:
     return msg
 
 
+def _model_attribution(task, requested_model, terminal_event=None):
+    """OpenAI ``model`` is the model used for the completion, not the request.
+
+    Returns the answering model and a ``tofu`` extension that keeps the
+    requested model beside every answering model when they differ. Raises
+    CompatModelAttributionUnknown when the ledger cannot name the model.
+    """
+    model, served = responding_models(task, requested_model, terminal_event)
+    if served == [requested_model]:
+        return model, None
+    return model, {'requested_model': requested_model, 'served_models': served}
+
+
 def build_openai_response(task: dict, model: str,
                             requested_id: str = '') -> dict:
-    """Turn a finished task into an OpenAI ``chat.completion`` body."""
+    """Turn a finished task into an OpenAI ``chat.completion`` body.
+
+    ``model`` is the requested model; the body reports the answering one.
+    """
     require_deliverable_terminal(task)
+    served_model, attribution = _model_attribution(task, model)
     finish = openai_finish_reason(
         terminal_finish_reason(task), aborted=bool(task.get('aborted')))
     usage = task.get('usage') or {}
-    return {
+    body = {
         'id': requested_id or short_id('chatcmpl-'),
         'object': 'chat.completion',
         'created': int(time.time()),
-        'model': model,
+        'model': served_model,
         'choices': [{
             'index': 0,
             'message': _assistant_message(task),
@@ -174,6 +193,9 @@ def build_openai_response(task: dict, model: str,
             'total_tokens': int(usage.get('total_tokens') or 0),
         },
     }
+    if attribution is not None:
+        body['tofu'] = attribution
+    return body
 
 
 # ── Streaming ──────────────────────────────────────────────────────
@@ -183,12 +205,15 @@ def _terminal_frames(task, model, completion_id, *, emitted_role, terminal_event
     event = terminal_event or {}
     try:
         require_deliverable_terminal(task, terminal_event)
-    except CompatTerminalFailure as exc:
+        model, attribution = _model_attribution(task, model, terminal_event)
+    except (CompatTerminalFailure, CompatModelAttributionUnknown) as exc:
+        cause = (exc.cause if isinstance(exc, CompatModelAttributionUnknown)
+                 else exc.verdict.cause)
         yield 'data: ' + json.dumps({
             'error': {
                 'message': str(exc),
                 'type': 'server_error',
-                'code': exc.verdict.cause,
+                'code': cause,
             },
         }, ensure_ascii=False) + '\n\n'
         yield 'data: [DONE]\n\n'
@@ -227,6 +252,8 @@ def _terminal_frames(task, model, completion_id, *, emitted_role, terminal_event
         finish_reason=openai_finish_reason(raw_finish, aborted=bool(task.get('aborted'))))
     if event.get('usage') or task.get('usage'):
         final['usage'] = event.get('usage') or task.get('usage')
+    if attribution is not None:
+        final['tofu'] = attribution
     yield f'data: {json.dumps(final, ensure_ascii=False)}\n\n'
     yield 'data: [DONE]\n\n'
     return
@@ -261,25 +288,14 @@ async def stream_openai_chunks(task, model: str, requested_id: str = '',
             for ev in new_events:
                 etype = ev.get('type', '')
                 if etype == 'delta':
-                    # Narrator-leak root fix (, step 3):
-                    #   a content delta is UNCLASSIFIABLE mid-stream (narration vs
-                    #   answer is only known at round close), and a wire client
-                    #   cannot retract bytes already sent. So we do NOT forward raw
-                    #   content deltas into the answer channel — the narration-free
-                    #   deliverable is emitted from the segment model at `done`.
-                    #   Thinking deltas DO stream live (reasoning_content), giving a
-                    #   real-time experience without polluting the answer. This
-                    #   retires the compat surface's dependence on DELTA_RESET.
-                    if not ev.get('thinking'):
-                        continue
-                    chunk = openai_completion_chunk(
-                        completion_id, model,
-                        created=int(time.time()))
-                    if not emitted_role:
-                        chunk['choices'][0]['delta']['role'] = 'assistant'
-                        emitted_role = True
-                    chunk['choices'][0]['delta']['reasoning_content'] = ev['thinking']
-                    yield f'data: {json.dumps(chunk, ensure_ascii=False)}\n\n'
+                    # Content is not classifiable as narration vs deliverable
+                    # until round close. Reasoning has no authoritative per-event
+                    # dispatch identity either: pool rescue emits model_fallback
+                    # AFTER streaming. Neither that event nor the final ledger
+                    # can attribute mixed/failed-attempt reasoning retroactively.
+                    # Withhold both rather than emit irretractable guessed bytes.
+                    # Only the verified terminal deliverable is projected below.
+                    continue
                 elif etype == 'done':
                     for frame in _terminal_frames(
                         task, model, completion_id, emitted_role=emitted_role, terminal_event=ev):
@@ -288,7 +304,7 @@ async def stream_openai_chunks(task, model: str, requested_id: str = '',
                 elif include_tofu_native:
                     chunk = {
                         'id': completion_id, 'object': 'chat.completion.chunk',
-                        'created': int(time.time()), 'model': model,
+                        'created': int(time.time()),
                         'choices': [{'index': 0, 'delta': {}, 'finish_reason': None}],
                         'tofu': ev,
                     }

@@ -45,16 +45,27 @@ Semantics:
   context window) — the same convergence the domain alias merge applies
   to survivor rows — so a transplanted offering never out-claims the
   official row it validates against.
+* **Optimistic concurrency** — the commit re-reads and recomputes after
+  every revision conflict instead of failing the sweep, and a pass that
+  changes nothing commits no revision at all. Every monitor used to CAS a
+  no-op document, which woke the sibling monitors into another no-op CAS
+  and logged 20 `aggregate changed concurrently` ERRORs in one window.
+  The "no routable connection" verdict is likewise reported once per
+  (access, recipe) instead of once per row per pass.
 """
 
 from __future__ import annotations
 
 import copy
+import hashlib
 import os
 import threading
 from typing import Any
 
 from lib.log import audit_log, get_logger
+
+from lib.model_routing.domain import ModelRoutingError
+from lib.provider.provider_headers import merge_header_layers
 
 logger = get_logger(__name__)
 
@@ -153,15 +164,66 @@ def _known_keys(document: dict, access_id: str) -> frozenset:
     return frozenset(keys)
 
 
-def _known_wires(document: dict, access_id: str) -> set[str]:
-    connection_ids = {
-        row.get('connection_id') for row in _access_connections(document, access_id)
-    }
+def _wire_face_key(wire: str, connection: dict, headers=None) -> tuple:
+    from lib.model_routing.migration import _protocol
+
+    return (wire, _norm_url(connection.get('base_url')),
+            _protocol(connection.get('protocol')),
+            tuple(sorted((name.lower() if name.isascii() else name, value)
+                         for name, value in merge_header_layers(
+                             connection.get('extra_headers') or {}, headers or {}).items())))
+
+
+def _probe_transport_key(wire: str, url: str, protocol: str, headers: dict) -> tuple:
+    # The synchronous HTTP transport collapses header names in insertion
+    # order. Digest every effective routing value, including unknown headers:
+    # an explicit credential-envelope header can route just like a face header.
+    return _wire_face_key(wire, {
+        'base_url': url, 'protocol': protocol,
+        'extra_headers': {
+            name: hashlib.sha256(str(value).encode('utf-8', 'surrogatepass')).hexdigest()
+            for name, value in headers.items()},
+    })
+
+
+def _known_wire_faces(document: dict, access_id: str) -> set[tuple]:
+    connections = {row.get('connection_id'): row
+                   for row in _access_connections(document, access_id)}
     return {
-        str(row.get('wire_model_id') or '').strip()
+        _wire_face_key(str(row['wire_model_id']).strip(),
+                       connections[row['connection_id']], row.get('extra_headers'))
         for row in document.get('deployments') or []
-        if isinstance(row, dict) and row.get('connection_id') in connection_ids
-    } - {''}
+        if isinstance(row, dict) and row.get('connection_id') in connections
+        and str(row.get('wire_model_id') or '').strip()
+    }
+
+
+def _missing_probe_recipes(document: dict, access: dict, template: dict) -> list[dict]:
+    from lib.llm_dispatch.provider_face import resolve_face
+
+    access_id = access['provider_access_id']
+    seen = _known_wire_faces(document, access_id)
+    base_url, protocol, faces, headers = _probe_plan(document, access, template)
+    provider = {'base_url': base_url, 'protocol': protocol, 'faces': faces,
+                'extra_headers': headers}
+    missing = []
+    for recipe in template['offering_recipes']:
+        wires = recipe.get('request_ids') or [recipe['model_id']]
+        missing_wires = []
+        for wire in wires:
+            resolution = resolve_face(provider, recipe, wire_id=wire)
+            if not resolution.ok:
+                continue
+            cell = _wire_face_key(wire, {
+                'base_url': resolution.base_url, 'protocol': resolution.protocol,
+                'extra_headers': resolution.extra_headers})
+            if cell not in seen:
+                missing_wires.append(wire)
+                seen.add(cell)
+        if missing_wires:
+            missing.append(recipe if missing_wires == wires else {
+                **recipe, 'request_ids': missing_wires})
+    return missing
 
 
 def _find_template(document: dict, access: dict,
@@ -269,55 +331,60 @@ def probe_cell_connection_headers(item: tuple, *, default_url: str,
 def _live_prober(*, base_url: str, protocol: str, faces: dict,
                  api_key: str, extra_headers: dict,
                  recipes: list[dict],
-                 default_face_headers: dict | None = None) -> dict[str, str]:
-    """Probe each recipe's wire pool; return model_id → verdict.
+                 default_face_headers: dict | None = None) -> dict[str | tuple, str]:
+    """Return recipe admission verdicts and exact per-cell serving evidence.
 
     ``extra_headers`` are the credential envelope's headers and ride every
     cell. Connection headers stay per face: a declared face's arrive in its
     cells' ``build_probe_work`` context, and ``default_face_headers`` reach
-    only cells sent to the default endpoint.
+    only cells sent to the default endpoint. Exact evidence requires the
+    final prepared values of all explicit headers; unobserved requests
+    can inform recipe admission but cannot pass a deployment.
     """
     from lib.provider.provider_probe import build_probe_work, probe_one_cell
 
     provider = {'base_url': base_url, 'protocol': protocol, 'faces': faces}
     models = [recipe_probe_entry(recipe) for recipe in recipes]
     work = build_probe_work(provider, models, [api_key])
-    by_root: dict[str, str] = {}
-
-    def _run(item):
-        _idx, key, root, wire, _caps, url, proto = item[:7]
-        # As in dispatch, credential headers take precedence over transport
-        # headers.
-        face_headers = probe_cell_connection_headers(
-            item, default_url=base_url,
-            default_face_headers=default_face_headers)
-        return root, probe_one_cell(
-            url, key, wire, {**face_headers, **extra_headers}, _PROBE_TIMEOUT,
-            protocol=proto)
+    verdicts: dict[str | tuple, str] = {}
 
     from lib.observability import InstrumentedThreadPoolExecutor
     with InstrumentedThreadPoolExecutor(max_workers=_PROBE_WORKERS,
             metric_pool='template-supply', thread_name_prefix='template-supply') as pool:
         futures = []
         for item in work:
+            _idx, key, root, wire, _caps, url, proto = item[:7]
+            face_headers = probe_cell_connection_headers(
+                item, default_url=base_url, default_face_headers=default_face_headers)
+            # As in dispatch, credential headers override face headers.
+            sent_headers = merge_header_layers(face_headers, extra_headers)
+            evidence = []
+
+            def observe(headers, evidence=evidence, root=root, wire=wire, url=url, proto=proto):
+                evidence.append((root, *_probe_transport_key(wire, url, proto, headers)))
             try:
-                futures.append((item[2], pool.submit(_run, item)))
+                future = pool.submit(probe_one_cell, url, key, wire, sent_headers,
+                                     _PROBE_TIMEOUT, protocol=proto,
+                                     on_prepared_headers=observe)
+                futures.append((root, evidence, future))
             except Exception:
                 # This cell never started. No serving evidence exists, but
                 # accepted sibling probes retain ownership and still finish.
-                by_root.setdefault(item[2], 'unknown')
-        for root, future in futures:
+                verdicts.setdefault(root, 'unknown')
+        for root, evidence, future in futures:
             try:
-                _root, (verdict, _detail) = future.result()
+                verdict, _detail = future.result()
             except Exception as diagnostic_error:
                 logger.debug('_live_prober failure handled: %s', type(diagnostic_error).__name__)
                 verdict = 'unknown'
-            previous = by_root.get(root)
+            if len(evidence) == 1 and verdicts.get(evidence[0]) != 'ok':
+                verdicts[evidence[0]] = verdict
+            previous = verdicts.get(root)
             if previous in _SERVED_VERDICTS:
                 continue
             if verdict in _SERVED_VERDICTS or previous is None:
-                by_root[root] = verdict
-    return by_root
+                verdicts[root] = verdict
+    return verdicts
 
 
 def _probe_plan(document: dict, access: dict,
@@ -365,10 +432,8 @@ def _probe_plan(document: dict, access: dict,
         faces[name] = {
             **face,
             'base_url': (matched or face).get('base_url'),
-            'extra_headers': {
-                **(matched.get('extra_headers') or {}),
-                **(face.get('extra_headers') or {}),
-            },
+            'extra_headers': merge_header_layers(matched.get('extra_headers') or {},
+                                                 face.get('extra_headers') or {}),
         }
 
     if primary is None:
@@ -383,7 +448,7 @@ def _probe_plan(document: dict, access: dict,
 
 
 def _supersede_renamed_supply(working: dict, access: dict, template: dict,
-                              stats: dict) -> bool:
+                              stats: dict, previous: dict | None = None) -> bool:
     """Retire offerings whose whole wire pool a renamed recipe now owns.
 
     A logical id is renamed by authoring the SAME gateway spellings under the
@@ -393,17 +458,20 @@ def _supersede_renamed_supply(working: dict, access: dict, template: dict,
     picker offers one gateway supply twice under two model identities, and
     both stay dispatchable.
 
-    Evidence is the wire pool, not a name guess: an offering is superseded
-    only when every wire it deploys on the matched access is authored by a
-    DIFFERENT recipe of that same template. Partial overlap is left alone
-    because it may be genuine shared capacity; the superseded offering keeps
-    every field and is marked ``stale`` — the existing "no longer supplied"
-    state the picker hides and dispatch rejects — so nothing is destroyed.
+    A replacement must have eligible exact recipe deployments on the affected
+    faces, and its recipe must author the old offering's entire wire/face pool.
+    A spelling, identity alias, or unrelated deployment is not replacement
+    supply. Plan against one snapshot; an offering being replaced cannot be
+    used as a replacement. Keep retired rows and their existing evidence.
     """
     from lib.model_catalog._creator_identity import merge_keys
+    from lib.llm_dispatch.provider_face import resolve_face
 
     access_id = access['provider_access_id']
-    authored: list[tuple[str, frozenset, set[str]]] = []
+    base_url, protocol, faces, headers = _probe_plan(working, access, template)
+    provider = {'base_url': base_url, 'protocol': protocol, 'faces': faces,
+                'extra_headers': headers}
+    authored: list[tuple[str, frozenset, set[tuple]]] = []
     for recipe in template.get('offering_recipes') or []:
         model_id = str(recipe.get('model_id') or '').strip()
         wires = {
@@ -411,56 +479,100 @@ def _supersede_renamed_supply(working: dict, access: dict, template: dict,
             for wire in (recipe.get('request_ids') or [model_id])
             if str(wire).strip()
         }
-        if model_id and wires:
-            authored.append((model_id, merge_keys(model_id), wires))
+        cells = set()
+        for wire in wires:
+            resolution = resolve_face(provider, recipe, wire_id=wire)
+            if resolution.ok:
+                cells.add(_wire_face_key(wire, {
+                    'base_url': resolution.base_url, 'protocol': resolution.protocol,
+                    'extra_headers': resolution.extra_headers}))
+        if model_id and cells:
+            authored.append((model_id, merge_keys(model_id), cells))
     if not authored:
         return False
 
-    connection_ids = {
-        row.get('connection_id')
-        for row in working.get('connections') or []
-        if isinstance(row, dict)
-        and row.get('provider_access_id') == access_id
-    }
-    wires_by_offering: dict[str, set[str]] = {}
+    connections = {row['connection_id']: row
+                   for row in _access_connections(working, access_id)}
+    wires_by_offering: dict[str, set[tuple]] = {}
     for deployment in working.get('deployments') or []:
         if not isinstance(deployment, dict):
             continue
-        if deployment.get('connection_id') not in connection_ids:
+        if deployment.get('connection_id') not in connections:
             continue
         wire = str(deployment.get('wire_model_id') or '').strip()
         if wire:
             wires_by_offering.setdefault(
-                deployment['offering_id'], set()).add(wire)
+                deployment['offering_id'], set()).add(_wire_face_key(
+                    wire, connections[deployment['connection_id']],
+                    deployment.get('extra_headers')))
+
+    active = [row for row in working.get('offerings') or []
+              if isinstance(row, dict) and row.get('provider_access_id') == access_id
+              and row.get('stale') is not True and row.get('enabled') is not False
+              and row.get('identity_state') == 'confirmed'
+              and wires_by_offering.get(row['offering_id'])]
+    return _retire_replaced_offerings(working, access_id, active, authored,
+                                      wires_by_offering, stats, previous)
+
+
+def _retire_replaced_offerings(working, access_id, active, authored,
+                                wires_by_offering, stats, previous) -> bool:
+    from lib.model_catalog._creator_identity import merge_keys
+    from lib.model_routing.domain import NativeModelSelection, ProviderOfferingRef
+    from lib.model_routing.routing import RouteCandidateCompiler
+
+    installed = {}
+    for row in active:
+        model_id = (row.get('model') or {}).get('model_id')
+        if model_id:
+            installed.setdefault(model_id, []).append(row)
+    compiler = None
+    eligible_faces = {}
+    replacements = {}
+    for model_id, rows in installed.items():
+        keys = merge_keys(model_id)
+        for offering in rows:
+            offering_id = offering['offering_id']
+            wires = wires_by_offering[offering_id]
+            if any(cells >= wires and keys & recipe_keys
+                   for _, recipe_keys, cells in authored):
+                continue  # its own recipe still authors this supply
+            for heir_id, heir_keys, cells in authored:
+                heirs = installed.get(heir_id, ())
+                if len(heirs) != 1 or keys & heir_keys or not cells >= wires:
+                    continue
+                heir = heirs[0]['offering_id']
+                if not wires_by_offering[heir] & cells:
+                    continue  # no exact installed recipe cell, even before eligibility
+                if compiler is None:
+                    from lib.model_routing.registration import prepare_registration_document
+
+                    # Check the admission view the CAS will store; a newly
+                    # transplanted draft or invalid retarget is no heir.
+                    admitted = (prepare_registration_document(working, previous=previous)
+                                if previous is not None else working)
+                    compiler = RouteCandidateCompiler(admitted, normalized=True)
+                    provider_id = next(row['provider_id'] for row in working['provider_accesses']
+                                       if row['provider_access_id'] == access_id)
+                if heir not in eligible_faces:
+                    selection = NativeModelSelection(None, ProviderOfferingRef(provider_id, heir))
+                    eligible_faces[heir] = {
+                        _wire_face_key(route.deployment['wire_model_id'], route.connection,
+                                       route.deployment.get('extra_headers'))
+                        for route in compiler.compile_deployments(selection)
+                    }
+                if {cell[1:] for cell in wires} <= {
+                        cell[1:] for cell in cells & eligible_faces[heir]}:
+                    replacements.setdefault(offering_id, []).append((heir, heir_id))
 
     changed = False
-    for offering in working.get('offerings') or []:
-        if not isinstance(offering, dict):
-            continue
-        if offering.get('provider_access_id') != access_id:
-            continue
-        if (offering.get('stale') is True or offering.get('enabled') is False
-                or offering.get('identity_state') != 'confirmed'):
-            continue
-        ref = offering.get('model') or {}
-        model_id = str(ref.get('model_id') or '').strip()
-        if not model_id:
-            continue
-        keys = merge_keys(model_id)
-        wires = wires_by_offering.get(offering['offering_id']) or set()
-        if not wires:
-            continue
-        if any(candidate[2] >= wires and keys & candidate[1]
-               for candidate in authored):
-            continue  # its own recipe still authors this supply
-        heir = next(
-            (candidate for candidate in authored
-             if candidate[2] >= wires and not (keys & candidate[1])),
-            None)
-        if heir is not None:
+    for offering in active:
+        heir_id = next((model_id for heir, model_id in replacements.get(offering['offering_id'], ())
+                        if heir not in replacements), None)
+        if heir_id is not None:
             offering['stale'] = True
             changed = True
-            entry = f"{access_id}:{model_id}->{heir[0]}"
+            entry = f"{access_id}:{offering['model']['model_id']}->{heir_id}"
             if entry not in stats['superseded']:
                 stats['superseded'].append(entry)
     return changed
@@ -626,6 +738,18 @@ def _backfill_request_faces(working: dict, access: dict, template: dict,
                  for wire in (recipe.get('request_ids') or [model_id])}
         wires |= pinned
         for wire in sorted(value for value in wires if value):
+            rows = rows_by_wire.get(wire) or []
+            # A wire belongs to one deployment per access, even when two
+            # selector faces share an endpoint. Never steal another offering.
+            if not rows and any(
+                    row.get('wire_model_id') == wire
+                    and row.get('connection_id') in connection_ids
+                    for row in working.get('deployments') or []):
+                conflict = f'{access_id}:{wire}'
+                conflicts = stats.setdefault('wire_conflicts', [])
+                if conflict not in conflicts:
+                    conflicts.append(conflict)
+                continue
             resolution = resolve_face(provider, recipe, wire_id=wire)
             if not resolution.ok or not resolution.base_url:
                 continue  # unresolved face — leave for migration to flag
@@ -645,7 +769,6 @@ def _backfill_request_faces(working: dict, access: dict, template: dict,
                 changed = _grant_face_connection(
                     credentials, connection_id, offering['model'], wire,
                     source_connection_ids) or changed
-            rows = rows_by_wire.get(wire) or []
             if any(row.get('connection_id') == connection_id for row in rows):
                 continue  # already converges on its face
             if rows:
@@ -709,9 +832,9 @@ def _converge_declared_face(row: dict, face_name: str, spec: dict) -> bool:
     if isinstance(declared_headers, dict) and declared_headers:
         headers = row.get('extra_headers')
         headers = dict(headers) if isinstance(headers, dict) else {}
-        if any(headers.get(key) != value
-               for key, value in declared_headers.items()):
-            row['extra_headers'] = {**headers, **declared_headers}
+        merged = merge_header_layers(headers, declared_headers)
+        if merged != headers:
+            row['extra_headers'] = merged
             changed = True
     declared_profile_name = spec.get('responses_profile')
     if (declared_profile_name
@@ -782,7 +905,8 @@ def _grant_face_connection(credentials: list[dict], connection_id: str,
 
 
 def _transplant(working: dict, access: dict, bundle: dict,
-                verdicts: dict, stats: dict) -> bool:
+                verdicts: dict, stats: dict, unroutable: list, *,
+                grantable_credentials: frozenset = frozenset()) -> bool:
     """Append the bundle's offerings/deployments for one access.
 
     Recomputes dedupe against the working copy so CAS retries stay
@@ -793,7 +917,8 @@ def _transplant(working: dict, access: dict, bundle: dict,
 
     access_id = access['provider_access_id']
     known = set(_known_keys(working, access_id))
-    wires = _known_wires(working, access_id)
+    wire_faces = _known_wire_faces(working, access_id)
+    wires = {cell[0] for cell in wire_faces}
     offering_ids = {
         row.get('offering_id')
         for row in working.get('offerings') or []
@@ -826,16 +951,27 @@ def _transplant(working: dict, access: dict, bundle: dict,
         offering_id = _stable_id('off', access_id, identity)
         if offering_id in offering_ids:
             continue
-        verdict = verdicts.get(model['model_id'] if model else pending, '')
+        root = model['model_id'] if model else pending
 
         deployments: list[dict] = []
+        unrouted_wire = False
         for dep in bundle['deployments']:
             if dep.get('offering_id') != source['offering_id']:
                 continue
             wire = str(dep.get('wire_model_id') or '').strip()
-            if not wire or wire in wires:
+            if not wire:
                 continue
             bundle_conn = bundle_connections.get(dep.get('connection_id')) or {}
+            if wire in wires:
+                # The domain permits only one deployment per access/wire,
+                # even when another selector would serve that spelling.
+                if _wire_face_key(wire, bundle_conn, dep.get('extra_headers')) not in wire_faces:
+                    conflicts = stats.setdefault('wire_conflicts', [])
+                    conflict = f'{access_id}:{wire}'
+                    if conflict not in conflicts:
+                        conflicts.append(conflict)
+                continue
+            unrouted_wire = True
             bundle_namespace = str(bundle_conn.get('gateway_namespace') or '')
             target = next(
                 (row for row in connections
@@ -864,6 +1000,13 @@ def _transplant(working: dict, access: dict, bundle: dict,
                 'dep', access_id, target['connection_id'], wire)
             if deployment_id in deployment_ids:
                 continue
+            # Match the complete explicit header set of the new Deployment
+            # (Connection then Deployment), without adding credential-only
+            # routing values to its declaration.
+            declared_headers = merge_header_layers(target.get('extra_headers') or {},
+                                                   dep.get('extra_headers') or {})
+            cell_verdict = verdicts.get((root, *_probe_transport_key(
+                wire, target.get('base_url'), target.get('protocol'), declared_headers)))
             deployments.append({
                 **copy.deepcopy(dep),
                 'deployment_id': deployment_id,
@@ -872,12 +1015,11 @@ def _transplant(working: dict, access: dict, bundle: dict,
                 'wire_model_id': wire,
                 # Only a measured successful inference is passed evidence.
                 # Diagnostics do not control route enablement.
-                'probe_status': 'passed' if verdict == 'ok' else 'unprobed',
+                'probe_status': 'passed' if cell_verdict == 'ok' else 'unprobed',
             })
         if not deployments:
-            logger.warning(
-                'template supply: %s has no routable connection for %s — skipped',
-                access_id, identity)
+            if unrouted_wire:
+                unroutable.append((access_id, identity))
             continue
 
         offering = {
@@ -890,6 +1032,10 @@ def _transplant(working: dict, access: dict, bundle: dict,
         offering_ids.add(offering_id)
         deployment_ids.update(row['deployment_id'] for row in deployments)
         wires.update(row['wire_model_id'] for row in deployments)
+        wire_faces.update(_wire_face_key(
+            row['wire_model_id'], next(connection for connection in connections
+                                      if connection['connection_id'] == row['connection_id']),
+            row.get('extra_headers')) for row in deployments)
         known.update(identity_keys)
         appended = True
         stats['added_offerings'] += 1
@@ -927,13 +1073,35 @@ def _transplant(working: dict, access: dict, bundle: dict,
             working['creators'].append(copy.deepcopy(creator))
         ref = {'creator_id': model['creator_id'], 'model_id': model['model_id']}
         for credential in working.get('credentials') or []:
-            if credential.get('provider_access_id') != access_id:
+            if (credential.get('provider_access_id') != access_id
+                    or credential.get('credential_id') not in grantable_credentials):
                 continue
             authorized = credential.setdefault('authorization', {}).setdefault(
                 'models', [])
             if not any(all(grant[key] == value for key, value in ref.items()) for grant in authorized):
                 authorized.append(dict(ref))
     return appended
+
+
+_unroutable_reported: dict[str, tuple[str, ...]] = {}
+
+
+def _log_unroutable(identities: list[str]) -> None:
+    """Warn once per (access, identity set) change, not once per row per pass.
+
+    An unroutable pending recipe is re-encountered on every pass while the
+    template names a face the access has no Connection for, so per-row logging
+    flooded the ERROR/WARNING streams (188 lines in one 49-minute window).
+    """
+    for access_id, identity in identities:
+        with _schedule_lock:
+            key = f'{access_id}:{identity}'
+            if key in _unroutable_reported:
+                continue
+            _unroutable_reported[key] = ()
+        logger.warning(
+            'template supply: %s has no routable connection for %s — skipped',
+            access_id, identity)
 
 
 def sync_template_supply(*, boundary=None, repository=None,
@@ -978,6 +1146,7 @@ def sync_template_supply(*, boundary=None, repository=None,
         'repaired_connections': 0,
         'superseded_offerings': 0,
         'superseded': [],
+        'wire_conflicts': [],
         'accesses': {},
     }
     plans: list[tuple[dict, dict, dict]] = []
@@ -996,13 +1165,7 @@ def sync_template_supply(*, boundary=None, repository=None,
         matched.append((access, template))
         if backfill_only:
             continue
-        known = _known_keys(document, access['provider_access_id'])
-        wires = _known_wires(document, access['provider_access_id'])
-        missing = [
-            recipe for recipe in template['offering_recipes']
-            if not (_recipe_keys(recipe) & known)
-            and not (set(recipe.get('request_ids') or ()) & wires)
-        ]
+        missing = _missing_probe_recipes(document, access, template)
         if not missing:
             continue
         try:
@@ -1049,47 +1212,65 @@ def sync_template_supply(*, boundary=None, repository=None,
             continue
         plans.append((access, bundle, verdicts))
 
-    if not plans:
-        preview = copy.deepcopy(document)
-        probe_stats = {'superseded': [], 'added_connections': 0,
-                       'added_deployments': 0, 'repaired_deployments': 0,
-                       'repaired_connections': 0, 'accesses': {}}
-        changed = False
+    planned_credentials = {
+        row['credential_id']: row for row in document.get('credentials', ())
+        if plans and row.get('credential_id')}
+
+    def _mutate(previous: dict, attempt_stats: dict, attempt_unroutable: list) -> dict:
+        # A stale probe plan can add supply, but cannot grant permissions to
+        # new or changed credentials (including a concurrent model revocation).
+        grantable_credentials = frozenset(
+            row['credential_id'] for row in previous.get('credentials', ())
+            if planned_credentials.get(row.get('credential_id')) == row)
+        working = copy.deepcopy(previous)
+        current_accesses = {row['provider_access_id']: row
+                            for row in working['provider_accesses']}
         for access, template in matched:
-            changed = (_supersede_renamed_supply(preview, access, template,
-                                                 probe_stats) or changed)
-            changed = (_backfill_request_faces(preview, access, template,
-                                               probe_stats) or changed)
-        if not changed:
+            current = current_accesses.get(access['provider_access_id'])
+            if current is not None:
+                _backfill_request_faces(working, current, template, attempt_stats)
+        for access, bundle, verdicts in plans:
+            current = current_accesses.get(access['provider_access_id'])
+            if current is not None:
+                _transplant(working, current, bundle, verdicts, attempt_stats,
+                            attempt_unroutable, grantable_credentials=grantable_credentials)
+        # Backfill may move the heir onto a disabled or ungranted face.
+        # Decide retirement last against what this CAS would publish.
+        for access, template in matched:
+            current = current_accesses.get(access['provider_access_id'])
+            if current is not None:
+                _supersede_renamed_supply(working, current, template, attempt_stats, previous)
+        return working
+
+    if not plans:
+        preview_stats = copy.deepcopy(stats)
+        if _mutate(document, preview_stats, []) == document:
+            stats['wire_conflicts'] = preview_stats['wire_conflicts']
             stats['revision'] = repository.get(boundary).revision
             return stats
 
-    def _mutate(working: dict):
-        retired = False
-        backfilled = False
-        for access, template in matched:
-            retired = (_supersede_renamed_supply(working, access, template,
-                                                 stats) or retired)
-            backfilled = (_backfill_request_faces(working, access, template,
-                                                  stats) or backfilled)
-        appended = False
-        for access, bundle, verdicts in plans:
-            current = next(
-                (row for row in working.get('provider_accesses') or []
-                 if row.get('provider_access_id')
-                 == access['provider_access_id']),
-                None,
-            )
-            if current is None:
+    # Optimistic concurrency: every conflicting writer moved the aggregate,
+    # so re-read and recompute instead of failing the sweep. An empty pass
+    # must NOT commit — a no-op revision used to wake every sibling monitor,
+    # which committed another, producing an ERROR storm of CAS conflicts.
+    while True:
+        authority = repository.get(boundary)
+        attempt_stats = copy.deepcopy(stats)
+        attempt_unroutable = []
+        working = _mutate(authority.document, attempt_stats, attempt_unroutable)
+        if working != authority.document:
+            try:
+                authority = repository.compare_and_swap(
+                    boundary, working, expected_revision=authority.revision)
+            except ModelRoutingError as exc:
+                if getattr(exc, 'kind', '') != 'model_routing_revision_conflict':
+                    raise
                 continue
-            appended = (
-                _transplant(working, current, bundle, verdicts, stats)
-                or appended)
-        return working if (appended or retired or backfilled) else None
-
-    authority = repository.mutate(boundary, _mutate)
+        stats, unroutable = attempt_stats, attempt_unroutable
+        break
     stats['superseded_offerings'] = len(stats['superseded'])
     stats['revision'] = authority.revision
+    _log_unroutable(unroutable)
     logger.info('template supply sync: %s', stats)
     audit_log('provider_template_supply_synced',
               accesses={key: sorted(value)
@@ -1100,6 +1281,7 @@ def sync_template_supply(*, boundary=None, repository=None,
               added_connections=stats['added_connections'],
               repaired_connections=stats['repaired_connections'],
               superseded_offerings=stats['superseded_offerings'],
+              wire_conflicts=stats['wire_conflicts'],
               owner_user_id=boundary.owner_user_id,
               model_routing_revision=authority.revision)
     try:

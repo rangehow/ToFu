@@ -399,6 +399,10 @@ repository boundary; it is never included in the public template or bundle.
    boundary. Empty transport/model grants and `excluded_wire_model_ids` are
    never widened by backfill. Alternative rejected: periodically granting
    every face cannot distinguish initialization from explicit revocation.
+   Provider PATCH records explicit model and wire grant changes in retained
+   revocation history, keyed by credential and model identity. Provider DELETE
+   leaves that history intact. History comes from the prior owner authority,
+   not the incoming document; deleting a credential is not a model denial.
 
    Supply probes merge per-cell face headers with credential-envelope headers,
    rather than choosing one dictionary. Credential material wins collisions,

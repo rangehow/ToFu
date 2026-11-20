@@ -55,6 +55,7 @@ import time
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from lib.git_runtime import GIT_STALL_SECONDS  # noqa: E402 - after the path setup above
 from lib.project_mod.checkout_landing import (  # noqa: E402 - after the path setup above
     IndexBusy, LandingError, Refused, Replan as _Replan, git as _git, git_paths as _git_paths,
     operations_in_progress as _operations_in_progress, plan as _plan, publish as _publish_plan,
@@ -212,16 +213,23 @@ def _open_holders(path: Path) -> list[str] | None:
     return holders
 
 
-def _busy_lock(lock_path: Path) -> Refused | None:
-    """Refusal for an existing index.lock, with the evidence to tell busy from stale.
+# A live index.lock holder is another publication in this checkout (another
+# landing). Its critical section is delta-sized, so wait for it under the
+# shared Git liveness window instead of failing the caller; a lock with no live
+# holder is stale and still refuses with the manual-removal advice.
+PUBLISH_LOCK_WAIT_SECONDS = GIT_STALL_SECONDS
 
-    None: the lock was released while it was examined, so publication can be
-    planned again at once.
+
+def _busy_lock(lock_path: Path) -> tuple[Refused | None, bool]:
+    """``(refusal, live_holder)`` for an existing index.lock.
+
+    ``(None, False)``: the lock was released while it was examined, so
+    publication can be planned again at once.
     """
     try:
         info = lock_path.stat()
     except FileNotFoundError:
-        return None
+        return None, False
     age = time.time() - info.st_mtime
     holders = _open_holders(lock_path)
     if holders == []:
@@ -230,29 +238,37 @@ def _busy_lock(lock_path: Path) -> Refused | None:
         try:
             again = lock_path.stat()
         except FileNotFoundError:
-            return None
+            return None, False
         if (again.st_ino, again.st_mtime_ns) != (info.st_ino, info.st_mtime_ns):
-            return None
+            return None, False
     if holders is None or holders:
         owner = f'process {", ".join(holders)}' if holders else 'another Git process'
         return Refused(f'{lock_path} is held by {owner}: Git is busy in this checkout',
-                       advice='Rerun when it finishes.')
+                       advice='Rerun when it finishes.'), True
     return Refused(
         f'{lock_path} exists ({age:.0f} s old) but no process of this user holds it open; '
         'a Git process probably exited while holding it',
         advice='Confirm no Git command is running in this checkout, remove that file '
-               '(Git requires the same manual step), and rerun.')
-
+               '(Git requires the same manual step), and rerun.'), False
 
 
 def _publish(top: Path, branch_ref: str, head: str, commit: str, steps, reflog: str) -> None:
     try:
         _publish_plan(top, branch_ref, head, commit, steps, reflog)
     except IndexBusy as busy:
-        refusal = _busy_lock(busy.lock_path)
+        refusal, live_holder = _busy_lock(busy.lock_path)
         if refusal is None:
             raise _Replan() from None
-        raise refusal from None
+        if not live_holder:
+            raise refusal from None
+        deadline = time.monotonic() + PUBLISH_LOCK_WAIT_SECONDS
+        while True:
+            if not busy.lock_path.exists():
+                raise _Replan() from None
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise refusal from None
+            time.sleep(min(0.05, remaining))
 
 
 def _cleanup(top: Path, source_ref: str, tip: str) -> list[str]:

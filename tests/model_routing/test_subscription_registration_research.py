@@ -228,3 +228,56 @@ def test_codex_catalog_import_uses_exact_registration_or_defers_to_research(monk
         assert doc['models'] == []
         assert doc['offerings'][0]['identity_state'] == 'pending_identity'
         assert research._pending_supply_models(doc, provider_id='oauth_codex')[0]['context_window'] is None
+
+
+@pytest.mark.parametrize(('model_id', 'prices'), [
+    ('gpt-6.2-astra', (8, 0.4, 40)),
+    ('gpt-6.2-sol', (2, 0.1, 10)),
+])
+def test_gpt62_official_facts_and_codex_subscription_admission(monkeypatch, model_id, prices):
+    from lib.oauth import codex_catalog, outbound
+    from lib.oauth import codex  # Install refresh hooks.
+    from lib.provider.provider_template_recipes import compile_provider_template_bundle
+    assert codex is not None
+    bundle = compile_provider_template_bundle('openai', selected_model_ids=[model_id])
+    doc = empty_document()
+    doc['creators'], doc['models'] = bundle['creators'], bundle['models']
+    model = public_projection(doc)['models'][0]
+    assert model['release_date'] == '2026-11-17'
+    assert model['context_window'] == 1050000
+    assert {'text', 'vision', 'thinking'} <= set(model['capabilities'])
+    price = model['official_pricing']
+    assert (price['input'], price['cache_read'], price['output']) == prices
+    reason = model['inference_profile']['reasoning']
+    assert reason['effort_knowledge'] == 'undocumented'
+    assert reason['can_disable'] is False
+    assert 'supported_efforts' not in reason and 'default_effort' not in reason
+    assert research.registration_missing_fields(model) == []
+
+    supply_context = 500000 if model_id == 'gpt-6.2-sol' else 272000
+    efforts = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']
+    rows = codex_catalog._normalise_models({'models': [{
+        'slug': model_id, 'visibility': 'list',
+        'input_modalities': ['text', 'image', 'audio'],
+        'context_window': supply_context,
+        'default_reasoning_level': 'low',
+        'supported_reasoning_levels': [{'effort': effort} for effort in efforts],
+    }]})
+    monkeypatch.setattr(codex_catalog, 'cached_codex_provider_models', lambda: codex_catalog._provider_models(rows))
+    repo, owner = InMemoryModelRoutingRepository(), OwnerBoundary.create(493)
+    entry = outbound._managed_oauth_entry('codex', plan_type='test')
+    assert outbound._upsert_oauth_provider(entry, owner_user_id=owner.owner_user_id,
+                                         tenant_id=None, repository=repo)
+    doc = repo.get(owner).document
+    assert doc['models'][0]['registration_state'] == 'ready'
+    candidates = compile_candidates(doc, NativeModelSelection(ModelRef('openai', model_id), None, ''))
+    assert candidates and not candidates[0].deployment.get('registration_issues')
+    offered = candidates[0].offering
+    assert offered['context_window'] == supply_context
+    assert offered['inference_profile']['reasoning']['supported_efforts'] == efforts
+    assert offered['inference_profile']['reasoning']['default_effort'] == 'low'
+    assert 'audio' not in offered['capabilities']
+    projected = public_projection(doc)['models'][0]
+    assert projected['context_window'] == 1050000
+    assert projected['inference_profile']['reasoning']['effort_knowledge'] == 'undocumented'
+    assert 'default_effort' not in projected['inference_profile']['reasoning']

@@ -1467,6 +1467,174 @@ mod tests {
     }
 
     #[test]
+    fn selected_stream_blocks_have_counted_physical_adjacency_and_retirement_fallback() {
+        use crate::block::{count_read_io_for_test, PayloadByteSource};
+        use crate::vfs::{DeterministicVfs, Vfs};
+        use std::{path::Path, sync::Arc, time::Duration};
+
+        let vfs = Arc::new(DeterministicVfs::new(None));
+        let root = Path::new("/stream-adjacency");
+        vfs.create_dir(root).unwrap();
+        let mut authority =
+            crate::authority::AuthorityDatabase::initialize_with_vfs(root, vfs.clone()).unwrap();
+        let key = StreamKey::new(7, 11, "task_event", b"physical-adjacency").unwrap();
+        // Separate appends give each position its own real stream block; no
+        // hash search, large payloads, or assumed logical-to-physical order.
+        let events = (1..=4).map(|n| event(n, 32 + n)).collect::<Vec<_>>();
+        let mut ids = Vec::new();
+        for (index, event) in events.iter().enumerate() {
+            let sequence = index as u64 + 1;
+            let mut tx = authority.begin(7, 11).unwrap();
+            authority
+                .stream_append(&mut tx, key.clone(), sequence, vec![event.clone()])
+                .unwrap();
+            authority.commit(tx).unwrap();
+            ids.push(BlockId::for_payload(
+                &encode_segment(&key, sequence, std::slice::from_ref(event)).unwrap(),
+            ));
+        }
+        let blocks = authority.writer_engine().unwrap().block_store_shared();
+        blocks
+            .flush_pending_references(&ids.iter().copied().collect())
+            .unwrap();
+        let dead = blocks.put_loose(b"unreferenced pack member").unwrap();
+        let mut victims = ids.clone();
+        victims.push(dead);
+        let packed = authority
+            .engine_mut_for_test()
+            .compact_payload_blocks(&victims)
+            .unwrap();
+        blocks.set_cache_capacity_bytes(0).unwrap();
+        blocks.set_segment_index_cache_bytes(0).unwrap();
+        assert!(blocks.publish_first_catalog_locations(|| Ok(())).unwrap());
+        let segments = blocks.payload_segment_store().unwrap();
+        let mut physical = Vec::new();
+        for (index, &id) in ids.iter().enumerate() {
+            let sequence = index as u64 + 1;
+            let source = blocks.locate_for_range_reads(id).unwrap().unwrap();
+            let PayloadByteSource::Segment {
+                segment_id,
+                payload_offset,
+            } = source
+            else {
+                panic!("selected stream block {sequence} is not packed");
+            };
+            assert_eq!(segment_id, packed.segment_id);
+            let bytes = authority.writer_engine().unwrap().read_block(id).unwrap();
+            assert_eq!(
+                decode_segment(&bytes, &key, sequence).unwrap(),
+                [events[index].clone()]
+            );
+            physical.push((payload_offset, sequence, source, bytes));
+        }
+        physical.sort_by_key(|entry| entry.0);
+        // With four stream blocks and one unrelated block, there must be an
+        // adjacent pair. The extreme stream blocks also have a real gap.
+        let [left, right] = physical
+            .windows(2)
+            .find(|pair| pair[0].0 + pair[0].3.len() as u64 == pair[1].0)
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        let first = physical.first().unwrap();
+        let last = physical.last().unwrap();
+        assert!(first.0 + (first.3.len() as u64) < last.0);
+        let adjacent = BTreeSet::from([left.1, right.1]);
+        let gapped = BTreeSet::from([first.1, last.1]);
+        let expected = |positions: &BTreeSet<u64>| {
+            positions
+                .iter()
+                .map(|&n| (n, events[n as usize - 1].clone()))
+                .collect::<BTreeMap<_, _>>()
+        };
+        let read_positions = |authority: &crate::authority::AuthorityDatabase,
+                              positions: &BTreeSet<u64>| {
+            let mut tx = authority.begin(7, 11).unwrap();
+            authority
+                .stream_read_positions_in_transaction(&mut tx, &key, positions)
+                .unwrap()
+        };
+        // Warm the separate entity directory so counted point reads isolate
+        // the stream blocks plus their pack routing, rather than page setup.
+        assert_eq!(read_positions(&authority, &adjacent), expected(&adjacent));
+        assert_eq!(read_positions(&authority, &gapped), expected(&gapped));
+        for (positions, runs) in [(&adjacent, 1), (&gapped, 2)] {
+            segments.clear_read_handles_for_test();
+            let (selected, io) =
+                count_read_io_for_test(&vfs, || read_positions(&authority, positions));
+            assert_eq!(selected, expected(positions));
+            assert_eq!(
+                io,
+                (1, 4),
+                "one shared open, two index entries and two payload reads"
+            );
+            eprintln!("stream adjacency: sources=1 selected=2 runs={runs} opens={} routing_reads=2 payload_reads=2", io.0);
+        }
+        // Measure only the payload I/O opportunity, not a production batch
+        // implementation: offsets and verified copies above are setup work.
+        segments.clear_read_handles_for_test();
+        let (separate, io) = count_read_io_for_test(&vfs, || {
+            [left, right].map(|entry| {
+                let mut bytes = vec![0; entry.3.len()];
+                blocks.read_payload_range(&entry.2, 0, &mut bytes).unwrap();
+                bytes
+            })
+        });
+        assert_eq!(io, (1, 2));
+        assert_eq!((&separate[0], &separate[1]), (&left.3, &right.3));
+        segments.clear_read_handles_for_test();
+        let mut combined = vec![0; left.3.len() + right.3.len()];
+        let (result, io) = count_read_io_for_test(&vfs, || {
+            blocks.read_payload_range(&left.2, 0, &mut combined)
+        });
+        result.unwrap();
+        assert_eq!(io, (1, 1));
+        assert_eq!(
+            combined.split_at(left.3.len()),
+            (left.3.as_slice(), right.3.as_slice())
+        );
+
+        for (entry, bytes) in [left, right]
+            .into_iter()
+            .zip([&combined[..left.3.len()], &combined[left.3.len()..]])
+        {
+            let id = ids[entry.1 as usize - 1];
+            assert_eq!(BlockId::for_payload(bytes), id);
+            let mut damaged = bytes.to_vec();
+            damaged[0] ^= 1;
+            assert_ne!(BlockId::for_payload(&damaged), id);
+        }
+
+        let rewrite = authority
+            .engine_mut_for_test()
+            .collect_payload_segment(packed.segment_id, &ids)
+            .unwrap();
+        let replacement = rewrite.replacement_segment_id.unwrap();
+        assert_ne!(replacement, packed.segment_id);
+        blocks
+            .sweep_deferred_segment_retirements(Duration::ZERO)
+            .unwrap();
+        let (stale, io) = count_read_io_for_test(&vfs, || {
+            blocks.read_payload_range(&left.2, 0, &mut combined)
+        });
+        assert_eq!(stale.unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert_eq!(io, (1, 0), "the stale range cannot read a retired file");
+        // Rewrite verification may have opened the replacement already.
+        segments.clear_read_handles_for_test();
+        // Do not refresh the location table: the original segment is no
+        // longer live, so an ordinary verified stream read must resolve anew.
+        let (selected, (opens, reads)) =
+            count_read_io_for_test(&vfs, || read_positions(&authority, &adjacent));
+        assert_eq!(selected, expected(&adjacent));
+        assert!(
+            reads >= adjacent.len(),
+            "replacement I/O: opens={opens} reads={reads}"
+        );
+        eprintln!("stream adjacency: retired source opens=1 reads=0; replacement opens={opens} reads={reads}");
+    }
+
+    #[test]
     fn owner_scope_and_expected_position_fail_before_commit() {
         let directory = tempfile::tempdir().unwrap();
         let mut engine = Engine::initialize(directory.path()).unwrap();

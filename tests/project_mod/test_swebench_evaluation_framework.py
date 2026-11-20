@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -438,6 +439,48 @@ def test_rootless_definition_cache_is_pinned_and_parses_dockerfile_base(host_tmp
     assert tasks[0].base_image == "example/base:pinned"
     assert tasks[0].dockerfile is True
     assert tasks[0].memory_mib == 4096
+
+
+def test_definition_cache_restores_exec_bit_on_task_scripts(host_tmp_path):
+    # Harbor's package download writes tests/test.sh and solution/solve.sh without
+    # the exec bit; sandbox runners refuse a non-executable verifier entry point.
+    definition = BenchmarkDefinition(
+        key="fixture",
+        dataset="org/dataset@sha256:dataset",
+        task_count=1,
+        dataset_source_revision="sha256:dataset",
+        default_attempts=1,
+        official_min_attempts=1,
+        source_url="https://example.invalid/source",
+        source_commit="commit",
+    )
+    root = host_tmp_path / "definitions"
+    root.mkdir(mode=0o700)
+    task = root / "org" / "task" / ("a" * 64)
+    for sub in ("environment", "tests", "solution"):
+        (task / sub).mkdir(parents=True)
+    (task / "task.toml").write_text("[task]\nname = 'org/task'\n[environment]\ncpus = 1\n")
+    (task / "environment" / "Dockerfile").write_text("FROM example/base:pinned\n")
+    for script in (task / "tests" / "test.sh", task / "solution" / "solve.sh"):
+        script.write_text("#!/bin/bash\nexit 0\n")
+        script.chmod(0o600)
+    (task / "tests" / "config.json").write_text("{}")
+    (task / "tests" / "config.json").chmod(0o600)
+    (root / "definitions.json").write_text(json.dumps({
+        "schema": 1,
+        "benchmark": definition.key,
+        "dataset": definition.dataset,
+        "dataset_source_revision": definition.dataset_source_revision,
+        "task_count": 1,
+        "tasks": [{"name": "org/task", "ref": "sha256:" + "a" * 64,
+                   "path": task.relative_to(root).as_posix()}],
+    }))
+
+    load_definitions(definition, root)
+
+    assert os.access(task / "tests" / "test.sh", os.X_OK)
+    assert os.access(task / "solution" / "solve.sh", os.X_OK)
+    assert not os.access(task / "tests" / "config.json", os.X_OK)
 
 
 def test_official_definition_cache_rejects_same_count_task_digest_drift(

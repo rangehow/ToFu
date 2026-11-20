@@ -117,15 +117,16 @@ class _Peer:
                 elif 'method' in message:
                     self._inbox.put(message)
                 else:
+                    request_id = message.get('id')
+                    if type(request_id) is not int:
+                        continue  # this endpoint issues integer IDs only; nothing waits on another
                     with self._lock:
-                        future = self._pending.pop(message.get('id'), None)
+                        future = self._pending.pop(request_id, None)
                     if future is None:
                         continue
                     error = message.get('error')
                     if isinstance(error, dict):
-                        future.set_exception(ProtocolError(int(error.get('code') or ERRORS['internalError']),
-                                                           str(error.get('message') or ''),
-                                                           data=error.get('data') or None))
+                        future.set_exception(_response_error(error))
                     else:
                         future.set_result(message.get('result'))
         finally:
@@ -157,6 +158,14 @@ class _Peer:
                 continue
             if request_id is not None:
                 self._answer(request_id, result=result)
+
+
+def _response_error(error: dict[str, Any]) -> ProtocolError:
+    """The ``ProtocolError`` an error response carries; a malformed one fails its request as internalError."""
+    code, data = error.get('code'), error.get('data')
+    if (code is not None and type(code) is not int) or (data is not None and not isinstance(data, dict)):
+        return ProtocolError(ERRORS['internalError'], 'The adapter sent a malformed error response')
+    return ProtocolError(code or ERRORS['internalError'], str(error.get('message') or ''), data=data or None)
 
 
 class StdioLink:

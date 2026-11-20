@@ -1,0 +1,35 @@
+[package]
+name = "tofu-sql-authority"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "SQL storage authority (storage.v1) ported from lib/storage_authority_sql"
+publish = false
+
+# Standalone like packages/tofu-db: own lock and build. tofu-db may not link
+# SQLite outside its read-only TofuSQL front (packages/tofu-db/AGENTS.md), so
+# the SQL mode lives in this crate until the single `tofu` binary composes both.
+[workspace]
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "tofu-sql-authority"
+path = "src/main.rs"
+
+[dependencies]
+rusqlite = { version = "0.32.1", features = ["bundled", "functions", "hooks"] }
+serde_json = { version = "=1.0.151", features = ["preserve_order", "float_roundtrip"] }
+sha2 = "0.10"
+aes = "0.8.4"
+hmac = "0.12.1"
+hex = "0.4"
+flate2 = "1"
+base64 = "0.22"
+libc = "0.2"
+uuid = { version = "1", features = ["v4"] }
+regex = "1"
+
+[dev-dependencies]
+tempfile = "3"

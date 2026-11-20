@@ -52,6 +52,7 @@ function openDailyReport() {
 }
 function closeDailyReport() {
   document.getElementById('dailyReportModal').classList.remove('open');
+  if (typeof runtimeScope !== 'undefined') runtimeScope.MyDayTokenCosts?.hide();
 }
 
 function _mydayShowToday() {
@@ -66,8 +67,9 @@ function _mydayShowToday() {
 
 /* Header ↻: re-read the goals (with their Worker evidence) and the month overview. */
 function _mydayRefresh() {
-  _myday._overviewCache = null;
+  if (_myday._overviewCache) _myday._overviewCache.ts = 0;
   _mydayFetchMonthOverview(_myday.year, _myday.month);
+  _mydayShowTokenCosts(_myday.selectedDateStr);
   const board = _mydayGoalBoard();
   if (board) board.refresh();
 }
@@ -166,34 +168,41 @@ function _mydayRenderCalendar() {
    balances and conversation counts before the (possibly multi-second,
    cache-cold) network call, which then reconciles and rewrites the cache. */
 function _mydayFetchMonthOverview(year, month) {
-  const cacheKey = `${year}-${month}`;
+  const now = new Date();
+  const today = _mydayDateStr(now.getFullYear(), now.getMonth(), now.getDate());
+  const cacheKey = `${year}-${month}:${today}`;
   if (_myday._overviewCache && _myday._overviewCache.key === cacheKey &&
       Date.now() - _myday._overviewCache.ts < 15000) {
-    return Promise.resolve();
+    return Promise.resolve(_myday._overviewCache.tokenCosts);
   }
   const inFlight = _myday._overviewLoads[cacheKey];
   if (inFlight) return inFlight;
-  const load = _mydayLoadMonthOverview(year, month).finally(() => {
+  const load = _mydayLoadMonthOverview(year, month, cacheKey, today).finally(() => {
     if (_myday._overviewLoads[cacheKey] === load) delete _myday._overviewLoads[cacheKey];
   });
   _myday._overviewLoads[cacheKey] = load;
   return load;
 }
 
-async function _mydayLoadMonthOverview(year, month) {
+async function _mydayLoadMonthOverview(year, month, cacheKey, today) {
   const monthKey = `${year}-${String(month + 1).padStart(2, '0')}`;
-  try {
-    const repository = _mydayReportRepository();
-    const cachedMonth = repository && typeof repository.readMonth === 'function'
-      ? await repository.readMonth(monthKey) : null;
-    // Guard: user may have navigated to a different month while IDB read was in flight.
-    if (cachedMonth && _myday.year === year && _myday.month === month) {
-      if (cachedMonth.cost_days) _myday._costDays = cachedMonth.cost_days;
-      if (cachedMonth.conv_days) _myday._convDays = cachedMonth.conv_days;
-      _mydayRenderCalendar();
-      if (_myday.selectedDateStr) _mydayRenderSidebarInfo(_myday.selectedDateStr);
+  const repository = _mydayReportRepository();
+  let received = false;
+  const local = Promise.resolve().then(() => repository?.readMonth(monthKey)).catch(e => {
+    console.warn('[MyDay] month cache read failed:', e && e.message);
+  });
+  // IDB and network race independently; a slow cache never delays the request.
+  void local.then(cached => {
+    if (!cached || _myday.year !== year || _myday.month !== month) return;
+    if (typeof runtimeScope !== 'undefined') {
+      runtimeScope.MyDayTokenCosts?.restore(cached.today_token_costs);
     }
-  } catch (e) { console.warn('[MyDay] month cache read failed:', e && e.message); }
+    if (received) return;
+    if (cached.cost_days) _myday._costDays = cached.cost_days;
+    if (cached.conv_days) _myday._convDays = cached.conv_days;
+    _mydayRenderCalendar();
+    if (_myday.selectedDateStr) _mydayRenderSidebarInfo(_myday.selectedDateStr);
+  });
 
   try {
     const data = await Api.daily.calendar(year, month + 1);
@@ -201,30 +210,28 @@ async function _mydayLoadMonthOverview(year, month) {
       console.warn('[MyDay] Calendar overview fetch failed');
       return;
     }
-    // Persist what the calendar paints so the next reopen/reload paints
-    // historical balances instantly (server stays the source of truth). Only
-    // each day's cost: the per-conversation details grow with every
-    // conversation and would push a busy month past the cache bound, where
-    // the write is skipped.
-    try {
-      const repository = _mydayReportRepository();
-      if (repository && typeof repository.storeMonth === 'function') {
-        const costDays = {};
-        for (const [day, entry] of Object.entries(data.cost_days || {})) {
-          if (entry && typeof entry.cost === 'number') costDays[day] = { cost: entry.cost };
-        }
-        const pending = repository.storeMonth(monthKey, {
-          cost_days: costDays, conv_days: data.conv_days || {},
-        });
-        if (pending && typeof pending.catch === 'function') pending.catch(() => {});
-      }
-    } catch (_error) { /* reconstructible cache is optional */ }
-    _myday._overviewCache = { key: `${year}-${month}`, ts: Date.now() };
-    if (_myday.year !== year || _myday.month !== month) return;
-    _myday._convDays = data.conv_days || {};
-    _myday._costDays = data.cost_days || {};
-    _mydayRenderCalendar();
-    if (_myday.selectedDateStr) _mydayRenderSidebarInfo(_myday.selectedDateStr);
+    received = true;
+    const tokenCosts = data.today_token_costs?.date === today ? data.today_token_costs : undefined;
+    const costDays = {};
+    for (const [day, entry] of Object.entries(data.cost_days || {})) {
+      if (entry && typeof entry.cost === 'number' && !entry.partial) costDays[day] = { cost: entry.cost };
+    }
+    // A failed live scan must not erase an earlier usable snapshot in IDB.
+    if (repository && (tokenCosts || !today.startsWith(`${monthKey}-`))) {
+      void repository.storeMonth(monthKey, {
+        cost_days: costDays, conv_days: data.conv_days || {},
+        ...(tokenCosts ? { today_token_costs: tokenCosts } : {}),
+      }).catch(() => {});
+    }
+    if (_myday.year === year && _myday.month === month) {
+      const lastTokenCosts = tokenCosts || _myday._overviewCache?.lastTokenCosts;
+      _myday._overviewCache = { key: cacheKey, ts: Date.now(), tokenCosts, lastTokenCosts };
+      _myday._convDays = data.conv_days || {};
+      _myday._costDays = data.cost_days || {};
+      _mydayRenderCalendar();
+      if (_myday.selectedDateStr) _mydayRenderSidebarInfo(_myday.selectedDateStr);
+    }
+    return tokenCosts;
   } catch (e) {
     console.warn('[MyDay] Calendar overview error:', e);
   }
@@ -246,6 +253,7 @@ function _mydaySelectDay(day) {
 
   _mydayUpdateHeader(dateStr);
   _mydayRenderSidebarInfo(dateStr);
+  _mydayShowTokenCosts(dateStr);
   const board = _mydayGoalBoard();
   if (board) board.show(dateStr);
 }
@@ -262,15 +270,38 @@ function _mydayUpdateHeader(dateStr) {
   }
 }
 
-/* ═══════ Sidebar cost info ═══════ */
+/* Today's typed cost disclosure reads the existing calendar single-flight. */
+function _mydayShowTokenCosts(dateStr) {
+  const costs = typeof runtimeScope !== 'undefined' && runtimeScope.MyDayTokenCosts;
+  if (!costs) return;
+  const now = new Date();
+  if (dateStr !== _mydayDateStr(now.getFullYear(), now.getMonth(), now.getDate())) {
+    costs.hide();
+    return;
+  }
+  costs.show(dateStr, _mydayFetchMonthOverview(now.getFullYear(), now.getMonth()),
+    _myday._overviewCache?.lastTokenCosts);
+}
+
+/* ═══════ Sidebar cost info for past days ═══════ */
 function _mydayRenderSidebarInfo(dateStr) {
   const el = document.getElementById('mydayCalInfo');
   if (!el) return;
+  const now = new Date();
+  if (dateStr === _mydayDateStr(now.getFullYear(), now.getMonth(), now.getDate())) {
+    el.replaceChildren();
+    return;
+  }
   const d = new Date(dateStr + 'T00:00:00');
   const costDaily = _myday._costDays || {};
   const dayData = costDaily[d.getDate()];
-  if (!dayData || dayData.cost <= 0) { el.innerHTML = ''; return; }
+  if (!dayData || (dayData.cost <= 0 && !dayData.partial)) { el.innerHTML = ''; return; }
   el.innerHTML = `<div class="mcal-info-label">\ud83d\udcb0 ¥${dayData.cost.toFixed(2)}</div>`;
+  if (dayData.partial) {
+    const notice = document.createElement('div');
+    notice.textContent = t('myday.costPartial');
+    el.append(notice);
+  }
 }
 
 // The typed goal board reads this panel back through one presentation port.

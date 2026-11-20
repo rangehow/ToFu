@@ -129,9 +129,6 @@ __pycache__/
 !/benchmarks/
 /benchmarks/*
 !/benchmarks/AGENTS.md
-!/benchmarks/markdown_worker/
-/benchmarks/markdown_worker/*
-!/benchmarks/markdown_worker/reference_5c55a9d1b/
 !/benchmarks/startup_idle_dispatch.py
 !/benchmarks/startup_recovery_batch.py
 !/benchmarks/startup_dispatch_recovery.py
@@ -241,10 +238,20 @@ __pycache__/
 # belong beside their owning docs or in the canonical static asset tree.
 /propaganda/
 /scripts/*
+!/scripts/check_agent_wheel_run.py
 !/scripts/document_pipeline.py
+!/scripts/research_loop.py
+!/scripts/install_document_tex_packages.py
+!/scripts/capture_search_html_corpus.py
 !/scripts/eval_runs_retention.py
 !/scripts/prepare_project_folder.py
 !/scripts/generated_rust.py
+!/scripts/gen_api_v1_contract.py
+!/scripts/gen_test_classification.py
+!/scripts/rust_phase_gate.py
+!/scripts/gen_sql_authority_schema.py
+!/scripts/test_classification_parity_cases.json
+!/scripts/blackbox_run.py
 !/scripts/migrate_host.py
 !/scripts/backfill_memory_triggers.py
 !/scripts/verify_checkout_view.py
@@ -256,6 +263,7 @@ __pycache__/
 !/scripts/agent_loop_load_test.py
 !/scripts/restart_interruptions.py
 !/scripts/tofudb_prestop_check.py
+!/scripts/tofudb_restore_selectors.py
 !/scripts/gen_packaged_search_runtime.py
 !/scripts/gen_packaged_local_models.py
 !/scripts/gen_working_facts_contract.py
@@ -281,6 +289,7 @@ __pycache__/
 !/scripts/check_tool_environment.py
 !/scripts/check_monorepo.py
 !/scripts/gen_wire_fixtures.py
+!/scripts/golden_documents.py
 !/scripts/generate_paper_build_contract.py
 !/scripts/gen_concept_index.py
 !/scripts/vite_asset_retention.mjs
@@ -295,6 +304,8 @@ __pycache__/
 !/scripts/git_maintenance.py
 !/scripts/git_task_ref_archive.py
 !/scripts/resource_inventory.py
+!/scripts/cargo_footprint.py
+!/scripts/remote_cargo.py
 !/scripts/generate_research_progress.py
 !/scripts/gen_tofudb_cert_binding.py
 !/scripts/audit_model_configuration.py
@@ -471,6 +482,7 @@ __pycache__/
 # clean clone without it breaks the release pipeline in CI rather than
 # locally, which is the worst place to discover a missing file.
 !/scripts/release_assets.py
+!/scripts/verify_macos_dmg.sh
 !/scripts/build_native_runtime.py
 !/scripts/build_python_wheels.py
 # Shared "is this VERSION documented?" predicate. The version gate in
@@ -490,6 +502,7 @@ __pycache__/
 # errors tests/cache/test_cache_waste_report.py now pins.
 !/scripts/report_tool_search_outcomes.py
 !/scripts/cache_waste_report.py
+!/scripts/cache_usage_window.py
 !/scripts/inspect_context.py
 # Single-property prompt-cache A/B probe, DRY-RUN by default. The value is the
 # encoded experiment design: arms identical except one property, a per-run
@@ -785,6 +798,7 @@ designs/ui-gallery/ui-kit.bundle.js
 !/scripts/gen_native_loop_policy.py
 !/scripts/fetch_chatgpt_share.py
 !/scripts/measure_token_units.py
+!/scripts/secret_fingerprint_scan.py
 
 # Generated visual-test screenshots — never commit.
 /tests/visual/output/

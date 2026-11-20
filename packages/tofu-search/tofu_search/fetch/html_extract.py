@@ -5,6 +5,8 @@ publication date extraction from meta tags / JSON-LD / <time> elements,
 and specialized code-hosting blob extraction (GitHub / GitLab / Bitbucket).
 """
 
+import functools
+import importlib
 import json
 import re
 import threading
@@ -23,6 +25,7 @@ from tofu_search.fetch.utils import _get_bs4
 from tofu_search.log import get_logger
 
 logger = get_logger(__name__)
+_native = importlib.import_module('tofu_search._native_kernels').native
 
 # lxml 6.1.1 / libxml2 2.14.6 segfault when multiple threads enter
 # `lxml.html.text_content()` simultaneously (observed via faulthandler:
@@ -560,9 +563,22 @@ def _extract_html_document(html, max_chars, url, *, scope=None):
     except Exception as e:
         logger.warning('Trafilatura failed for %s: %s', url[:80], e, exc_info=True)
 
+    rendering = scope.setdefault('rendering', {}) if scope is not None else None
+    text, signals = _assemble_document(html, main_text, url, max_chars, rendering is not None)
+    if signals:
+        rendering.update(signals)
+    return text
+
+
+def _assemble_document(html, main_text, url, max_chars, want_rendering):
+    """Everything after trafilatura, from one sanitized BeautifulSoup tree.
+
+    Returns ``(text or None, rendering signals or None)``. This body is the
+    parity oracle of the native ``extract_document`` kernel.
+    """
+    rendering = {} if want_rendering else None
     # ── Phase 2: BeautifulSoup fallback / link extraction ──
     try:
-        rendering = scope.setdefault('rendering', {}) if scope is not None else None
         soup = _sanitized_soup(html, rendering=rendering)
         # ★ Priority: <main> before <article> — <article> can be a single card/widget
         #   while <main> wraps the full page content (e.g. HuggingFace collections)
@@ -591,13 +607,13 @@ def _extract_html_document(html, max_chars, url, *, scope=None):
             lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
             main_text = re.sub(r'\n{3,}', '\n\n', '\n'.join(lines))
             if not main_text or len(main_text) < 30:
-                return None
+                return None, rendering
     except Exception as e:
         logger.warning('BS4 extraction failed for %s: %s', url[:80], e, exc_info=True)
         if main_text:
             links = []
         else:
-            return None
+            return None, rendering
 
     # Tables carry row/column relationships that article heuristics can omit.
     # Supplement from the existing content DOM, never a second fetch or model.
@@ -668,7 +684,25 @@ def _extract_html_document(html, max_chars, url, *, scope=None):
 
     if max_chars and len(combined) > max_chars:
         combined = combined[:max_chars] + '\n[…truncated]'
-    return combined
+    return combined, rendering
+
+
+# The Python body above is the parity oracle; the native kernel replaces it for
+# str documents when the extension is installed (lone surrogates keep it).
+PYTHON_KERNELS = {'_assemble_document': _assemble_document}
+if _native is not None:
+    @functools.wraps(_assemble_document)
+    def _assemble_document(html, main_text, url, max_chars, want_rendering):
+        if (type(html) is str and type(url) is str
+                and (main_text is None or type(main_text) is str)
+                and (max_chars is None or type(max_chars) is int)):
+            try:
+                return _native.extract_document(html, main_text, url, max_chars,
+                                                want_rendering)
+            except UnicodeEncodeError:
+                pass
+        return PYTHON_KERNELS['_assemble_document'](html, main_text, url, max_chars,
+                                                    want_rendering)
 
 
 # Backward-compatible aliases (these were originally _-prefixed private names)

@@ -465,6 +465,12 @@ STRINGS = {
         'en': 'server answered HTTP {code}',
         'zh': '服务器返回 HTTP {code}',
     },
+    # A joined node the Home's owner has not confirmed yet (Rust tray,
+    # packages/tofu-node/src/tray): the fingerprint both ends show.
+    'desktop.tray.stPending': {
+        'en': 'waiting for the owner to confirm it on that Tofu (fingerprint {fingerprint})',
+        'zh': '等待服务器主人在该 Tofu 上确认（指纹 {fingerprint}）',
+    },
     'desktop.tray.stStarting': {
         'en': 'connecting…',
         'zh': '连接中…',

@@ -10,7 +10,6 @@ from evaluations import claude_code_contract as contract
 from evaluations.terminal_bench import harness, runner
 
 pytestmark = pytest.mark.unit
-_AUDIT_SYNTHETIC_REPO_PATHS = {"tests/test.sh"}
 
 
 def fhe_runner(tmp_path: Path, *, anthropic_url=None, protocol="fhe-v1", model="kimi-k3") -> runner.Runner:

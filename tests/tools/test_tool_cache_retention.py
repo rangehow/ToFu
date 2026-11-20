@@ -118,13 +118,44 @@ def test_prune_refuses_at_once_while_another_uv_holds_the_cache(cache_root):
     assert uv_runs and uv_runs[0]['exit'] != 0
 
 
-def test_prune_purges_the_pip_cache(cache_root):
+@pytest.mark.parametrize('pip_in_venv', [True, False])
+def test_prune_purges_the_pip_cache(cache_root, tmp_path, monkeypatch, pip_in_venv):
+    if not pip_in_venv:
+        # uv sync does not seed pip. Reproduce that layout with a real venv
+        # while leaving the pytest runner's own interpreter untouched.
+        venv = tmp_path / 'unseeded'
+        subprocess.run([sys.executable, '-m', 'venv', '--without-pip', str(venv)], check=True)
+        python = venv / 'bin' / 'python'
+        monkeypatch.delenv('PYTHONPATH', raising=False)
+        monkeypatch.setattr(retention.sys, 'executable', str(python))
     wheel = cache_root / 'pip' / 'wheels' / 'ab' / 'cached-1.0-py3-none-any.whl'
     wheel.parent.mkdir(parents=True)
     wheel.write_bytes(b'cached')
     runs = retention.prune(str(cache_root))
     assert any(run['argv'][1:] == ['-m', 'pip', 'cache', 'purge'] and run['exit'] == 0 for run in runs)
     assert not wheel.exists()
+
+
+def test_discoverable_pip_failure_does_not_fall_back(cache_root, tmp_path, monkeypatch):
+    (cache_root / 'pip').mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / 'pip.py').write_text(
+        'import sys\n'
+        'print(f"{sys.executable}: No module named pip", file=sys.stderr)\n'
+        'raise SystemExit(1)\n')
+    [run] = retention.prune(str(cache_root))
+    assert run['argv'][0] == sys.executable
+    assert run['exit'] == 1
+    assert run['detail'] == f'{sys.executable}: No module named pip'
+
+
+def test_invalid_pip_cache_failure_is_visible(cache_root, monkeypatch):
+    (cache_root / 'pip').mkdir(parents=True)
+    monkeypatch.setenv('PIP_NO_CACHE_DIR', '1')
+    [run] = retention.prune(str(cache_root))
+    assert run['argv'][0] == sys.executable
+    assert run['exit'] != 0
+    assert 'cache is disabled' in run['detail']
 
 
 def test_concurrent_requests_coalesce_into_one_more_prune(cache_root, monkeypatch):

@@ -2,7 +2,7 @@
    ★ Paper Reading Mode v3
      Layout: Sidebar = paper library (persistent, like conversations)
              Main Left = PDF (largest, vertical scroll)
-             Main Right = Q&A / Report / Babel PDF tabs
+             Main Right = Overview / Q&A / Report / Review / Full-text translation
    ═══════════════════════════════════════════════════ */
 
 /* ── Sidebar: hide conv list, show paper library ── */
@@ -421,8 +421,15 @@
 .paper-report-body th,.paper-report-body td{border:1px solid var(--border);padding:calc(var(--space-1) * 1.5) calc(var(--space-1) * 2.5);text-align:left}
 .paper-report-body th{background:var(--bg-secondary);font-weight:600}
 
-/* ── Babel PDF Module ── */
-.paper-translate-content{flex:1;display:flex;flex-direction:column;overflow:hidden}
+/* ── Full-text translation (own pipeline) ── */
+.paper-translate-content{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+.paper-fulltext{flex:1;display:flex;flex-direction:column;gap:var(--space-4);padding:var(--space-6) var(--space-5);overflow-y:auto;min-width:0;color:var(--text-primary)}
+.paper-fulltext-header{display:grid;gap:var(--space-2)}
+.paper-fulltext-title{margin:0;font-size:var(--font-size-xl);font-weight:600;color:var(--text-primary)}
+.paper-fulltext-hint{max-width:60ch;margin:0;font-size:var(--font-size-md);line-height:1.6;color:var(--text-secondary)}
+.paper-fulltext-controls{display:flex;flex-wrap:wrap;gap:var(--space-3);align-items:center}
+.paper-fulltext-status{margin:0;font-size:var(--font-size-md);line-height:1.6;color:var(--text-secondary)}
+.paper-fulltext-result{display:grid;gap:var(--space-3);justify-items:start;padding:var(--space-4);border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-secondary)}
 
 
 /* ── Landing / Upload screen ── */

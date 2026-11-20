@@ -249,6 +249,9 @@ def execute_watchdog_tool(task: dict, scope: dict, name: str, arguments: dict) -
         from .snapshot import health_snapshot
         arguments = validate(dict(arguments), 'watchdogSnapshot')
         resolved = _resolve_own_failures(owner, scope['conversation_id'])
+        if arguments.get('signals_after_id') is None:
+            from .quota import settle_quota_alerts
+            settle_quota_alerts(owner)
         snapshot = health_snapshot(owner, after_id=arguments.get('after_id'),
                                    signals_after_id=arguments.get('signals_after_id'))
         if resolved:

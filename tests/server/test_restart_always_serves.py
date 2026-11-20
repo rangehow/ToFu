@@ -100,7 +100,12 @@ def serving(manager, *, other_than=None, timeout=60.0):
 def start_serving(manager):
     started = manager.start(source='spec')
     assert started['ok'] is True, started
-    return serving(manager)
+    current = serving(manager)
+    deadline = time.monotonic() + 60.0
+    while (record := manager._native_storage.record()).get('state') != 'ready':
+        assert time.monotonic() < deadline, f'probe did not publish readiness: {record}'
+        time.sleep(0.05)
+    return current
 
 
 def test_storage_boundary_violation_keeps_the_serving_generation_alive(harness, monkeypatch):
@@ -217,16 +222,20 @@ def test_a_resident_host_owned_elsewhere_refuses_before_the_old_server_stops(har
     manager, project, storage = harness
     first = start_serving(manager)
     record = storage.record()
+    # The probe retains its published record for shutdown; inject only after publication.
     resident.write_record(storage.state_path, {**record, 'host': 'another-host'})
+    try:
+        result = manager.restart(source='spec')
 
-    result = manager.restart(source='spec')
-
-    assert result['ok'] is False
-    assert 'another host' in result['message']
-    current = serving(manager)
-    assert current['pid'] == first['pid']
-    # Restore so teardown's full stop owns the host again.
-    resident.write_record(storage.state_path, record)
+        assert result['ok'] is False
+        assert 'another host' in result['message']
+        current = serving(manager)
+        assert current['pid'] == first['pid']
+        assert storage.record()['host'] == 'another-host'
+        assert resident.process_matches(record['pid'], record['processStartTime'])
+    finally:
+        # Restore so teardown's full stop owns the host again, even after an assertion fails.
+        resident.write_record(storage.state_path, record)
 
 
 def _state_writes_fail_while(manager, monkeypatch, quota_full):

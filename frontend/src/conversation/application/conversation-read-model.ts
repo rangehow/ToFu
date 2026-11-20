@@ -7,6 +7,7 @@ import { entityRecordValues, isPublishedEntityRecord } from '../domain/turn-stor
  * never the positional compatibility message document.
  */
 import type { TurnRecord } from '../../api/conversation-sync.generated';
+import { activeTurnAttemptId, activeTurnAttempts } from '../../core/turn-state';
 import type { TurnState, TurnStateUpdate } from '../domain/turn-store';
 
 export function orderedConversationTurns(
@@ -101,20 +102,12 @@ export function conversationCompactionArchiveIds(
 export function activeConversationAttemptIds(
   state: TurnState | null | undefined,
 ): ReadonlyArray<string> {
-  if (!state) return [];
-  return [...new Set(entityRecordValues(state.turnsById).flatMap((turn) => (
-    turn && (turn.status === 'pending' || turn.status === 'running')
-      && turn.currentAttemptId ? [turn.currentAttemptId] : []
-  )))];
+  return [...activeTurnAttempts(state).keys()];
 }
 
 /** Active main-lane attempt, used by queue-vs-steer and abort commands. */
 export function activeMainConversationAttemptId(
   state: TurnState | null | undefined,
 ): string | null {
-  return latestConversationTurn(
-    state,
-    (turn) => (turn.status === 'pending' || turn.status === 'running')
-      && Boolean(turn.currentAttemptId),
-  )?.currentAttemptId ?? null;
+  return latestConversationTurn(state, turn => Boolean(activeTurnAttemptId(turn)))?.currentAttemptId ?? null;
 }

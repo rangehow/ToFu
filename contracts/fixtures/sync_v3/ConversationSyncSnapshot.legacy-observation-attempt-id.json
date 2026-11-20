@@ -1236,6 +1236,13 @@
           "attemptId": "s",
           "turnId": "s"
         },
+        "coordinatorWorkerObservations": {
+          "s": {
+            "attemptId": "s",
+            "deliveryStatus": "s",
+            "resultRevision": 1
+          }
+        },
         "error": {},
         "evidence": "provider_finish",
         "outcome": "completed",

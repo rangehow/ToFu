@@ -158,13 +158,8 @@ def test_rpc_burst_starts_every_handler_beyond_legacy_capacity_hint(monkeypatch)
     try:
         with ThreadPoolExecutor(max_workers=count) as callers:
             def call(_):
-                # A keep-alive handler retires when its client closes the socket.
-                client = StorageClient('127.0.0.1', srv.server_address[1], TOKEN,
-                                       timeout=10, read_attempts=1)
-                try:
-                    return client.health()
-                finally:
-                    client.close()
+                return StorageClient('127.0.0.1', srv.server_address[1], TOKEN,
+                                     timeout=10, read_attempts=1).health()
             responses = list(callers.map(call, range(count)))
         _wait_for_active_handlers(srv, timeout=3)
         for handler in handlers: handler.join(3)

@@ -12,7 +12,9 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from lib.cost import normalize_usage, split_input_tokens
+from lib.cost import (
+    is_responses_usage, normalize_usage, reported_responses_input_usage, split_input_tokens,
+)
 from lib.log import audit_log, get_logger, task_log_tag
 from lib.tasks_pkg.cache_tracking._policy import MIN_CACHEABLE_PROMPT_TOKENS
 from lib.tasks_pkg.cache_tracking._state import (
@@ -183,6 +185,7 @@ def notify_compaction(
 
 def _emit_l2_roi(conv_id: str, roi: dict, *, user_id: int,
                  cache_write_rebilled: int | None,
+                 following_round: bool = False,
                  cache_read_next: int | None = None,
                  cache_uncached_next: int | None = None,
                  input_next: int | None = None,
@@ -192,9 +195,10 @@ def _emit_l2_roi(conv_id: str, roi: dict, *, user_id: int,
     """Emit ONE ``l2_cache_roi`` audit metric for a stashed L2 event.
 
     Two outcomes, BOTH signal (only a silent drop is bias):
-      * ``cache_write_rebilled`` is an int → OUTCOME 'paired': we observed the
-        following round's re-billed write. ``net_tokens`` = dropped − re-billed.
-      * ``cache_write_rebilled`` is None → OUTCOME 'no_following_round': the
+      * OUTCOME 'paired': the following round returned. If it reported a
+        write count, ``net_tokens`` = dropped − re-billed. If the exact
+        Responses write is unknown, both the write and net are null.
+      * OUTCOME 'no_following_round': the
         session ended (cleanup / task teardown) OR a second L2 event superseded
         this one before a round paired it. The re-billed half is UNOBSERVED;
         ``net_tokens`` is None so the retune analysis can exclude it from the
@@ -222,10 +226,11 @@ def _emit_l2_roi(conv_id: str, roi: dict, *, user_id: int,
         _read_lost = int(roi.get('cache_read_at_event', 0))
         _observed = cache_write_rebilled is not None
         _net = (_dropped - int(cache_write_rebilled)) if _observed else None
+        outcome = 'paired' if following_round or _observed else 'no_following_round'
         details = dict(
             user_id=user_id,
             conv_id=conv_id,
-            outcome='paired' if _observed else 'no_following_round',
+            outcome=outcome,
             tokens_dropped=_dropped,
             tokens_before=int(roi.get('tokens_before', 0)),
             tokens_after=int(roi.get('tokens_after', 0)),
@@ -250,7 +255,7 @@ def _emit_l2_roi(conv_id: str, roi: dict, *, user_id: int,
         logger.info(
             '[CacheTrack] conv=%s L2 ROI (%s): dropped=%d tokens, '
             're-billed=%s + busted read=%d → net=%s%s',
-            conv_id, 'paired' if _observed else 'no_following_round',
+            conv_id, outcome,
             _dropped,
             (str(int(cache_write_rebilled)) if _observed else 'UNOBSERVED'),
             _read_lost, (str(_net) if _net is not None else 'n/a'),
@@ -337,10 +342,6 @@ def log_round_cache_stats(
     if not usage:
         return
 
-    _nu = normalize_usage(usage)
-    cache_write = _nu['cache_write']
-    cache_read = _nu['cache_read']
-
     # A round with NO cache activity used to return here — which silenced
     #   exactly the most expensive rounds in the system (a full miss on a
     #   200k-token prompt logged nothing at all, while a healthy 99% hit
@@ -350,7 +351,17 @@ def log_round_cache_stats(
     #   minimum-cacheable length no Claude tier can cache at all, so their
     #   miss is not actionable signal — everything else is logged, and a
     #   total miss is tagged COLD so it can be grepped directly.
-    uncached, total_input = split_input_tokens(usage)
+    if is_responses_usage(usage):
+        exact = reported_responses_input_usage(usage) or {}
+        cache_read = exact.get('cache_read')
+        if cache_read is None:
+            return  # the structured round record carries the unknown read
+        total_input = exact['input_tokens']
+        cache_write = exact['cache_write']
+    else:
+        normalized = normalize_usage(usage)
+        cache_read, cache_write = normalized['cache_read'], normalized['cache_write']
+        _, total_input = split_input_tokens(usage)
     if not cache_write and not cache_read:
         if total_input < MIN_CACHEABLE_PROMPT_TOKENS:
             return
@@ -365,7 +376,7 @@ def log_round_cache_stats(
     #   reported hit rate and the price charged for a round can never
     #   disagree about how big the prompt was.
     hit_pct = round(cache_read / max(total_input, 1) * 100)
-    _cold = '' if (cache_read or cache_write) else ' COLD'
+    _cold = ' COLD' if cache_read == 0 and cache_write == 0 else ''
 
     # Surface the SERVING KEY + retry count so a clean-round full-floor miss
     # (cache_r=0 with no compaction) can be attributed to per-round dispatch
@@ -388,10 +399,11 @@ def log_round_cache_stats(
 
     logger.info(
         '[CacheStats] %s conv=%s R%d model=%s '
-        'input=%d cache_w=%d cache_r=%d hit=%d%% key=%s retries=%d trace=%s%s',
+        'input=%d cache_w=%s cache_r=%d hit=%d%% key=%s retries=%d trace=%s%s',
         task_log_tag(tid) if tid else '???',
         conv_id if conv_id else '???',
         round_num + 1, model,
-        total_input, cache_write, cache_read, hit_pct, _key, _retries,
+        total_input, cache_write if cache_write is not None else 'unknown',
+        cache_read, hit_pct, _key, _retries,
         _trace or '-', _cold,
     )

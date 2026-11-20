@@ -21,7 +21,6 @@ from .conv_affinity import (
     record_conv_key,
     sticky_routing_enabled,
 )
-from .credential_reservation import active_reservations, reserved_slot
 from .measured_speed import measured_speed_evidence
 from .quota_watch import WINDOW_S
 from .slot import Slot
@@ -37,6 +36,28 @@ __all__ = [
 def _model_identity(slot) -> str:
     """The logical Model a slot serves; keys rotation and speed evidence."""
     return slot.logical_model or slot.model
+
+
+# A dispatcher that never built a configured pool (a hand-assembled instance) has
+# nothing to revalidate: it publishes no build stamp.
+_NO_BUILD_STAMP = object()
+
+
+def _personal_authority_stamp():
+    """Stat identity of the change stamp that governs the configured pool.
+
+    The configured pool is derived from the personal owner's model-routing
+    authority, and the repository replaces that owner's stamp in WHICHEVER
+    server process commits a routing change or writes a credential secret.
+    Comparing this identity before a pick is therefore the cross-process
+    signal that this process's pool (slots AND their resolved plaintext
+    credentials) is stale. One ``stat``: no storage round trip, no timer.
+    """
+    from lib.identity import PERSONAL_USER_ID
+    from lib.model_routing.change_notifications import (
+        model_routing_secrets_stamp_identity,
+    )
+    return model_routing_secrets_stamp_identity(user_id=PERSONAL_USER_ID)
 
 
 @dataclass(frozen=True)
@@ -187,6 +208,14 @@ class LLMDispatcher:
         # generation tells a finished build whether a reload arrived meanwhile.
         self._build_lock = threading.Lock()
         self._configuration_generation = 0
+        # Change-stamp identity the published configured pool was built from
+        # (None until the first build). A pick whose ``stat`` of the owner's
+        # stamp differs rebuilds, so the pool follows commits made in any
+        # process instead of holding whatever existed when it was built.
+        self._configured_authority_stamp = None
+        # One adoption of a changed stamp at a time: concurrent pickers that
+        # all notice the same change invalidate once, not once each.
+        self._authority_sync_lock = threading.Lock()
         # name → logical model_id, built ONLY from each entry's own
         # {model_id} ∪ wire ids — never merged across entries/providers.
         # Owner directive 2026-08-06: routing keys on model_id alone; config
@@ -227,14 +256,23 @@ class LLMDispatcher:
 
         A pinned context sees only its own provider/route group; an unpinned
         one sees only configured slots, never another request's group.
-        Fallback dispatch additionally never sees an experiment-reserved
-        credential (credential_reservation.py, docs/NETWORK.md).
         """
-        scope = self._pool.scope(pinned_provider)
-        reserved = active_reservations()
-        if not reserved:
-            return scope
-        return [slot for slot in scope if not reserved_slot(slot, reserved)]
+        return self._pool.scope(pinned_provider)
+
+    def loaded_model_match(self, model: str, *, pin: str = '', legacy_provider: str = '') -> bool | None:
+        """Strict model presence in loaded scopes; None if not yet knowable.
+
+        No reservations, initialization, egress or health probes. Without a
+        pin a legacy summary can see configured slots or its explicit provider.
+        """
+        with self._lock:
+            if not self._initialized:
+                return None
+            matcher = self._prefer_matcher(model)
+            if not callable(matcher):
+                return None
+            scopes = (pin, legacy_provider) if not pin and legacy_provider else (pin,)
+            return any(matcher(slot) for scope in scopes for slot in self._selection_scope(scope))
 
     def resource_snapshot(self) -> dict:
         """Observe native slot reservations without initializing providers."""
@@ -261,8 +299,32 @@ class LLMDispatcher:
         health and disposal. No request group is reminted or widened here.
         """
         with self._lock:
-            self._initialized = False
-            self._configuration_generation += 1
+            self._invalidate_locked()
+
+    def _invalidate_locked(self) -> None:
+        """Retire the built pool; the next pick rebuilds. Caller holds ``_lock``."""
+        self._initialized = False
+        self._configuration_generation += 1
+
+    def _adopt_authority_change(self) -> None:
+        """Rebuild after the owner's routing changed in another process.
+
+        Runs only on the slow path of :meth:`initialize` (the stat identity
+        moved). The observed identity is recorded before the rebuild, so a
+        burst of pickers that noticed the same change invalidates once; the
+        rest see it as current and reuse the build. A change landing during
+        that build is still caught by the published stamp, because the build
+        captures its identity before it reads the authority.
+        """
+        with self._authority_sync_lock:
+            stamp = _personal_authority_stamp()
+            with self._lock:
+                if stamp == self._configured_authority_stamp:
+                    return
+                self._configured_authority_stamp = stamp
+                self._invalidate_locked()
+        logger.info('[Dispatch] model-routing change stamp moved — rebuilding '
+                    'configured slots')
 
     def initialize(self):
         """Build configured slots, then swap them in around request-owned ones.
@@ -274,14 +336,28 @@ class LLMDispatcher:
         keeps every request-scoped slot live at that moment. A reload during
         the build publishes the finished build but leaves the next call to
         rebuild, as a reload right after a build always did.
+
+        A ready pool is revalidated against the owner's model-routing change
+        stamp on every call (one ``stat``): a pool built before a commit in
+        another process would otherwise serve that process's history forever,
+        which is how project Workers lost every model a later revision added.
         """
         if self._initialized:
-            return
+            published = getattr(self, '_configured_authority_stamp',
+                               _NO_BUILD_STAMP)
+            if published is _NO_BUILD_STAMP:
+                return
+            if _personal_authority_stamp() == published:
+                return
+            self._adopt_authority_change()
         with self._build_lock:
             if self._initialized:
                 return
             with self._lock:
                 generation = self._configuration_generation
+            # Captured BEFORE the authority read: a change that lands during
+            # the build must stay visible to the next pick.
+            stamp = _personal_authority_stamp()
             try:
                 configured, logical_index = self._build_slots()
                 # Benchmark seeds/pruning apply only to configured slots.
@@ -298,6 +374,7 @@ class LLMDispatcher:
                 self._pool.replace_configured(configured)
                 self._logical_index = logical_index
                 self._direct_models = set()
+                self._configured_authority_stamp = stamp
                 self._initialized = (
                     generation == self._configuration_generation)
         logger.info('Initialized %d configured slots', len(configured))
@@ -417,6 +494,8 @@ class LLMDispatcher:
                 secret = resolved_secrets.get(reference, '')
                 api_key, oauth, secret_headers = decode_credential_secret(
                     secret, kind=candidate.credential['kind'])
+                if candidate.codex_account_fingerprints and (oauth != 'codex' or api_key):
+                    continue
                 quota = candidate.credential.get('quota_policy') or {}
                 access_quota = candidate.provider_access.get('quota_policy') or {}
                 pricing = candidate.offering.get('actual_pricing') or {}
@@ -435,7 +514,7 @@ class LLMDispatcher:
                     api_key=api_key,
                     model=candidate.deployment['wire_model_id'],
                     logical_model=model['model_id'],
-                    capabilities=set(candidate.offering['capabilities']),
+                    capabilities=candidate.dispatch_capabilities,
                     base_url=candidate.connection['base_url'],
                     provider_id=candidate.provider_id,
                     routing_provider_id=candidate.provider_id,
@@ -462,6 +541,7 @@ class LLMDispatcher:
                     **candidate_inference_metadata(candidate),
                     protocol=candidate.connection['protocol'],
                     oauth=oauth,
+                    codex_account_fingerprints=candidate.codex_account_fingerprints,
                     adapter=dict(candidate.connection.get('adapter') or {}),
                     rpm_limit=float(
                         quota.get('rpm') or access_quota.get('rpm') or 30),

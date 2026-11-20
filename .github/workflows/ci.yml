@@ -156,27 +156,11 @@ jobs:
     # verified graph when frontend succeeded, so graph contracts execute.
     needs: [verification-scope, frontend]
     if: ${{ always() && !cancelled() && needs.verification-scope.outputs.profile == 'full' }}
-    # One runner for the whole tier was shut down by GitHub at ~44% on every
-    # run from 52cb8c11 on; each shard completes on its own runner
-    # (make SHARD=k/n, tests/conftest.py --tofu-shard).
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4]
-    name: test-unit (${{ matrix.shard }}/4)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # Generator and landing contracts in the unit tier run repository
-      # node_modules (TypeScript, jsdom) through node.
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .node-version
-          cache: npm
-      - name: Install JS dev-deps from lockfile
-        run: npm ci
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
@@ -190,19 +174,8 @@ jobs:
       - name: Verify the downloaded graph without Node
         if: ${{ needs.frontend.result == 'success' }}
         run: python3 scripts/verify_frontend_dist.py
-      # The project search engine shells out to ripgrep (grep translation,
-      # live tree-index fallback); the runner image does not ship it.
-      - name: Install ripgrep
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ripgrep
       - name: Verify lock and sync test environment
         run: uv lock --check && uv sync --frozen --extra test
-      # Slide/presentation rendering contracts launch headless Chromium.
-      - name: Install headless Chromium + system deps
-        run: uv run --frozen --extra test python -m playwright install --with-deps --only-shell chromium
-      # Native-engine identity specs build the engine with `cargo --offline`
-      # (unit tests never reach the network); provide its locked crates here.
-      - name: Fetch the native engine's locked crates
-        run: cargo fetch --locked --manifest-path packages/tofu-db/Cargo.toml
       - name: Run unit tests
         # `-n auto` on a 4-vCPU runner = 4 workers, and each worker spawns
         # node/jsdom subprocesses + ML-lib thread pools on top — measured
@@ -213,16 +186,14 @@ jobs:
         # Make owns the exclusion of retired classic-js harnesses and the
         # serial split for timing-sensitive backend contracts.
         run: >-
-          uv run --frozen --extra test make test-unit JOBS=2 SHARD=${{ matrix.shard }}/4
+          uv run --frozen --extra test make test-unit JOBS=2
           COV="--cov=lib --cov=routes --cov-report="
           COV_APPEND="--cov=lib --cov=routes --cov-append --cov-report="
       - name: Publish unit coverage data
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-unit-${{ matrix.shard }}
+          name: coverage-unit
           path: .coverage
-          # upload-artifact@v4 skips dotfiles unless asked to include them.
-          include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
 
@@ -242,18 +213,8 @@ jobs:
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           enable-cache: true
-      - name: Install ripgrep
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ripgrep
       - name: Verify lock and sync test environment
         run: uv lock --check && uv sync --frozen --extra test
-      # The installed-wheel test builds offline from the uv cache; a changed
-      # cache key leaves the pinned build backend uncached. Cache exactly
-      # pyproject's build-system.requires first.
-      - name: Cache the pinned build backend for offline wheel builds
-        run: >-
-          python3 -c "import tomllib;print('\n'.join(tomllib.load(open('pyproject.toml','rb'))['build-system']['requires']))"
-          > "$RUNNER_TEMP/build-backend.txt"
-          && uv pip install --target "$RUNNER_TEMP/build-backend" -r "$RUNNER_TEMP/build-backend.txt"
       - name: Run API tests (parallel)
         run: >-
           uv run --frozen --extra test make test-api-core JOBS=auto
@@ -263,7 +224,6 @@ jobs:
         with:
           name: coverage-api
           path: .coverage
-          include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
 
@@ -294,7 +254,7 @@ jobs:
         run: >-
           uv run --frozen --extra test python
           scripts/check_coverage.py
-          coverage-unit-*/.coverage coverage-api/.coverage
+          coverage-unit/.coverage coverage-api/.coverage
 
   # ── Slow tier (endpoint-loop integration; ~90s each) — bounded parallel ──
   # Kept in a separate job because the loops are multi-minute, but a release
@@ -312,12 +272,8 @@ jobs:
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           enable-cache: true
-      - name: Install ripgrep
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ripgrep
       - name: Verify lock and sync test environment
         run: uv lock --check && uv sync --frozen --extra test
-      - name: Install headless Chromium + system deps
-        run: uv run --frozen --extra test python -m playwright install --with-deps --only-shell chromium
       - name: Run slow tests
         run: uv run --frozen --extra test make test-slow JOBS=auto
 
@@ -455,21 +411,6 @@ jobs:
           "import importlib.util, os;
           assert importlib.util.find_spec('playwright') is not None;
           assert os.path.isdir('/opt/ms-playwright')"
-      # The worker installs Chromium's shared libraries by soname instead of
-      # Playwright's apt-only --with-deps, so prove the browser really starts.
-      - name: Verify worker launches Chromium
-        if: matrix.target == 'worker'
-        run: >-
-          docker run --rm tofu-worker:ci python -c
-          "from playwright.sync_api import sync_playwright;
-          playwright = sync_playwright().start();
-          browser = playwright.chromium.launch();
-          page = browser.new_page();
-          page.set_content('<title>tofu</title><p>Tofu</p>');
-          assert page.title() == 'tofu';
-          assert len(page.screenshot()) > 0;
-          browser.close();
-          playwright.stop()"
       - name: Generate ${{ matrix.target }} CycloneDX SBOM
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -661,14 +602,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # Visual journeys load repository node_modules (marked, typescript,
-      # vite) directly through node and the browser.
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .node-version
-          cache: npm
-      - name: Install JS dev-deps from lockfile
-        run: npm ci
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:

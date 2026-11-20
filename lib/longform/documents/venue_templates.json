@@ -1,0 +1,2307 @@
+{
+ "schema": "tofu.venue-templates/1",
+ "about": "Pinned official venue templates. Edit by the procedure in docs/DOCUMENT_PIPELINE.md (\"Updating a venue template\"); never by copying an older edition.",
+ "editions": [
+  {
+   "id": "icml-2027",
+   "venue": "icml",
+   "family": "icml",
+   "conference": "ICML 2027",
+   "year": 2027,
+   "status": "pinned",
+   "checked": "2026-11-18",
+   "archive": {
+    "url": "https://media.icml.cc/Conferences/ICML2027/styles/icml2027.zip",
+    "sha256": "52384a2a4f32e562755e44ced55a58f857f8706425f2f04904190f613531801e",
+    "retrieved": "2026-11-18"
+   },
+   "kit_dir": "",
+   "files": {
+    "algorithmic.sty": "48d18794a5d97c0479a588cc2eac0917992feb9da83acc4631b8f55757d80f9b",
+    "algorithm.sty": "93fd0eb31c112eb405833db8f1d7f5d238c7e691b1c05680d7276e68f36d564a",
+    "fancyhdr.sty": "9130c52f91087abc6d223164ffa587e207e3257fcbcd069ef09ecb5391043f14",
+    "icml2027.bst": "0ec3d5eb9b02efb7e0b44a32f3775882f42a743d0bdc618f34e6936309b98764",
+    "icml2027.sty": "3a61b88dc041e0f1db75cd8ff0a8e5396979cfb88cbde684333eb1a0ae585e30"
+   },
+   "sample": "example_paper.tex",
+   "layout": {
+    "begin": {
+     "paperwidth": "614.295pt",
+     "paperheight": "794.96999pt",
+     "textwidth": "487.8225pt",
+     "textheight": "650.43pt",
+     "columnwidth": "234.8775pt",
+     "columnsep": "18.06749pt",
+     "oddsidemargin": "-16.62178pt",
+     "evensidemargin": "-16.62178pt",
+     "topmargin": "-24.95781pt",
+     "headheight": "10.0pt",
+     "headsep": "10.0pt",
+     "footskip": "25.0pt",
+     "hoffset": "0.0pt",
+     "voffset": "0.0pt",
+     "fontsize": "10",
+     "baselineskip": "12.0pt",
+     "fontfamily": "ptm",
+     "twocolumn": "1"
+    },
+    "end": {
+     "paperwidth": "614.295pt",
+     "paperheight": "794.96999pt",
+     "textwidth": "487.8225pt",
+     "textheight": "650.43pt",
+     "columnwidth": "487.8225pt",
+     "columnsep": "18.06749pt",
+     "oddsidemargin": "-16.62178pt",
+     "evensidemargin": "-16.62178pt",
+     "topmargin": "-24.95781pt",
+     "headheight": "10.0pt",
+     "headsep": "10.0pt",
+     "footskip": "25.0pt",
+     "hoffset": "0.0pt",
+     "voffset": "0.0pt",
+     "fontsize": "10",
+     "baselineskip": "12.0pt",
+     "fontfamily": "ptm",
+     "twocolumn": "0"
+    }
+   },
+   "archive_source": {
+    "source": {
+     "url": "https://icml.cc/Conferences/2027/AuthorInstructions",
+     "quote": "The camera-ready version should be prepared using the ICML 2027 Style File (available in icml2027.zip)"
+    }
+   },
+   "main_style_file": "icml2027.sty",
+   "owned_files": [
+    "icml2027.sty",
+    "icml2027.bst"
+   ],
+   "style_pattern": "icml\\d{4}",
+   "page_limits": {
+    "regular": {
+     "submission": 8,
+     "camera_ready": 9
+    }
+   },
+   "page_limits_rule": {
+    "source": {
+     "url": "https://icml.cc/Conferences/2027/CallForPapers",
+     "quote": "8 pages for the main paper, with unlimited pages for references, the impact statement, and appendices"
+    }
+   },
+   "extra_rules": [
+    {
+     "name": "camera-ready body 9 pages",
+     "source": {
+      "url": "https://icml.cc/Conferences/2027/AuthorInstructions",
+      "quote": "the length limit of the paper body is 9 pages"
+     }
+    }
+   ],
+   "anonymity": {
+    "rule": "double-blind: default build (no [accepted]) prints \"Anonymous Authors\"; no acknowledgements, grant numbers or links to public code repositories",
+    "double_blind": true,
+    "forbid_acknowledgements": true,
+    "pdf_markers": [
+     "Anonymous Authors"
+    ],
+    "source": {
+     "url": "https://icml.cc/Conferences/2027/AuthorInstructions",
+     "quote": "They should refrain from including acknowledgements, grant numbers, or links to public code repositories in their submissions."
+    }
+   },
+   "required_sections": [
+    {
+     "heading": "Impact Statement",
+     "source": {
+      "url": "https://icml.cc/Conferences/2027/AuthorInstructions",
+      "quote": "Impact statement is mandatory for the main track"
+     }
+    },
+    {
+     "heading": "AI Disclosure Statement",
+     "note": "CFP and AI policy govern submission requirements: use AI Disclosure Statement. Kit says AI Use Statement; the discrepancy is unresolved, and that heading alone does not prove policy compliance.",
+     "source": {
+      "url": "https://icml.cc/Conferences/2027/UseOfGenerativeAIByAuthors",
+      "quote": "All submissions must include an AI Disclosure Statement at the end of the paper, before or after the references."
+     }
+    }
+   ],
+   "exempt_sections": {
+    "headings": [
+     "Impact Statement",
+     "AI Disclosure Statement",
+     "AI Use Statement",
+     "Accessibility",
+     "Software and Data",
+     "Acknowledgements",
+     "Acknowledgments"
+    ],
+    "source": {
+     "url": "https://icml.cc/Conferences/2027/CallForPapers",
+     "quote": "All submissions must include an AI disclosure statement. The statement does not count toward the paper page limit."
+    }
+   },
+   "modes": {
+    "submission": {
+     "forbidden_options": [
+      "accepted",
+      "preprint"
+     ]
+    },
+    "camera_ready": {
+     "required_options": [
+      "accepted"
+     ]
+    }
+   },
+   "newer_edition_probes": [
+    "https://icml.cc/Conferences/2028/CallForPapers",
+    "https://icml.cc/Conferences/2028/AuthorInstructions"
+   ],
+   "policy_conflicts": [
+    {
+     "topic": "AI statement heading",
+     "resolution": "Use the explicit CFP/AI policy heading AI Disclosure Statement. The kit example alone is not authority to waive that requirement. This gate does not guarantee venue acceptance.",
+     "sources": [
+      {
+       "url": "https://icml.cc/Conferences/2027/UseOfGenerativeAIByAuthors",
+       "quote": "All submissions must include an AI Disclosure Statement at the end of the paper, before or after the references."
+      },
+      {
+       "url": "https://media.icml.cc/Conferences/ICML2027/styles/icml2027.zip",
+       "archive_member": "example_paper.tex",
+       "quote": "\\section*{AI Use Statement}"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "icml-2028",
+   "venue": "icml",
+   "conference": "ICML 2028",
+   "year": 2028,
+   "status": "unverified",
+   "checked": "2026-11-18",
+   "not_released_evidence": [
+    {
+     "url": "https://icml.cc/Conferences/2028/CallForPapers",
+     "result": "HTTP 404"
+    },
+    {
+     "url": "https://icml.cc/Conferences/2028/AuthorInstructions",
+     "result": "HTTP 404"
+    }
+   ],
+   "draft_fallback": "icml-2027",
+   "availability_note": "HTTP 404 or connection failure is inability to verify availability, not proof that no template exists."
+  },
+  {
+   "id": "icml-workshop-2027",
+   "venue": "icml-workshop",
+   "conference": "ICML 2027 workshops",
+   "year": 2027,
+   "status": "not_released",
+   "checked": "2026-11-18",
+   "not_released_evidence": [
+    {
+     "url": "https://icml.cc/Conferences/2027/CallForWorkshops",
+     "result": "HTTP 200: \"The ICML 2027 Call for Workshops will be posted here soon.\"",
+     "quote": "The ICML 2027 Call for Workshops will be posted here soon."
+    }
+   ]
+  },
+  {
+   "id": "neurips-2026",
+   "venue": "neurips",
+   "family": "neurips",
+   "conference": "NeurIPS 2026",
+   "year": 2026,
+   "status": "pinned",
+   "checked": "2026-11-18",
+   "archive": {
+    "url": "https://media.neurips.cc/Conferences/NeurIPS2026/Formatting_Instructions_For_NeurIPS_2026.zip",
+    "sha256": "82473931e3ef710fcd3f4a8cd4119b9de32e56825f90f9e5a6d55f2d01b817d9",
+    "retrieved": "2026-11-18"
+   },
+   "kit_dir": "",
+   "files": {
+    "neurips_2026.sty": "c3fc2894e83d2517ca18b66741d6c595986d97957dc08ec08bb2125a7ec4555a"
+   },
+   "sample": "neurips_2026.tex",
+   "layout": {
+    "begin": {
+     "paperwidth": "614.295pt",
+     "paperheight": "794.96999pt",
+     "textwidth": "397.48499pt",
+     "textheight": "650.43pt",
+     "columnwidth": "397.48499pt",
+     "columnsep": "10.0pt",
+     "oddsidemargin": "36.13501pt",
+     "evensidemargin": "36.13501pt",
+     "topmargin": "-37.0pt",
+     "headheight": "12.0pt",
+     "headsep": "25.0pt",
+     "footskip": "30.0pt",
+     "hoffset": "0.0pt",
+     "voffset": "0.0pt",
+     "fontsize": "10",
+     "baselineskip": "10.95pt",
+     "fontfamily": "ptm",
+     "twocolumn": "0"
+    },
+    "end": {
+     "paperwidth": "614.295pt",
+     "paperheight": "794.96999pt",
+     "textwidth": "397.48499pt",
+     "textheight": "650.43pt",
+     "columnwidth": "397.48499pt",
+     "columnsep": "10.0pt",
+     "oddsidemargin": "36.13501pt",
+     "evensidemargin": "36.13501pt",
+     "topmargin": "-37.0pt",
+     "headheight": "12.0pt",
+     "headsep": "25.0pt",
+     "footskip": "30.0pt",
+     "hoffset": "0.0pt",
+     "voffset": "0.0pt",
+     "fontsize": "10",
+     "baselineskip": "10.95pt",
+     "fontfamily": "ptm",
+     "twocolumn": "0"
+    }
+   },
+   "archive_source": {
+    "source": {
+     "url": "https://neurips.cc/Conferences/2026/MainTrackHandbook",
+     "quote": "You must format your submission using the LaTeX style file for that year."
+    }
+   },
+   "main_style_file": "neurips_2026.sty",
+   "owned_files": [
+    "neurips_2026.sty"
+   ],
+   "style_pattern": "neurips_\\d{4}",
+   "page_limits": {
+    "regular": {
+     "submission": 9,
+     "camera_ready": 10
+    }
+   },
+   "page_limits_rule": {
+    "source": {
+     "url": "https://neurips.cc/Conferences/2026/MainTrackHandbook",
+     "quote": "The main text of a submitted paper is limited to nine content pages, including all figures and tables."
+    }
+   },
+   "extra_rules": [
+    {
+     "name": "camera-ready extra page",
+     "source": {
+      "url": "https://neurips.cc/Conferences/2026/MainTrackHandbook",
+      "quote": "If your submission is accepted, you will be allowed an additional content page for the camera-ready version."
+     }
+    },
+    {
+     "name": "default main track",
+     "source": {
+      "url": "https://media.neurips.cc/Conferences/NeurIPS2026/Formatting_Instructions_For_NeurIPS_2026.zip",
+      "archive_member": "neurips_2026.sty",
+      "quote": "\\newif\\if@main\\@maintrue"
+     }
+    }
+   ],
+   "anonymity": {
+    "rule": "double-blind (main and E&D): the track option without final/preprint prints \"Anonymous Author(s)\"; no acknowledgements at submission",
+    "double_blind": true,
+    "forbid_acknowledgements": true,
+    "pdf_markers": [
+     "Anonymous Author(s)"
+    ],
+    "source": {
+     "url": "https://neurips.cc/Conferences/2026/MainTrackHandbook",
+     "quote": "Please do not include acknowledgments at submission time."
+    }
+   },
+   "required_sections": [
+    {
+     "heading": "NeurIPS Paper Checklist",
+     "todo_markers": [
+      "\\answerTODO",
+      "\\justificationTODO"
+     ],
+     "source": {
+      "url": "https://neurips.cc/public/guides/PaperChecklist",
+      "quote": "The papers not including the checklist will be desk rejected."
+     }
+    }
+   ],
+   "exempt_sections": {
+    "headings": [
+     "NeurIPS Paper Checklist",
+     "Acknowledgments",
+     "Acknowledgements"
+    ],
+    "source": {
+     "url": "https://neurips.cc/Conferences/2026/MainTrackHandbook",
+     "quote": "Additional pages containing references, optional technical appendices and mandatory paper checklist do not count as content pages."
+    }
+   },
+   "tracks": {
+    "main": {
+     "option": "main",
+     "source": {
+      "url": "https://neurips.cc/Conferences/2026/CallForPapers",
+      "quote": "NeurIPS 2026"
+     }
+    },
+    "eandd": {
+     "option": "eandd",
+     "source": {
+      "url": "https://neurips.cc/Conferences/2026/EvaluationsDatasetsFAQ",
+      "quote": "It's the same as the main track template."
+     }
+    }
+   },
+   "modes": {
+    "submission": {
+     "forbidden_options": [
+      "final",
+      "preprint"
+     ]
+    },
+    "camera_ready": {
+     "required_options": [
+      "final"
+     ]
+    }
+   },
+   "newer_edition_probes": [
+    "https://neurips.cc/Conferences/2027/CallForPapers"
+   ],
+   "default_track": "main"
+  },
+  {
+   "id": "neurips-2027",
+   "venue": "neurips",
+   "conference": "NeurIPS 2027",
+   "year": 2027,
+   "status": "unverified",
+   "checked": "2026-11-18",
+   "not_released_evidence": [
+    {
+     "url": "https://neurips.cc/Conferences/2027/CallForPapers",
+     "result": "HTTP 404"
+    },
+    {
+     "url": "https://neurips.cc/Conferences/2027/Dates",
+     "result": "HTTP 404"
+    }
+   ],
+   "draft_fallback": "neurips-2026",
+   "availability_note": "HTTP 404 or connection failure is inability to verify availability, not proof that no template exists."
+  },
+  {
+   "id": "iclr-2027",
+   "venue": "iclr",
+   "family": "iclr",
+   "conference": "ICLR 2027",
+   "year": 2027,
+   "status": "pinned",
+   "checked": "2026-11-18",
+   "archive": {
+    "url": "https://media.iclr.cc/Conferences/ICLR2027/iclr-2027-style-files.zip",
+    "sha256": "0d940dfa9398ae99a18f24a85a8a683f367204b6af6d17d2899e60a67102529e",
+    "retrieved": "2026-11-18"
+   },
+   "kit_dir": "",
+   "files": {
+    "math_commands.tex": "90473c4d0542070db244cea73ef962d6cddc5b2a746757e6a40ddf5fdfb90ba9",
+    "fancyhdr.sty": "b56ec4434b9f4607529a4b23dc68ad8d4b94f1f631c8cddaf7da78140d53a5ea",
+    "iclr2027_conference.bst": "2d67552db7ed38ccfccb5957b52f95656e25c249724761d3cf5f7922ad1844c5",
+    "natbib.sty": "88bc70c0e48461934cab5b2accef06b74a8b3ac45ad03ccd3f2a6b7e0d6d530d",
+    "iclr2027_conference.sty": "797deef41724e93761426ac0cbcca46279a91cc650dd1f0ce76a4f08d2098ea6"
+   },
+   "sample": "iclr2027_conference.tex",
+   "layout": {
+    "begin": {
+     "paperwidth": "614.295pt",
+     "paperheight": "794.96999pt",
+     "textwidth": "397.48499pt",
+     "textheight": "650.43pt",
+     "columnwidth": "397.48499pt",
+     "columnsep": "10.0pt",
+     "oddsidemargin": "36.135pt",
+     "evensidemargin": "36.135pt",
+     "topmargin": "-45.16875pt",
+     "headheight": "12.0pt",
+     "headsep": "43.06749pt",
+     "footskip": "30.0pt",
+     "hoffset": "0.0pt",
+     "voffset": "0.0pt",
+     "fontsize": "10",
+     "baselineskip": "11.0pt",
+     "fontfamily": "ptm",
+     "twocolumn": "0"
+    },
+    "end": {
+     "paperwidth": "614.295pt",
+     "paperheight": "794.96999pt",
+     "textwidth": "397.48499pt",
+     "textheight": "650.43pt",
+     "columnwidth": "397.48499pt",
+     "columnsep": "10.0pt",
+     "oddsidemargin": "36.135pt",
+     "evensidemargin": "36.135pt",
+     "topmargin": "-45.16875pt",
+     "headheight": "12.0pt",
+     "headsep": "43.06749pt",
+     "footskip": "30.0pt",
+     "hoffset": "0.0pt",
+     "voffset": "0.0pt",
+     "fontsize": "10",
+     "baselineskip": "11.0pt",
+     "fontfamily": "ptm",
+     "twocolumn": "0"
+    }
+   },
+   "archive_source": {
+    "source": {
+     "url": "https://iclr.cc/Conferences/2027/AuthorGuidelines",
+     "quote": "https://media.iclr.cc/Conferences/ICLR2027/iclr-2027-style-files.zip"
+    }
+   },
+   "main_style_file": "iclr2027_conference.sty",
+   "owned_files": [
+    "iclr2027_conference.sty",
+    "iclr2027_conference.bst"
+   ],
+   "style_pattern": "iclr\\d{4}_conference",
+   "page_limits": {
+    "regular": {
+     "submission": 9,
+     "rebuttal": 10,
+     "camera_ready": 10
+    }
+   },
+   "page_limits_rule": {
+    "source": {
+     "url": "https://iclr.cc/Conferences/2027/AuthorGuidelines",
+     "quote": "At the time of submission, the main text should be 9 pages or fewer."
+    }
+   },
+   "anonymity": {
+    "rule": "double-blind: default build (no \\iclrfinalcopy) prints \"Anonymous authors\"",
+    "double_blind": true,
+    "pdf_markers": [
+     "Anonymous authors"
+    ],
+    "source": {
+     "url": "https://iclr.cc/Conferences/2027/AuthorGuidelines",
+     "quote": "Any paper where author identity is revealed in either the main text or the supplementary material will be desk rejected."
+    }
+   },
+   "required_sections": [
+    {
+     "heading": "AI use statement",
+     "source": {
+      "url": "https://iclr.cc/Conferences/2027/AIPolicyForAuthors",
+      "quote": "we require authors to disclose AI use in a mandatory section in their paper"
+     }
+    }
+   ],
+   "exempt_sections": {
+    "headings": [
+     "AI use statement",
+     "Ethics statement",
+     "Reproducibility statement",
+     "Acknowledgments"
+    ],
+    "source": {
+     "url": "https://iclr.cc/Conferences/2027/AuthorGuidelines",
+     "quote": "This optional reproducibility statement is not part of the main text and therefore will not count toward the page limit."
+    }
+   },
+   "modes": {
+    "submission": {
+     "forbidden_commands": [
+      "\\iclrfinalcopy"
+     ]
+    }
+   },
+   "newer_edition_probes": [
+    "https://iclr.cc/Conferences/2028/AuthorGuidelines"
+   ]
+  },
+  {
+   "id": "iclr-2028",
+   "venue": "iclr",
+   "conference": "ICLR 2028",
+   "year": 2028,
+   "status": "unverified",
+   "checked": "2026-11-18",
+   "not_released_evidence": [
+    {
+     "url": "https://iclr.cc/Conferences/2028/AuthorGuidelines",
+     "result": "HTTP 404"
+    },
+    {
+     "url": "https://iclr.cc/Conferences/2028/CallForPapers",
+     "result": "HTTP 404"
+    }
+   ],
+   "draft_fallback": "iclr-2027",
+   "availability_note": "HTTP 404 or connection failure is inability to verify availability, not proof that no template exists."
+  },
+  {
+   "id": "colm-2026",
+   "venue": "colm",
+   "family": "colm",
+   "conference": "COLM 2026",
+   "year": 2026,
+   "status": "pinned",
+   "checked": "2026-11-18",
+   "archive": {
+    "url": "https://github.com/COLM-org/Template/archive/refs/tags/2026.zip",
+    "sha256": "24c616f7c37769db12fb2f2064b0f55a710b1503d673ba6a3cc114c54c01335e",
+    "retrieved": "2026-11-18",
+    "upstream_commit": "963ddd1d5756b6155a4fc6f2404fb941a9c0ca17",
+    "final_url": "https://codeload.github.com/COLM-org/Template/zip/refs/tags/2026",
+    "final_url_verified_on": "2026-11-18"
+   },
+   "kit_dir": "",
+   "files": {
+    "colm2026_conference.bst": "2d67552db7ed38ccfccb5957b52f95656e25c249724761d3cf5f7922ad1844c5",
+    "colm2026_conference.sty": "55962ae80c25a50335825c85d23eb5f1cd9015aa8e77f7af32b483b646c7483e",
+    "fancyhdr.sty": "b56ec4434b9f4607529a4b23dc68ad8d4b94f1f631c8cddaf7da78140d53a5ea",
+    "math_commands.tex": "90473c4d0542070db244cea73ef962d6cddc5b2a746757e6a40ddf5fdfb90ba9",
+    "natbib.sty": "88bc70c0e48461934cab5b2accef06b74a8b3ac45ad03ccd3f2a6b7e0d6d530d"
+   },
+   "sample": "colm2026_conference.tex",
+   "layout": {
+    "begin": {
+     "paperwidth": "614.295pt",
+     "paperheight": "794.96999pt",
+     "textwidth": "397.48499pt",
+     "textheight": "650.43pt",
+     "columnwidth": "397.48499pt",
+     "columnsep": "10.0pt",
+     "oddsidemargin": "36.135pt",
+     "evensidemargin": "36.135pt",
+     "topmargin": "-45.16875pt",
+     "headheight": "12.0pt",
+     "headsep": "43.06749pt",
+     "footskip": "30.0pt",
+     "hoffset": "0.0pt",
+     "voffset": "0.0pt",
+     "fontsize": "10",
+     "baselineskip": "11.0pt",
+     "fontfamily": "ppl",
+     "twocolumn": "0"
+    },
+    "end": {
+     "paperwidth": "614.295pt",
+     "paperheight": "794.96999pt",
+     "textwidth": "397.48499pt",
+     "textheight": "650.43pt",
+     "columnwidth": "397.48499pt",
+     "columnsep": "10.0pt",
+     "oddsidemargin": "36.135pt",
+     "evensidemargin": "36.135pt",
+     "topmargin": "-45.16875pt",
+     "headheight": "12.0pt",
+     "headsep": "43.06749pt",
+     "footskip": "30.0pt",
+     "hoffset": "0.0pt",
+     "voffset": "0.0pt",
+     "fontsize": "10",
+     "baselineskip": "11.0pt",
+     "fontfamily": "ppl",
+     "twocolumn": "0"
+    }
+   },
+   "archive_source": {
+    "source": {
+     "url": "https://colm.cc/Conferences/2026/CallForPapers",
+     "quote": "https://github.com/COLM-org/Template/releases/tag/2026"
+    }
+   },
+   "main_style_file": "colm2026_conference.sty",
+   "owned_files": [
+    "colm2026_conference.sty",
+    "colm2026_conference.bst"
+   ],
+   "style_pattern": "colm\\d{4}_conference",
+   "page_limits": {
+    "regular": {
+     "submission": 9
+    }
+   },
+   "page_limits_rule": {
+    "source": {
+     "url": "https://colm.cc/Conferences/2026/CallForPapers",
+     "quote": "There is a strict upper limit of 9 pages for the main text of the submission, with unlimited additional pages for citations."
+    }
+   },
+   "anonymity": {
+    "rule": "double-blind: [submission] prints \"Anonymous authors\"; no acknowledgments or identifying links",
+    "double_blind": true,
+    "forbid_acknowledgements": true,
+    "pdf_markers": [
+     "Anonymous authors"
+    ],
+    "source": {
+     "url": "https://colm.cc/Conferences/2026/CallForPapers",
+     "quote": "the submission must not contain acknowledgments or any link (e.g., github) that would reveal authors' identity."
+    }
+   },
+   "exempt_sections": {
+    "headings": [
+     "Ethics Statement",
+     "Reproducibility Statement",
+     "Acknowledgments"
+    ],
+    "source": {
+     "url": "https://colm.cc/Conferences/2026/CallForPapers",
+     "quote": "Authors can add an optional ethics statement to the paper; it will not count toward the page limit, but should not be more than 1 page."
+    }
+   },
+   "modes": {
+    "submission": {
+     "forbidden_options": [
+      "final",
+      "preprint"
+     ]
+    },
+    "camera_ready": {
+     "required_options": [
+      "final"
+     ]
+    }
+   },
+   "newer_edition_probes": [
+    "https://colm.cc/Conferences/2027/CallForPapers"
+   ]
+  },
+  {
+   "id": "colm-2027",
+   "venue": "colm",
+   "conference": "COLM 2027",
+   "year": 2027,
+   "status": "unverified",
+   "checked": "2026-11-18",
+   "not_released_evidence": [
+    {
+     "url": "https://colm.cc/Conferences/2027/CallForPapers",
+     "result": "HTTP 404"
+    },
+    {
+     "url": "https://colm.cc/Conferences/2027/AuthorGuide",
+     "result": "HTTP 404"
+    }
+   ],
+   "draft_fallback": "colm-2026",
+   "availability_note": "HTTP 404 or connection failure is inability to verify availability, not proof that no template exists."
+  },
+  {
+   "id": "arr-rolling",
+   "venue": "arr",
+   "family": "acl",
+   "conference": "ACL Rolling Review (rolling cycles)",
+   "year": null,
+   "status": "pinned",
+   "checked": "2026-11-18",
+   "archive": {
+    "url": "https://github.com/acl-org/acl-style-files/archive/d5adc823ff0f80f98c80405ca0ab66c68e684409.zip",
+    "sha256": "35b158b724d04435a657ab214fe4da5f2b57808fc15ca0f24b751bc07b1d1c73",
+    "retrieved": "2026-11-18",
+    "upstream_commit": "d5adc823ff0f80f98c80405ca0ab66c68e684409",
+    "final_url": "https://codeload.github.com/acl-org/acl-style-files/zip/d5adc823ff0f80f98c80405ca0ab66c68e684409",
+    "final_url_verified_on": "2026-11-18"
+   },
+   "kit_dir": "",
+   "files": {
+    "acl.sty": "19dfeddc2c0e448f3926a0bef048a9db3f3611b46265b760caabd7ada4f361de",
+    "acl_natbib.bst": "6fbb306202290f4b68e74ac1460a8b27398500cb6dfeb4492e74c457eae7cd1e"
+   },
+   "sample": "acl_latex.tex",
+   "layout": {
+    "begin": {
+     "paperwidth": "597.50787pt",
+     "paperheight": "845.04684pt",
+     "textwidth": "455.24411pt",
+     "textheight": "704.60031pt",
+     "columnwidth": "219.08614pt",
+     "columnsep": "17.07182pt",
+     "oddsidemargin": "-1.1381pt",
+     "evensidemargin": "-1.1381pt",
+     "topmargin": "-38.1381pt",
+     "headheight": "12.0pt",
+     "headsep": "25.0pt",
+     "footskip": "30.0pt",
+     "hoffset": "0.0pt",
+     "voffset": "0.0pt",
+     "fontsize": "10.95",
+     "baselineskip": "13.6pt",
+     "fontfamily": "ptm",
+     "twocolumn": "1"
+    },
+    "end": {
+     "paperwidth": "597.50787pt",
+     "paperheight": "845.04684pt",
+     "textwidth": "455.24411pt",
+     "textheight": "704.60031pt",
+     "columnwidth": "219.08614pt",
+     "columnsep": "17.07182pt",
+     "oddsidemargin": "-1.1381pt",
+     "evensidemargin": "-1.1381pt",
+     "topmargin": "-38.1381pt",
+     "headheight": "12.0pt",
+     "headsep": "25.0pt",
+     "footskip": "30.0pt",
+     "hoffset": "0.0pt",
+     "voffset": "0.0pt",
+     "fontsize": "10.95",
+     "baselineskip": "13.6pt",
+     "fontfamily": "ptm",
+     "twocolumn": "1"
+    }
+   },
+   "archive_source": {
+    "source": {
+     "url": "https://aclrollingreview.org/cfp",
+     "quote": "Paper submissions must use the official ACL style template"
+    }
+   },
+   "upstream_head": {
+    "url": "https://github.com/acl-org/acl-style-files/commits/master.atom",
+    "pattern": "Commit/([0-9a-f]{40})",
+    "commit": "d5adc823ff0f80f98c80405ca0ab66c68e684409"
+   },
+   "main_style_file": "acl.sty",
+   "owned_files": [
+    "acl.sty",
+    "acl_natbib.bst"
+   ],
+   "page_limits": {
+    "long": {
+     "submission": 8,
+     "camera_ready": 9
+    },
+    "short": {
+     "submission": 4,
+     "camera_ready": 5
+    }
+   },
+   "page_limits_rule": {
+    "source": {
+     "url": "https://aclrollingreview.org/cfp",
+     "quote": "up to eight (8) pages of content"
+    }
+   },
+   "anonymity": {
+    "rule": "double-blind: [review] prints \"Anonymous ACL submission\", line numbers; no acknowledgements in the review version",
+    "double_blind": true,
+    "forbid_acknowledgements": true,
+    "pdf_markers": [
+     "Anonymous ACL submission"
+    ],
+    "source": {
+     "url": "https://aclrollingreview.org/cfp",
+     "quote": "Papers must not include authors' names and affiliations."
+    }
+   },
+   "required_sections": [
+    {
+     "heading": "Limitations",
+     "source": {
+      "url": "https://aclrollingreview.org/cfp",
+      "quote": "Authors are required to discuss the limitations of their work in a dedicated section titled"
+     }
+    }
+   ],
+   "exempt_sections": {
+    "headings": [
+     "Limitations",
+     "Ethical considerations",
+     "Ethics Statement",
+     "Acknowledgments",
+     "Acknowledgements"
+    ],
+    "source": {
+     "url": "https://aclrollingreview.org/cfp",
+     "quote": "unlimited extra space after the conclusion for limitations (required, see below) and optional section on ethical considerations"
+    }
+   },
+   "allowed_layout_commands": [
+    "\\documentclass[11pt]"
+   ],
+   "modes": {
+    "submission": {
+     "required_options": [
+      "review"
+     ],
+     "forbidden_options": [
+      "final",
+      "preprint"
+     ]
+    },
+    "camera_ready": {
+     "forbidden_options": [
+      "review",
+      "preprint"
+     ]
+    }
+   },
+   "extra_rules": [
+    {
+     "name": "camera-ready +1 page",
+     "source": {
+      "url": "https://acl-org.github.io/ACLPUB/formatting.html",
+      "quote": "final versions of long papers will be given one additional page"
+     }
+    }
+   ]
+  },
+  {
+   "id": "acl-2027",
+   "venue": "acl",
+   "family": "acl",
+   "conference": "ACL 2027",
+   "year": 2027,
+   "status": "pinned",
+   "checked": "2026-11-18",
+   "archive": {
+    "url": "https://github.com/acl-org/acl-style-files/archive/d5adc823ff0f80f98c80405ca0ab66c68e684409.zip",
+    "sha256": "35b158b724d04435a657ab214fe4da5f2b57808fc15ca0f24b751bc07b1d1c73",
+    "retrieved": "2026-11-18",
+    "upstream_commit": "d5adc823ff0f80f98c80405ca0ab66c68e684409",
+    "final_url": "https://codeload.github.com/acl-org/acl-style-files/zip/d5adc823ff0f80f98c80405ca0ab66c68e684409",
+    "final_url_verified_on": "2026-11-18"
+   },
+   "kit_dir": "",
+   "files": {
+    "acl.sty": "19dfeddc2c0e448f3926a0bef048a9db3f3611b46265b760caabd7ada4f361de",
+    "acl_natbib.bst": "6fbb306202290f4b68e74ac1460a8b27398500cb6dfeb4492e74c457eae7cd1e"
+   },
+   "sample": "acl_latex.tex",
+   "layout": {
+    "begin": {
+     "paperwidth": "597.50787pt",
+     "paperheight": "845.04684pt",
+     "textwidth": "455.24411pt",
+     "textheight": "704.60031pt",
+     "columnwidth": "219.08614pt",
+     "columnsep": "17.07182pt",
+     "oddsidemargin": "-1.1381pt",
+     "evensidemargin": "-1.1381pt",
+     "topmargin": "-38.1381pt",
+     "headheight": "12.0pt",
+     "headsep": "25.0pt",
+     "footskip": "30.0pt",
+     "hoffset": "0.0pt",
+     "voffset": "0.0pt",
+     "fontsize": "10.95",
+     "baselineskip": "13.6pt",
+     "fontfamily": "ptm",
+     "twocolumn": "1"
+    },
+    "end": {
+     "paperwidth": "597.50787pt",
+     "paperheight": "845.04684pt",
+     "textwidth": "455.24411pt",
+     "textheight": "704.60031pt",
+     "columnwidth": "219.08614pt",
+     "columnsep": "17.07182pt",
+     "oddsidemargin": "-1.1381pt",
+     "evensidemargin": "-1.1381pt",
+     "topmargin": "-38.1381pt",
+     "headheight": "12.0pt",
+     "headsep": "25.0pt",
+     "footskip": "30.0pt",
+     "hoffset": "0.0pt",
+     "voffset": "0.0pt",
+     "fontsize": "10.95",
+     "baselineskip": "13.6pt",
+     "fontfamily": "ptm",
+     "twocolumn": "1"
+    }
+   },
+   "archive_source": {
+    "source": {
+     "url": "https://aclrollingreview.org/cfp",
+     "quote": "Paper submissions must use the official ACL style template"
+    }
+   },
+   "upstream_head": {
+    "url": "https://github.com/acl-org/acl-style-files/commits/master.atom",
+    "pattern": "Commit/([0-9a-f]{40})",
+    "commit": "d5adc823ff0f80f98c80405ca0ab66c68e684409"
+   },
+   "main_style_file": "acl.sty",
+   "owned_files": [
+    "acl.sty",
+    "acl_natbib.bst"
+   ],
+   "page_limits": {
+    "long": {
+     "submission": 8,
+     "camera_ready": 9
+    },
+    "short": {
+     "submission": 4,
+     "camera_ready": 5
+    }
+   },
+   "page_limits_rule": {
+    "source": {
+     "url": "https://2027.aclweb.org/calls/main/",
+     "quote": "Final versions of accepted papers will be given one additional page of content"
+    }
+   },
+   "anonymity": {
+    "rule": "double-blind: [review] prints \"Anonymous ACL submission\", line numbers; no acknowledgements in the review version",
+    "double_blind": true,
+    "forbid_acknowledgements": true,
+    "pdf_markers": [
+     "Anonymous ACL submission"
+    ],
+    "source": {
+     "url": "https://aclrollingreview.org/cfp",
+     "quote": "Papers must not include authors' names and affiliations."
+    }
+   },
+   "required_sections": [
+    {
+     "heading": "Limitations",
+     "source": {
+      "url": "https://aclrollingreview.org/cfp",
+      "quote": "Authors are required to discuss the limitations of their work in a dedicated section titled"
+     }
+    }
+   ],
+   "exempt_sections": {
+    "headings": [
+     "Limitations",
+     "Ethical considerations",
+     "Ethics Statement",
+     "Acknowledgments",
+     "Acknowledgements"
+    ],
+    "source": {
+     "url": "https://aclrollingreview.org/cfp",
+     "quote": "unlimited extra space after the conclusion for limitations (required, see below) and optional section on ethical considerations"
+    }
+   },
+   "allowed_layout_commands": [
+    "\\documentclass[11pt]"
+   ],
+   "modes": {
+    "submission": {
+     "required_options": [
+      "review"
+     ],
+     "forbidden_options": [
+      "final",
+      "preprint"
+     ]
+    },
+    "camera_ready": {
+     "forbidden_options": [
+      "review",
+      "preprint"
+     ]
+    }
+   },
+   "extra_rules": [
+    {
+     "name": "ARR requirements apply",
+     "source": {
+      "url": "https://2027.aclweb.org/calls/main/",
+      "quote": "should follow all of the ARR submission requirements"
+     }
+    }
+   ]
+  },
+  {
+   "id": "naacl-2027",
+   "venue": "naacl",
+   "family": "acl",
+   "conference": "NAACL 2027",
+   "year": 2027,
+   "status": "pinned",
+   "checked": "2026-11-18",
+   "archive": {
+    "url": "https://github.com/acl-org/acl-style-files/archive/d5adc823ff0f80f98c80405ca0ab66c68e684409.zip",
+    "sha256": "35b158b724d04435a657ab214fe4da5f2b57808fc15ca0f24b751bc07b1d1c73",
+    "retrieved": "2026-11-18",
+    "upstream_commit": "d5adc823ff0f80f98c80405ca0ab66c68e684409",
+    "final_url": "https://codeload.github.com/acl-org/acl-style-files/zip/d5adc823ff0f80f98c80405ca0ab66c68e684409",
+    "final_url_verified_on": "2026-11-18"
+   },
+   "kit_dir": "",
+   "files": {
+    "acl.sty": "19dfeddc2c0e448f3926a0bef048a9db3f3611b46265b760caabd7ada4f361de",
+    "acl_natbib.bst": "6fbb306202290f4b68e74ac1460a8b27398500cb6dfeb4492e74c457eae7cd1e"
+   },
+   "sample": "acl_latex.tex",
+   "layout": {
+    "begin": {
+     "paperwidth": "597.50787pt",
+     "paperheight": "845.04684pt",
+     "textwidth": "455.24411pt",
+     "textheight": "704.60031pt",
+     "columnwidth": "219.08614pt",
+     "columnsep": "17.07182pt",
+     "oddsidemargin": "-1.1381pt",
+     "evensidemargin": "-1.1381pt",
+     "topmargin": "-38.1381pt",
+     "headheight": "12.0pt",
+     "headsep": "25.0pt",
+     "footskip": "30.0pt",
+     "hoffset": "0.0pt",
+     "voffset": "0.0pt",
+     "fontsize": "10.95",
+     "baselineskip": "13.6pt",
+     "fontfamily": "ptm",
+     "twocolumn": "1"
+    },
+    "end": {
+     "paperwidth": "597.50787pt",
+     "paperheight": "845.04684pt",
+     "textwidth": "455.24411pt",
+     "textheight": "704.60031pt",
+     "columnwidth": "219.08614pt",
+     "columnsep": "17.07182pt",
+     "oddsidemargin": "-1.1381pt",
+     "evensidemargin": "-1.1381pt",
+     "topmargin": "-38.1381pt",
+     "headheight": "12.0pt",
+     "headsep": "25.0pt",
+     "footskip": "30.0pt",
+     "hoffset": "0.0pt",
+     "voffset": "0.0pt",
+     "fontsize": "10.95",
+     "baselineskip": "13.6pt",
+     "fontfamily": "ptm",
+     "twocolumn": "1"
+    }
+   },
+   "archive_source": {
+    "source": {
+     "url": "https://aclrollingreview.org/cfp",
+     "quote": "Paper submissions must use the official ACL style template"
+    }
+   },
+   "upstream_head": {
+    "url": "https://github.com/acl-org/acl-style-files/commits/master.atom",
+    "pattern": "Commit/([0-9a-f]{40})",
+    "commit": "d5adc823ff0f80f98c80405ca0ab66c68e684409"
+   },
+   "main_style_file": "acl.sty",
+   "owned_files": [
+    "acl.sty",
+    "acl_natbib.bst"
+   ],
+   "page_limits": {
+    "long": {
+     "submission": 8,
+     "camera_ready": 9
+    },
+    "short": {
+     "submission": 4,
+     "camera_ready": 5
+    }
+   },
+   "page_limits_rule": {
+    "source": {
+     "url": "https://2027.naacl.org/calls/main_conference_papers/",
+     "quote": "Final versions of accepted papers will be given one additional page of content"
+    }
+   },
+   "anonymity": {
+    "rule": "double-blind: [review] prints \"Anonymous ACL submission\", line numbers; no acknowledgements in the review version",
+    "double_blind": true,
+    "forbid_acknowledgements": true,
+    "pdf_markers": [
+     "Anonymous ACL submission"
+    ],
+    "source": {
+     "url": "https://aclrollingreview.org/cfp",
+     "quote": "Papers must not include authors' names and affiliations."
+    }
+   },
+   "required_sections": [
+    {
+     "heading": "Limitations",
+     "source": {
+      "url": "https://aclrollingreview.org/cfp",
+      "quote": "Authors are required to discuss the limitations of their work in a dedicated section titled"
+     }
+    }
+   ],
+   "exempt_sections": {
+    "headings": [
+     "Limitations",
+     "Ethical considerations",
+     "Ethics Statement",
+     "Acknowledgments",
+     "Acknowledgements"
+    ],
+    "source": {
+     "url": "https://aclrollingreview.org/cfp",
+     "quote": "unlimited extra space after the conclusion for limitations (required, see below) and optional section on ethical considerations"
+    }
+   },
+   "allowed_layout_commands": [
+    "\\documentclass[11pt]"
+   ],
+   "modes": {
+    "submission": {
+     "required_options": [
+      "review"
+     ],
+     "forbidden_options": [
+      "final",
+      "preprint"
+     ]
+    },
+    "camera_ready": {
+     "forbidden_options": [
+      "review",
+      "preprint"
+     ]
+    }
+   },
+   "extra_rules": [
+    {
+     "name": "ARR requirements apply",
+     "source": {
+      "url": "https://2027.naacl.org/calls/main_conference_papers/",
+      "quote": "should follow all of the ARR submission requirements"
+     }
+    }
+   ]
+  },
+  {
+   "id": "eacl-2027",
+   "venue": "eacl",
+   "family": "acl",
+   "conference": "EACL 2027",
+   "year": 2027,
+   "status": "pinned",
+   "checked": "2026-11-18",
+   "archive": {
+    "url": "https://github.com/acl-org/acl-style-files/archive/d5adc823ff0f80f98c80405ca0ab66c68e684409.zip",
+    "sha256": "35b158b724d04435a657ab214fe4da5f2b57808fc15ca0f24b751bc07b1d1c73",
+    "retrieved": "2026-11-18",
+    "upstream_commit": "d5adc823ff0f80f98c80405ca0ab66c68e684409",
+    "final_url": "https://codeload.github.com/acl-org/acl-style-files/zip/d5adc823ff0f80f98c80405ca0ab66c68e684409",
+    "final_url_verified_on": "2026-11-18"
+   },
+   "kit_dir": "",
+   "files": {
+    "acl.sty": "19dfeddc2c0e448f3926a0bef048a9db3f3611b46265b760caabd7ada4f361de",
+    "acl_natbib.bst": "6fbb306202290f4b68e74ac1460a8b27398500cb6dfeb4492e74c457eae7cd1e"
+   },
+   "sample": "acl_latex.tex",
+   "layout": {
+    "begin": {
+     "paperwidth": "597.50787pt",
+     "paperheight": "845.04684pt",
+     "textwidth": "455.24411pt",
+     "textheight": "704.60031pt",
+     "columnwidth": "219.08614pt",
+     "columnsep": "17.07182pt",
+     "oddsidemargin": "-1.1381pt",
+     "evensidemargin": "-1.1381pt",
+     "topmargin": "-38.1381pt",
+     "headheight": "12.0pt",
+     "headsep": "25.0pt",
+     "footskip": "30.0pt",
+     "hoffset": "0.0pt",
+     "voffset": "0.0pt",
+     "fontsize": "10.95",
+     "baselineskip": "13.6pt",
+     "fontfamily": "ptm",
+     "twocolumn": "1"
+    },
+    "end": {
+     "paperwidth": "597.50787pt",
+     "paperheight": "845.04684pt",
+     "textwidth": "455.24411pt",
+     "textheight": "704.60031pt",
+     "columnwidth": "219.08614pt",
+     "columnsep": "17.07182pt",
+     "oddsidemargin": "-1.1381pt",
+     "evensidemargin": "-1.1381pt",
+     "topmargin": "-38.1381pt",
+     "headheight": "12.0pt",
+     "headsep": "25.0pt",
+     "footskip": "30.0pt",
+     "hoffset": "0.0pt",
+     "voffset": "0.0pt",
+     "fontsize": "10.95",
+     "baselineskip": "13.6pt",
+     "fontfamily": "ptm",
+     "twocolumn": "1"
+    }
+   },
+   "archive_source": {
+    "source": {
+     "url": "https://aclrollingreview.org/cfp",
+     "quote": "Paper submissions must use the official ACL style template"
+    }
+   },
+   "upstream_head": {
+    "url": "https://github.com/acl-org/acl-style-files/commits/master.atom",
+    "pattern": "Commit/([0-9a-f]{40})",
+    "commit": "d5adc823ff0f80f98c80405ca0ab66c68e684409"
+   },
+   "main_style_file": "acl.sty",
+   "owned_files": [
+    "acl.sty",
+    "acl_natbib.bst"
+   ],
+   "page_limits": {
+    "long": {
+     "submission": 8,
+     "camera_ready": 9
+    },
+    "short": {
+     "submission": 4,
+     "camera_ready": 5
+    }
+   },
+   "page_limits_rule": {
+    "source": {
+     "url": "https://2027.eacl.org/calls/papers/",
+     "quote": "Final versions of accepted papers will be given one additional page of content"
+    }
+   },
+   "anonymity": {
+    "rule": "double-blind: [review] prints \"Anonymous ACL submission\", line numbers; no acknowledgements in the review version",
+    "double_blind": true,
+    "forbid_acknowledgements": true,
+    "pdf_markers": [
+     "Anonymous ACL submission"
+    ],
+    "source": {
+     "url": "https://aclrollingreview.org/cfp",
+     "quote": "Papers must not include authors' names and affiliations."
+    }
+   },
+   "required_sections": [
+    {
+     "heading": "Limitations",
+     "source": {
+      "url": "https://aclrollingreview.org/cfp",
+      "quote": "Authors are required to discuss the limitations of their work in a dedicated section titled"
+     }
+    }
+   ],
+   "exempt_sections": {
+    "headings": [
+     "Limitations",
+     "Ethical considerations",
+     "Ethics Statement",
+     "Acknowledgments",
+     "Acknowledgements"
+    ],
+    "source": {
+     "url": "https://aclrollingreview.org/cfp",
+     "quote": "unlimited extra space after the conclusion for limitations (required, see below) and optional section on ethical considerations"
+    }
+   },
+   "allowed_layout_commands": [
+    "\\documentclass[11pt]"
+   ],
+   "modes": {
+    "submission": {
+     "required_options": [
+      "review"
+     ],
+     "forbidden_options": [
+      "final",
+      "preprint"
+     ]
+    },
+    "camera_ready": {
+     "forbidden_options": [
+      "review",
+      "preprint"
+     ]
+    }
+   },
+   "extra_rules": [
+    {
+     "name": "ARR requirements apply",
+     "source": {
+      "url": "https://2027.eacl.org/calls/papers/",
+      "quote": "should follow all of the ARR submission requirements"
+     }
+    }
+   ]
+  },
+  {
+   "id": "eacl-srw-2027",
+   "venue": "eacl-srw",
+   "family": "acl",
+   "conference": "EACL 2027 Student Research Workshop",
+   "year": 2027,
+   "status": "pinned",
+   "checked": "2026-11-18",
+   "archive": {
+    "url": "https://github.com/acl-org/acl-style-files/archive/d5adc823ff0f80f98c80405ca0ab66c68e684409.zip",
+    "sha256": "35b158b724d04435a657ab214fe4da5f2b57808fc15ca0f24b751bc07b1d1c73",
+    "retrieved": "2026-11-18",
+    "upstream_commit": "d5adc823ff0f80f98c80405ca0ab66c68e684409",
+    "final_url": "https://codeload.github.com/acl-org/acl-style-files/zip/d5adc823ff0f80f98c80405ca0ab66c68e684409",
+    "final_url_verified_on": "2026-11-18"
+   },
+   "kit_dir": "",
+   "files": {
+    "acl.sty": "19dfeddc2c0e448f3926a0bef048a9db3f3611b46265b760caabd7ada4f361de",
+    "acl_natbib.bst": "6fbb306202290f4b68e74ac1460a8b27398500cb6dfeb4492e74c457eae7cd1e"
+   },
+   "sample": "acl_latex.tex",
+   "layout": {
+    "begin": {
+     "paperwidth": "597.50787pt",
+     "paperheight": "845.04684pt",
+     "textwidth": "455.24411pt",
+     "textheight": "704.60031pt",
+     "columnwidth": "219.08614pt",
+     "columnsep": "17.07182pt",
+     "oddsidemargin": "-1.1381pt",
+     "evensidemargin": "-1.1381pt",
+     "topmargin": "-38.1381pt",
+     "headheight": "12.0pt",
+     "headsep": "25.0pt",
+     "footskip": "30.0pt",
+     "hoffset": "0.0pt",
+     "voffset": "0.0pt",
+     "fontsize": "10.95",
+     "baselineskip": "13.6pt",
+     "fontfamily": "ptm",
+     "twocolumn": "1"
+    },
+    "end": {
+     "paperwidth": "597.50787pt",
+     "paperheight": "845.04684pt",
+     "textwidth": "455.24411pt",
+     "textheight": "704.60031pt",
+     "columnwidth": "219.08614pt",
+     "columnsep": "17.07182pt",
+     "oddsidemargin": "-1.1381pt",
+     "evensidemargin": "-1.1381pt",
+     "topmargin": "-38.1381pt",
+     "headheight": "12.0pt",
+     "headsep": "25.0pt",
+     "footskip": "30.0pt",
+     "hoffset": "0.0pt",
+     "voffset": "0.0pt",
+     "fontsize": "10.95",
+     "baselineskip": "13.6pt",
+     "fontfamily": "ptm",
+     "twocolumn": "1"
+    }
+   },
+   "archive_source": {
+    "source": {
+     "url": "https://2027.eacl.org/calls/srw/",
+     "quote": "Paper submissions must use the official ACL style templates."
+    }
+   },
+   "upstream_head": {
+    "url": "https://github.com/acl-org/acl-style-files/commits/master.atom",
+    "pattern": "Commit/([0-9a-f]{40})",
+    "commit": "d5adc823ff0f80f98c80405ca0ab66c68e684409"
+   },
+   "main_style_file": "acl.sty",
+   "owned_files": [
+    "acl.sty",
+    "acl_natbib.bst"
+   ],
+   "page_limits": {
+    "long": {
+     "submission": 8,
+     "camera_ready": 9
+    },
+    "short": {
+     "submission": 4,
+     "camera_ready": 5
+    },
+    "thesis_proposal": {
+     "submission": 8,
+     "camera_ready": 9
+    }
+   },
+   "page_limits_rule": {
+    "source": {
+     "url": "https://2027.eacl.org/calls/srw/",
+     "quote": "Thesis proposals consist of up to eight (8) pages of content, plus unlimited references."
+    }
+   },
+   "anonymity": {
+    "rule": "double-blind: [review] prints \"Anonymous ACL submission\", line numbers; no acknowledgements in the review version",
+    "double_blind": true,
+    "forbid_acknowledgements": true,
+    "pdf_markers": [
+     "Anonymous ACL submission"
+    ],
+    "source": {
+     "url": "https://aclrollingreview.org/cfp",
+     "quote": "Papers must not include authors' names and affiliations."
+    }
+   },
+   "required_sections": [
+    {
+     "heading": "Limitations",
+     "source": {
+      "url": "https://aclrollingreview.org/cfp",
+      "quote": "Authors are required to discuss the limitations of their work in a dedicated section titled"
+     }
+    }
+   ],
+   "exempt_sections": {
+    "headings": [
+     "Limitations",
+     "Ethical considerations",
+     "Ethics Statement",
+     "Acknowledgments",
+     "Acknowledgements"
+    ],
+    "source": {
+     "url": "https://aclrollingreview.org/cfp",
+     "quote": "unlimited extra space after the conclusion for limitations (required, see below) and optional section on ethical considerations"
+    }
+   },
+   "allowed_layout_commands": [
+    "\\documentclass[11pt]"
+   ],
+   "modes": {
+    "submission": {
+     "required_options": [
+      "review"
+     ],
+     "forbidden_options": [
+      "final",
+      "preprint"
+     ]
+    },
+    "camera_ready": {
+     "forbidden_options": [
+      "review",
+      "preprint"
+     ]
+    }
+   }
+  },
+  {
+   "id": "emnlp-2026",
+   "venue": "emnlp",
+   "family": "acl",
+   "conference": "EMNLP 2026",
+   "year": 2026,
+   "status": "superseded",
+   "checked": "2026-11-18",
+   "superseded_reason": "the conference was held Oct 24-29, 2026",
+   "archive": {
+    "url": "https://github.com/acl-org/acl-style-files/archive/d5adc823ff0f80f98c80405ca0ab66c68e684409.zip",
+    "sha256": "35b158b724d04435a657ab214fe4da5f2b57808fc15ca0f24b751bc07b1d1c73",
+    "retrieved": "2026-11-18",
+    "upstream_commit": "d5adc823ff0f80f98c80405ca0ab66c68e684409",
+    "final_url": "https://codeload.github.com/acl-org/acl-style-files/zip/d5adc823ff0f80f98c80405ca0ab66c68e684409",
+    "final_url_verified_on": "2026-11-18"
+   },
+   "kit_dir": "",
+   "files": {
+    "acl.sty": "19dfeddc2c0e448f3926a0bef048a9db3f3611b46265b760caabd7ada4f361de",
+    "acl_natbib.bst": "6fbb306202290f4b68e74ac1460a8b27398500cb6dfeb4492e74c457eae7cd1e"
+   },
+   "sample": "acl_latex.tex",
+   "layout": {
+    "begin": {
+     "paperwidth": "597.50787pt",
+     "paperheight": "845.04684pt",
+     "textwidth": "455.24411pt",
+     "textheight": "704.60031pt",
+     "columnwidth": "219.08614pt",
+     "columnsep": "17.07182pt",
+     "oddsidemargin": "-1.1381pt",
+     "evensidemargin": "-1.1381pt",
+     "topmargin": "-38.1381pt",
+     "headheight": "12.0pt",
+     "headsep": "25.0pt",
+     "footskip": "30.0pt",
+     "hoffset": "0.0pt",
+     "voffset": "0.0pt",
+     "fontsize": "10.95",
+     "baselineskip": "13.6pt",
+     "fontfamily": "ptm",
+     "twocolumn": "1"
+    },
+    "end": {
+     "paperwidth": "597.50787pt",
+     "paperheight": "845.04684pt",
+     "textwidth": "455.24411pt",
+     "textheight": "704.60031pt",
+     "columnwidth": "219.08614pt",
+     "columnsep": "17.07182pt",
+     "oddsidemargin": "-1.1381pt",
+     "evensidemargin": "-1.1381pt",
+     "topmargin": "-38.1381pt",
+     "headheight": "12.0pt",
+     "headsep": "25.0pt",
+     "footskip": "30.0pt",
+     "hoffset": "0.0pt",
+     "voffset": "0.0pt",
+     "fontsize": "10.95",
+     "baselineskip": "13.6pt",
+     "fontfamily": "ptm",
+     "twocolumn": "1"
+    }
+   },
+   "archive_source": {
+    "source": {
+     "url": "https://aclrollingreview.org/cfp",
+     "quote": "Paper submissions must use the official ACL style template"
+    }
+   },
+   "upstream_head": {
+    "url": "https://github.com/acl-org/acl-style-files/commits/master.atom",
+    "pattern": "Commit/([0-9a-f]{40})",
+    "commit": "d5adc823ff0f80f98c80405ca0ab66c68e684409"
+   },
+   "main_style_file": "acl.sty",
+   "owned_files": [
+    "acl.sty",
+    "acl_natbib.bst"
+   ],
+   "page_limits": {
+    "long": {
+     "submission": 8,
+     "camera_ready": 9
+    },
+    "short": {
+     "submission": 4,
+     "camera_ready": 5
+    }
+   },
+   "page_limits_rule": {
+    "source": {
+     "url": "https://2026.emnlp.org/calls/main_conference_papers/",
+     "quote": "Final versions of accepted papers will be given one additional page of content"
+    }
+   },
+   "anonymity": {
+    "rule": "double-blind: [review] prints \"Anonymous ACL submission\", line numbers; no acknowledgements in the review version",
+    "double_blind": true,
+    "forbid_acknowledgements": true,
+    "pdf_markers": [
+     "Anonymous ACL submission"
+    ],
+    "source": {
+     "url": "https://aclrollingreview.org/cfp",
+     "quote": "Papers must not include authors' names and affiliations."
+    }
+   },
+   "required_sections": [
+    {
+     "heading": "Limitations",
+     "source": {
+      "url": "https://aclrollingreview.org/cfp",
+      "quote": "Authors are required to discuss the limitations of their work in a dedicated section titled"
+     }
+    }
+   ],
+   "exempt_sections": {
+    "headings": [
+     "Limitations",
+     "Ethical considerations",
+     "Ethics Statement",
+     "Acknowledgments",
+     "Acknowledgements"
+    ],
+    "source": {
+     "url": "https://aclrollingreview.org/cfp",
+     "quote": "unlimited extra space after the conclusion for limitations (required, see below) and optional section on ethical considerations"
+    }
+   },
+   "allowed_layout_commands": [
+    "\\documentclass[11pt]"
+   ],
+   "modes": {
+    "submission": {
+     "required_options": [
+      "review"
+     ],
+     "forbidden_options": [
+      "final",
+      "preprint"
+     ]
+    },
+    "camera_ready": {
+     "forbidden_options": [
+      "review",
+      "preprint"
+     ]
+    }
+   }
+  },
+  {
+   "id": "emnlp-2027",
+   "venue": "emnlp",
+   "conference": "EMNLP 2027",
+   "year": 2027,
+   "status": "unverified",
+   "checked": "2026-11-18",
+   "not_released_evidence": [
+    {
+     "url": "https://2027.emnlp.org/",
+     "result": "no answer (connection failed) on 2026-11-18"
+    }
+   ],
+   "availability_note": "HTTP 404 or connection failure is inability to verify availability, not proof that no template exists."
+  },
+  {
+   "id": "cvpr-2027",
+   "venue": "cvpr",
+   "family": "cvpr",
+   "conference": "CVPR 2027",
+   "year": 2027,
+   "status": "pinned",
+   "checked": "2026-11-18",
+   "archive": {
+    "url": "https://media.eventhosts.cc/Conferences/CVPR2027/author-kit-CVPR2027-v1-latex.zip",
+    "sha256": "da1ec5db9b73531ea82a87723e4aedb631083331fe655d1972279b48a7bdb2fe",
+    "retrieved": "2026-11-18"
+   },
+   "kit_dir": "",
+   "files": {
+    "preamble.tex": "f666a85903f49929395951e7afb620e96d4e208334623f23135298b4d7f06228",
+    "ieeenat_fullname.bst": "e38e6166bd7b1e6d23a1b79dcdb55c656e4fcdbe91bdf6b50d827e6b5d1aacfc",
+    "cvpr.sty": "1cd7f434b13d41c475df4a1901a5d82d9ca8b80b8cf6205dc4602a5c164286b4"
+   },
+   "sample": "main.tex",
+   "layout": {
+    "begin": {
+     "paperwidth": "614.295pt",
+     "paperheight": "794.96999pt",
+     "textwidth": "496.85625pt",
+     "textheight": "641.39624pt",
+     "columnwidth": "237.13594pt",
+     "columnsep": "22.58437pt",
+     "oddsidemargin": "-13.55061pt",
+     "evensidemargin": "-13.55061pt",
+     "topmargin": "0.0pt",
+     "headheight": "0.0pt",
+     "headsep": "0.0pt",
+     "footskip": "30.0pt",
+     "hoffset": "0.0pt",
+     "voffset": "0.0pt",
+     "fontsize": "10",
+     "baselineskip": "12.0pt",
+     "fontfamily": "ptm",
+     "twocolumn": "1"
+    },
+    "end": {
+     "paperwidth": "614.295pt",
+     "paperheight": "794.96999pt",
+     "textwidth": "496.85625pt",
+     "textheight": "641.39624pt",
+     "columnwidth": "237.13594pt",
+     "columnsep": "22.58437pt",
+     "oddsidemargin": "-13.55061pt",
+     "evensidemargin": "-13.55061pt",
+     "topmargin": "0.0pt",
+     "headheight": "0.0pt",
+     "headsep": "0.0pt",
+     "footskip": "30.0pt",
+     "hoffset": "0.0pt",
+     "voffset": "0.0pt",
+     "fontsize": "10",
+     "baselineskip": "12.0pt",
+     "fontfamily": "ptm",
+     "twocolumn": "1"
+    }
+   },
+   "archive_source": {
+    "source": {
+     "url": "https://cvpr.thecvf.com/Conferences/2027/AuthorGuidelines",
+     "quote": "Please download the CVPR 2027 Submission Template"
+    }
+   },
+   "main_style_file": "cvpr.sty",
+   "owned_files": [
+    "cvpr.sty",
+    "ieeenat_fullname.bst"
+   ],
+   "page_limits": {
+    "regular": {
+     "submission": 8
+    }
+   },
+   "page_limits_rule": {
+    "source": {
+     "url": "https://cvpr.thecvf.com/Conferences/2027/AuthorGuidelines",
+     "quote": "Papers are limited to eight pages, including figures and tables, in the CVPR style."
+    }
+   },
+   "anonymity": {
+    "rule": "double-blind: [review] prints \"Anonymous CVPR submission\" and the ruler; no acknowledgements; no links that identify the authors",
+    "double_blind": true,
+    "forbid_acknowledgements": true,
+    "pdf_markers": [
+     "Anonymous CVPR submission"
+    ],
+    "source": {
+     "url": "https://cvpr.thecvf.com/Conferences/2027/AuthorGuidelines",
+     "quote": "Do not provide links to websites that identify the authors."
+    }
+   },
+   "required_sections": [
+    {
+     "heading": "LLM Usage Statement",
+     "stages": [
+      "submission"
+     ],
+     "source": {
+      "url": "https://cvpr.thecvf.com/Conferences/2027/AuthorGuidelines",
+      "quote": "Every submission must include a section titled"
+     }
+    }
+   ],
+   "exempt_sections": {
+    "headings": [
+     "LLM Usage Statement"
+    ],
+    "source": {
+     "url": "https://cvpr.thecvf.com/Conferences/2027/AuthorGuidelines",
+     "quote": "Additional pages containing only cited references and the mandatory LLM Usage Statement are allowed."
+    }
+   },
+   "modes": {
+    "submission": {
+     "required_options": [
+      "review"
+     ],
+     "forbidden_options": [
+      "rebuttal",
+      "pagenumbers"
+     ]
+    }
+   },
+   "newer_edition_probes": [
+    "https://cvpr.thecvf.com/Conferences/2028/AuthorGuidelines"
+   ]
+  },
+  {
+   "id": "cvpr-workshop-2027",
+   "venue": "cvpr-workshop",
+   "family": "cvpr",
+   "conference": "CVPR 2027 workshops (archival)",
+   "year": 2027,
+   "status": "unpinned",
+   "checked": "2026-11-18",
+   "archive": {
+    "url": "https://media.eventhosts.cc/Conferences/CVPR2027/author-kit-CVPR2027-v1-latex.zip",
+    "sha256": "da1ec5db9b73531ea82a87723e4aedb631083331fe655d1972279b48a7bdb2fe",
+    "retrieved": "2026-11-18"
+   },
+   "kit_dir": "",
+   "files": {
+    "preamble.tex": "f666a85903f49929395951e7afb620e96d4e208334623f23135298b4d7f06228",
+    "ieeenat_fullname.bst": "e38e6166bd7b1e6d23a1b79dcdb55c656e4fcdbe91bdf6b50d827e6b5d1aacfc",
+    "cvpr.sty": "1cd7f434b13d41c475df4a1901a5d82d9ca8b80b8cf6205dc4602a5c164286b4"
+   },
+   "sample": "main.tex",
+   "layout": {
+    "begin": {
+     "paperwidth": "614.295pt",
+     "paperheight": "794.96999pt",
+     "textwidth": "496.85625pt",
+     "textheight": "641.39624pt",
+     "columnwidth": "237.13594pt",
+     "columnsep": "22.58437pt",
+     "oddsidemargin": "-13.55061pt",
+     "evensidemargin": "-13.55061pt",
+     "topmargin": "0.0pt",
+     "headheight": "0.0pt",
+     "headsep": "0.0pt",
+     "footskip": "30.0pt",
+     "hoffset": "0.0pt",
+     "voffset": "0.0pt",
+     "fontsize": "10",
+     "baselineskip": "12.0pt",
+     "fontfamily": "ptm",
+     "twocolumn": "1"
+    },
+    "end": {
+     "paperwidth": "614.295pt",
+     "paperheight": "794.96999pt",
+     "textwidth": "496.85625pt",
+     "textheight": "641.39624pt",
+     "columnwidth": "237.13594pt",
+     "columnsep": "22.58437pt",
+     "oddsidemargin": "-13.55061pt",
+     "evensidemargin": "-13.55061pt",
+     "topmargin": "0.0pt",
+     "headheight": "0.0pt",
+     "headsep": "0.0pt",
+     "footskip": "30.0pt",
+     "hoffset": "0.0pt",
+     "voffset": "0.0pt",
+     "fontsize": "10",
+     "baselineskip": "12.0pt",
+     "fontfamily": "ptm",
+     "twocolumn": "1"
+    }
+   },
+   "archive_source": {
+    "source": {
+     "url": "https://cvpr.thecvf.com/Conferences/2027/AuthorGuidelines",
+     "quote": "Please download the CVPR 2027 Submission Template"
+    }
+   },
+   "main_style_file": "cvpr.sty",
+   "owned_files": [
+    "cvpr.sty",
+    "ieeenat_fullname.bst"
+   ],
+   "page_limits": {
+    "regular": {
+     "submission": 8
+    }
+   },
+   "page_limits_rule": {
+    "source": {
+     "url": "https://cvpr.thecvf.com/Conferences/2027/AuthorGuidelines",
+     "quote": "Papers are limited to eight pages, including figures and tables, in the CVPR style."
+    }
+   },
+   "anonymity": {
+    "rule": "double-blind: [review] prints \"Anonymous CVPR submission\" and the ruler; no acknowledgements; no links that identify the authors",
+    "double_blind": true,
+    "forbid_acknowledgements": true,
+    "pdf_markers": [
+     "Anonymous CVPR submission"
+    ],
+    "source": {
+     "url": "https://cvpr.thecvf.com/Conferences/2027/AuthorGuidelines",
+     "quote": "Do not provide links to websites that identify the authors."
+    }
+   },
+   "required_sections": [
+    {
+     "heading": "LLM Usage Statement",
+     "stages": [
+      "submission"
+     ],
+     "source": {
+      "url": "https://cvpr.thecvf.com/Conferences/2027/AuthorGuidelines",
+      "quote": "Every submission must include a section titled"
+     }
+    }
+   ],
+   "exempt_sections": {
+    "headings": [
+     "LLM Usage Statement"
+    ],
+    "source": {
+     "url": "https://cvpr.thecvf.com/Conferences/2027/AuthorGuidelines",
+     "quote": "Additional pages containing only cited references and the mandatory LLM Usage Statement are allowed."
+    }
+   },
+   "modes": {
+    "submission": {
+     "required_options": [
+      "review"
+     ],
+     "forbidden_options": [
+      "rebuttal",
+      "pagenumbers"
+     ]
+    }
+   },
+   "extra_rules": [
+    {
+     "name": "workshop papers follow the main-conference format",
+     "source": {
+      "url": "https://cvpr.thecvf.com/Conferences/2027/CallForWorkshops",
+      "quote": "paper submissions must adhere to the CVPR 2027 paper submission style, format, length restrictions"
+     }
+    }
+   ],
+   "unpinned_reason": "The common CVPR archival style is verified, but no named workshop CFP/track or workshop-specific length rules are pinned. Name the workshop and verify its official CFP before readiness.",
+   "not_released_evidence": [
+    {
+     "url": "https://cvpr.thecvf.com/Conferences/2027/CallForWorkshops",
+     "result": "HTTP 200; common style rule only, not a named workshop paper CFP",
+     "quote": "paper submissions must adhere to the CVPR 2027 paper submission style, format, length restrictions"
+    }
+   ]
+  },
+  {
+   "id": "iccv-2027",
+   "venue": "iccv",
+   "conference": "ICCV 2027",
+   "year": 2027,
+   "status": "unverified",
+   "checked": "2026-11-18",
+   "not_released_evidence": [
+    {
+     "url": "https://iccv.thecvf.com/Conferences/2027/AuthorGuidelines",
+     "result": "HTTP 404"
+    },
+    {
+     "url": "https://iccv.thecvf.com/Conferences/2027/CallForPapers",
+     "result": "HTTP 404"
+    }
+   ],
+   "availability_note": "HTTP 404 or connection failure is inability to verify availability, not proof that no template exists."
+  },
+  {
+   "id": "eccv-2026",
+   "venue": "eccv",
+   "family": "eccv",
+   "conference": "ECCV 2026",
+   "year": 2026,
+   "status": "superseded",
+   "checked": "2026-11-18",
+   "superseded_reason": "the conference was held Sep 2026; ECCV is biennial",
+   "archive": {
+    "url": "https://github.com/paolo-favaro/paper-template/archive/da8c09c40239d5665757527e77388f4716a6564a.zip",
+    "sha256": "1c1c8a188decf1f1adfccadb0585ccc95cef17f7ef846f4a5291ba1c5407b4a1",
+    "retrieved": "2026-11-18",
+    "upstream_commit": "da8c09c40239d5665757527e77388f4716a6564a",
+    "final_url": "https://codeload.github.com/paolo-favaro/paper-template/zip/da8c09c40239d5665757527e77388f4716a6564a",
+    "final_url_verified_on": "2026-11-18"
+   },
+   "files": {
+    "eccv.sty": "07785f87dd4741a761e5064d6752e59dbca308b7999de35df983e70dc0a33d80",
+    "eccvabbrv.sty": "1c9aba814d428d8d90bfdfde53e3ad8edc9f1db0e5f12e052f713fd5b38e483f",
+    "llncs.cls": "8152fe7afa929cbd3f3679d6f7c1d562525414ed9c5940a69e86cd923416cb2b",
+    "splncs04.bst": "564cb6156e2400e3755a58bed9caabccb3067dd37a48efcb66851a56d4475c4c"
+   }
+  },
+  {
+   "id": "eccv-2028",
+   "venue": "eccv",
+   "conference": "ECCV 2028",
+   "year": 2028,
+   "status": "unverified",
+   "checked": "2026-11-18",
+   "not_released_evidence": [
+    {
+     "url": "https://eccv.ecva.net/Conferences/2028",
+     "result": "HTTP 404"
+    },
+    {
+     "url": "https://eccv.ecva.net/Conferences/2028/CallForPapers",
+     "result": "HTTP 404"
+    }
+   ],
+   "availability_note": "HTTP 404 or connection failure is inability to verify availability, not proof that no template exists."
+  },
+  {
+   "id": "aaai-2027",
+   "venue": "aaai",
+   "family": "aaai",
+   "conference": "AAAI-27",
+   "year": 2027,
+   "status": "pinned",
+   "checked": "2026-11-18",
+   "archive": {
+    "url": "https://aaai.org/authorkit27/",
+    "sha256": "9406a545d5d213757245eb37118fe652b2fccf64f555aff28b49ebe2a780c960",
+    "retrieved": "2026-11-18"
+   },
+   "kit_dir": "",
+   "files": {
+    "aaai2027.bst": "5db7765ba99de5c1e4686f9b3940a0add9c5e702f2164514462bec130ccb6e3c",
+    "aaai2027.sty": "01990f8d3716f8e39c5b28a7478f3ac6e28630d1161de6105a7217f5e7f60e43"
+   },
+   "sample": "AnonymousSubmission2027.tex",
+   "layout": {
+    "begin": {
+     "paperwidth": "614.295pt",
+     "paperheight": "794.96999pt",
+     "textwidth": "505.89pt",
+     "textheight": "650.43pt",
+     "columnwidth": "239.39438pt",
+     "columnsep": "27.10124pt",
+     "oddsidemargin": "-18.06749pt",
+     "evensidemargin": "62.0pt",
+     "topmargin": "-18.06749pt",
+     "headheight": "0.0pt",
+     "headsep": "0.0pt",
+     "footskip": "30.0pt",
+     "hoffset": "0.0pt",
+     "voffset": "0.0pt",
+     "fontsize": "10",
+     "baselineskip": "11.0pt",
+     "fontfamily": "ntxtlf",
+     "twocolumn": "1"
+    },
+    "end": {
+     "paperwidth": "614.295pt",
+     "paperheight": "794.96999pt",
+     "textwidth": "505.89pt",
+     "textheight": "650.43pt",
+     "columnwidth": "239.39438pt",
+     "columnsep": "27.10124pt",
+     "oddsidemargin": "-18.06749pt",
+     "evensidemargin": "62.0pt",
+     "topmargin": "-18.06749pt",
+     "headheight": "0.0pt",
+     "headsep": "0.0pt",
+     "footskip": "30.0pt",
+     "hoffset": "0.0pt",
+     "voffset": "0.0pt",
+     "fontsize": "10",
+     "baselineskip": "11.0pt",
+     "fontfamily": "ntxtlf",
+     "twocolumn": "1"
+    }
+   },
+   "archive_source": {
+    "source": {
+     "url": "https://aaai.org/conference/aaai/aaai-27/submission-instructions/",
+     "quote": "see the AAAI-27 author kit for details"
+    }
+   },
+   "main_style_file": "aaai2027.sty",
+   "owned_files": [
+    "aaai2027.sty",
+    "aaai2027.bst"
+   ],
+   "style_pattern": "aaai\\d{4}",
+   "page_limits": {
+    "regular": {
+     "submission": 7
+    }
+   },
+   "max_total_pages": {
+    "submission": 9
+   },
+   "page_limits_rule": {
+    "source": {
+     "url": "https://aaai.org/conference/aaai/aaai-27/submission-instructions/",
+     "quote": "the main paper can have up to 7 pages of non-references content."
+    }
+   },
+   "extra_rules": [
+    {
+     "name": "ethics statement counts toward the 7 pages",
+     "source": {
+      "url": "https://aaai.org/conference/aaai/aaai-27/submission-instructions/",
+      "quote": "any ethical statements or similar considerations, if included, must be included in the 7 content pages."
+     }
+    }
+   ],
+   "anonymity": {
+    "rule": "anonymous: [submission] prints \"Anonymous submission\"; no author, affiliation or acknowledgements",
+    "double_blind": true,
+    "forbid_acknowledgements": true,
+    "pdf_markers": [
+     "Anonymous submission"
+    ],
+    "source": {
+     "url": "https://aaai.org/conference/aaai/aaai-27/submission-instructions/",
+     "quote": "Acknowledgements should be omitted from papers submitted for review"
+    }
+   },
+   "exempt_sections": {
+    "headings": [],
+    "source": {
+     "url": "https://aaai.org/conference/aaai/aaai-27/submission-instructions/",
+     "quote": "pages 8–9 reserved exclusively for references"
+    }
+   },
+   "forbidden_packages": [
+    "authblk",
+    "balance",
+    "CJK",
+    "float",
+    "flushend",
+    "fullpage",
+    "geometry",
+    "hyperref",
+    "navigator",
+    "indentfirst",
+    "layout",
+    "multicol",
+    "nameref",
+    "savetrees",
+    "setspace",
+    "stfloats",
+    "tabu",
+    "titlesec",
+    "tocbibind",
+    "ulem",
+    "wrapfig"
+   ],
+   "forbidden_packages_rule": {
+    "source": {
+     "url": "https://aaai.org/authorkit27/",
+     "quote": "\\usepackage{authblk} -- This package is specifically forbidden",
+     "archive_member": "AnonymousSubmission2027.tex"
+    }
+   },
+   "modes": {
+    "submission": {
+     "required_options": [
+      "submission"
+     ]
+    },
+    "camera_ready": {
+     "forbidden_options": [
+      "submission"
+     ]
+    }
+   },
+   "newer_edition_probes": [
+    "https://aaai.org/conference/aaai/aaai-28/submission-instructions/"
+   ]
+  },
+  {
+   "id": "ijcai-2027",
+   "venue": "ijcai",
+   "family": "ijcai",
+   "conference": "IJCAI 2027",
+   "year": 2027,
+   "status": "pinned",
+   "checked": "2026-11-18",
+   "note": "IJCAI published its 2027 kit before its call for papers; the rules are the kit's own instructions (ijcai27.tex). Re-check when the CFP appears.",
+   "archive": {
+    "url": "https://www.ijcai.org/sites/default/files/Guidelines/FormattingGuidelines-IJCAI-27.zip",
+    "sha256": "1f829e86070353eb72220864632c4e6c5a6dd160c35380e68de14a242078b663",
+    "retrieved": "2026-11-18"
+   },
+   "kit_dir": "",
+   "files": {
+    "ijcai27.sty": "cdf7ca9a28c6b1ba60cde0f42019ccea3722838242b69471db572d21f879d3b2",
+    "named.bst": "72c53a0febca9745a9a6febdc1e49327d2b6ac4f161e1d7a210dd47e5f5dda40"
+   },
+   "sample": "ijcai27.tex",
+   "layout": {
+    "begin": {
+     "paperwidth": "614.295pt",
+     "paperheight": "794.96999pt",
+     "textwidth": "505.89pt",
+     "textheight": "650.43pt",
+     "columnwidth": "243.91125pt",
+     "columnsep": "18.06749pt",
+     "oddsidemargin": "-18.06749pt",
+     "evensidemargin": "-18.06749pt",
+     "topmargin": "-18.06749pt",
+     "headheight": "0.0pt",
+     "headsep": "0.0pt",
+     "footskip": "30.0pt",
+     "hoffset": "0.0pt",
+     "voffset": "0.0pt",
+     "fontsize": "10",
+     "baselineskip": "11.0pt",
+     "fontfamily": "ptm",
+     "twocolumn": "1"
+    },
+    "end": {
+     "paperwidth": "614.295pt",
+     "paperheight": "794.96999pt",
+     "textwidth": "505.89pt",
+     "textheight": "650.43pt",
+     "columnwidth": "243.91125pt",
+     "columnsep": "18.06749pt",
+     "oddsidemargin": "-18.06749pt",
+     "evensidemargin": "-18.06749pt",
+     "topmargin": "-18.06749pt",
+     "headheight": "0.0pt",
+     "headsep": "0.0pt",
+     "footskip": "30.0pt",
+     "hoffset": "0.0pt",
+     "voffset": "0.0pt",
+     "fontsize": "10",
+     "baselineskip": "11.0pt",
+     "fontfamily": "ptm",
+     "twocolumn": "1"
+    }
+   },
+   "archive_source": {
+    "source": {
+     "url": "https://www.ijcai.org/authors_kit",
+     "quote": "You can download the IJCAI 2027 formatting guidelines here"
+    }
+   },
+   "main_style_file": "ijcai27.sty",
+   "owned_files": [
+    "ijcai27.sty",
+    "named.bst"
+   ],
+   "style_pattern": "ijcai\\d{2}",
+   "page_limits": {
+    "regular": {
+     "submission": 7
+    }
+   },
+   "max_total_pages": {
+    "submission": 9
+   },
+   "page_limits_rule": {
+    "source": {
+     "url": "https://www.ijcai.org/sites/default/files/Guidelines/FormattingGuidelines-IJCAI-27.zip",
+     "quote": "All paper {\\em submissions} to the main track must have a maximum of seven pages, plus at most two for references / acknowledgements / contribution statement / ethics statement.",
+     "archive_member": "ijcai27.tex"
+    }
+   },
+   "anonymity": {
+    "rule": "main track anonymous: no author block, no Acknowledgements or Contribution Statement",
+    "double_blind": true,
+    "forbid_acknowledgements": true,
+    "pdf_markers": [],
+    "source": {
+     "url": "https://www.ijcai.org/sites/default/files/Guidelines/FormattingGuidelines-IJCAI-27.zip",
+     "quote": "in this case, Acknowledgements and Contribution Statement sections are not allowed.",
+     "archive_member": "ijcai27.tex"
+    }
+   },
+   "exempt_sections": {
+    "headings": [
+     "Ethical Statement",
+     "Acknowledgments",
+     "Contribution Statement"
+    ],
+    "source": {
+     "url": "https://www.ijcai.org/sites/default/files/Guidelines/FormattingGuidelines-IJCAI-27.zip",
+     "quote": "The section should be titled \\emph{Ethical Statement}",
+     "archive_member": "ijcai27.tex"
+    }
+   },
+   "allowed_layout_commands": [],
+   "newer_edition_probes": []
+  },
+  {
+   "id": "kdd-2027",
+   "venue": "kdd",
+   "family": "acmart",
+   "conference": "KDD 2027",
+   "year": 2027,
+   "status": "unpinned",
+   "checked": "2026-11-18",
+   "unpinned_reason": "the CFP points to the ACM proceedings template page, which refuses this client (HTTP 403), so no official archive could be hashed; Cycle 1 has closed and the Cycle 2 call is not published",
+   "not_released_evidence": [
+    {
+     "url": "https://www.acm.org/publications/proceedings-template",
+     "result": "HTTP 403"
+    },
+    {
+     "url": "https://kdd2027.kdd.org/research-track-call-for-papers/",
+     "result": "HTTP 200: \\documentclass[sigconf,anonymous,review]{acmart}; Cycle 1 deadline 2026-07-26 passed"
+    }
+   ]
+  }
+ ]
+}

@@ -483,6 +483,10 @@ _MEASURED_3S = {'request_span_id': 'model:task:4',
     (None, _SINGLE_DISPATCH, (8_010, 'unknown', True, 900)),
     # The dispatcher measured the settled attempt's first output.
     (_MEASURED_3S, _SINGLE_DISPATCH, (3_110, 'done', False, 3_009 + 900)),
+    # The clearer label preserves the same guarded projection and old rows.
+    ({**_MEASURED_3S, '_dispatch': {
+        'ttft_ms': 3_000.4, 'ttft_measurement': 'dispatcher_attempt_to_first_output_callback'}},
+     _SINGLE_DISPATCH, (3_110, 'done', False, 3_009 + 900)),
     # Two dispatches: the last attempt need not be the measured one.
     (_MEASURED_3S, {**_SINGLE_DISPATCH, 'providerDispatches': 2},
      (8_010, 'unknown', True, 900)),

@@ -124,13 +124,17 @@ def resolve(store, event: ChannelEvent, *, owner_uid: str,
         (store.provider_message_alias(event.channel, message_id) or '') if message_id else '')
     found = Quote(state='unreadable', message_id=message_id, event_id=f'{event.thread}/{external}' if external else '')
     marker = store.echo_item(event.channel, external_id=message_id) if message_id else None
+    if not marker and message_id and event.channel == 'wechat':
+        from lib.channels.outbox import acknowledged_wechat_part
+        marker = acknowledged_wechat_part(store, event.thread, message_id)
     if not marker and copy is not None and owner_uid and copy.sender_id == owner_uid and copy.marker:
         marker = copy.marker  # only an API sets the platform's marker field: a Tofu send path stamped it
-    tofu = bool(marker) or _host_sent(copy, owner_uid)
+    tofu = _host_sent(copy, owner_uid)
     quote = None
     if marker:
         from lib.channels import outbox
-        sent = outbox.sent_message(store, marker, message_id)
+        sent = outbox.sent_message(store, marker, message_id, thread=event.thread)
+        tofu = tofu or marker == outbox.ROBOT_ECHO or sent is not None
         if sent is not None:
             text, attachments, sent_at_ms = sent
             quote = replace(found, state='resolved', author='tofu', source='outbox', text=text,

@@ -31,6 +31,18 @@ Design notes
   cross-process lock degrades to a no-op where advisory locking is
   unavailable (Windows / no ``fcntl`` / FS without flock support), leaving
   the in-process guarantee intact.
+* **Never widen on rewrite**: publication keeps the caller's mode minus any
+  group/other bit the existing destination lacks, so a 0600 secret store
+  stays 0600 whichever writer saves it. A secret-holding writer passes
+  ``mode=0o600`` so it also creates (or narrows) the file owner-only.
+* **Config tree is private**: every publication under
+  ``lib.config_dir.CONFIG_DIR`` drops group/other bits, so a new store there
+  (daily reports, cookie stores, ...) is created 0600 whatever mode its
+  caller passes.
+* **Abandoned staging is reclaimed**: a writer flocks its ``.jsonstore-`` /
+  ``.binstore-`` staging file until after ``os.replace``; the first write a
+  process makes into a directory removes every staging file no live writer
+  holds (left by a killed process).
 * **JSONC tolerance**: pass ``jsonc=True`` to strip ``//``-line comments,
   ``/* */``-block comments, and trailing commas before parsing.
 * **Errors are logged, not silenced**: read failures return ``default``
@@ -48,12 +60,19 @@ import contextlib
 import json
 import os
 import re
+import stat
 import tempfile
 import threading
 from typing import Any, Callable
 
+from lib import config_dir as _config_dir
 from lib.log import get_logger
 from lib.weak_lock_pool import WeakLockPool
+
+try:
+    import fcntl as _fcntl  # POSIX only
+except ImportError:
+    _fcntl = None
 
 logger = get_logger(__name__)
 
@@ -427,7 +446,9 @@ def write_text_atomic(path: str, text: str, *, fsync: bool = True,
         a crash within seconds of the call.
     mode : int
         Octal file mode to chmod the temp file to before rename. The
-        default 0o644 matches typical Unix expectations.
+        default 0o644 matches typical Unix expectations. A rewrite never
+        widens an existing file's group/other access (see
+        :func:`_publication_mode`).
     """
     _write_payload_atomic(path, text, binary=False, fsync=fsync, mode=mode)
 
@@ -447,14 +468,132 @@ def write_bytes_atomic(path: str, data: bytes, *, fsync: bool = True,
     _write_payload_atomic(path, bytes(data), binary=True, fsync=fsync, mode=mode)
 
 
+def _in_private_config_tree(path: str) -> bool:
+    # Read at call time: tests and frozen installs relocate CONFIG_DIR.
+    root = os.path.abspath(_config_dir.CONFIG_DIR)
+    return os.path.abspath(path).startswith(root + os.sep)
+
+
+def _publication_mode(path: str, mode: int) -> int:
+    """Return ``mode`` without group/other bits the existing ``path`` lacks.
+
+    Publication replaces the inode, so the caller's mode would otherwise
+    silently widen a file an owner (or a secret-holding writer) locked down:
+    server_config.json holds plaintext provider keys and has many writers that
+    pass no mode. Owner bits stay the caller's so a store remains writable.
+
+    Everything under the config tree (``lib.config_dir.CONFIG_DIR``) is
+    owner-only whatever the caller passes: it holds provider keys, cookies,
+    daily reports and dozens of stores whose writers pass no mode, and a new
+    file there must not start life 0644.
+    """
+    if _in_private_config_tree(path):
+        mode &= 0o700
+    try:
+        existing = stat.S_IMODE(os.stat(path).st_mode)
+    except OSError:
+        return mode
+    return mode & (existing | 0o700)
+
+
+# ── Staging-file ownership and reclaim ─────────────────────────────
+# A writer killed between mkstemp and os.replace leaves its staging file
+# behind. Staging files are reconstructible transport data, so they are
+# reclaimed, never kept: each writer holds an exclusive flock on its staging
+# file from creation until after publication, and a sweep removes every
+# staging file whose lock it can take (its writer is gone). Without flock
+# support neither side can tell, and nothing is removed.
+_STAGING_PREFIXES = ('.jsonstore-', '.binstore-')
+# Abandonment needs a dead writer, so one sweep per directory per process
+# reaches everything earlier processes left behind.
+_RECLAIMED_STAGING_DIRS: set[str] = set()
+_RECLAIMED_STAGING_LOCK = threading.Lock()
+
+
+def _same_file(fd: int, path: str) -> bool:
+    try:
+        named = os.stat(path, follow_symlinks=False)
+    except OSError:
+        return False
+    held = os.fstat(fd)
+    return (named.st_dev, named.st_ino) == (held.st_dev, held.st_ino)
+
+
+def _lock_staging(fd: int) -> bool:
+    """Hold ``fd``'s staging file against reclaim; False where flock is unavailable."""
+    if _fcntl is None:
+        return False
+    try:
+        _fcntl.flock(fd, _fcntl.LOCK_EX)
+    except OSError as error:
+        logger.debug('[json_store] staging flock unsupported: %s', error)
+        return False
+    return True
+
+
+def _reclaim_abandoned_staging(parent: str) -> None:
+    """Remove staging files in ``parent`` that no live writer holds."""
+    key = os.path.abspath(parent)
+    with _RECLAIMED_STAGING_LOCK:
+        if key in _RECLAIMED_STAGING_DIRS:
+            return
+        _RECLAIMED_STAGING_DIRS.add(key)
+    if _fcntl is None:
+        return
+    try:
+        with os.scandir(parent) as entries:
+            names = [entry.name for entry in entries
+                     if entry.name.startswith(_STAGING_PREFIXES)
+                     and entry.name.endswith('.tmp')]
+    except OSError as error:
+        logger.debug('[json_store] staging reclaim skipped for %s: %s', parent, error)
+        return
+    reclaimed = 0
+    for name in names:
+        candidate = os.path.join(parent, name)
+        try:
+            fd = os.open(candidate, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+        except OSError:
+            continue  # published, removed, or a symlink: not ours to touch
+        try:
+            try:
+                _fcntl.flock(fd, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+            except OSError:
+                continue  # a live writer holds it, or flock is unsupported
+            # The name may have been published (renamed) after our open; only
+            # unlink while it still names the inode we locked.
+            if _same_file(fd, candidate):
+                with contextlib.suppress(OSError):
+                    os.unlink(candidate)
+                    reclaimed += 1
+        finally:
+            os.close(fd)
+    if reclaimed:
+        logger.info('[json_store] reclaimed %d abandoned staging file(s) in %s',
+                    reclaimed, parent)
+
+
+def _create_locked_staging(parent: str, prefix: str) -> tuple[int, str, bool]:
+    """mkstemp a staging file and hold its lock before anyone may reclaim it."""
+    while True:
+        fd, tmp = tempfile.mkstemp(prefix=prefix, suffix='.tmp', dir=parent)
+        locked = _lock_staging(fd)
+        if not locked or _same_file(fd, tmp):
+            return fd, tmp, locked
+        # Another process's sweep removed it between mkstemp and our lock.
+        os.close(fd)
+
+
 def _write_payload_atomic(path: str, payload: str | bytes, *, binary: bool,
                           fsync: bool, mode: int) -> None:
     """Own the staging descriptor, stream and publication for both payload types."""
+    mode = _publication_mode(path, mode)
     parent = os.path.dirname(path) or '.'
     if parent != '.' and not os.path.isdir(parent):
         os.makedirs(parent, exist_ok=True)
+    _reclaim_abandoned_staging(parent)
     prefix = '.binstore-' if binary else '.jsonstore-'
-    fd, tmp = tempfile.mkstemp(prefix=prefix, suffix='.tmp', dir=parent)
+    fd, tmp, locked = _create_locked_staging(parent, prefix)
     try:
         try:
             try:
@@ -482,9 +621,14 @@ def _write_payload_atomic(path: str, payload: str | bytes, *, binary: bool,
                         os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
                     except (OSError, AttributeError) as error:
                         logger.debug('[json_store] fadvise DONTNEED skipped: %s', error)
+            if locked:
+                # Publish before closing: closing drops the lock, and an
+                # unlocked staging file is fair game for a sweep.
+                os.replace(tmp, path)
         finally:
             os.close(fd)
-        os.replace(tmp, path)
+        if not locked:
+            os.replace(tmp, path)
     except BaseException:
         with contextlib.suppress(OSError):
             os.unlink(tmp)
@@ -503,6 +647,7 @@ def atomic_output_path(path: str, *, fsync: bool = True,
     This context owns the complete lifecycle: unique same-directory creation,
     optional fsync, atomic replace, and cleanup after *any* exception.
     """
+    mode = _publication_mode(path, mode)
     parent = os.path.dirname(path) or '.'
     if parent != '.' and not os.path.isdir(parent):
         os.makedirs(parent, exist_ok=True)

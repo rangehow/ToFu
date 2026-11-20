@@ -322,6 +322,18 @@ def http_request(method: str, url: str, *,
                          headers=_build_headers(headers), **extra)
 
 
+def prepared_response_headers(response, *, method: str, url: str, names) -> dict | None:
+    """Return selected final Requests header values for a direct response only."""
+    request = getattr(response, 'request', None)
+    if (not isinstance(request, requests.PreparedRequest)
+            or getattr(response, 'history', None)
+            or request.method != method or request.url != url
+            or request.headers is None):
+        return None
+    observed = {name: request.headers.get(name) for name in names}
+    return observed if all(isinstance(value, str) for value in observed.values()) else None
+
+
 def http_get(url: str, *, timeout: float = _DEFAULT_TIMEOUT,
              headers: Optional[dict] = None,
              params: Optional[dict] = None,

@@ -14,6 +14,10 @@ Specification for ``lib/storage_authority_sql/adapters/sqlite_checkpointer.py``
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
+import hashlib
+import json
 import sqlite3
 import threading
 import time
@@ -22,7 +26,6 @@ import pytest
 
 from lib.storage_authority_sql.adapters import sqlite_checkpointer
 from lib.storage_authority_sql.adapters.sqlite import SQLiteBackend
-from lib.storage_authority_sql.adapters.sqlite_checkpointer import WAL_AUTOCHECKPOINT_FRAMES
 from lib.storage_authority_sql.adapters.sqlite_wal_coalesce import wal_coalescing
 from tests.storage_authority_sql.test_sqlite_read_pool import _config
 
@@ -72,33 +75,67 @@ def test_the_writer_runs_no_automatic_checkpoint(backend):
 
 
 def test_continuous_writes_restart_the_wal(backend):
-    # Back-to-back commits from several threads keep the writer busy, so it
-    # never begins a transaction while the checkpointer is idle; the writer
-    # finishes a due checkpoint and the WAL restarts while they continue.
-    stop = threading.Event()
+    # Pin the reader's end mark below the real boundary. This guarantees a
+    # partial PASSIVE pass, rather than hoping to sample a short-lived peak.
+    def write(keys):
+        def op(session):
+            for key in keys:
+                session.execute('INSERT INTO bulk VALUES (?, ?)', (key, f'{key:03500d}'))
+        backend._writer.submit(op, 'user', time.monotonic() + 30, operation_name='test.bulk')
 
-    def keep_writing():
-        while not stop.is_set():
-            _write(backend, 50)
+    def initialize(session):
+        session.execute('CREATE TABLE bulk(id INTEGER PRIMARY KEY, payload TEXT NOT NULL)')
 
-    threads = [threading.Thread(target=keep_writing) for _ in range(4)]
-    for thread in threads:
-        thread.start()
-    try:
-        peak = 0
+    backend._writer.submit(initialize, 'user', time.monotonic() + 30, operation_name='test.bulk')
+    write(range(64))
+    status = lambda: backend.metrics()['wal_checkpointer']
+    assert status()['wal_autocheckpoint_frames'] == 4096
+    assert backend._writer._connection.execute('PRAGMA synchronous').fetchone()[0] == 2
+    assert backend._writer._connection.execute('PRAGMA journal_mode').fetchone()[0] == 'wal'
+    assert _wal_index(backend)[0] < 4096
+    with closing(backend._connect(query_only=True)) as reader:
+        reader.execute('BEGIN')
+        assert reader.execute('SELECT count(*) FROM bulk').fetchone()[0] == 64
+        gate = threading.Barrier(2, timeout=30)
 
-        def restarted() -> bool:
-            nonlocal peak
-            frames, _ = _wal_index(backend)
-            peak = max(peak, frames)
-            return peak >= WAL_AUTOCHECKPOINT_FRAMES and frames < peak
-        _eventually(restarted, timeout_s=120)
-    finally:
-        stop.set()
-        for thread in threads:
-            thread.join()
-    status = backend.metrics()['wal_checkpointer']
-    assert status['passes'] + status['writer_passes'] > 0
+        def producer(start):
+            for key in range(start, 4664, 100):
+                gate.wait()
+                write(range(key, key + 50))
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(producer, start) for start in (64, 114)]
+            for future in futures:
+                future.result()
+        _eventually(lambda: status()['passes'] > 0 and status()['frames_backfilled'] > 0)
+        pinned = status()
+        frames, backfilled = _wal_index(backend)
+        assert frames >= 4096 and 0 < backfilled < frames
+        assert reader.execute('SELECT count(*) FROM bulk').fetchone()[0] == 64
+        reader.rollback()
+
+    # A fresh commit triggers retry; require actual backfill, then a WAL reset
+    # on the following commit. Neither probing nor test teardown checkpoints it.
+    write(range(4664, 4665))
+    def fully_backfilled():
+        current, copied = _wal_index(backend)
+        return current >= 4096 and current == copied
+
+    _eventually(fully_backfilled)
+    write(range(4665, 4666))
+    final_index = _wal_index(backend)
+    assert final_index[0] < 4096
+    final = status()
+    assert final['max_wal_frames'] >= 4096
+    assert final['failed_passes'] == 0 and final['last_error'] == ''
+    with closing(sqlite3.connect(backend.config.sqlite_path)) as reader:
+        assert reader.execute('PRAGMA integrity_check').fetchall() == [('ok',)]
+        rows = reader.execute('SELECT id, payload FROM bulk ORDER BY id').fetchall()
+    assert rows == [(key, str(key).zfill(3500)) for key in range(4666)]
+    print(json.dumps({'partial_index': [frames, backfilled], 'pinned': pinned,
+                      'reset_index': final_index, 'final': final, 'content_rows': len(rows),
+                      'content_sha256': hashlib.sha256(''.join(row[1] for row in rows).encode()).hexdigest(),
+                      'integrity': 'ok'}))
 
 
 def test_a_writer_commit_does_not_wait_for_a_checkpoint_pass(backend, monkeypatch):

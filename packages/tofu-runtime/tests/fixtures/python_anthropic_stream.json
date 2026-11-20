@@ -924,7 +924,9 @@
           "cache_creation_input_tokens": 20,
           "cache_read_input_tokens": 100,
           "effective_prompt_tokens": 130,
-          "effective_output_tokens": 1
+          "effective_output_tokens": 1,
+          "_wire_anthropic_input_tokens": 130,
+          "_wire_anthropic_cached_tokens": 100
         }
       },
       {
@@ -943,7 +945,9 @@
           "cache_creation_input_tokens": 20,
           "cache_read_input_tokens": 100,
           "effective_prompt_tokens": 130,
-          "effective_output_tokens": 8
+          "effective_output_tokens": 8,
+          "_wire_anthropic_input_tokens": 130,
+          "_wire_anthropic_cached_tokens": 100
         }
       },
       "[DONE]"
@@ -1011,7 +1015,9 @@
           "reasoning_tokens": 2,
           "compaction_iterations": 1,
           "compaction_input_tokens": 40,
-          "compaction_output_tokens": 4
+          "compaction_output_tokens": 4,
+          "_wire_anthropic_input_tokens": 190,
+          "_wire_anthropic_cached_tokens": 100
         }
       },
       {

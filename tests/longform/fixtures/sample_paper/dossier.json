@@ -68,7 +68,7 @@
       "id": "mechanism",
       "kind": "contribution",
       "status": "sourced",
-      "text": "Pure BF16 training stalls because updates smaller than half a BF16 ulp round back to the old weight: 61.5% of updates are stale by step 20000, and the half-ulp test predicts them with precision 0.98 and recall 0.96.",
+      "text": "Synthetic diagnostics report 61.5% stale round-to-nearest updates at step 20000 and half-ulp predictor precision 0.98 and recall 0.96. These descriptive measurements do not establish global training stalling or its cause; a subset of stale updates can coexist with continuing loss improvement.",
       "source": {
         "path": [
           "results/stale_updates.csv",
@@ -84,7 +84,7 @@
       "id": "c_selective",
       "kind": "contribution",
       "status": "sourced",
-      "text": "Stochastically rounding only the 8.7% of parameters that fail the half-ulp test matches stochastic rounding everywhere (validation loss 3.125 versus 3.124) with 0.087 of the random bits, while a random 8.7% reaches only 3.171.",
+      "text": "Synthetic point estimates for stochastic rounding: half-ulp selection of 8.7% of parameters has validation loss 3.125, rounding everywhere 3.124, and random selection of 8.7% of parameters 3.171. Half-ulp selection uses 0.087 of the random bits relative to rounding everywhere. Repeated-run uncertainty and an equivalence margin are unspecified; neither equivalence nor reproducible performance differences are established.",
       "source": {
         "path": [
           "results/selective.csv",
@@ -100,13 +100,12 @@
       "id": "c_match",
       "kind": "contribution",
       "status": "sourced",
-      "text": "BF16 training with stochastically rounded updates and no FP32 master copy matches FP32 master-weight training: validation loss 3.124 versus 3.112, a 0.39% gap.",
+      "text": "The synthetic full-stochastic-rounding point estimate is validation loss 3.124 versus 3.112 for FP32 master weights, a reported 0.39% gap. This full-SR comparison is distinct from selective SR and does not establish parity; repeated-run uncertainty and an equivalence margin are unspecified.",
       "source": {
         "path": "results/summary.json"
       },
       "evidence": [
-        "loss",
-        "fig:loss"
+        "loss"
       ]
     },
     {
@@ -148,10 +147,9 @@
     {
       "label": "fig:loss",
       "file": "figures/loss_curve.pdf",
-      "caption": "Validation loss during training. Stochastically rounding the BF16 update tracks FP32 master weights; round-to-nearest updates stall.",
+      "caption": "Synthetic validation-loss trajectories. Round-to-nearest has higher validation loss over the displayed token range. Nearby curves do not establish statistical equivalence.",
       "supports": [
-        "loss",
-        "c_match"
+        "loss"
       ]
     }
   ]

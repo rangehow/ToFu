@@ -141,6 +141,36 @@ def test_missing_usage_does_not_erase_durable_or_memory_predecessor(usage):
         assert state.get_prev_turn_cache_read(conv_id, user_id=7) == 34_304
 
 
+@pytest.mark.parametrize('cold', [False, True])
+def test_responses_gap_between_turns_keeps_last_known_read_but_is_not_its_wire(cold):
+    from lib.llm.responses_outbound import responses_response_to_openai
+
+    conv_id = conversation()
+    messages = [{'role': 'user', 'content': 'offline fixture'}]
+
+    def detect(read):
+        usage = responses_response_to_openai({
+            'status': 'completed', 'output': [], 'usage': {
+                'input_tokens': 40_000, 'output_tokens': 10,
+                'input_tokens_details': {'cached_tokens': read},
+            },
+        })['usage']
+        usage['_dispatch'] = {'protocol': 'responses'}
+        return detect_cache_break(conv_id, messages, [], 'fixture-wire-model',
+                                  usage, user_id=7, durable=False)
+
+    with state.cache_tracking_scope(task_for(conv_id)):
+        assert detect(35_000) is None
+    with state.cache_tracking_scope(task_for(conv_id)):
+        assert detect(None) is None
+    if cold:
+        cold_memory()
+    with state.cache_tracking_scope(task_for(conv_id)):
+        expected = 34_304 if cold else 35_000
+        assert state.get_prev_turn_cache_read(conv_id, user_id=7) == expected
+        assert detect(0) is None  # cannot compare to the turn before the gap
+
+
 def test_running_checkpoint_keeps_read_staged_until_terminal():
     conv_id = conversation()
     task = task_for(conv_id)

@@ -57,10 +57,17 @@ failure (provider stream premature close, engine deadline exhausted), the
 worker's settle-error path persists a `_translateFailed` verdict on the turn
 projection (`mark_turn_translation_failed`) instead of the turn vanishing
 silently; the marker is cleared by the next successful commit and never
-regresses a committed turn. A boot sweep (`run_boot_translation_sweep`, wired
+regresses a committed turn. The one failure that is not re-runnable is a
+content-guard refusal: `content_guard_refusal_recorded` recognizes its typed
+`content_refused` marker (and the legacy text-only marker), the worker logs it
+as a WARNING rather than an ERROR traceback, and neither the terminal
+coordinator nor any sweep re-spawns that turn — the verdict is a property of
+the text, so another pass would only buy the same refusal again (generation
+0b3b0163: 122 ERROR tracebacks from re-running refused turns).
+A boot sweep (`run_boot_translation_sweep`, wired
 into the post-ready path) re-spawns whole-turn translations for recently-active
 conversations whose settled turns still lack a translation — covering both a
-recorded failure and a restart that dropped the in-flight task. Because that
+transient recorded failure and a restart that dropped the in-flight task. Because that
 sweep is bounded to recent conversations, the conversation-open read path
 (`GET /api/v4/conversations/<id>/sync`) and every successful perception
 receipt (`POST /api/v4/conversations/<id>/turns/<turn>/perception`, sent while

@@ -20,7 +20,7 @@ ROUTER_ONLY_TOOLS = frozenset({
     'route_to_project', 'get_router_projects',
     'router_portfolio',
     'router_instruction_create', 'router_instruction_list', 'router_instruction_cancel',
-    'owner_settings', 'repair_project', 'broadcast_project_message',
+    'owner_settings', 'broadcast_project_message',
 })
 CHANNEL_TOOLS = frozenset({
     'channel_send', 'channel_read', 'channel_threads', 'channel_configure_thread',

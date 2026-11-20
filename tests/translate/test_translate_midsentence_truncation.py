@@ -21,7 +21,7 @@ and deterministically (mirrors test_translate_wrong_language_flip.py).
 import pytest
 
 import lib.translate.engine as engine
-from lib.translate.engine import _ends_midsentence
+from lib.translate.engine import _ends_in_open_link, _ends_midsentence
 
 pytestmark = pytest.mark.unit
 
@@ -170,6 +170,103 @@ def test_complete_output_accepted_first_try_and_cached(monkeypatch):
     tr = usage.get('_translate_trace')
     assert tr and tr['verdict'] == 'ok'
     assert puts == [_GOOD_ZH.strip()], f'a complete translation must be cached: {puts}'
+
+
+# ── Unclosed Markdown link tail (structural, length-independent) ──
+#
+# Production case (conv mwn8kcx6gcqwxu, 2026-11-19): the translation of an
+# assistant reply stopped mid-link after 298 of 632 source chars. That ratio
+# (47%) sits ABOVE the 45% soft floor, and the body DOES end mid-sentence, so
+# the ratio+mid-sentence branch never fired — the cut body was committed and
+# the transcript rendered a dangling "[" where the rest of the message should
+# be. The tail shape, not the length, is the tell.
+_LINK_SOURCE = (
+    "Done — the Devices page is already live.\n\n"
+    "The [Devices page](page:devices) now has a **Back to Chat** button that "
+    "stays visible as you scroll and returns you to your conversation without "
+    "losing your draft. Closing device details or the add-device wizard "
+    "returns you to the list.\n\n"
+    "I replaced the wide table with compact, grouped device rows using Tofu's "
+    "shared controls and theme colors. Long hostnames wrap on narrow "
+    "screens.\n\n"
+    "[Desktop preview](/api/response-assets/51838716-2ddb-45b8-80a5-2d823e9d64ba) · "
+    "[Mobile preview](/api/response-assets/496ec23d-28b7-40f4-9764-c56f28278270)\n\n"
+    "Merged as `d32b0ec4d6` (pre-merge: `51a0086f56`)."
+)
+_LINK_TRUNCATED_ZH = (
+    '我重新设计了设备页面，并修复了相关问题。**返回对话**会始终固定在页面顶部，即使滚动也不会消失。'
+    '点击后可返回当前聊天页面，且不会清空您的草稿。关闭设备详情或添加设备向导后会返回列表，'
+    '而无需担心浏览器的后退按钮重新打开它们。\n\n新布局采用了 Tofu 的纸张调色板和共享控件：'
+    '一个用于 Home 服务器的卡片、紧凑的设备组（一眼就能看到状态和权限），以及一个折叠的连接指南。'
+    '长名称在移动设备上会自动换行，而不会拉伸页面。\n\n'
+    '![在 Tofu 纸张主题下重新设计的设备页面]'
+    '(/api/response-assets/51838716-2ddb-45b8-80a5-2d823e9d64ba)\n\n['
+)
+_LINK_GOOD_ZH = (
+    '设备页面已完成并已上线。\n\n'
+    '[设备页面](page:devices)现在有一个**返回对话**按钮，滚动时始终可见，点击后可返回对话，'
+    '且不会清空草稿。关闭设备详情或添加设备向导后会返回列表。\n\n'
+    '我把宽表格换成了紧凑的分组设备行，使用 Tofu 的共享控件和主题颜色。长主机名在窄屏上会自动换行。\n\n'
+    '[桌面预览](/api/response-assets/51838716-2ddb-45b8-80a5-2d823e9d64ba) · '
+    '[移动端预览](/api/response-assets/496ec23d-28b7-40f4-9764-c56f28278270)\n\n'
+    '已合并为 `d32b0ec4d6`（合并前：`51a0086f56`）。'
+)
+
+
+def test_ends_in_open_link_pure():
+    # A tail inside an unclosed link/image opener means the model stopped
+    # between '[' and ']' — never a complete document.
+    assert _ends_in_open_link('…页面。\n\n[') is True
+    assert _ends_in_open_link('见 [桌面预览](') is False  # inside link TARGET
+    assert _ends_in_open_link('见 [桌面预览](/x)') is False
+    assert _ends_in_open_link('[Desktop preview]') is False
+    assert _ends_in_open_link('普通结尾。') is False
+    assert _ends_in_open_link('') is False
+
+
+def test_unclosed_link_tail_rejected_above_ratio_floors(monkeypatch):
+    # Guard the reproduction itself: the ratio clears the soft floor, so only
+    # the structural tail check can reject this body.
+    assert len(_LINK_TRUNCATED_ZH) / len(_LINK_SOURCE) > 0.45
+    assert _ends_midsentence(_LINK_TRUNCATED_ZH) is True
+
+    state = _patch_sequence(monkeypatch, [_LINK_TRUNCATED_ZH, _LINK_GOOD_ZH])
+    out, usage = engine._translate_one_chunk(
+        _LINK_SOURCE, system_prompt='translate', source='English',
+        target='Chinese', overall_deadline=30)
+    assert out == _LINK_GOOD_ZH.strip()
+    assert state['i'] >= 2  # the cut body was rejected and retried
+    tr = usage.get('_translate_trace')
+    assert tr and tr['verdict'] == 'ok'
+
+
+def test_source_ending_in_open_bracket_not_flagged(monkeypatch):
+    # A source may legitimately end inside an unclosed bracket (a document
+    # ABOUT Markdown). The translation inherits that shape; it must not be
+    # treated as a cut translation.
+    source = (
+        'Markdown link syntax begins with an opening square bracket, as in [ — '
+        'that opener is the whole point of the sentence. A renderer that never '
+        'sees the closing bracket shows the raw character, which is exactly what '
+        'this note is about, so the note ends here with the opener: ['
+    )
+    translated = (
+        'Markdown 链接语法以一个左方括号开头，就像这里写的那样：[ —— 这个左括号就是整句话的全部要点。'
+        '渲染器如果永远看不到右方括号，就只会把这个原始字符直接显示出来，而这正是本说明想要讲清楚的东西，'
+        '所以这段说明就到这里，最后以一个左括号结束：['
+    )
+    # The body lands above every ratio floor and ends mid-sentence, so only the
+    # source-shape exemption keeps it from being rejected as truncated.
+    assert len(translated) / len(source) > 0.45
+    assert _ends_midsentence(translated) is True
+    state = _patch_sequence(monkeypatch, [translated])
+    out, usage = engine._translate_one_chunk(
+        source, system_prompt='translate', source='English',
+        target='Chinese', overall_deadline=30)
+    assert out == translated.strip()
+    assert state['i'] == 1  # accepted immediately
+    tr = usage.get('_translate_trace')
+    assert tr and tr['verdict'] == 'ok'
 
 
 def test_terse_but_complete_short_output_not_flagged(monkeypatch):

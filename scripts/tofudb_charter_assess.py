@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from scripts.tofudb_workloads.result_evidence import compare_results  # noqa: E402
 from scripts.db_performance_catalog import (  # noqa: E402
     CatalogError, canonical, immutable_write, parse, read_bytes,
 )
@@ -102,7 +103,12 @@ def qualify(report, current_sources):
         native, sqlite, raw = (observed[name] for name in ('tofudb', 'sqlite', 'rawsqlite'))
         if native.get('profiling') is not False or native.get('profile_sample_every') != 0:
             problems.append(f'{phase}: observed native profile-off policy is missing or contradicted')
+        writer = sqlite.get('writer_configuration_at_open')
+        writer = writer if isinstance(writer, dict) else {}
         if (native.get('wal_durability') != 'strict' or sqlite.get('synchronous') != 2
+                or type(writer.get('synchronous')) is not int or writer.get('synchronous') != 2
+                or str(writer.get('journal_mode')).lower() != 'wal'
+                or sqlite.get('journal_mode') != writer.get('journal_mode')
                 or sqlite.get('fastpath_active') is not False or raw.get('synchronous') != 2
                 or str(raw.get('journal_mode')).lower() != 'wal'):
             problems.append(f'{phase}: observed equivalent durability/volume policy is missing or contradicted')
@@ -207,6 +213,10 @@ def metric_cell(reports, quality, workload, metric, baseline, maximum_ratio):
             # capabilities. Either kind of gap cannot establish a lifecycle win.
             return cell('INSUFFICIENT' if quality['status'] == 'PASS' else quality['status'],
                         [*quality['reasons'], f'{workload}: incomplete cold-read evidence'])
+        if workload != 'footprint':
+            fidelity = compare_results({'tofudb': native, baseline: control}, workload=workload)
+            if not fidelity['qualified']:
+                return cell('INSUFFICIENT', [f'{workload}: {reason}' for reason in fidelity['reasons']])
         left, right = metric_value(native, metric['name']), metric_value(control, metric['name'])
         if not number(left) or not number(right) or (not metric.get('allow_zero') and (left == 0 or right == 0)):
             missing.append(f"{workload}.{metric['name']}: finite native/{baseline} measurements required")
@@ -612,6 +622,9 @@ def witness_cell(reports, quality, definition):
         return cell('INCOMPARABLE', list(dict.fromkeys(unjoined)))
     if missing or not witnesses:
         return cell('INSUFFICIENT', list(dict.fromkeys(missing)) or ['no witness observations'])
+    fidelity = compare_results({}, workload=spec['name'])
+    if not fidelity['qualified']:
+        return cell('INSUFFICIENT', [f"{spec['name']}: {reason}" for reason in fidelity['reasons']])
     observed = WITNESS_RULES[spec['name']](witnesses, spec, definition)
     status = quality['status'] if quality['status'] != 'PASS' else observed['status']
     return cell(status, [*quality['reasons'], *observed['reasons']],

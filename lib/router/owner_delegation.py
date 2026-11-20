@@ -243,8 +243,7 @@ def _engine_readiness(project: str) -> str:
     from serverctl_pkg.engine_certification import passing_record
     from tofu_dotenv import read_dotenv_values
     root = Path(project)
-    from lib.tools.process_environment import inherited_child_environment
-    environment = {**read_dotenv_values(root / '.env'), **inherited_child_environment()}
+    environment = {**read_dotenv_values(root / '.env'), **os.environ}
     if load_deployment_configuration(environment).storage_backend != 'tofudb':
         return 'not_applicable'
     try:
@@ -514,11 +513,12 @@ def _restart_after_acceptance(owner: int, action_id: str, requester: dict, reque
                 return
             outcome = server_reexec.perform_server_reexec(RESTART_REASON, frontend_prevalidated=True,
                                                           requested_at=requested_at)
-            if outcome.handed_over:
+            failure = server_reexec.await_managed_restart_failure(outcome, requested_at)
+            if outcome.handed_over and not failure:
                 precedence.retain_until_exit()
             else:
                 gate.settle_delegated_action(owner, action_id, status='failed',
-                                             code='restart_bridge_refused', detail=outcome.detail)
+                                             code='restart_bridge_refused', detail=failure)
     except gate.DelegationRefused as refusal:
         gate.note_restart_notice(action_id, oldCode=old_code)
         gate.settle_delegated_action(owner, action_id, status='failed', code=refusal.code,
@@ -534,8 +534,11 @@ def _restart_after_acceptance(owner: int, action_id: str, requester: dict, reque
 
 
 def delegated_conversation_control(task: dict, scope: dict, arguments: dict, *, control):
-    """``control_conversation`` with ``owner_delegation``: Continue, checkpoint resume, Stop,
-    a Worker hold/resume or a session model change (``set_model``).
+    """Audited delegated session control: Continue, checkpoint resume, Stop, hold/resume or set_model.
+
+    Only set_model may omit the explicit authority object: the tool adapter
+    selects this path when the current owner request does not supply authority
+    for the target. The existing full grant and live-attempt trigger still apply.
 
     The grant, the owner trigger and the audit record precede ``control``, the
     shared session command (``session_control.control_session``). It runs as
@@ -552,11 +555,15 @@ def delegated_conversation_control(task: dict, scope: dict, arguments: dict, *, 
     from lib.conversations.project_identity import normalize_project_path
     from lib.conversations.project_messages import scope as conversation_project
     from lib.identity import PrincipalContext
-    authority = validate(dict(arguments['owner_delegation']), 'ownerDelegationAuthority')
+    action = arguments.get('action')
+    explicit = arguments.get('owner_delegation')
+    standing = action == 'set_model' and explicit is None
+    authority = validate(
+        {'reason': arguments.get('reason'), 'under_delegation': True} if standing else dict(explicit),
+        'ownerDelegationAuthority')
     for name in ('conversation_id', 'turn_id', 'attempt_id', 'idempotency_key'):
         if not isinstance(arguments.get(name), str) or not arguments[name].strip():
             raise ValueError(f'{name} is required')
-    action = arguments.get('action')
     if action not in ('continue', 'checkpoint_resume', 'stop', 'hold', 'resume', 'set_model'):
         raise ValueError('Under the owner\u2019s delegation, only continue, checkpoint_resume, stop, hold, '
                          'resume and set_model are available; regenerate needs the owner\u2019s own request, and '
@@ -578,8 +585,11 @@ def delegated_conversation_control(task: dict, scope: dict, arguments: dict, *, 
         # Checked before the gate records anything: every record stays an ownerDelegatedAction.
         from lib.conversations.session_model import validate_request
         target['model'] = validate_request(arguments)[1]
-    gate.check_delegation(owner, requester, 'conversation_control')
+    grant = gate.check_delegation(owner, requester, 'conversation_control')
     try:
+        if standing and grant['coverage'] != 'full':
+            raise _refused('owner_delegation_scope', 'A marker-free model change by a lead needs the owner’s '
+                           'full delegation. A narrower grant requires an explicit owner trigger.')
         trigger = resolve_trigger(task, scope, authority)
     except gate.DelegationRefused as refusal:
         gate.record_delegated_refusal(owner, requester, scope='conversation_control',
@@ -639,7 +649,7 @@ def _notify_target_lead(task: dict, scope: dict, project: str, record: dict, tar
 
 
 def delegated_action(task: dict, scope: dict, arguments: dict, *, scope_name: str,
-                     target: dict, action) -> tuple[dict, str]:
+                     target: dict, action, allow_project_lead: bool = False) -> tuple[dict, str]:
     """One delegated effect through the R9 gate, for scopes without a bespoke tool.
 
     The owner instruction is authoritative (never the agent's claim). The grant,
@@ -649,11 +659,12 @@ def delegated_action(task: dict, scope: dict, arguments: dict, *, scope_name: st
     service, project folders), never a second authority. Returns the effect's
     result and the audit action id. A DelegationRefused raised by the effect is
     settled ``failed`` and re-raised; any other exception is settled ``failed``
-    with its type name.
+    with its type name. Callers opting into Project Lead authority must supply
+    their own live, operation-specific scope fence. The gate still requires full coverage.
     """
     from lib import lifecycle_approval as gate
     from .policy import is_router_scope
-    if not is_router_scope(scope):
+    if not allow_project_lead and not is_router_scope(scope):
         raise PermissionError('Only the owner\u2019s Global Router can act under the owner\u2019s delegation')
     owner = scope['user_id']
     requester = router_requester(task, scope)

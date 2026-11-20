@@ -233,6 +233,15 @@ class TestStreamReader(unittest.TestCase):
                 lines.append(ln)
         self.assertEqual(lines, ['data: {"a":1}', '', 'data: {"b":2}', ''])
 
+    def test_header_wait_outlasts_the_entry_created_by_the_first_frame(self):
+        meta = json.dumps({'status': 200, 'headers': {}})
+        answers = iter([None, None, ([(1, 'meta', meta)], False)])
+        with mock.patch('lib.desktop.get_frames', side_effect=lambda *a, **k: next(answers)), \
+             mock.patch.object(egress, '_CONSUME_POLL_S', 0):
+            r = egress.EgressStreamReader('cmd-x', 'agent-1')
+            r.wait_headers(timeout=2)
+        self.assertEqual(r.status_code, 200)
+
     def test_vanished_entry_raises(self):
         with mock.patch('lib.desktop.get_frames', return_value=None):
             r = egress.EgressStreamReader('cmd-x', 'agent-1')

@@ -10,20 +10,24 @@ with an oversized prompt or silently drops durable history.
 
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from lib.context_telemetry import validated_tool_schema_token_count
 from lib.llm.llm_errors import (
     AbortedError, ContextCompactionError, LocalRequestPreparationError, PromptTooLongError,
 )
 from lib.log import audit_log, get_logger
+from lib.tasks_pkg.compaction._admission_budget import (
+    admission_ceiling_for_resolved_output, resolve_admission_budget,
+)
 from lib.tasks_pkg.compaction._layer2 import force_compact_if_needed
 from lib.tasks_pkg.compaction._pipeline import recompose_context_after_compaction
 
 from lib.tasks_pkg.context_composer.checklist import restore_checklist_context
 from lib.tasks_pkg.context_composer.turn_requirements import refresh_turn_requirements
 from lib.tasks_pkg.compaction._tokens import (
-    _count_tokens_authoritative,
+    _compaction_trigger_threshold, _count_tokens_authoritative,
 )
 from lib.token_counter.base import (
     REUSABLE_TEXT_TOKEN_COUNTS_BY_IDENTITY_KEY,
@@ -34,6 +38,44 @@ logger = get_logger(__name__)
 _MIN_SUMMARY_PRESERVE_TOKENS = 8_000
 _MAX_SUMMARY_PRESERVE_TOKENS = 32_000
 _MEASUREMENT_VERSION = 'tofu.prompt-admission/v2'
+
+
+@dataclass(frozen=True, kw_only=True)
+class PromptAdmissionPlanInput:
+    """Frozen facts for one final candidate and its route, not execution config.
+
+    ``total_tokens`` is the canonical full prompt count in serving units,
+    including the candidate tool schemas. ``resolved_output_tokens`` must
+    already be bound by the route or resolved for that very count (ordinary
+    requested output caps do not qualify). The caller supplies matched facts;
+    this carrier neither verifies provenance nor grants admission authority.
+    """
+
+    total_tokens: int | None = None
+    context_window_tokens: int | None = None
+    resolved_output_tokens: int | None = None
+
+
+def plan_dispatch_prompt_limit(
+    facts: PromptAdmissionPlanInput,
+) -> Literal['fits', 'needs_compaction', 'unknown']:
+    """Classify initial prompt pressure without resolving or applying anything.
+
+    Over-budget does not promise compaction is possible. A fit applies only
+    to the supplied candidate, not a later injection or provider dispatch.
+    """
+    total = facts.total_tokens
+    window = facts.context_window_tokens
+    output = facts.resolved_output_tokens
+    if (type(total) is not int or not 0 < total <= 2**53 - 1
+            or type(window) is not int or not 0 < window <= 2**53 - 1
+            or type(output) is not int or not 0 < output < window):
+        return 'unknown'
+
+    _, window_safety, _ = _compaction_trigger_threshold(context_limit=window)
+    ceiling = admission_ceiling_for_resolved_output(
+        window=window, window_safety=window_safety, output=output)
+    return 'fits' if total <= ceiling else 'needs_compaction'
 
 
 def _tool_schema_tokens(tools: Any, *, model: str) -> int:
@@ -69,7 +111,6 @@ def _resolved_ceiling(task: dict[str, Any], *, round_num: int,
     route-derived safety ceiling. Retired economic targets, first dispatch
     and pricing-tier boundaries do not reduce physical model capacity.
     """
-    from lib.tasks_pkg.compaction._admission_budget import resolve_admission_budget
     return resolve_admission_budget(
         task, round_num=round_num, input_tokens=input_tokens)
 
@@ -500,4 +541,8 @@ def enforce_dispatch_prompt_limit(
     )
 
 
-__all__ = ['enforce_dispatch_prompt_limit']
+__all__ = [
+    'PromptAdmissionPlanInput',
+    'enforce_dispatch_prompt_limit',
+    'plan_dispatch_prompt_limit',
+]

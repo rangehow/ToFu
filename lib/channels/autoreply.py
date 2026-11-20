@@ -175,6 +175,8 @@ def _publish_progress(task: dict[str, Any], store, channel: dict[str, Any],
         content = json.loads(payload.get('toolContent') or '{}')
     except (TypeError, ValueError):
         return
+    if not isinstance(content, dict) or content.get('changed') is not True:
+        return  # Reading the board (or retrying an unchanged write) is not a progress update.
     revision = content.get('revision')
     if not isinstance(revision, int):
         return
@@ -396,10 +398,11 @@ def _final_answer_attachments(task: dict[str, Any], owner: int, conversation_id:
     """
     from lib.channels.model import CHANNEL_TRAITS, ThreadKey
     try:
-        if not CHANNEL_TRAITS[ThreadKey.parse(channel['thread']).channel].get('attachments'):
+        platform = ThreadKey.parse(channel['thread']).channel
+        if not CHANNEL_TRAITS[platform].get('attachments'):
             return text, []
         from lib.channels.attachments import for_final_answer
-        files, notes = for_final_answer(task, owner, conversation_id, text)
+        files, notes = for_final_answer(task, owner, conversation_id, text, generic_file=platform == 'wechat')
     except Exception:
         logger.warning('[Channels] final-answer attachments skipped conv=%s', conversation_id, exc_info=True)
         return text, []

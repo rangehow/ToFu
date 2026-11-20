@@ -9,8 +9,9 @@ against the child's actual PATH (including a project .venv) while excluding
 our own shim directories.
 
 Residual: this is a PATH guard, not a sandbox. An agent that invokes the real
-CLI by absolute path, or another submission client, bypasses it; the hope-mcp
-submission boundary is the second, independent check.
+CLI by absolute path, or another submission client, bypasses it; Tofu's MCP
+boundary (``lib.mcp.queue_policy.submission_refusal``) is the second,
+independent check.
 """
 from __future__ import annotations
 

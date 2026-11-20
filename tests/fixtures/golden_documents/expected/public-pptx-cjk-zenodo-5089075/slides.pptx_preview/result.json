@@ -1,0 +1,29 @@
+{
+ "geometry": {
+  "height": 540.13,
+  "pageCount": 32,
+  "width": 960.5
+ },
+ "pages": [
+  {
+   "height": 540,
+   "index": 0,
+   "links": [],
+   "png": {
+    "$blob": "pages/00.png",
+    "kind": "raster"
+   },
+   "width": 960
+  },
+  {
+   "height": 540,
+   "index": 12,
+   "links": [],
+   "png": {
+    "$blob": "pages/12.png",
+    "kind": "raster"
+   },
+   "width": 960
+  }
+ ]
+}

@@ -139,9 +139,15 @@ def main() -> None:
                   return invisible;
                 })""")
             check("native hidden removes shared button layout and focus targets", all(hidden_controls))
-            input_heights = {round(b["h"], 2) for b in boxes(page, "input.ui-input, .ui-select>select")}
-            check("all md inputs/selects share the md control height", input_heights == {34.0},
-                  f"heights: {sorted(input_heights)}")
+            fields = ":is(input.ui-input, .ui-select>select)"
+            md_field_heights = {round(b["h"], 2) for b in boxes(
+                page, f"{fields}:not(.ui-field--sm *)")}
+            sm_field_heights = {round(b["h"], 2) for b in boxes(
+                page, f".ui-field--sm {fields}")}
+            check("md inputs/selects share the md control height", md_field_heights == {34.0},
+                  f"heights: {sorted(md_field_heights)}")
+            check("sm inputs/selects share the sm control height", sm_field_heights == {28.0},
+                  f"heights: {sorted(sm_field_heights)}")
 
             # ── 2. Theme-invariant control geometry ─────────────────
             # HEIGHTS never shift across themes (token-fixed); widths of

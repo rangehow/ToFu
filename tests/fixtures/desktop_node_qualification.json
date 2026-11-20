@@ -1,0 +1,30 @@
+{
+  "source_revision": "1025bbbd729e98f6250c749af8dd81d89d9db00a",
+  "status": "NOT_QUALIFIED_NO_SOURCE_EXECUTION",
+  "command": ".venv/bin/python3 -I -S tests/support/desktop_node_qualification.py",
+  "qualification_exit_code": 0,
+  "kernel_preflight": {
+    "available": true,
+    "distinct_user_net_pid_namespaces": true,
+    "exit_code": 0,
+    "interfaces": ["lo"],
+    "isolated_python": true,
+    "no_site": true
+  },
+  "node_generations_started": 0,
+  "services_started": 0,
+  "application_or_third_party_imports": false,
+  "allow_exec_set": false,
+  "network_operations": false,
+  "source_sha256": {
+    "lib/desktop_agent/__init__.py": "9fd3da847e2dc31bda4440dd665c999063cdf60a9dbd5e703abe1a4e3422e2c1",
+    "lib/desktop_agent/_gui.py": "278a5cb0a4576cdf75d835da17e8e85f095c73e90643b8bd5624ea0b60e437ae",
+    "lib/desktop_agent/_run.py": "528b395a453d20d42a11ce8b021ba20ba63e6f2eac17ea9eecbdef1f11b225d2",
+    "lib/desktop_agent/links.py": "35fead1868eb5fb9d116a39435bbca691feef797eaa683e6cba0548539f92f3b",
+    "tests/chaos/node.py": "df98cbf743d36682b6cd0112ad2ae45b3d5a1595638f6c5103ec085bd3fb54b7",
+    "tests/chaos/node_main.py": "f91f634a57164af11f56a2fd0aafc02096ccf3b5d86b2b9825abb6a8d2a4f03b"
+  },
+  "lifecycle_acceptance": "UNVERIFIED: no new node generation, pairing, config-mode, credential separation or shutdown evidence",
+  "qualification": "Kernel capability passed; existing command-free early-process fixture missing. No source execution authorized by this receipt.",
+  "limits": "Not macOS/Windows, production transport, native installation, real application or rollout evidence. Earlier scratch results are not promoted into this receipt."
+}

@@ -136,6 +136,57 @@ def test_a_reissue_with_changed_content_is_refused_and_the_streamed_message_retr
     assert len(_inbox(s)) == 2
 
 
+def _bound_continuation(s, monkeypatch, mode):
+    """The sender runs as a dispatch-bound continuation Turn, as every lead's
+    "Continue the request" wake does (``KEY`` in its config, a granted role)."""
+    from lib.project_dispatch import admission, scope
+    binding = {'assignmentId': 'continuation-1', 'projectPath': '/project', 'owner': 1, 'tenant': 'default'}
+    s.sender['config'] = {**s.sender['config'], admission.KEY: binding}
+    s.sender[admission.ROLE_KEY] = {'binding': binding, 'mode': mode, 'coordinatorScope': None}
+    admitted = []
+
+    def admit_call(task, name, args, project_path=None, *, admission=None):
+        admitted.append((name, project_path))
+        return None, object()
+    monkeypatch.setattr(scope, 'admit_call', admit_call)
+    return admitted
+
+
+def test_a_bound_coordinator_continuation_commits_its_message_mid_round(streaming, monkeypatch):
+    """GR toolu_0151j3FajP71FwiMBuSyt4Gu: a send emitted mid-round in a continuation
+    Turn waited 331 s for the round to end; it commits while the response streams."""
+    s = streaming
+    admitted = _bound_continuation(s, monkeypatch, 'coordinator')
+    _stream(s, [('call-1', 'send_project_message', _args()),
+                ('call-2', 'send_project_message', _args('two', 'x' * 4000))], upto=5)
+    assert _eventually(lambda: [m['content'] for m in _inbox(s)] == ['Check alpha']), \
+        'the continuation\'s first message is durable before its response ends'
+    assert admitted == [('send_project_message', '/project')], \
+        'the start passed the same dispatch admission its ordinary dispatch runs'
+
+
+def test_a_continuation_whose_grant_refuses_the_call_holds_it(streaming, monkeypatch):
+    from lib.project_dispatch import scope
+    s = streaming
+    _bound_continuation(s, monkeypatch, 'coordinator')
+
+    def refuse(task, name, args, project_path=None, *, admission=None):
+        raise scope.ToolAdmissionRefused('Coordinator call exceeds its original continuation policy',
+                                         tool_name=name)
+    monkeypatch.setattr(scope, 'admit_call', refuse)
+    _stream(s, [('call-1', 'send_project_message', _args())])
+    time.sleep(.2)
+    assert _inbox(s) == []
+
+
+def test_a_dispatched_worker_never_stream_starts(streaming, monkeypatch):
+    s = streaming
+    admitted = _bound_continuation(s, monkeypatch, 'project')
+    _stream(s, [('call-1', 'send_project_message', _args())])
+    time.sleep(.2)
+    assert _inbox(s) == [] and admitted == [], 'a Worker\'s send keeps its fence until dispatch'
+
+
 @pytest.mark.parametrize('name', ['route_to_project', 'channel_send', 'consider_project_message'])
 def test_calls_without_a_withdrawal_wait_for_their_final_response(name):
     assert stream_start_port(name) is None

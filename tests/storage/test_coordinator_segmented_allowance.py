@@ -111,6 +111,58 @@ def test_missing_allowance_index_cannot_refund_a_worker(segmented_runtime, group
     assert r.c.repo.read(assignment['id']) == retained
 
 
+def test_recipient_recovery_skips_unrelated_documents_but_keeps_coordinator_wakes(
+        segmented_runtime, monkeypatch):
+    from lib.identity import PrincipalContext
+    from lib.project_dispatch import continuation, recovery
+    from lib.project_dispatch.delegation import capture_worker_policy
+    from lib.project_dispatch.repository import CONTRACT
+    from lib.project_dispatch.segmented import SegmentedDispatch
+
+    r = segmented_runtime
+    repo = r.c.repo
+    user = PrincipalContext.user(subject_id='user:7', owner_user_id=7, tenant_id='tenant-a', scopes=['chat'])
+    legacy = repo.authorize(r.c.request, user, 'legacy-index')
+    unrelated = repo.authorize(r.c.request, user, 'indexed-unrelated')
+    store = SegmentedDispatch(repo)
+    index = store.query('list', collection='indexes', prefix='assignments:order:', limit=1)[0]
+    assert index['value']['id'] == legacy['id']
+    old_value = {k: v for k, v in index['value'].items() if k != 'recovery'}
+    head = store.head()
+    store.command(head['version'], head['value']['state'], [{'collection': 'indexes',
+        'id': f"assignments:order:{old_value['sequence']:020d}",
+        'expected_version': index['version'], 'value': old_value}])
+
+    names = CONTRACT['continuationTools'] + ['run_command', 'read_files', 'write_file']
+    capture_worker_policy(r.task, r.task['config'], [{'function': {'name': name}} for name in names],
+                          'model-a', worker_model='model-a')
+    contracts.bind(r)
+    _, worker = contracts._worker_task(r)
+    assert worker['request']['delegation']['policy']['continuation']
+    assert worker['request']['recipientId'] != 'idle-recipient'
+
+    reads, wakes = [], []
+    real_get = SegmentedDispatch.get_many
+
+    def get_many(self, documents):
+        documents = list(documents)
+        reads.extend(ident for field, ident in documents if field == 'assignments')
+        return real_get(self, documents)
+
+    def wake(repository, *, discovered, **kwargs):
+        rows, _ = discovered
+        wakes.extend(row['id'] for row in rows if row['request'].get('delegation'))
+        return ['deferred']
+
+    monkeypatch.setattr(SegmentedDispatch, 'get_many', get_many)
+    monkeypatch.setattr(continuation, 'recover_coordinator', wake)
+    stats = recovery.recover_project_dispatch(7, repo.project, recipient_id='idle-recipient',
+        repository=repo, service=object(), was_aborted_after=lambda *args: False)
+    assert reads == [legacy['id'], worker['id']]
+    assert unrelated['id'] not in reads and wakes == [worker['id']]
+    assert stats['deferred'] == 1 and stats['eligible'] == stats['failed'] == 0
+
+
 def test_passive_history_does_not_load_original_request_account_history(segmented_runtime):
     r = segmented_runtime
     contracts.bind(r)

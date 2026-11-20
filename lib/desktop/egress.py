@@ -362,6 +362,14 @@ def route_request(url: str, *, user_id: str = '', cancelled=None) -> str:
     return route_candidates(url, user_id=user_id, cancelled=cancelled)[0]
 
 
+def require_server_egress(url: str, *, user_id: str) -> str:
+    """Enforce a server-side-only credential policy after ordinary route selection."""
+    route = route_request(url, user_id=user_id)
+    if route != 'direct':
+        raise EgressUnavailable('This credential requires server-side subscription egress')
+    return route
+
+
 # ══════════════════════════════════════════════════════════
 #  Streaming (S3): open_stream / EgressStreamReader / cancel_stream
 # ══════════════════════════════════════════════════════════
@@ -403,13 +411,18 @@ class EgressStreamReader:
 
     # ── frame intake ────────────────────────────────────────────
 
-    def _poll_frames(self):
+    def _poll_frames(self, awaiting_first_frame=False):
         """Pull new frames into the buffer. Raises EgressUnavailable on a
-        vanished entry (swept / agent died) or an agent-side error frame."""
+        vanished entry (swept / agent died) or an agent-side error frame.
+
+        The bridge creates a stream entry with its first frame, so while the
+        header wait (``awaiting_first_frame``, bounded by its own deadline)
+        has seen no frame, an absent entry means "not yet", not "vanished".
+        """
         from lib.desktop import get_frames
         got = get_frames(self._cmd_id, since_seq=self._seq)
         if got is None:
-            if self._done:
+            if self._done or (awaiting_first_frame and self._seq == 0):
                 return
             raise EgressUnavailable(
                 f'egress stream {self._cmd_id[:8]} vanished mid-flight '
@@ -462,7 +475,7 @@ class EgressStreamReader:
                 from lib.llm.llm_errors import AbortedError
                 self.close()
                 raise AbortedError('desktop response-header wait cancelled')
-            self._poll_frames()
+            self._poll_frames(awaiting_first_frame=True)
             if self.status_code:
                 return
             if time.monotonic() > deadline:

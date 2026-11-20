@@ -824,7 +824,7 @@ def test_async_finish_without_done_keeps_route_healthy(monkeypatch):
             return None
 
     @contextlib.asynccontextmanager
-    async def open_stream(_plan, _log_prefix=''):
+    async def open_stream(_plan, _log_prefix='', *, payload=None):
         yield AsyncFiniteResponse(), None
 
     outcomes = []
@@ -942,7 +942,7 @@ def test_async_reasoning_activity_outlives_idle_window_and_finishes(
     response = AsyncReasoningThenContentResp()
 
     @contextlib.asynccontextmanager
-    async def open_stream(_plan, _log_prefix=''):
+    async def open_stream(_plan, _log_prefix='', *, payload=None):
         yield response, None
 
     monkeypatch.setattr('lib.llm._transport.IDLE_STREAM_TIMEOUT_S', 0.15)
@@ -1061,7 +1061,7 @@ def test_async_keepalive_only_interval_renews_stream_idle_window(monkeypatch):
     response = AsyncReasoningThenKeepAliveResp()
 
     @contextlib.asynccontextmanager
-    async def open_stream(_plan, _log_prefix=''):
+    async def open_stream(_plan, _log_prefix='', *, payload=None):
         yield response, None
 
     monkeypatch.setattr('lib.llm._transport.IDLE_STREAM_TIMEOUT_S', 0.15)

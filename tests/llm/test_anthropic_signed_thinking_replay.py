@@ -126,14 +126,19 @@ def test_omitted_display_signature_only_block_survives_the_tool_loop():
 
 def test_interleaved_thinking_blocks_keep_their_own_signatures_and_order():
     message = _accumulate(_stream(
-        _thinking(0, 'plan', 'SIG_ONE'), _tool_use(1, 'toolu_1'),
-        _thinking(2, 'progress note', 'SIG_TWO'), _tool_use(3, 'toolu_2')))
+        _thinking(0, '\n plan\n  \t', 'SIG_ONE'), _tool_use(1, 'toolu_1'),
+        _thinking(2, ' progress note\t\n ', 'SIG_TWO'), _tool_use(3, 'toolu_2')))
     wire = openai_body_to_anthropic(
         _next_request(_live_tail(message), 'toolu_1', 'toolu_2'))
-    assert [(block['type'], block.get('signature'))
-            for block in wire['messages'][1]['content']] == [
-        ('thinking', 'SIG_ONE'), ('tool_use', None),
-        ('thinking', 'SIG_TWO'), ('tool_use', None)]
+    expected = [
+        {'type': 'thinking', 'thinking': '\n plan\n  \t', 'signature': 'SIG_ONE'},
+        {'type': 'tool_use', 'id': 'toolu_1', 'name': 'read', 'input': {}},
+        {'type': 'thinking', 'thinking': ' progress note\t\n ', 'signature': 'SIG_TWO'},
+        {'type': 'tool_use', 'id': 'toolu_2', 'name': 'read', 'input': {}},
+    ]
+    assert message['_anthropic_content_blocks'] == expected
+    assert _live_tail(message)['_anthropic_content_blocks'] == expected
+    assert wire['messages'][1]['content'] == expected
     assert all('SIG_ONESIG_TWO' != block.get('signature')
                for block in wire['messages'][1]['content'])
 
@@ -247,7 +252,7 @@ def test_settled_native_turn_still_crosses_to_responses_once():
     assert 'SIG_A' not in repr(payload)
 
 
-def test_active_signed_thinking_cannot_silently_cross_protocols():
+def test_active_signed_thinking_crosses_responses_with_explicit_loss_report():
     from lib.llm.responses_outbound import openai_body_to_responses_checked
     message = _accumulate(_stream(_thinking(0, '', 'SIG_A'), _tool_use(1, 'toolu_1')))
     result = openai_body_to_responses_checked({
@@ -255,7 +260,12 @@ def test_active_signed_thinking_cannot_silently_cross_protocols():
         'messages': [{'role': 'user', 'content': 'go'}, _live_tail(message),
                      {'role': 'tool', 'tool_call_id': 'toolu_1', 'content': 'ok'}]},
         profile='default')
-    assert result.validation_issues == ('mandatory_continuity_unrepresentable',)
+    payload = result.require_payload()
+    assert result.permitted_conversion_losses == {'cross_protocol_reasoning_omitted': 1}
+    assert [item['type'] for item in payload['input']] == [
+        'message', 'function_call', 'function_call_output']
+    assert payload['input'][-1]['output'] == 'ok'
+    assert 'SIG_A' not in repr(payload)
 
 
 @pytest.mark.parametrize('model_id', [
@@ -384,3 +394,23 @@ def test_a_batch_sibling_missing_from_the_record_replays_a_typed_receipt():
     assert UNRECORDED_TOOL_RESULT_TEXT in json.dumps(results['toolu_poll'])
     assert 'Result not recorded' not in json.dumps(results['toolu_edit'])
 
+
+
+@pytest.mark.parametrize('corruption', ['clear', 'strip'])
+def test_streaming_live_tail_oracle_rejects_changed_native_thinking(monkeypatch, corruption):
+    import sys
+    from copy import deepcopy
+
+    module = sys.modules[__name__]
+    live_tail = _live_tail
+
+    def corrupted(message):
+        tail = deepcopy(live_tail(message))
+        for block in tail['_anthropic_content_blocks']:
+            if block['type'] == 'thinking':
+                block['thinking'] = '' if corruption == 'clear' else block['thinking'].strip()
+        return tail
+
+    monkeypatch.setattr(module, '_live_tail', corrupted)
+    with pytest.raises(AssertionError):
+        test_interleaved_thinking_blocks_keep_their_own_signatures_and_order()

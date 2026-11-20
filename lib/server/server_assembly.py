@@ -353,6 +353,37 @@ def _run_boot_recovery_step(label, step, *, attempts=4):
             delay = min(delay * 2.5, 15.0)
 
 
+def converge_startup_model_routing(deployment):
+    """Certify the personal route aggregate before this owner recovers work."""
+    from lib.process_roles import CAPABILITY_TASK_RECOVERY, process_role_has
+
+    # In personal mode this capability belongs to the all-in-one host or
+    # split primary. API queues commands; shards are launched by that primary
+    # only after its claim workers have started. Neither replays startup writes.
+    if deployment.mode != 'personal' or not process_role_has(
+            deployment.process_role, CAPABILITY_TASK_RECOVERY):
+        return
+
+    from lib.identity import PERSONAL_USER_ID
+    from lib.model_routing import (
+        ModelRoutingRepository, OwnerBoundary, bootstrap_owner_model_routing,
+    )
+    from lib.model_routing.world_catalog import sync_world_model_catalog
+    from lib.oauth.outbound import reconcile_oauth_providers
+
+    boundary = OwnerBoundary.create(PERSONAL_USER_ID)
+    repository = ModelRoutingRepository()
+    result = bootstrap_owner_model_routing(boundary, repository=repository)
+    if not result.get('revision') or result['status'] == 'migration_failed':
+        raise RuntimeError('Startup model-routing authority was not activated')
+    if (result.get('pending_provider') or {}).get('status') == 'deferred':
+        raise RuntimeError('Startup model-routing provider import did not converge')
+
+    reconcile_oauth_providers(owner_user_id=boundary.owner_user_id,
+                             repository=repository, stored_only=True)
+    sync_world_model_catalog(boundary=boundary, repository=repository)
+
+
 def _init_database():
     """Recover all process-local services after sidecar storage is ready."""
     from lib.process_roles import CAPABILITY_TASK_RECOVERY, process_role_has
@@ -494,7 +525,8 @@ def _run_post_ready_deferred():
     An execution shard only claims jobs beside its primary, which runs these.
     """
     from lib.process_roles import (
-        CAPABILITY_ATTEMPT_EXECUTION, CAPABILITY_TASK_WORKERS, process_role_has)
+        CAPABILITY_ATTEMPT_EXECUTION, CAPABILITY_TASK_RECOVERY, CAPABILITY_TASK_WORKERS,
+        process_role_has)
     role = _DEPLOYMENT_CONFIGURATION.process_role
     if (process_role_has(role, CAPABILITY_ATTEMPT_EXECUTION)
             and not process_role_has(role, CAPABILITY_TASK_WORKERS)):
@@ -509,10 +541,8 @@ def _run_post_ready_deferred():
     from lib.turn_lifecycle import cleanup_superseded_attempts
     _run_boot_recovery_step(
         'superseded-attempt cleanup', cleanup_superseded_attempts)
-    from lib.process_roles import CAPABILITY_TASK_RECOVERY, process_role_has
     if (not _DEPLOYMENT_CONFIGURATION.distributed_preview_read_only
-            and process_role_has(_DEPLOYMENT_CONFIGURATION.process_role,
-                                 CAPABILITY_TASK_RECOVERY)):
+            and process_role_has(role, CAPABILITY_TASK_RECOVERY)):
         # Receipts that finished while the server was down get their one
         # collective wake here. It starts a model turn, so it waits for
         # readiness; the record scan that gates wakes already ran in
@@ -532,11 +562,10 @@ def _run_post_ready_deferred():
                 os.environ.get('TOFUDB_OWNER_ID', str(PERSONAL_USER_ID))))
         except Exception as exc:
             _server_log.warning('[Server] MCP declaration compaction failed to start: %s', exc)
-    from lib.swarm.integration import rehydrate_swarms_on_startup
-    _run_boot_recovery_step('swarm rehydration', rehydrate_swarms_on_startup)
-    if (not _DEPLOYMENT_CONFIGURATION.distributed_preview_read_only
-            and process_role_has(_DEPLOYMENT_CONFIGURATION.process_role,
-                                 CAPABILITY_TASK_RECOVERY)):
+        # Swarm rehydration can start model work; do not have the API replay
+        # retained sessions while the primary's startup CAS is still pending.
+        from lib.swarm.integration import rehydrate_swarms_on_startup
+        _run_boot_recovery_step('swarm rehydration', rehydrate_swarms_on_startup)
         # After the owners that resume their own work (project dispatch,
         # background batches, swarms), every Turn the restart interrupted
         # continues from its checkpoint; then the restart's requester hears

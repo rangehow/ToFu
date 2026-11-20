@@ -140,7 +140,9 @@ def test_task_history_keeps_tasks_later_boards_omitted(flask_client, chat_sideca
     board = CoordinatorTaskProgress(1, path)
     board.publish(scope, {'summary': 'Two tasks.', 'tasks': [
         {'title': '修复侧边栏', 'status': 'completed', 'progress': '已合并并验证。'},
-        {'title': '调研民宿', 'status': 'in_progress'}, {'title': '整理文章', 'status': 'pending'}]})
+        {'title': '调研民宿', 'status': 'in_progress'},
+        {'title': '整理文章', 'status': 'pending',
+         'blocker': {'kind': 'next_action', 'action': 'Read the saved article and write the summary'}}]})
     board.publish(scope, {'summary': 'One task.', 'tasks': [{'title': '整理文章', 'status': 'in_progress'}]})
     endpoint = '/api/v4/project/coordination/progress/history'
     response = flask_client.get(endpoint, query_string={'path': path})
@@ -367,3 +369,34 @@ def test_assignment_history_read_runs_through_the_live_async_view(flask_app, fla
     assert response.status_code == 200, response.get_json()
     page = response.get_json()
     assert (page['assignments'], page['olderCursor'], page['newerCursor']) == ([], None, None)
+
+
+def test_board_read_passes_principal_without_broadening_receipt_permission(
+        flask_client, chat_sidecar, monkeypatch):
+    from lib.conversations.coordinator_progress import CoordinatorTaskProgress
+    from lib.conversations.coordinator_work_evidence import unknown_evidence
+    from lib.conversations.project_coordination import ProjectCoordinationRepository
+    from lib.identity import PrincipalContext
+    from routes.api_v1 import project_brain
+    path = '/test/board-evidence-' + uuid.uuid4().hex
+    binding = ProjectCoordinationRepository(1).create(path, folder_id='test', expected_revision=0, command_id='create')
+    scope = {'owner': 1, 'projectPath': path, 'coordinatorId': binding['conversationId'],
+             'bindingRevision': binding['revision']}
+    CoordinatorTaskProgress(1, path).publish(scope, {'summary': 'Owned board', 'tasks': []})
+    seen = []
+    def evidence(*args, **kwargs):
+        seen.append(kwargs['principal'])
+        return unknown_evidence()
+    monkeypatch.setattr('lib.conversations.coordinator_work_evidence.read_evidence', evidence)
+    principal = PrincipalContext.user(subject_id='user:1', owner_user_id=1, tenant_id='tenant-a',
+                                      scopes=['conversations'])
+    monkeypatch.setattr(project_brain, 'request_principal', lambda: principal)
+    endpoint = '/api/v4/project/coordination/progress'
+    response = flask_client.get(endpoint, query_string={'path': path})
+    assert response.status_code == 200
+    assert response.get_json()['board']['summary'] == 'Owned board'
+    assert response.get_json()['workEvidence'] == unknown_evidence() and not seen
+    from dataclasses import replace
+    principal = replace(principal, scopes=frozenset({'conversations', 'chat'}))
+    response = flask_client.get(endpoint, query_string={'path': path})
+    assert response.status_code == 200 and seen == [principal]

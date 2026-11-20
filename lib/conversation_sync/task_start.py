@@ -204,7 +204,9 @@ def start_conversation_attempt_executor(
         raise TypeError('conversation executor execution_clock must be ExecutionClock')
     from lib.conversation_sync.attempt_identity import is_conversation_attempt
     from lib.identity import require_user_id
-    from lib.conversation_sync.execution_identity import restore_execution_identity
+    from lib.conversation_sync.execution_identity import (
+        ManualDetectAdmission, restore_execution_identity, restore_manual_detect_admission,
+    )
 
     if not is_conversation_attempt(config):
         raise ValueError('conversation executor requires an accepted attempt')
@@ -213,6 +215,7 @@ def start_conversation_attempt_executor(
         context='conversation executor',
     )
     principal, attended = restore_execution_identity(config)
+    detect_binding = restore_manual_detect_admission(config, principal, conv_id)
     if worker_context is not None:
         from lib.tasks_pkg.worker_binding import worker_task_identity
         worker_task_identity(worker_context, conversation_id=conv_id,
@@ -262,6 +265,12 @@ def start_conversation_attempt_executor(
             supersede=False, execution_clock=execution_clock,
             **({'worker_context': worker_context} if worker_context is not None else {}))
     task['_attended'] = attended
+    if detect_binding is not None:
+        task['_manualDetectAdmission'] = ManualDetectAdmission(task['id'], principal, *detect_binding)
+        if worker_context is not None and application is not None:
+            # Host stop begins before the service joins its workers. Borrow
+            # that earlier signal only for this relay's publication lifetime.
+            task['_manualDetectHostShutdown'] = application.extensions.get('tofu_shutdown_requested')
     if input_translation is not None:
         task['_deferredInputTranslation'] = input_translation
     task_id = task['id']

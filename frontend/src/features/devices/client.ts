@@ -8,7 +8,7 @@
  */
 import { ApiError, request as transportRequest, type RequestOptions } from '../../api/transport';
 import type {
-  DefaultKind, DefaultsView, DevicePermissions, HomeFacts, PermissionsView, Source, Tiers,
+  DefaultKind, DefaultsView, DefaultsWriteResponse, DevicePermissions, HomeFacts, PermissionsView, Source, Tiers,
   WireBrowserClient, WireNode, WireWait,
 } from './model';
 
@@ -35,8 +35,8 @@ export interface DevicesClient {
   reject(nodeId: string): Promise<unknown>;
   rename(nodeId: string, name: string): Promise<unknown>;
   remove(nodeId: string): Promise<unknown>;
-  setCeiling(nodeId: string, tiers: Partial<Tiers>): Promise<DevicePermissions>;
-  setDefault(kind: DefaultKind, nodeId: string | null): Promise<DefaultsView>;
+  setCeiling(nodeId: string, tiers: Partial<Tiers>, expectedRevision: number): Promise<DevicePermissions>;
+  setDefault(kind: DefaultKind, nodeId: string | null): Promise<DefaultsWriteResponse>;
 }
 
 const NOT_SERVED = new Set([404, 405, 501]);
@@ -71,8 +71,11 @@ export function createDevicesClient(request: Request = transportRequest): Device
   return {
     nodes: signal => read(async () => list<WireNode>(await get('/api/v4/desktop/nodes', signal), 'nodes')),
     permissions: signal => read(async () => {
-      const value = await get<Partial<PermissionsView>>('/api/v4/devices/permissions', signal);
-      return { ...value, permissions: value?.permissions || {} };
+      const value = await get<PermissionsView>('/api/v4/devices/permissions', signal);
+      if (!value || !Number.isSafeInteger(value.rev) || value.rev < 0 || !value.permissions) {
+        throw new TypeError('Invalid device permissions snapshot');
+      }
+      return value;
     }),
     defaults: signal => read(async () => {
       const value = await get<Partial<DefaultsView>>('/api/v4/devices/defaults', signal);
@@ -108,8 +111,8 @@ export function createDevicesClient(request: Request = transportRequest): Device
     reject: nodeId => send(`/api/v4/desktop/nodes/${path(nodeId)}/reject`, 'POST'),
     rename: (nodeId, name) => send(`/api/v4/desktop/nodes/${path(nodeId)}`, 'PATCH', { name }),
     remove: nodeId => request(`/api/v4/desktop/nodes/${path(nodeId)}`, { method: 'DELETE', onError: 'throw' }),
-    setCeiling: (nodeId, tiers) => send<DevicePermissions>(
-      `/api/v4/devices/${path(nodeId)}/ceiling`, 'PUT', { tiers }),
-    setDefault: (kind, nodeId) => send<DefaultsView>('/api/v4/devices/defaults', 'PUT', { [kind]: nodeId }),
+    setCeiling: (nodeId, tiers, expectedRevision) => send<DevicePermissions>(
+      `/api/v4/devices/${path(nodeId)}/ceiling`, 'PUT', { tiers, expected_revision: expectedRevision }),
+    setDefault: (kind, nodeId) => send<DefaultsWriteResponse>('/api/v4/devices/defaults', 'PUT', { [kind]: nodeId }),
   };
 }

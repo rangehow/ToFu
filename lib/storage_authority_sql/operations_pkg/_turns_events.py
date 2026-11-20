@@ -160,6 +160,16 @@ def _turn_event_record(session: Session, payload: Mapping[str, Any], *,
             session.lock_key('turn_conversation', key)
             if background_ack is not None:
                 session.lock_key('queue-conversation', key)
+    event_payload_hint = payload.get('event_payload')
+    require_unbound = (event_payload_hint.get('_requireUnboundAttempt', False)
+                       if isinstance(event_payload_hint, Mapping) else False)
+    if require_unbound is not False:
+        if require_unbound is not True or not payload.get('terminal') or payload.get('status') != 'failed':
+            raise StorageError('database_protocol_error', 'Unbound fence requires a startup failure')
+        # Match dispatch -> bind -> event append order, behind the conversation
+        # lock taken above (which also orders settlement with Stop).
+        session.lock_key('attempt_dispatch', attempt_id)
+        session.lock_key('turn_attempt', attempt_id)
     # The declared root is only a lock-order hint; the immutable attempt
     # config below must prove it. Ordinary chat pays no extra parent read.
     flow_root_hint = str(payload.get("flow_root_attempt_id") or "")
@@ -169,6 +179,8 @@ def _turn_event_record(session: Session, payload: Mapping[str, Any], *,
     attempt = session.fetch_one(
         "SELECT * FROM storage_generation_attempts WHERE attempt_id=?", (attempt_id,))
     if attempt is None or attempt["status"] not in ("pending", "running"):
+        return {"applied": False}
+    if require_unbound and (attempt['status'] != 'pending' or attempt['task_id'] or attempt['queue_state']):
         return {"applied": False}
     flow_root = str((_load(attempt["config_json"]) or {}).get("flowRootAttemptId") or "")
     if flow_root != flow_root_hint:
@@ -541,7 +553,8 @@ def _turn_event_record(session: Session, payload: Mapping[str, Any], *,
         from ._model_continuation import settle_continuation
         continuation_status = settle_continuation(
             session, turn, payload.get('model_continuation'), status=status)
-    event_payload = dict(payload.get("event_payload") or {})
+    event_payload = dict(event_payload_hint or {})
+    event_payload.pop('_requireUnboundAttempt', None)
     # Only this transaction can attest queue removal. Producer-supplied IDs
     # must never bypass the exact owner/kind/receipt checks below.
     event_payload.pop('removedQueueIds', None)

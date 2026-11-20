@@ -40,7 +40,6 @@ def test_a_wake_reads_outcome_ownership_through_real_storage(
     from lib.agent_core.execution_budget import model_budget_admission
     from lib.conversation_sync.command_service import ConversationTurnCommandService
     from lib.conversations import coordinator_births, coordinator_workers
-    from lib.conversations.coordinator_continuation import _UNOWNED_HEADING
     from lib.conversations.coordinator_tools import execute_coordinator_tool
     from lib.identity import PrincipalContext
     from lib.project_dispatch import admission
@@ -111,14 +110,14 @@ def test_a_wake_reads_outcome_ownership_through_real_storage(
                                               was_aborted_after=lambda *args: False, start_task=transport)
     service = ProjectDispatchService(repo, commands=commands)
     monkeypatch.setattr(coordinator_workers, 'ProjectDispatchService', lambda repository: service)
-    delegated = json.loads(execute_coordinator_tool(task, 'delegate_project_work', {
-        'title': 'Paper body', 'brief': 'Draft the paper body.', 'idempotency_key': 'paper-body'}))
-    assert delegated.get('status') == 'completed', delegated
     board = json.loads(execute_coordinator_tool(task, 'update_task_progress', {
         'summary': 'The paper and its appendix', 'tasks': [
             {'title': 'Paper body', 'status': 'in_progress'},
             {'title': 'Appendix tables', 'status': 'pending'}]}))
     assert 'error' not in board, board
+    delegated = json.loads(execute_coordinator_tool(task, 'delegate_project_work', {
+        'title': 'Paper draft', 'brief': 'Draft the paper body.', 'idempotency_key': 'paper-body'}))
+    assert delegated.get('status') == 'completed', delegated
     _settle(factory, owner, task['_attemptId'], task['id'], 'Delegated the body; the appendix is next.')
 
     assert recover_coordinator(repo, service=service) == ['accepted']
@@ -128,5 +127,5 @@ def test_a_wake_reads_outcome_ownership_through_real_storage(
     unreadable = [record.getMessage() for record in caplog.records if 'unreadable' in record.getMessage()]
     assert unreadable == []
     assert 'could not be read now' not in content
-    assert _UNOWNED_HEADING in content
-    assert '- [unowned] Appendix tables' in content
+    assert '- [ownership_unknown] Appendix tables' in content
+    assert '- [in_progress] Paper body' in content and '[active_owner]' not in content

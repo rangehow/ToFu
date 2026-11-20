@@ -337,6 +337,7 @@ class SubAgent:
         self.result = SubAgentResult()
         self.progress_beacon = ProgressBeacon()
         self.swarm_key, self.swarm_run_id, self.output_file = '', '', ''
+        self._checkpoint_writer_epoch = 0
         self._round_offset = 0
         self._child = None
         # (messages, result without marker fields, append base id) exactly as
@@ -596,6 +597,17 @@ class SubAgent:
             if self.result.checkpoint_phase == 'model_in_flight':
                 self.result.rounds_used = max(live_rounds, self.result.rounds_used)
 
+    def _admit_recovery_model_dispatch(self):
+        from lib.llm.llm_errors import ModelAdmissionRefused
+        from lib.storage.errors import StorageError
+
+        try:
+            self._recovery_dispatch_guard()
+        except StorageError as error:
+            # A storage refusal is not provider failure and cannot be repaired
+            # by retry, rotation or fallback. Preserve its original cause.
+            raise ModelAdmissionRefused('Durable Swarm model dispatch authority refused') from error
+
     def _exactly_selected_tool_names(self):
         if not self.spec.tools:
             return ()
@@ -647,8 +659,11 @@ class SubAgent:
             if self.spec.max_retries is not None:
                 child['config']['autoTurnRetryMax'] = self.spec.max_retries
 
-            if message_binding is not None and child.get('_invocationStorageFree'):
-                child.pop('_swarmMessageBinding', None)
+            if message_binding is not None:
+                if child.get('_invocationStorageFree'):
+                    child.pop('_swarmMessageBinding', None)
+                elif self._checkpoint_writer_epoch:
+                    child['_swarmCheckpointWriterEpoch'] = self._checkpoint_writer_epoch
             if self.spec.retained_agent_id:
                 # Browser tab memory is a work-context hint, never a device
                 # authority. Keep two retained browser colleagues on the
@@ -656,7 +671,11 @@ class SubAgent:
                 child['config']['browserWorkKey'] = self.spec.retained_agent_id
             child['_tool_env'] = self._artifact_environment()
             child['_flow_phase'] = 'swarm-agent'
-            with thread_progress_sink(self.progress_beacon, self.spec.id):
+            from lib.llm.request import physical_model_dispatch_scope
+            guard = (self._admit_recovery_model_dispatch
+                     if getattr(self, '_recovery_dispatch_guard', None) is not None else None)
+            with (thread_progress_sink(self.progress_beacon, self.spec.id),
+                  physical_model_dispatch_scope(guard)):
                 run_child_invocation(child)
             verdict = derive_task_verdict(child)
             self.result.status = {'completed': 'completed', 'interrupted': 'cancelled'}.get(verdict.status.value, 'failed')
@@ -665,7 +684,7 @@ class SubAgent:
                 self.result.error_message = str(error.get('detail') or error.get('message') or error) if isinstance(error, dict) else str(error)
         except Exception as error:
             from lib.agent_core.execution_budget import ModelBudgetExceeded
-            from lib.llm.llm_errors import AbortedError
+            from lib.llm.llm_errors import AbortedError, AdmissionRefused
             from lib.tasks_pkg.native_parent import NativeParentSettled
             child = self._child or {}
             internal_stop = child.get('_invocationStopReason') in {'stalled', 'deadline'}
@@ -676,7 +695,8 @@ class SubAgent:
                 isinstance(error, ModelBudgetExceeded)
                 and error.reason == 'execution_owner_cancelled')) and self.abort_check()
             cancelled = not internal_stop and not child.get('_invocationDeliveryError') and (
-                isinstance(error, AbortedError) or child.get('aborted') or stopped_issuer)
+                (isinstance(error, AbortedError) and not isinstance(error, AdmissionRefused))
+                or child.get('aborted') or stopped_issuer)
             self.result.status = 'cancelled' if cancelled else 'failed'
             if isinstance(error, NativeParentSettled) and not stopped_issuer:
                 self.result.recovery_reason = error.reason
@@ -1036,11 +1056,13 @@ class SubAgent:
             result = self.result.to_dict()
             task = self._child or self.context_task
             durable, self._durable_checkpoint = self._durable_checkpoint, None
+            writer = {'run_id': self.swarm_run_id,
+                      'checkpoint_writer_epoch': self._checkpoint_writer_epoch}
             marker = (None if final or not required
                       else self._checkpoint_marker(durable, result, self.messages))
             if marker is not None and persistence.mark_agent_checkpoint(
                     self.swarm_key, self.spec.id, rounds_used=self.result.rounds_used,
-                    result=marker, task=task):
+                    result=marker, task=task, **writer):
                 self._durable_checkpoint = durable
                 return True
             # One detached snapshot is both the sent result and the next base.
@@ -1056,7 +1078,7 @@ class SubAgent:
                     base_message_count=len(durable[0]), checkpoint_id=checkpoint_id,
                     messages=appended, result=result, status=status,
                     rounds_used=self.result.rounds_used, task=task,
-                    cancellable=not final):
+                    cancellable=not final, **writer):
                 durable[0].extend(appended)
                 self._durable_checkpoint = (durable[0], settled, checkpoint_id)
                 return True
@@ -1072,7 +1094,7 @@ class SubAgent:
                 required=required,
                 task=task,
                 cancellable=not final,
-                checkpoint_id=checkpoint_id)
+                checkpoint_id=checkpoint_id, **writer)
             if acknowledgement is not None:
                 recorded = acknowledgement.get('checkpoint_id') == checkpoint_id
                 self._durable_checkpoint = (messages, settled, checkpoint_id if recorded else '')

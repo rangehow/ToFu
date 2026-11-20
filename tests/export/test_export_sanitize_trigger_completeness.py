@@ -27,14 +27,12 @@ import sys
 import unittest
 
 import pytest
-from tests.support.export_toolchain import require_export_toolchain
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-require_export_toolchain()
+pytest.importorskip('export', reason='export.py is not shipped in opensource builds')
 
 pytestmark = pytest.mark.unit
-_AUDIT_SYNTHETIC_REPO_PATHS = {'tests/providers/test_x.py'}
 
 
 class SanitizeTriggerCompletenessTest(unittest.TestCase):
@@ -86,43 +84,46 @@ class SanitizeTriggerCompletenessTest(unittest.TestCase):
             self.assertIn(replacement, out,
                           f'replacement {replacement!r} not present after scrub of {ident!r}')
 
-    def test_brand_only_file_gets_the_same_rename_as_its_callers(self):
-        """A file naming the provider brand and no other trigger is still
-        opened: otherwise it keeps the brand while renamed callers (its tests)
-        ask for the replacement key."""
-        import tempfile
-        from pathlib import Path
-        from export_pkg._sanitize import (
-            _collect_opensource_candidates, _sanitize_source_opensource)
-        brand = 'mei' + 'tuan'
-        with tempfile.TemporaryDirectory() as root:
-            registry = Path(root) / 'model-group.ts'
-            registry.write_text(f'export const NAMES = {{ {brand}: 1 }};\n')
-            self.assertIn('model-group.ts', _collect_opensource_candidates(Path(root)))
-        renamed = _sanitize_source_opensource(f'{brand}: 1', 'frontend/src/core/model-group.ts')
-        self.assertNotIn(brand, renamed)
+    def test_overlay_definition_and_importers_are_triggerable(self):
+        """Renaming a symbol that CONTAINS an internal identifier must reach the
+        defining module and every import site.
 
-    def test_a_fixture_provider_id_and_its_assertion_get_one_rename(self):
-        """A test that builds a slot with the corp provider ID and asserts it
-        back must still agree after export: every quoted occurrence gets the
-        same replacement, whatever syntax surrounds it."""
-        from export import _sanitize_source_opensource
-        corp, brand = 'san' + 'kuai', 'Mei' + 'tuan'
-        path = 'tests/providers/test_x.py'
-        corp_token = _sanitize_source_opensource(f"'{corp}'", path)
-        brand_token = _sanitize_source_opensource(f"'{brand}'", path)
-        source = (f"# the {brand}-keyed operator slot\n"
-                  f"slot = Slot(provider_id='{corp}', routing_provider_id='{corp}')\n"
-                  f"def f(provider_id: str = '{corp}'): pass\n"
-                  f"face = {{'id': '{corp}', 'name': '{brand}'}}\n"
-                  f"pid = provider.get('id', '{corp}') or m.get('provider_id', '{corp}')\n"
-                  f"assert slot.provider_id == '{corp}' and face['name'] == '{brand}'\n")
-        expected = (source.replace(f"'{corp}'", corp_token)
-                    .replace(f"'{brand}'", brand_token))
-        out = _sanitize_source_opensource(source, path)
-        self.assertEqual(out.split('\n', 1)[1], expected.split('\n', 1)[1])
-        self.assertNotIn(corp, out)
-        self.assertNotIn(brand, out)
+        Rule 15 rewrites the corp word inside identifiers of an opened file. A
+        file whose only marker is the derived symbol — typically the module
+        that DEFINES it — was never opened, so the definition kept its original
+        name while importers that matched another trigger were renamed: the
+        public tree then failed collection with ImportError. This projects the
+        tracked tree through the real exclusion predicate and asserts every
+        shipped file carrying such a symbol is a sanitize candidate.
+        """
+        import subprocess
+        from pathlib import Path as _Path
+        from export import _OPENSOURCE_KEEP_FILES, _should_exclude
+
+        root = _Path(__file__).resolve().parents[2]
+        rx = self._trigger_regex()
+        for ident in ('yourprovider' + '_overlay',):
+            found = subprocess.run(
+                ['git', 'grep', '-lF', '-e', ident], cwd=root,
+                capture_output=True, text=True, check=False)
+            self.assertEqual(found.returncode, 0,
+                             f'git grep failed for {ident!r}: {found.stderr.strip()}')
+            shipped = []
+            for rel in found.stdout.split():
+                parts = rel.split('/')
+                if (any(_should_exclude('/'.join(parts[:depth]), parts[depth - 1],
+                                        'opensource')
+                        for depth in range(1, len(parts) + 1))
+                        and rel not in _OPENSOURCE_KEEP_FILES):
+                    continue
+                shipped.append(rel)
+            self.assertTrue(shipped, f'no shipped file carries {ident!r}')
+            for rel in shipped:
+                content = (root / rel).read_text(encoding='utf-8', errors='ignore')
+                self.assertTrue(
+                    rx.search(content),
+                    f'{rel} mentions {ident!r} but is invisible to the sanitize '
+                    'trigger list, so its symbol would keep the private name')
 
     def test_scrub_and_trigger_share_one_source(self):
         """Structural: the scrub and trigger paths draw the plain-substring
@@ -140,16 +141,3 @@ class SanitizeTriggerCompletenessTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
-
-
-def test_a_file_whose_only_internal_token_is_a_step15_name_is_opened_and_renamed():
-    """A test asserting the provider id 'example-corp' shipped unrenamed while the
-    harness it tests shipped 'example-corp' (public CI, 2026-11-18)."""
-    from export import _opensource_sanitize_triggers
-    from export_pkg._sanitize import _STEP15_RENAMED, _sanitize_source_opensource
-    rx = re.compile('|'.join(_opensource_sanitize_triggers()))
-    for ident in _STEP15_RENAMED:
-        line = 'assert provider_id == "' + ident + '"\n'
-        assert rx.search(line), ident
-        assert ident not in _sanitize_source_opensource(line, 'tests/x/test_provider.py')
-

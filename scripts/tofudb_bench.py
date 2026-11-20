@@ -92,7 +92,7 @@ def _mount_type(path: Path) -> str:
                 if len(parts) < 3:
                     continue
                 mount_point = parts[1].replace('\\040', ' ')
-                if target.startswith(mount_point) and len(mount_point) > len(best_mount):
+                if (target == mount_point or target.startswith(mount_point.rstrip('/') + '/')) and len(mount_point) > len(best_mount):
                     best_mount = mount_point
                     best_type = parts[2]
     except OSError:

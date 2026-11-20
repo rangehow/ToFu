@@ -154,6 +154,18 @@ class ChaosInstance:
             raise RuntimeError('could not export the chaos instance source')
         (self.source / 'data').mkdir(mode=0o700, exist_ok=True)
 
+    def _missing_frontend_graph(self) -> None:
+        raise RuntimeError(json.dumps({
+            'code': 'frontend_preparation_evidence_unavailable',
+            'message': 'the chaos API host needs the built frontend graph',
+            'fixture': 'chaos', 'stage': 'api-start',
+            'manifest': 'manifest.json', 'manifestStatus': 'missing',
+            'lockfile': 'package-lock.json',
+            'installedByteProvenance': 'unverified',
+            'authoritativeEvidence': 'unavailable', 'buildAttempted': False,
+            'qualification': 'missing graph input only; not full startup diagnosis',
+        }, sort_keys=True))
+
     def _seed_caches(self) -> None:
         # tiktoken downloads its BPE into $TMPDIR/data-gym-cache when absent;
         # an offline instance must not retry that download per token count.
@@ -249,9 +261,7 @@ class ChaosInstance:
 
     def start_api(self) -> None:
         if not (self.source / 'static' / 'vite' / 'manifest.json').is_file():
-            # The api role serves the shipped graph; CI downloads it, make test-api builds it.
-            raise RuntimeError('the chaos API host needs the built frontend graph: '
-                               'run `npm run build:frontend` (or make frontend-build)')
+            self._missing_frontend_graph()
         self.api_generation += 1
         log = (self.root / f'api-{self.api_generation}.log').open('ab')
         self.api = subprocess.Popen(

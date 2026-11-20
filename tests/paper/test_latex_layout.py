@@ -1,11 +1,12 @@
 """tests/paper/test_latex_layout.py — Executable spec for lib/paper/latex_layout.
 
 Pure-parser pins (synctex/geometry/MediaBox/log/section scanner) run anywhere;
-the end-to-end compile pins skip when the repo-local TinyTeX toolchain is
-absent, mirroring the module's PATH fallback.
+the end-to-end compile pins use the same persistent toolchain resolver as
+production, not an assumed repo-local TinyTeX installation.
 """
 
 import gzip
+import os
 from pathlib import Path
 
 import pytest
@@ -15,9 +16,8 @@ from lib.paper import latex_layout as ll
 pytestmark = pytest.mark.unit
 
 
-_TEXLIVE = ll._TEXROOT / 'bin' / 'x86_64-linux' / 'latexmk'
 needs_texlive = pytest.mark.skipif(
-    not _TEXLIVE.is_file(), reason='repo-local TinyTeX (.texlive/) not installed')
+    not ll.latex_toolchain(), reason='declared persistent latexmk toolchain not installed')
 
 
 # ── Synthetic fixtures ─────────────────────────────────────────────────
@@ -204,6 +204,22 @@ def test_extract_errors_blocks():
     assert errors[0].startswith('! Undefined control sequence.')
 
 
+def test_compile_survives_non_utf8_tool_output(tmp_path, monkeypatch):
+    """TeX echoes source bytes in their input encoding (a Latin-1 .bbl);
+    the compile call reports the run instead of raising UnicodeDecodeError."""
+    fake_bin = tmp_path / 'bin'
+    fake_bin.mkdir()
+    tool = fake_bin / 'latexmk'
+    tool.write_text('#!/bin/sh\nprintf "Underfull \\237 caf\\351\\n"\n'
+                    'printf "%s" "%PDF-1.4" > main.pdf\n')
+    tool.chmod(0o755)
+    monkeypatch.setenv('PATH', f'{fake_bin}:{os.environ.get("PATH", "")}')
+    (tmp_path / 'main.tex').write_text('\\documentclass{article}\\begin{document}x'
+                                       '\\end{document}\n')
+    build = ll.compile_project(tmp_path, main='main.tex')
+    assert build['status'] == 'success' and build['pdf']
+
+
 # ── End-to-end with the real toolchain ─────────────────────────────────
 
 @needs_texlive
@@ -275,14 +291,16 @@ def test_xelatex_cjk_content_bottom_uses_pdf_ground_truth(tmp_path):
     # routine deep below the real content; fullness must come from the PDF's
     # visible content, not the deepest SyncTeX box.
     (tmp_path / 'main.tex').write_text(
-        '\\documentclass[fontset=windows]{ctexart}\n'
+        # This regression tests PDF content height, not proprietary Windows
+        # font availability. Fandol ships in the declared ctex dependency set.
+        '\\documentclass[fontset=fandol]{ctexart}\n'
         '\\usepackage[margin=1in]{geometry}\n'
         '\\title{t}\n'
         '\\begin{document}\n'
         '\\maketitle\n'
         '\\section{A}\n'
         '\\section{B}\n'
-        'short body.\n'
+        'short body. 短正文。\n'
         '\\end{document}\n')
     report = ll.compile_and_report(tmp_path, engine='xelatex')
     assert report['status'] == 'success', report.get('errors')
@@ -293,6 +311,8 @@ def test_xelatex_cjk_content_bottom_uses_pdf_ground_truth(tmp_path):
         assert report['end']['bottom_source'] == 'synctex'
     else:
         assert report['end']['bottom_source'] == 'pdf'
+        with pymupdf.open(tmp_path / 'main.pdf') as document:
+            assert '短正文' in document[0].get_text()
         # title + two headings + one line is nowhere near a full page
         assert report['end']['text_area_fill_pct'] < 60
 
@@ -379,3 +399,15 @@ def test_fonts_conf_skips_opentype_registration_when_toolchain_absent(tmp_path):
     text = ll._fonts_conf_text(tmp_path, tmp_path / 'cache',
                                texroot=tmp_path / 'no-such-texlive')
     assert 'texmf-dist/fonts/opentype' not in text
+
+
+@pytest.mark.parametrize('command, kind', [
+    (r'\section[Short]', 'section'),
+    (r'\paragraph*', 'paragraph'),
+    (r'\subparagraph*[Short]', 'subparagraph'),
+    (r'\subparagraph * [Short]', 'subparagraph'),
+])
+def test_shared_heading_scanner_balances_formatted_common_headings(command, kind):
+    title = r'\textbf{Contribution \textit{Statement}}'
+    text = 'Preface.\n' + command + '{' + title + '}\nBody.'
+    assert list(ll.iter_section_headings(text)) == [(2, kind, title)]

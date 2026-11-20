@@ -80,6 +80,8 @@ def _phase(row) -> str:
     if row['publication_requested']:
         if row['canonical_delivery']:
             return 'delivered'
+        if (row['delivery'] or {}).get('status') == 'closed':
+            return 'reviewed'  # A later rework or reject closed the pinned publication.
         return 'held' if (row['delivery'] or {}).get('status') in _HELD_DELIVERY else 'delivering'
     return 'reviewed' if row.get('review') is not None else 'needs_review'
 
@@ -222,15 +224,17 @@ def _delegation_key(origin_attempt_id, idempotency_key):
                                      separators=(',', ':')).encode()).hexdigest()
 
 
-def delegate(task, scope, arguments, *, repository=None, service=None, create=None, early=False):
-    """Admit a delegation from memory and return its Worker's identity at once.
+def delegate(task, scope, arguments, *, repository=None, service=None, create=None, early=False,
+             coverage_from=None):
+    """Admit a delegation and return its Worker's identity without waiting for birth.
 
     Owner decision 2026-11-11: delegating is as immediate as a human sending a
     message. The assignment and conversation IDs are deterministic, so the
     birth (``_born``) runs on its own thread (``coordinator_births``); its
     refusal or its Worker reaches the Coordinator through
     poll, get_project_workers or a replay of this call.
-    Refusals that need no storage still return here.
+    Refusals that need no storage still return here. If the call attaches
+    files, the birth's source and command checks run before retaining them.
 
     ``early``: the call's arguments finished streaming and its response has
     not ended; the attempt's ordinary dispatch of the same call adopts this
@@ -238,15 +242,16 @@ def delegate(task, scope, arguments, *, repository=None, service=None, create=No
     """
     _validate_schema(arguments, 'delegateRequest')
     own_checks(arguments)  # Refused here: it needs no storage.
-    if arguments.get('attachments'):
-        # Admitted before any birth, so a refusal returns here and the Worker
-        # request stores only retained attachment records.
-        from .lead_attachments import admit
-        arguments = {**arguments, 'attachments': admit(task, scope['user_id'], arguments['attachments'])}
+    if arguments.get('review'):
+        from .review_loops import validate_spec
+        validate_spec(arguments['review'])
     repository = repository or ProjectDispatchRepository(scope['user_id'], scope['project_path'])
     admit_in_memory(repository, task)
     key = _delegation_key(origin_attempt(repository, task), arguments['idempotency_key'])
     command = 'coordinator-delegate:' + key
+    if arguments.get('attachments'):
+        arguments = _admit_delegation_attachments(task, scope, arguments, repository, command,
+                                                 coverage_from=coverage_from)
     from .coordinator_tools import refusal_payload, worker_identity
     birth = births.start(
         task, assignment_id=repository.command_identity(command),
@@ -254,7 +259,8 @@ def delegate(task, scope, arguments, *, repository=None, service=None, create=No
         digest=hashlib.sha256(json.dumps(arguments, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
         # Unchanged arguments replay the same Worker, so contention reruns the
         # birth instead of leaving an uncertain outcome.
-        run=lambda: _settled_birth(task, scope, arguments, repository, service, create, command),
+        run=lambda: _settled_birth(task, scope, arguments, repository, service, create, command,
+                                   coverage_from=coverage_from),
         refusal=lambda error: refusal_payload('delegate_project_work', error),
         conflict=lambda: CommandReused('Command identity reused with changed request/granter',
                                        repository.command_identity(command)),
@@ -262,20 +268,36 @@ def delegate(task, scope, arguments, *, repository=None, service=None, create=No
     if birth.done.is_set():
         if birth.failure is not None:
             raise births.BirthFailed(birth.failure)
-        return birth.result
-    return {'assignment_id': birth.assignment_id, 'conversation_id': birth.conversation_id,
-            'task_id': None, 'status': 'starting', 'dispatch': 'starting',
-            'next_step': 'The Worker is starting. Delegate other independent work now, then poll the '
-                         'assignment IDs with wait_s for results; poll also reports a Worker that could not '
-                         'start. Review the actual evidence before reporting delivery.'}
+        return _with_review_loop(scope, key, arguments, birth.assignment_id, birth.result)
+    return _with_review_loop(scope, key, arguments, birth.assignment_id, {
+        'assignment_id': birth.assignment_id, 'conversation_id': birth.conversation_id,
+        'task_id': None, 'status': 'starting', 'dispatch': 'starting',
+        'next_step': 'The Worker is starting. Delegate other independent work now, then poll the '
+                     'assignment IDs with wait_s for results; poll also reports a Worker that could not '
+                     'start. Review the actual evidence before reporting delivery.'})
 
 
-def _settled_birth(task, scope, arguments, repository, service, create, command):
+def _with_review_loop(scope, key, arguments, assignment_id, result):
+    """Record the delegation's review loop (``review``) and name its handle in the result."""
+    if not arguments.get('review'):
+        return result
+    from . import review_loops
+    loop_id = review_loops.loop_id_for(key)
+    review_loops.create(scope, loop_id=loop_id, author_assignment_id=assignment_id, title=arguments['title'],
+                        brief=arguments['brief'], review=arguments['review'])
+    return {**result, 'review_loop_id': loop_id,
+            'next_step': ('Independent review is automatic: poll review_loop_id (not the assignment) with wait_s. '
+                          'When the author finishes, reviewers with no author context audit it; failed findings '
+                          'go back to the author and fresh reviewers re-audit, until every reviewer passes or '
+                          'an impasse is reported. Delegate other independent work meanwhile.')}
+
+
+def _settled_birth(task, scope, arguments, repository, service, create, command, *, coverage_from=None):
     # A birth under the owner's delegation to every lead settles its lead_authority record.
     from lib.project_dispatch.delegation import lead_act
     with lead_act('delegate_project_work'):
         return reread_on_contention(task, lambda: _born(task, scope, arguments, repository, service,
-                                                        create, command),
+                                                        create, command, coverage_from=coverage_from),
                                     label='coordinator delegation')
 
 
@@ -313,18 +335,44 @@ def _coordinator_folder(task, scope):
     return kept[1]
 
 
-def _born(task, scope, arguments, repository, service, create, command):
+def _admit_delegation_attachments(task, scope, arguments, repository, command, *, coverage_from=None):
+    """Run the birth's read-only checks before retaining any attachment bytes."""
+    from lib.project_dispatch.delegation import lead_act
+    from .lead_attachments import admit
+
+    bare = {name: value for name, value in arguments.items() if name != 'attachments'}
+
+    def preflight():
+        with one_decision():
+            _checked_delegation_request(task, scope, bare, repository, command, coverage_from=coverage_from)
+
+    # This is a separate decision from birth: do not carry stale authority
+    # through file admission or weaken the grant CAS. Keep payload-based replay.
+    with lead_act('delegate_project_work_attachment_preflight'):
+        reread_on_contention(task, preflight, label='coordinator delegation attachment preflight')
+        admit_in_memory(repository, task)
+        return {**arguments, 'attachments': admit(task, scope['user_id'], arguments['attachments'])}
+
+
+def _checked_delegation_request(task, scope, arguments, repository, command, *, coverage_from=None):
+    request, key, actual, original = _delegation_request(task, scope, arguments, repository,
+                                                       coverage_from=coverage_from)
+    if actual != command:
+        raise RuntimeError('This delegation changed identity before its Worker was born; delegate again')
+    if original is not None and original['grant']['revoked']:
+        raise DelegationCancelled(f"Worker {original['id']} of this idempotency_key was cancelled")
+    return request, key, original
+
+
+def _born(task, scope, arguments, repository, service, create, command, *, coverage_from=None):
     """One delegation's Worker birth: validate, prepare the root, create, grant, dispatch.
 
     It reads each authority fact once (one decision); the Worker's own
     admission validates its grant live again before its first model request.
     """
     with one_decision():
-        request, key, actual, original = _delegation_request(task, scope, arguments, repository)
-        if actual != command:
-            raise RuntimeError('This delegation changed identity before its Worker was born; delegate again')
-        if original is not None and original['grant']['revoked']:
-            raise DelegationCancelled(f"Worker {original['id']} of this idempotency_key was cancelled")
+        request, key, original = _checked_delegation_request(task, scope, arguments, repository, command,
+                                                            coverage_from=coverage_from)
         if original is None:
             # Refuse before any conversation or grant exists: every worker would fail binding.
             # Preparing a plain folder walks and commits its whole tree (6,931 s for
@@ -352,12 +400,35 @@ def _born(task, scope, arguments, repository, service, create, command):
             'next_step': 'Delegate independent work, then poll the assignment IDs with wait_s for results. Review the actual evidence before reporting delivery.'}
 
 
-def _delegation_request(task, scope, arguments, repository):
+def _board_task_keys(repository, scope, keys):
+    from .coordinator_progress import CoordinatorTaskProgress, board_task_keys
+    progress = CoordinatorTaskProgress(repository.owner, repository.project,
+                                       client=repository.client, bindings=repository.binding_repository)
+    expected = {'owner': repository.owner, 'projectPath': repository.project,
+                'coordinatorId': scope['conversation_id'], 'bindingRevision': scope['binding_revision']}
+    current, _, head = progress.current()
+    if current != expected:
+        raise PermissionError('Coordinator binding changed')
+    known = set(board_task_keys(head)) if head else set()
+    if not set(keys) <= known:
+        raise ValueError('Board task key not found on this binding\'s current board; read update_task_progress(read={}) '
+                         'and copy its taskKeys. No assignment was created.')
+    return list(keys)
+
+
+def _delegation_request(task, scope, arguments, repository, *, coverage_from=None):
     """The Worker request this Coordinator attempt may delegate, refused before any effect."""
     _, source, attempt = source_for_task(repository, task, issued=True, delegated=True)
+    key = _delegation_key(origin_attempt(repository, task), arguments['idempotency_key'])
+    command = 'coordinator-delegate:' + key
+    original = repository.find_command(command)
+    recorded = original['request'] if original is not None else None
+    issued = issued_worker_policy(repository, task, recorded=recorded)
     policy = policy_for_task(repository, task, attempt)
     from lib.project_dispatch.continuation import original_delegation, ensure_open
     origin = original_delegation(task, policy, repository=repository)
+    if key != _delegation_key(origin['attemptId'], arguments['idempotency_key']):
+        raise RuntimeError('This delegation changed identity before its Worker was born; delegate again')
     budget_id = policy.get('requestBudgetId')
     # The request's first row stands for its cohort and brings the source
     # settlement and budget, as in the grant CAS (_authorize_request).
@@ -365,10 +436,6 @@ def _delegation_request(task, scope, arguments, repository):
         repository._selection(budgets=[budget_id], first_of_budgets=[budget_id], cohort=False)
         if budget_id else repository._selection(sources=[origin['attemptId']]))
     ensure_open(current, origin['attemptId'])
-    issued = issued_worker_policy(repository, task)
-    key = _delegation_key(origin['attemptId'], arguments['idempotency_key'])
-    command = 'coordinator-delegate:' + key
-    original = repository.find_command(command)
     # Stable identities cover both conversation creation and grant admission.
     # Nothing is relaunched just because the tool result acknowledgement was lost.
     request = {'projectPath': repository.project, 'coordinatorId': scope['conversation_id'],
@@ -377,6 +444,22 @@ def _delegation_request(task, scope, arguments, repository):
         'budget': {},
         'profile': worker_profile(issued),
         'delegation': origin}
+    if original is not None:
+        keys = recorded.get('boardTaskKeys')
+        if 'board_task_keys' in arguments and arguments['board_task_keys'] != keys:
+            raise CommandReused('Command identity reused with changed board coverage', original['id'])
+    elif 'board_task_keys' in arguments:
+        keys = _board_task_keys(repository, scope, arguments['board_task_keys'])
+    elif arguments.get('rework_of') or coverage_from:
+        predecessor = arguments['rework_of']['assignmentId'] if arguments.get('rework_of') else coverage_from
+        prior = repository.read_point(predecessor)
+        keys = (prior['request'].get('boardTaskKeys')
+                if prior['request']['coordinatorId'] == scope['conversation_id']
+                and prior['grant'].get('bindingRevision') == scope['binding_revision'] else None)
+    else:
+        keys = None
+    if keys is not None:
+        request['boardTaskKeys'] = deepcopy(keys)
     if arguments.get('dependencies'):
         request['dependencies'] = deepcopy(arguments['dependencies'])
     if arguments.get('rework_of'):
@@ -389,7 +472,7 @@ def _delegation_request(task, scope, arguments, repository):
         checks = repository.read_point(arguments['rework_of']['assignmentId'])['request'].get('acceptance')
     if checks:
         request['acceptance'] = list(checks)
-    if policy.get('requestBudgetId'):
+    if policy.get('requestBudgetId') or keys is not None:
         request['delegationInputHash'] = hashlib.sha256(json.dumps(arguments, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     _validate_schema(request, 'request')
     if original is None:
@@ -431,6 +514,14 @@ def poll_workers(task, scope, arguments, *, runtime_context=None):
         raise ValueError("mode must be 'any' or 'all'")
     if not ids:
         return _running_workers(task, scope)
+    from . import review_loops
+    loops = [identity for identity in ids if review_loops.is_loop_id(identity)]
+    if loops:
+        if len(loops) != len(ids):
+            raise ValueError('Poll review loops (review-loop-...) in their own poll call, apart from '
+                             'assignment IDs')
+        return review_loops.wait(task, scope, loops, wait_s=float(arguments.get('wait_s') or 0), mode=mode,
+                                 runtime_context=runtime_context)
     # The Worker wait request bounds and shapes the IDs one wait observes.
     _validate_schema({'assignment_ids': ids}, 'awaitWorkersRequest')
     return wait_for_workers(task, scope, ids, wait_s=float(arguments.get('wait_s') or 0), mode=mode,
@@ -493,7 +584,7 @@ def _running_workers(task, scope):
 
 
 def wait_for_workers(task, scope, ids, *, wait_s, mode='any', repository=None, service=None,
-                     runtime_context=None):
+                     runtime_context=None, loop_attempts=None):
     """Read (``wait_s`` 0) or wait on existing terminal notifications; no repeated LLM status calls.
 
     Settlement is news reported once per Coordinator attempt (``_phase``,
@@ -506,6 +597,10 @@ def wait_for_workers(task, scope, ids, *, wait_s, mode='any', repository=None, s
     one), at the deadline (wait=timeout), on Stop, or when input waits for the
     Coordinator's next round (wait=pending_input) by the rule every poll shares
     (``lib.tasks_pkg.wait_interruption``). Polls read settlement evidence only.
+
+    Internal review-loop waits pass their owned IDs in ``loop_attempts`` (a
+    rework ID maps to its predecessor attempt, which must not end the wait).
+    Their named terminal executions advance the loop but are not lead news.
     """
     if len(set(ids)) != len(ids):
         raise ValueError('Worker assignment IDs must be distinct')
@@ -553,10 +648,15 @@ def wait_for_workers(task, scope, ids, *, wait_s, mode='any', repository=None, s
     live = [identity for identity in ids if identity not in {row['assignment_id'] for row in refused}]
     refusal = ('' if not refused else ' Delegations ' + ', '.join(row['assignment_id'] for row in refused)
                + ' could not start a Worker (status failed_to_start): act on each error and its recovery.')
-    if not live:
-        return {'workers': refused, 'wait': 'settled', 'instruction': refusal.strip()}
+    if not live or (loop_attempts is not None and refused):
+        reason = interruption() if loop_attempts is not None else ''
+        result = {'workers': refused, 'wait': _INTERRUPTED.get(reason, 'settled'), 'instruction': refusal.strip()}
+        if reason == 'pending_input':
+            result['waiting'] = interruption.waiting()
+        return result
     result = _await_born(task, scope, live, deadline=deadline, mode=mode, interruption=interruption,
-                         repository=repository, service=service, runtime_context=runtime_context)
+                         repository=repository, service=service, runtime_context=runtime_context,
+                         loop_attempts=loop_attempts)
     if refused:
         result['workers'] = result['workers'] + refused
         result['instruction'] = result.get('instruction', '') + refusal
@@ -583,7 +683,8 @@ def _unread_row(identity):
 _WAIT_ROWS_KEY = '_coordinatorWaitRows'
 
 
-def _await_born(task, scope, ids, *, deadline, mode, interruption, repository, service, runtime_context):
+def _await_born(task, scope, ids, *, deadline, mode, interruption, repository, service, runtime_context,
+                loop_attempts=None):
     """Wait on born Workers, reading each again only when it can have changed.
 
     A Worker whose task runs in this process is read once its end fires here or
@@ -663,16 +764,23 @@ def _await_born(task, scope, ids, *, deadline, mode, interruption, repository, s
     # never ends a wait again, so polling it never loops a model.
     reports = _reports(task)
     named = set(ids)
-    watched = list(ids) + [identity for identity in _unnamed_pending(task, scope, reports) if identity not in named]
+    loop_workers = loop_attempts or {}
+    watched = list(ids) + [identity for identity in _unnamed_pending(task, scope, reports)
+                           if identity not in named and identity not in loop_workers]
 
     def news(rows):
-        return [row for row in rows if row['status'] != 'unread' and _phase(row) not in _NOT_NEWS
+        return [row for row in rows if row['assignment_id'] not in loop_workers
+                and row['status'] != 'unread' and _phase(row) not in _NOT_NEWS
                 and reports['reported'].get(row['assignment_id']) != _settlement(row)]
 
     def done(rows):
         fresh = news(rows)
         if any(row['assignment_id'] not in named for row in fresh):
             return True  # A Worker this call did not name settled: never hold it back.
+        if loop_attempts is not None:
+            return any(row['assignment_id'] in named and row['status'] in _TERMINAL
+                       and (row['status'] == 'cancelled' or loop_workers[row['assignment_id']] is None
+                            or row['attempt_id'] != loop_workers[row['assignment_id']]) for row in rows)
         if not any(_phase(row) in _PENDING for row in rows if row['assignment_id'] in named):
             # Every named Worker is settled: report its news, or (mode any) keep
             # waiting on the request's other pending Workers instead of
@@ -696,7 +804,10 @@ def _await_born(task, scope, ids, *, deadline, mode, interruption, repository, s
                             or not _runs_here(latest[identity], owner)]))
     rows = current()
     outcome = 'settled'
-    if not done(rows):
+    loop_interruption = interruption() if loop_attempts is not None else ''
+    if loop_interruption:
+        outcome = _INTERRUPTED[loop_interruption]
+    elif not done(rows):
         from lib.agent_core.admission import on_terminal
         from lib.tasks_pkg import wait_interruption
         changed, fired, ended_here, subscriptions = threading.Event(), deque(), set(), {}
@@ -709,6 +820,10 @@ def _await_born(task, scope, ids, *, deadline, mode, interruption, repository, s
         prompt_until = 0.0
         try:
             while True:
+                reason = interruption() if loop_attempts is not None else ''
+                if reason:
+                    outcome = _INTERRUPTED[reason]
+                    break
                 if done(rows):
                     outcome = 'progress'
                     break
@@ -716,8 +831,7 @@ def _await_born(task, scope, ids, *, deadline, mode, interruption, repository, s
                 if remaining <= 0:
                     outcome = 'timeout'
                     break
-                reason = interruption()
-                if reason:
+                if loop_attempts is None and (reason := interruption()):
                     outcome = _INTERRUPTED[reason]
                     break
                 fresh = [row['task_id'] for row in rows if row['task_id'] and row['status'] not in _TERMINAL
@@ -788,6 +902,14 @@ def _await_born(task, scope, ids, *, deadline, mode, interruption, repository, s
         from lib.turn_verdict import aborted_wait_text
         return {'workers': settled, 'wait': 'cancelled',
                 'instruction': aborted_wait_text(task.get('_abort_reason'))}
+    # Use what the poll actually returned, not the earlier lightweight claim.
+    with reports['lock']:
+        durable = reports.setdefault('observed_results', {})
+        for row in settled:
+            if row.get('attempt_id') and row.get('result_revision') is not None:
+                durable[row['assignment_id']] = {
+                    'attemptId': row['attempt_id'], 'resultRevision': row['result_revision'],
+                    'deliveryStatus': (row.get('delivery') or {}).get('status')}
     running = [row['assignment_id'] for row in rows if _phase(row) == 'running']
     delivering = [row['assignment_id'] for row in rows if _phase(row) == 'delivering']
     reported = {row['assignment_id'] for row in fresh}
@@ -803,6 +925,8 @@ def _await_born(task, scope, ids, *, deadline, mode, interruption, repository, s
     status = ('timeout' if outcome == 'timeout' and not fresh
               else 'pending_input' if outcome == 'pending_input' and (running or delivering)
               else 'progress' if running or delivering else 'settled')
+    if loop_attempts is not None and outcome in ('timeout', 'pending_input'):
+        status = outcome
     if status == 'pending_input':
         result['waiting'] = interruption.waiting()
     yields = status == 'timeout' and _settlement_resumes(task, repository, running + delivering)

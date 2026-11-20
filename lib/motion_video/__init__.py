@@ -28,6 +28,7 @@ from importlib import import_module
 
 __all__ = [
     'PINNED_HYPERFRAMES',
+    'PINNED_IMAGEIO_FFMPEG',
     'motion_root',
     'probe_env',
     'build_render_env',
@@ -111,6 +112,7 @@ __all__ = [
 _EXPORT_MODULES = {
     # Render-chain environment.
     'PINNED_HYPERFRAMES': 'lib.motion_video._env',
+    'PINNED_IMAGEIO_FFMPEG': 'lib.motion_video._env',
     'motion_root': 'lib.motion_video._env',
     'probe_env': 'lib.motion_video._env',
     'build_render_env': 'lib.motion_video._env',

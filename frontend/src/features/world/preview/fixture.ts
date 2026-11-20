@@ -6,17 +6,23 @@
 import { createChoiceInteractionPorts } from '../../../conversation/application/choice-interaction';
 import type { ChoicePorts } from '../../../rich-response/choices';
 import type { ProjectDispatchHistoryRow } from '../../../api/project-dispatch.generated';
-import type { CoordinatorConversationPage } from '../../../api/project-coordination.generated';
+import type { CoordinatorConversationPage, LeadDeliverablePage } from '../../../api/project-coordination.generated';
 import { openQuestions, type QuestionTurn } from '../attention';
-import type { LiveTeam, SourceState, WorldLive } from '../live';
+import type { DeliverablesSource, LiveTeam, SourceState, WorldLive } from '../live';
 import type { TeamKind } from '../model';
+import type { RouterOfficeFacts } from '../../../api/router.generated';
+import { createFactStore } from '../facts';
 
 export interface FixtureTeam {
   kind: TeamKind; key: string; name: string; color: string; leadId: string; order: number;
   team: CoordinatorConversationPage | null; assignments?: ProjectDispatchHistoryRow[] | null;
   progress: LiveTeam['progress']['value']; reports: LiveTeam['reports']['value']; questionTurns: QuestionTurn[] | null;
 }
-export interface FixtureSnapshot { capturedAt: number; teams: FixtureTeam[] }
+/** `deliverables`: each recorded conversation's first deliverables page (the office brief's timeline and files);
+ * `officeFacts`: an optional office facts snapshot (GET /api/v4/router/office), served as the live facts. */
+export interface FixtureSnapshot {
+  capturedAt: number; teams: FixtureTeam[]; deliverables?: Record<string, LeadDeliverablePage>; officeFacts?: RouterOfficeFacts;
+}
 
 const ok = <T,>(value: T | null | undefined): SourceState<T> => ({ value: value ?? null, status: value == null ? 'error' : 'ok', at: 1, inFlight: false, again: false });
 
@@ -38,6 +44,11 @@ export function fixtureLive(snapshot: FixtureSnapshot, onChange: () => void, opt
   grow(team: string, count: number): string[];
   answerPorts(conversationId: string, turnId: string): ChoicePorts | undefined;
   replies: Array<{ conversationId: string; guidanceId: string; quote: string; responseText: string }>;
+  /** Script a `lead_deliverable` hint for one conversation. */
+  hintDeliverable(conversationId: string): void;
+  /** Settles a non-blocking question on its default in the fixture, as the server marks its card. */
+  confirmDefault(conversationId: string, guidanceId: string): Promise<void>;
+  confirmations: Array<{ conversationId: string; guidanceId: string }>;
 } {
   const teams: LiveTeam[] = snapshot.teams.map(team => ({
     key: team.key, name: team.name, color: team.color, kind: team.kind, leadId: team.leadId, order: team.order,
@@ -59,8 +70,38 @@ export function fixtureLive(snapshot: FixtureSnapshot, onChange: () => void, opt
     if (!turn) throw new Error('No such Turn');
     return { status: 'running', settlement: null, projectionRevision: 1, ...turn, conversationId: fixture.leadId };
   };
+  const hinted = new Set<(conversationId: string) => void>();
+  const recorded = snapshot.deliverables;
+  const deliverables: DeliverablesSource | undefined = recorded && {
+    read: async (conversationId, _path, cursor) => (cursor ? null : recorded[conversationId])
+      || { conversationId, items: [], nextCursor: null, tasks: [], otherCount: 0 },
+    subscribe(changed) { hinted.add(changed); return () => { hinted.delete(changed); }; },
+  };
+  const confirmations: Array<{ conversationId: string; guidanceId: string }> = [];
+  const facts = createFactStore();
+  if (snapshot.officeFacts) facts.reset(snapshot.officeFacts);
   return {
     replies,
+    ...(deliverables ? { deliverables } : {}),
+    hintDeliverable(conversationId) { for (const changed of hinted) changed(conversationId); },
+    confirmations,
+    async confirmDefault(conversationId, guidanceId) {
+      const fixture = questionTeam(conversationId);
+      if (!fixture) throw new Error('No such lead');
+      confirmations.push({ conversationId, guidanceId });
+      if (snapshot.officeFacts) {
+        snapshot.officeFacts = { ...snapshot.officeFacts, seq: snapshot.officeFacts.seq + 1,
+          facts: snapshot.officeFacts.facts.filter(fact => !(fact.fact === 'decision' && fact.guidanceId === guidanceId)) };
+        facts.reset(snapshot.officeFacts);
+      }
+      for (const turn of fixture.questionTurns!) {
+        turn.projection = { ...turn.projection, toolRounds: (turn.projection?.toolRounds || []).map(raw => {
+          const round = raw as Record<string, unknown>;
+          return round.guidanceId === guidanceId ? { ...round, guidanceDefaultAccepted: { at: Date.now(), by: 1 } } : round;
+        }) };
+      }
+      window.setTimeout(() => settle(fixture), 0);
+    },
     answerPorts(conversationId, turnId) {
       const fixture = questionTeam(conversationId);
       if (!fixture) return undefined;
@@ -87,7 +128,7 @@ export function fixtureLive(snapshot: FixtureSnapshot, onChange: () => void, opt
         },
       });
     },
-    state: { teams, started: true, error: '', facts: null, loading: false },
+    state: { teams, started: true, error: '', get facts() { return facts.view(); }, loading: false },
     start: async () => { onChange(); },
     refreshAll: () => onChange(),
     stop: () => {},

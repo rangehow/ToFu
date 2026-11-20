@@ -247,6 +247,16 @@ def _convert_usage(usage: dict) -> dict:
         'effective_prompt_tokens': effective_prompt,
         'effective_output_tokens': top_out,
     }
+    # Preserve presence across the legacy integer projection, which uses
+    # zero defaults for arithmetic. Iteration totals have their own scopes.
+    sources = iterations or [usage]
+    if any(type(row.get('input_tokens')) is int and row['input_tokens'] >= 0
+           for row in sources):
+        result['_wire_anthropic_input_tokens'] = full_prompt
+    if any(type(row.get('cache_read_input_tokens')) is int
+           and row['cache_read_input_tokens'] >= 0
+           for row in [usage, *iterations]):
+        result['_wire_anthropic_cached_tokens'] = cr
     if thinking:
         result['thinking_tokens'] = thinking
         result['reasoning_tokens'] = thinking

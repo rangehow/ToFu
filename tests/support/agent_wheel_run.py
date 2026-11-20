@@ -31,6 +31,7 @@ ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_OWNER = ROOT / 'scripts' / 'agent_wheel_manifest.py'
 MARKER = 'installed-wheel-marker.txt'
 FINAL_ANSWER = 'The installed wheel wrote its marker.'
+MODEL_SECRET = 'wheel-test-credential-0123456789abcdef'
 # The one declared optional storage capability: lib/tasks_pkg/handlers/__init__.py
 # drops the large tool-result continuation handler when lib.storage is absent.
 OPTIONAL_STORAGE_IMPORTERS = frozenset({'lib.tool_results.tool_result_artifacts'})
@@ -150,7 +151,7 @@ def console_entry(root: Path = ROOT) -> tuple[str, str]:
     return module, attribute
 
 
-def _scripted_provider(requests_seen: list[dict]) -> ThreadingHTTPServer:
+def _scripted_provider(requests_seen: list[dict], *, credential_refusal=False) -> ThreadingHTTPServer:
     class Provider(BaseHTTPRequestHandler):
         protocol_version = 'HTTP/1.1'
 
@@ -164,8 +165,15 @@ def _scripted_provider(requests_seen: list[dict]) -> ThreadingHTTPServer:
                 delta = {'tool_calls': [{
                     'index': 0, 'id': 'call-installed-marker', 'type': 'function',
                     'function': {'name': 'run_command', 'arguments': json.dumps({
-                        'command': f'printf installed-wheel > {MARKER}'})},
+                        'command': f'printf installed-wheel > {MARKER}; printf "$WHEEL_TEST_VALUE"'})},
                 }]}
+                if credential_refusal:
+                    delta['tool_calls'].append({
+                        'index': 1, 'id': 'call-unavailable-credential', 'type': 'function',
+                        'function': {'name': 'run_command', 'arguments': json.dumps({
+                            'command': 'printf forbidden > credential-refusal-must-not-exist',
+                            'credentials': ['wheel-smoke-deliberately-missing-credential']})},
+                    })
                 finish = 'tool_calls'
             else:
                 delta, finish = {'content': FINAL_ANSWER}, 'stop'
@@ -188,7 +196,7 @@ def _scripted_provider(requests_seen: list[dict]) -> ThreadingHTTPServer:
 
 def run_tofu_agent(tmp_path: Path, *, application: Path, entry: tuple[str, str],
                    top_level, boundary: bool = False,
-                   overlay: dict[str, Path] | None = None) -> AgentRun:
+                   overlay: dict[str, Path] | None = None, credential_refusal=False) -> AgentRun:
     """Run the scripted tool round with APPLICATION as the only application path.
 
     TOP_LEVEL names the wheel's top-level packages, whose unsatisfied imports
@@ -199,11 +207,11 @@ def run_tofu_agent(tmp_path: Path, *, application: Path, entry: tuple[str, str],
     workspace = tmp_path / 'workspace'
     workspace.mkdir()
     requests_seen: list[dict] = []
-    server = _scripted_provider(requests_seen)
+    server = _scripted_provider(requests_seen, credential_refusal=credential_refusal)
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
     envelope = standalone_model_routing_envelope(
-        base_url=f'http://127.0.0.1:{server.server_port}/v1', secret='test-only',
+        base_url=f'http://127.0.0.1:{server.server_port}/v1', secret=MODEL_SECRET,
         model_id='installed-wheel-test')
     for model in envelope['model_routing']['models']:
         model['capabilities'].append('tools')
@@ -213,7 +221,8 @@ def run_tofu_agent(tmp_path: Path, *, application: Path, entry: tuple[str, str],
                    'PYTHONPATH': os.pathsep.join([str(application), *dependency_paths()]),
                    'TOFU_AGENT_MODEL_ROUTING': json.dumps(envelope),
                    'NO_PROXY': '127.0.0.1,localhost', 'no_proxy': '127.0.0.1,localhost',
-                   'TOFU_DATA_DIR': str(tmp_path / 'data')}
+                   'TOFU_DATA_DIR': str(tmp_path / 'data'),
+                   'WHEEL_TEST_VALUE': MODEL_SECRET}
     result_path = tmp_path / 'run.json'
     report_path = tmp_path / 'imports.json'
     config = {
@@ -246,6 +255,10 @@ def assert_tool_round(run: AgentRun) -> None:
     assert run.result['status'] == 'done' and run.result['content'] == FINAL_ANSWER
     assert (run.workspace / MARKER).read_text(encoding='utf-8') == 'installed-wheel'
     assert len(run.requests) == 2
+    assert MODEL_SECRET not in json.dumps(run.result)
+    assert MODEL_SECRET not in json.dumps(run.requests[1])
+    assert 'redacted credential' in json.dumps(run.requests[1])
+    assert '[CredentialRedaction]' not in run.completed.stderr
     assert any(message.get('role') == 'tool'
                and message.get('tool_call_id') == 'call-installed-marker'
                for message in run.requests[1]['messages'])
@@ -257,3 +270,17 @@ def unsatisfied_imports(run: AgentRun) -> list[list]:
     return sorted(([name, importer] for name, importer in attempts if not (
         importer in OPTIONAL_STORAGE_IMPORTERS
         and (name == 'lib.storage' or name.startswith('lib.storage.')))), key=str)
+
+
+def assert_credential_refusal(run: AgentRun) -> None:
+    """An unavailable credential refuses its command, not the safe sibling call."""
+    assert run.completed.returncode == 0, run.completed.stderr[-4000:]
+    assert run.result['status'] == 'done'
+    assert (run.workspace / MARKER).read_text() == 'installed-wheel'
+    assert not (run.workspace / 'credential-refusal-must-not-exist').exists()
+    messages = [message for request in run.requests[1:] for message in request['messages']]
+    refused = [message for message in messages if message.get('role') == 'tool'
+               and message.get('tool_call_id') == 'call-unavailable-credential']
+    assert refused and 'Credential request rejected' in str(refused[0])
+    assert MODEL_SECRET not in json.dumps(run.result)
+    assert MODEL_SECRET not in json.dumps(run.requests[1:])

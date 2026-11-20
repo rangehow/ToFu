@@ -131,7 +131,7 @@ function stgDownloadLinks(d: DesktopStatus | null, arch: string): string {
   let html = '';
   let older: DesktopDownloadPick | null = null;
   if (picks.length) {
-    html += '<div class="stg-mobile-rows">';
+    html += '<div class="stg-mobile-rows stg-desktop-downloads">';
     for (const rawPick of picks) {
       const p = rawPick || {};
       if (!p.url) continue;
@@ -149,17 +149,17 @@ function stgDownloadLinks(d: DesktopStatus | null, arch: string): string {
         escapeHtml(p.filename || '') + '">' +
         '<span class="stg-mobile-platform" aria-hidden="true">' +
           stgDesktopOsIcon(p.os) + '</span>' +
-        '<span class="stg-mobile-name">' +
-          escapeHtml(p.label || p.arch || '') + '</span>' +
-        (facts
-          ? '<span class="stg-mobile-version">' + escapeHtml(facts) + '</span>'
-          : '') +
-        (rec
-          ? '<span class="stg-desktop-rec">' +
-            escapeHtml(stgDlT('settings.desktopRecommend', '推荐')) + '</span>'
-          : '') +
-        '<span class="stg-mobile-get">' +
-          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M6 11l6 6 6-6"/><path d="M5 21h14"/></svg>' +
+        '<span class="stg-desktop-details">' +
+          '<span class="stg-mobile-name">' + escapeHtml(p.label || p.arch || '') + '</span>' +
+          (facts || rec
+            ? '<span class="stg-desktop-meta">' +
+              (facts ? '<span class="stg-mobile-version">' + escapeHtml(facts) + '</span>' : '') +
+              (rec ? '<span class="stg-desktop-rec">' +
+                escapeHtml(stgDlT('settings.desktopRecommend', '推荐')) + '</span>' : '') +
+              '</span>'
+            : '') +
+        '</span><span class="stg-mobile-get">' +
+          '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M6 11l6 6 6-6"/><path d="M5 21h14"/></svg>' +
           '<span>' + escapeHtml(stgDlT('settings.mobileDownload', '下载')) +
           '</span></span></a>';
     }

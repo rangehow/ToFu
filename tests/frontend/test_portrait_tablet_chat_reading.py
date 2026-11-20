@@ -212,7 +212,7 @@ def test_tablet_portrait_inflates_reader_padding():
 
 
 def test_tablet_portrait_grows_reader_tab_touch_target():
-    """The reader tabs (Q&A/Report/Babel) must be roomier than the phone's
+    """The reader tabs (Q&A/Report/Full-text) must be roomier than the phone's
     cramped `padding:10px 6px` on a tablet — assert a `.paper-tab-btn` rule in
     the band whose horizontal padding exceeds the phone's 6px."""
     css = _read(CSS)

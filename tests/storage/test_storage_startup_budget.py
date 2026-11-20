@@ -101,14 +101,16 @@ def test_rpc_deadline_rejects_malformed_and_clamps(monkeypatch):
     assert rpc_deadline_seconds() == 120.0
 
 
-def test_native_launch_durability_defaults_to_strict(monkeypatch):
+def test_native_launch_durability_unset_keeps_engine_tier_and_strict_is_explicit(monkeypatch):
     from lib.storage_authority_sql.native_launch import _durability_args
 
     monkeypatch.delenv('TOFU_DB_DURABILITY', raising=False)
     monkeypatch.delenv('TOFU_DB_WAL_FLUSH_INTERVAL_MS', raising=False)
     assert _durability_args() == []
+    # Without the flag the engine auto-tiers a fuse volume to normal, so an
+    # explicit strict must reach the daemon (docs/STORAGE_TOFUDB.md).
     monkeypatch.setenv('TOFU_DB_DURABILITY', 'strict')
-    assert _durability_args() == []
+    assert _durability_args() == ['--durability', 'strict']
 
 
 def test_native_launch_durability_normal_is_explicit_and_bounded(monkeypatch):

@@ -237,7 +237,7 @@
       "properties": {
         "conversationId": {"$ref": "#/$defs/id"},
         "model": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S"}, {"type": "null"}],
-          "description": "Model for this session's next accepted attempt; null restores its original model."},
+          "description": "Model for this session's next accepted attempt; null clears the override and returns to the session's normal model selection."},
         "reason": {"type": "string", "minLength": 1, "maxLength": 2048, "pattern": "\\S",
           "description": "Why the owner changed the model (for example a provider content-filter refusal)."}
       }
@@ -381,6 +381,29 @@
         "enabled": {"type": "boolean"},
         "schedule": {"type": "string", "minLength": 9, "maxLength": 512, "pattern": "\\S", "default": "7,37 * * * *",
                      "description": "Five-field local-time cron of the periodic review (lib/scheduler/cron.py). The default reviews every 30 minutes at :07 and :37, off the :00/:30 contention minutes. Omitted, an existing review keeps its cadence and a new one uses the default."}
+      }
+    },
+    "ownerQuestionConfirmRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["coordinatorId", "guidanceId"],
+      "description": "The owner accepts an open non-blocking owner question's stated default from its card (docs/ROUTER.md R10, 'The owner confirms a default'). Nothing is sent to the lead.",
+      "properties": {
+        "coordinatorId": {"type": "string", "minLength": 1, "maxLength": 256},
+        "guidanceId": {"type": "string", "minLength": 1, "maxLength": 256}
+      }
+    },
+    "ownerQuestionConfirmation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["coordinatorId", "guidanceId", "defaultAcceptedAt", "defaultAcceptedBy", "card"],
+      "properties": {
+        "coordinatorId": {"type": "string", "minLength": 1},
+        "guidanceId": {"type": "string", "minLength": 1},
+        "defaultAcceptedAt": {"type": "integer", "minimum": 1},
+        "defaultAcceptedBy": {"type": "integer", "minimum": 1},
+        "card": {"enum": ["card", "unmarked"],
+                 "description": "card: the question card's round carries guidanceDefaultAccepted. unmarked: its Turn is still running (its attempt owns the projection), so only the owner-question record holds the confirmation; every listing reads the record."}
       }
     },
     "watchdogReview": {
@@ -640,11 +663,17 @@
       }
     },
     "projectRepair": {
-      "description": "repair_project arguments (docs/ROUTER.md R9 project_repair, owner decision 2026-11-12). The trigger fields follow ownerDelegationTrigger, which lib.router.owner_delegation.resolve_trigger enforces before anything runs; the trigger's owner words become the repair conversation's request and the note travels with them as nonhuman evidence.",
+      "description": "repair_project arguments (docs/ROUTER.md R9). In open_repair_conversation mode the trigger words become the repair conversation's request and the note is nonhuman evidence. In replace_own_binding mode the full grant authorizes replacement of the executing Project Lead only; no Turn is started. The server enforces ownerDelegationTrigger before either effect.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["project_path", "title", "note", "reason", "idempotency_key"],
+      "required": ["reason", "idempotency_key"],
+      "if": {"required": ["action"], "properties": {"action": {"const": "replace_own_binding"}}},
+      "then": {"required": ["under_delegation"], "properties": {"under_delegation": {"const": true}},
+               "not": {"anyOf": [{"required": ["project_path"]}, {"required": ["title"]}, {"required": ["note"]}]}},
+      "else": {"required": ["project_path", "title", "note"]},
       "properties": {
+        "action": {"enum": ["open_repair_conversation", "replace_own_binding"],
+                   "description": "Global Router: open_repair_conversation (default). Running Project Lead: replace_own_binding only, without project_path, title or note, and with under_delegation=true."},
         "project_path": {"type": "string", "minLength": 1, "maxLength": 4096, "pattern": "\\S",
                          "description": "Absolute local path of the project whose Project Router cannot run."},
         "title": {"type": "string", "minLength": 1, "maxLength": 160, "pattern": "\\S",
@@ -754,7 +783,7 @@
             "channel": {"type": "string", "description": "A messaging channel id for a channel toggle."},
             "folderId": {"$ref": "#/$defs/id"},
             "model": {"anyOf": [{"$ref": "#/$defs/id"}, {"type": "null"}],
-              "description": "set_model only: the model chosen for the session's next attempt; null restores its original model (docs/ROUTER.md R5)."}
+              "description": "set_model only: the model chosen for the session's next attempt; null clears the session override (docs/ROUTER.md R5)."}
           }
         },
         "grantRevision": {"anyOf": [{"type": "integer", "minimum": 1}, {"type": "null"}]},
@@ -1197,6 +1226,28 @@
         "cursor": {"$ref": "#/$defs/cursor"}
       }
     },
+    "projectExecutionHealth": {
+      "description": "Passive main-lane execution evidence, not binding availability or permission to repair. Only the newest bound-attempt metadata page is examined. Unknown means incomplete or unreadable evidence, not a failed Turn.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state"],
+          "properties": {"state": {"enum": ["no_bound_attempt", "unknown"]}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "turnId", "status", "authorityWithdrawn"],
+          "properties": {
+            "state": {"enum": ["observed"]},
+            "turnId": {"$ref": "#/$defs/id"},
+            "status": {"enum": ["pending", "running", "completed", "interrupted", "truncated", "failed"]},
+            "authorityWithdrawn": {"type": "boolean"}
+          }
+        }
+      ]
+    },
     "routerProjectSummary": {
       "type": "object",
       "additionalProperties": false,
@@ -1207,6 +1258,7 @@
         "coordinatorConversationId": {"type": "string"},
         "bindingRevision": {"type": "integer", "minimum": 0},
         "availability": {"$ref": "#/$defs/routerState/properties/availability"},
+        "executionHealth": {"$ref": "#/$defs/projectExecutionHealth"},
         "activeWorkers": {"type": "integer", "minimum": 0},
         "activeRequests": {"type": "integer", "minimum": 0},
         "workersCoverage": {"enum": ["complete", "newest_page"],

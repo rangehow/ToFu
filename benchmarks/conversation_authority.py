@@ -13,6 +13,7 @@ import time
 from unittest.mock import patch
 
 from benchmarks.conversation_acceptance import POLICY
+from benchmarks.conversation_receipts import sqlite_library_role
 
 from scripts.tofudb_perf_compare import LegacyEngine, TofuDbEngine
 from scripts.tofudb_bench import _mount_type
@@ -52,6 +53,9 @@ class ConversationAuthority:
             self.declared_artifact = capture_declared_artifact(
                 self.binary, embedded=self.native_client == 'embedded')
             self.engine._expected_sha256 = self.declared_artifact['binary_sha256']
+            # Stop precedes the latency and paired verdicts. Keep daemon logs
+            # even if workload errors are empty and only the final verdict fails.
+            self.engine.retain_logs()
         with patch.dict(os.environ, {'TOFU_STORAGE_RPC_DEADLINE_S': str(POLICY['rpc_deadline_seconds'])}):
             self.engine.start()
         self.artifact_before = self.artifact_snapshot()
@@ -91,10 +95,46 @@ class ConversationAuthority:
             self.engine._binary,
             embedded_build_identity=getattr(self.engine, '_embedded_build_identity', None))
 
+    def sqlite_loaded_artifacts(self):
+        """Hash the files backing the actual child's mappings, not library hints."""
+        process = self._process
+        if process is None or process.poll() is not None:
+            raise RuntimeError('SQLite artifact observation has no running child')
+        observed = {}
+        for line in Path(f'/proc/{process.pid}/maps').read_text().splitlines():
+            fields = line.split(maxsplit=5)
+            if len(fields) != 6:
+                continue
+            path = Path(fields[5])
+            name = path.name.removesuffix(' (deleted)')
+            kind = sqlite_library_role(name)
+            if kind is None:
+                continue
+            major, minor = (int(part, 16) for part in fields[3].split(':'))
+            key = (os.makedev(major, minor), int(fields[4]), str(path))
+            if kind in observed:
+                if observed[kind][0] != key:
+                    raise RuntimeError(f'ambiguous SQLite {kind} mappings')
+                continue
+            with path.open('rb') as stream:
+                before = os.fstat(stream.fileno())
+                if (before.st_dev, before.st_ino) != key[:2]:
+                    raise RuntimeError(f'SQLite {kind} path does not identify the mapped inode')
+                digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+                after = os.fstat(stream.fileno())
+                if (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+                        after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+                    raise RuntimeError(f'SQLite {kind} changed while hashing')
+            observed[kind] = (key, {'path': str(path), 'sha256': digest})
+        if set(observed) != {'sqlite', 'vfs'} or self._process is not process or process.poll() is not None:
+            raise RuntimeError('SQLite/VFS loaded artifact evidence incomplete')
+        return {'pid': process.pid, **{kind: value for kind, (_, value) in observed.items()}}
+
     def describe(self):
         path = self.engine._data_dir if self.backend == 'tofudb' else self.engine._project_root
+        physical = path.stat()
         result = {'backend': self.backend, 'authority_directory': str(path),
-                  'volume_device': os.stat(path).st_dev,
+                  'volume_device': physical.st_dev, 'volume_inode': physical.st_ino,
                   'filesystem': _mount_type(path), 'durability': 'strict',
                   'rpc_deadline_seconds': self._client._timeout, 'crash_scope': 'sigkill'}
         if self.backend == 'tofudb':
@@ -116,6 +156,10 @@ class ConversationAuthority:
                 raise RuntimeError('SQLite relocated its WAL outside the requested comparison volume')
             result['journal'] = 'WAL, synchronous=FULL'
         return result
+
+    @property
+    def last_crash_receipt(self):
+        return getattr(self.engine, 'last_crash_receipt', None)
 
     def crash_cycle(self):
         with patch.dict(os.environ, {'TOFU_STORAGE_RPC_DEADLINE_S': str(POLICY['rpc_deadline_seconds'])}):

@@ -334,6 +334,11 @@ pub enum TransactionIrStep {
         keep: usize,
         slot: usize,
     },
+    ConversationPortableImport {
+        payload: Vec<u8>,
+        committed_at_ms: u64,
+        slot: usize,
+    },
     ConversationCreate {
         conversation_id: String,
         title: String,
@@ -841,6 +846,14 @@ pub enum TransactionIrStep {
         turn_id: String,
         include_projection: bool,
         content_preview_chars: Option<usize>,
+        expected: Option<(u64, String, String)>,
+        slot: usize,
+    },
+    TurnResumePlanRead {
+        conversation_id: String,
+        turn_id: String,
+        attempt_id: String,
+        projection_revision: u64,
         slot: usize,
     },
     TurnImageGet {
@@ -862,6 +875,7 @@ pub enum TransactionIrStep {
         turn_id: String,
         replay: bool,
         after_turn_id: Option<String>,
+        continue_plan: Option<crate::turn::model_context::ContinuePlanRequest>,
         slot: usize,
     },
     TurnList {
@@ -1055,6 +1069,16 @@ pub enum TransactionIrStep {
     EntityDelete {
         key: EntityKey,
         condition: EntityWriteCondition,
+    },
+    DeviceNodeWitness {
+        key: EntityKey,
+        logical_key: String,
+        owner: u64,
+        node_id: Option<String>,
+        version: u64,
+        credential: Option<String>,
+        state: Option<&'static str>,
+        slot: usize,
     },
     VersionedDocumentGet {
         key: EntityKey,
@@ -1858,6 +1882,7 @@ impl TransactionIr {
                 TransactionIrStep::EntityRead { key, .. }
                 | TransactionIrStep::EntityPut { key, .. }
                 | TransactionIrStep::EntityDelete { key, .. }
+                | TransactionIrStep::DeviceNodeWitness { key, .. }
                 | TransactionIrStep::VersionedDocumentGet { key, .. }
                 | TransactionIrStep::VersionedDocumentPut { key, .. }
                 | TransactionIrStep::VersionedDocumentDelete { key, .. } => &[key],
@@ -1907,6 +1932,7 @@ impl TransactionIr {
                 | TransactionIrStep::CompactionArchiveDeleteConversation { slot, .. }
                 | TransactionIrStep::CompactionArchivePrune { slot, .. }
                 | TransactionIrStep::EntityRead { slot, .. }
+                | TransactionIrStep::DeviceNodeWitness { slot, .. }
                 | TransactionIrStep::VersionedDocumentGet { slot, .. }
                 | TransactionIrStep::VersionedDocumentList { slot, .. }
                 | TransactionIrStep::VersionedDocumentDelete { slot, .. }
@@ -2964,6 +2990,20 @@ impl TransactionIr {
                         .ok_or_else(|| {
                             invalid_input("Transaction IR literal byte count overflow")
                         })?;
+                }
+                TransactionIrStep::ConversationPortableImport {
+                    payload,
+                    committed_at_ms,
+                    slot,
+                } => {
+                    let initialized = initialized_slots.get_or_insert(*slot);
+                    if *initialized || *committed_at_ms == 0 {
+                        return Err(invalid_input("invalid passive import step"));
+                    }
+                    *initialized = true;
+                    literal_bytes = literal_bytes.checked_add(payload.len()).ok_or_else(|| {
+                        invalid_input("Transaction IR literal byte count overflow")
+                    })?;
                 }
                 TransactionIrStep::ConversationCreate {
                     conversation_id,
@@ -4295,6 +4335,12 @@ impl TransactionIr {
                     slot,
                     ..
                 }
+                | TransactionIrStep::TurnResumePlanRead {
+                    conversation_id,
+                    turn_id,
+                    slot,
+                    ..
+                }
                 | TransactionIrStep::TurnImageGet {
                     conversation_id,
                     turn_id,
@@ -4324,6 +4370,23 @@ impl TransactionIr {
                         || turn_id.chars().count() > 128
                     {
                         return Err(invalid_input("invalid Turn identity"));
+                    }
+                    if let TransactionIrStep::TurnResumePlanRead {
+                        attempt_id,
+                        projection_revision,
+                        ..
+                    } = step
+                    {
+                        if attempt_id.is_empty()
+                            || attempt_id.chars().count() > 128
+                            || *projection_revision > i64::MAX as u64
+                        {
+                            return Err(invalid_input("invalid Turn resume source pin"));
+                        }
+                        literal_bytes =
+                            literal_bytes.checked_add(attempt_id.len()).ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?;
                     }
                     if let TransactionIrStep::TurnImageGet {
                         projection_revision,
@@ -5690,7 +5753,8 @@ impl TransactionIr {
                             | TransactionIrStep::CompactionArchiveUpdateSummary { .. }
                             | TransactionIrStep::CompactionArchiveDeleteConversation { .. }
                             | TransactionIrStep::CompactionArchivePrune { .. }
-                            | TransactionIrStep::ConversationCreate { .. }
+                            | TransactionIrStep::ConversationPortableImport { .. }
+                | TransactionIrStep::ConversationCreate { .. }
                             | TransactionIrStep::ConversationClone { .. }
                             | TransactionIrStep::ConversationDelete { .. }
                             | TransactionIrStep::ConversationRestore { .. }
@@ -6207,6 +6271,7 @@ fn prepare_transaction_ir_mode(
                 | TransactionIrStep::CompactionArchiveUpdateSummary { .. }
                 | TransactionIrStep::CompactionArchiveDeleteConversation { .. }
                 | TransactionIrStep::CompactionArchivePrune { .. }
+                | TransactionIrStep::ConversationPortableImport { .. }
                 | TransactionIrStep::ConversationCreate { .. }
                 | TransactionIrStep::ConversationClone { .. }
                 | TransactionIrStep::ConversationDelete { .. }
@@ -6224,6 +6289,8 @@ fn prepare_transaction_ir_mode(
                 | TransactionIrStep::TurnAttemptDispatchableList { .. }
                 | TransactionIrStep::TurnAttemptDispatchWorker { .. }
                 | TransactionIrStep::TurnAttemptGet { .. }
+                | TransactionIrStep::TurnResumePlanRead { .. }
+                | TransactionIrStep::TurnContextRead { continue_plan: Some(_), .. }
                 | TransactionIrStep::TurnTimingTraceGet { .. }
                 | TransactionIrStep::TurnTimingTraceList { .. }
                 | TransactionIrStep::TurnPerceptionRecord { .. }
@@ -6898,6 +6965,18 @@ fn prepare_transaction_ir_mode(
                     conversation_id,
                     archive_scope,
                     *keep,
+                )?));
+            }
+            TransactionIrStep::ConversationPortableImport {
+                payload,
+                committed_at_ms,
+                slot,
+            } => {
+                slots[*slot] = Some(Some(crate::portable_import::execute(
+                    database,
+                    &mut transaction,
+                    payload,
+                    *committed_at_ms,
                 )?));
             }
             TransactionIrStep::ConversationCreate {
@@ -7720,16 +7799,56 @@ fn prepare_transaction_ir_mode(
                 turn_id,
                 include_projection,
                 content_preview_chars,
+                expected,
                 slot,
             } => {
-                slots[*slot] = Some(crate::turn::get_with_projection(
+                let result = crate::turn::get_with_projection(
                     database,
                     &mut transaction,
                     conversation_id,
                     turn_id,
                     *include_projection,
                     *content_preview_chars,
-                )?);
+                )?;
+                if let Some((revision, attempt, status)) = expected {
+                    let matched = result.as_ref().is_some_and(|bytes| {
+                        serde_json::from_slice::<Value>(bytes).is_ok_and(|row| {
+                            row.get("projectionRevision").and_then(Value::as_u64) == Some(*revision)
+                                && row
+                                    .get("currentAttemptId")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("")
+                                    == attempt
+                                && row.get("status").and_then(Value::as_str)
+                                    == Some(status.as_str())
+                        })
+                    });
+                    if !matched {
+                        return Err(io::Error::new(
+                            io::ErrorKind::WouldBlock,
+                            "Dispatch Turn witness changed",
+                        ));
+                    }
+                    slots[*slot] = Some(None);
+                } else {
+                    slots[*slot] = Some(result);
+                }
+            }
+            TransactionIrStep::TurnResumePlanRead {
+                conversation_id,
+                turn_id,
+                attempt_id,
+                projection_revision,
+                slot,
+            } => {
+                slots[*slot] = Some(Some(crate::turn::resume_plan_read(
+                    database,
+                    &mut transaction,
+                    conversation_id,
+                    turn_id,
+                    attempt_id,
+                    *projection_revision,
+                )?));
             }
             TransactionIrStep::TurnImageGet {
                 conversation_id,
@@ -7768,6 +7887,7 @@ fn prepare_transaction_ir_mode(
                 turn_id,
                 replay,
                 after_turn_id,
+                continue_plan,
                 slot,
             } => {
                 slots.set_response(
@@ -7779,6 +7899,7 @@ fn prepare_transaction_ir_mode(
                         turn_id,
                         *replay,
                         after_turn_id.as_deref(),
+                        continue_plan.as_ref(),
                     )?
                     .map(IrResponse::from_encoded),
                 );
@@ -8269,6 +8390,53 @@ fn prepare_transaction_ir_mode(
                 if condition_matches(*condition, &slots)? {
                     database.entity_delete(&mut transaction, key.clone())?;
                 }
+            }
+            TransactionIrStep::DeviceNodeWitness {
+                key,
+                logical_key,
+                owner,
+                node_id,
+                version,
+                credential,
+                state,
+                slot,
+            } => {
+                let row = crate::versioned_document::get(
+                    database,
+                    &mut transaction,
+                    key,
+                    if node_id.is_some() {
+                        "desktop.node.v1"
+                    } else {
+                        "desktop.device_policy.v1"
+                    },
+                    logical_key,
+                )?;
+                let matches = if let Some(bytes) = row {
+                    let row: Value = serde_json::from_slice(&bytes)
+                        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                    row["version"].as_u64() == Some(*version)
+                        && row["value"]["owner"].as_u64() == Some(*owner)
+                        && node_id.as_ref().is_none_or(|node_id| {
+                            row["value"]["credentialId"].as_str() == credential.as_deref()
+                                && row["value"]["nodeId"].as_str() == Some(node_id.as_str())
+                                && state.is_none_or(|state| {
+                                    row["value"]["state"].as_str() == Some(state)
+                                })
+                        })
+                } else {
+                    *version == 0 && credential.is_none() && state.is_none()
+                };
+                if !matches {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "Device incarnation or policy changed",
+                    ));
+                }
+                slots[*slot] = Some(Some(
+                    serde_json::to_vec(&json!({"version": version}))
+                        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
+                ));
             }
             TransactionIrStep::VersionedDocumentGet {
                 key,

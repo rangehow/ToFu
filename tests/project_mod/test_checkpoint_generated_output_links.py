@@ -32,12 +32,7 @@ def git(root, *args):
 def test_capture_never_stages_generated_vite_output(tmp_path, kind):
     root = tmp_path / 'checkout'
     (root / 'static').mkdir(parents=True)
-    # The open export appends a block that publishes its prebuilt static/vite
-    # (export_pkg/_export_core.py, f831934d9b); a checkpoint of the source
-    # repository is governed by the rules above that block.
-    source_rules = (REPO / '.gitignore').read_text(encoding='utf-8')
-    (root / '.gitignore').write_text(
-        source_rules.split('# BEGIN tofu prebuilt frontend\n')[0], encoding='utf-8')
+    shutil.copyfile(REPO / '.gitignore', root / '.gitignore')
     (root / 'static' / 'styles.css').write_text('body {}\n', encoding='utf-8')
     git(root, 'init', '-q')
     git(root, 'add', '.')

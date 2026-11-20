@@ -7,7 +7,7 @@ import { createButton } from '../ui';
 import type { CoordinatorConversationPage } from '../api/project-coordination.generated';
 import { setStableAttribute, setStableData, setStableHidden, setStableText } from '../conversation/ui/renderers/stable-dom';
 import { folderIcon } from './project/folder-icons';
-import './project-coordination.css';
+import '../styles/application/33-project-coordination.css';
 
 export interface CoordinatorConversationRow {
   id: string;
@@ -36,10 +36,11 @@ export interface CoordinatorConversationGroupPorts {
   activeConversationId(): string;
   isRunning?(conversation: CoordinatorConversationRow): boolean;
   status?(conversation: CoordinatorConversationRow): 'running' | 'done' | 'failed' | 'cancelled' | null;
-  /** Sub-agents or commands of this conversation still run in the background. */
-  hasBackground?(conversation: CoordinatorConversationRow): boolean;
   readExpanded(coordinatorId: string): boolean | null;
   writeExpanded(coordinatorId: string, expanded: boolean): void;
+  /** Bounded DOM: the sidebar list's row-window bound and its prefetch margin. */
+  pageSize?: number;
+  pagePrefetchPx?: number;
   refresh?(): void;
   refreshActive?(): void;
 }
@@ -58,8 +59,16 @@ function relativeTime(timestamp: number | undefined): string {
 
 export function createCoordinatorConversationGroup(ports: CoordinatorConversationGroupPorts) {
   let coordinatorId = '', expanded = false, loaded = false, failed = false, loading = false, disposed = false;
-  let membership = '', bodyKey = '';
+  let membership = '';
   let flight: AbortController | null = null;
+  /* A project can start thousands of Workers. Render a bounded page and reconcile
+   * rows by id: one minute label or status change must never replace the list. */
+  const pageSize = Math.max(1, ports.pageSize ?? 50);
+  const pagePrefetchPx = ports.pagePrefetchPx ?? 600;
+  let limit = 0;
+  let sentinel: HTMLElement | null = null;
+  let windowObserver: IntersectionObserver | null = null;
+  const rowNodes = new Map<string, { node: HTMLElement; html: string }>();
   const root = document.createElement('section');
   root.className = 'coordinator-conversations';
   root.dataset.coordinatorId = '';
@@ -92,67 +101,139 @@ export function createCoordinatorConversationGroup(ports: CoordinatorConversatio
   function membershipOf(id: string) {
     return ports.rows().filter(row => row._coordinatorSource === id).map(row => row.id).sort().join('|');
   }
+  function stopWindow() {
+    windowObserver?.disconnect(); windowObserver = null;
+    sentinel?.remove(); sentinel = null;
+  }
+  function resetRows() {
+    stopWindow(); rowNodes.clear(); body.replaceChildren(); limit = 0;
+  }
+
+  /** One row node: the renderer's markup, with its owner-only actions folded away. */
+  function mountRow(conversation: CoordinatorConversationRow, html: string): HTMLElement | null {
+    const template = document.createElement('template');
+    template.innerHTML = html;
+    const node = template.content.firstElementChild as HTMLElement | null;
+    if (!node) return null;
+    node.tabIndex = 0; node.setAttribute('role', 'button');
+    node.querySelectorAll('.conv-actions > :not(.conv-copy-id)').forEach(action => action.remove());
+    node.querySelector('.conv-coordinator-badge')?.remove();
+    const date = node.querySelector('.conv-date');
+    if (date) {
+      // The row's own background tag (agents or commands still running) stays beside the status.
+      const background = date.querySelector('.conv-status-background');
+      const time = document.createElement('span');
+      time.className = 'coordinator-conversations-time';
+      date.replaceChildren(time, ...(background ? [background] : []));
+    }
+    const open = () => { ports.open(conversation.id); ports.refreshActive?.(); };
+    node.addEventListener('click', event => {
+      if ((event.target as Element).closest('.conv-actions')) return;
+      open();
+    });
+    node.addEventListener('keydown', event => {
+      if (event.target !== node || (event.key !== 'Enter' && event.key !== ' ')) return;
+      event.preventDefault(); open();
+    });
+    return node;
+  }
+
+  /** Only the leaves that age or change; equal values are not rewritten. */
+  function updateRow(node: HTMLElement, conversation: CoordinatorConversationRow, activeId: string) {
+    const active = conversation.id === activeId;
+    if (node.classList.contains('active') !== active) node.classList.toggle('active', active);
+    const date = node.querySelector('.conv-date');
+    if (!date) return;
+    const time = date.querySelector<HTMLElement>('.coordinator-conversations-time');
+    if (time) setStableText(time, relativeTime(conversation.updatedAt || conversation.createdAt));
+    const status = ports.status?.(conversation) ?? null;
+    let statusLabel = date.querySelector<HTMLElement>('.coordinator-conversations-status');
+    if (!status) { statusLabel?.remove(); return; }
+    if (!statusLabel) {
+      statusLabel = document.createElement('span');
+      if (time) time.after(statusLabel); else date.prepend(statusLabel);
+    }
+    const className = `coordinator-conversations-status is-${status}`;
+    if (statusLabel.className !== className) statusLabel.className = className;
+    setStableText(statusLabel, t(`projectCoordination.status.${status}`));
+  }
+
+  /** Bottom-sentinel paging, the same bound the sidebar conversation list uses. */
+  function ensureWindow(rows: readonly CoordinatorConversationRow[]) {
+    if (limit >= rows.length) { stopWindow(); return; }
+    if (!sentinel) {
+      sentinel = document.createElement('div');
+      sentinel.className = 'conv-window-sentinel';
+      sentinel.setAttribute('aria-hidden', 'true');
+    }
+    if (sentinel.parentNode !== body || body.lastElementChild !== sentinel) body.append(sentinel);
+    if (windowObserver) return;
+    const Observer = body.ownerDocument.defaultView?.IntersectionObserver;
+    if (!Observer) { limit = rows.length; sentinel.remove(); sentinel = null; return; }
+    windowObserver = new Observer(entries => {
+      if (!entries.some(entry => entry.isIntersecting) || !sentinel) return;
+      limit += pageSize;
+      paint();
+      /* A true→true append produces no second callback; re-observe so paging
+       * chains until the sentinel is pushed below the prefetch margin. */
+      const raf = body.ownerDocument.defaultView?.requestAnimationFrame;
+      if (sentinel && raf) raf(() => windowObserver?.observe(sentinel!));
+    }, { root: body, rootMargin: `0px 0px ${pagePrefetchPx}px 0px` });
+    windowObserver.observe(sentinel);
+  }
+
   /* Every streamed event of any conversation can reach here through the
-   * sidebar render: write only what changed. */
+   * sidebar render: write only what changed, and only for rendered rows. */
   function paint() {
     const rows = members();
     // The count is always the rows the group lists: an empty or still-loading inventory shows nothing.
     setStableHidden(root, !coordinatorId || rows.length === 0);
-    if (root.hidden) { setStableHidden(body, true); return; }
+    if (root.hidden) { setStableHidden(body, true); stopWindow(); return; }
     setStableText(count, String(rows.length));
     const running = rows.filter(row => ports.isRunning?.(row)).length;
-    const background = rows.filter(row => ports.hasBackground?.(row)).length;
-    setStableText(live, [running ? t('projectCoordination.running', { n: running }) : '',
-      background ? t('sidebar.backgroundRunningTag', { count: background }) : ''].filter(Boolean).join(' · '));
+    // Background work already counts as running (isRunning); a second tally crowded the label.
+    setStableText(live, running ? t('projectCoordination.running', { n: running }) : '');
     setStableAttribute(button, 'aria-expanded', String(expanded));
     button.classList.toggle('is-expanded', expanded);
     setStableAttribute(button, 'aria-label', [`${t('projectCoordination.conversations')} (${rows.length})`,
       live.textContent].filter(Boolean).join(', '));
     setStableHidden(body, !expanded);
-    if (!expanded) { bodyKey = ''; return; }
-    const html = rows.map(ports.renderRow).join('');
+    if (!expanded) { stopWindow(); return; }
     const activeId = ports.activeConversationId();
-    const decorations = rows.map(row => [relativeTime(row.updatedAt || row.createdAt), ports.status?.(row) ?? '']);
-    // Every sidebar refresh reaches here; replacing unchanged rows drops :hover and focus.
-    const nextBodyKey = JSON.stringify([html, activeId, decorations]);
-    if (nextBodyKey === bodyKey) return;
-    bodyKey = nextBodyKey;
-    const focusedId = body.contains(document.activeElement)
-      ? document.activeElement!.closest<HTMLElement>('.conv-item[data-conv-id]')?.dataset.convId : undefined;
-    body.innerHTML = html;
-    body.querySelectorAll<HTMLElement>('.conv-item[data-conv-id]').forEach(row => {
-      const conversation = rows.find(item => item.id === row.dataset.convId)!;
-      row.tabIndex = 0; row.setAttribute('role', 'button');
-      row.classList.toggle('active', row.dataset.convId === activeId);
-      row.querySelectorAll('.conv-actions > :not(.conv-copy-id)').forEach(action => action.remove());
-      row.querySelector('.conv-coordinator-badge')?.remove();
-      const date = row.querySelector('.conv-date');
-      if (date) {
-        const time = document.createElement('span');
-        time.className = 'coordinator-conversations-time';
-        time.textContent = relativeTime(conversation.updatedAt || conversation.createdAt);
-        const status = ports.status?.(conversation);
-        const statusLabel = status ? document.createElement('span') : null;
-        if (statusLabel && status) {
-          statusLabel.className = `coordinator-conversations-status is-${status}`;
-          statusLabel.textContent = t(`projectCoordination.status.${status}`);
+    if (!limit) limit = Math.min(pageSize, rows.length);
+    const activeIndex = activeId ? rows.findIndex(row => row.id === activeId) : -1;
+    if (activeIndex >= limit) limit = activeIndex + 1;
+    if (limit > rows.length) limit = rows.length;
+    ensureWindow(rows);
+    const visible = rows.slice(0, limit);
+    let position = 0;
+    for (const row of visible) {
+      const html = ports.renderRow(row);
+      let record = rowNodes.get(row.id);
+      if (!record || record.html !== html) {
+        const next = mountRow(row, html);
+        if (record) {
+          if (next) {
+            const focused = record.node.contains(document.activeElement);
+            record.node.replaceWith(next);
+            if (focused) next.focus({ preventScroll: true });
+          } else record.node.remove();
         }
-        // The row's own background tag (agents or commands still running) stays beside the status.
-        const background = date.querySelector('.conv-status-background');
-        date.replaceChildren(time, ...(statusLabel ? [statusLabel] : []), ...(background ? [background] : []));
+        if (next) { record = { node: next, html }; rowNodes.set(row.id, record); }
+        else { rowNodes.delete(row.id); record = undefined; }
       }
-      const open = () => { ports.open(row.dataset.convId!); ports.refreshActive?.(); };
-      row.addEventListener('click', event => {
-        if ((event.target as Element).closest('.conv-actions')) return;
-        open();
-      });
-      row.addEventListener('keydown', event => {
-        if (event.target !== row || (event.key !== 'Enter' && event.key !== ' ')) return;
-        event.preventDefault(); open();
-      });
-    });
-    if (focusedId) [...body.querySelectorAll<HTMLElement>('.conv-item[data-conv-id]')]
-      .find(row => row.dataset.convId === focusedId)?.focus({ preventScroll: true });
+      if (!record) continue;
+      const before = body.children[position] ?? sentinel ?? null;
+      if (before !== record.node) body.insertBefore(record.node, before);
+      position += 1;
+      updateRow(record.node, row, activeId);
+    }
+    const shown = new Set(visible.map(row => row.id));
+    for (const id of [...rowNodes.keys()]) if (!shown.has(id)) rowNodes.delete(id);
+    const keep = new Set([...rowNodes.values()].map(record => record.node));
+    for (const child of [...body.children]) {
+      if (child !== sentinel && !keep.has(child as HTMLElement)) child.remove();
+    }
   }
   async function load() {
     if (loading || loaded || disposed || !coordinatorId) return;
@@ -194,7 +275,7 @@ export function createCoordinatorConversationGroup(ports: CoordinatorConversatio
       }
       if (id !== coordinatorId) {
         coordinatorId = id; expanded = ports.readExpanded(id) === true;
-        loaded = false; failed = false; flight?.abort();
+        loaded = false; failed = false; flight?.abort(); resetRows();
       }
       paint(); void load();
     },
@@ -206,7 +287,7 @@ export function createCoordinatorConversationGroup(ports: CoordinatorConversatio
     revalidate() {
       if (failed) void load();
     },
-    destroy() { disposed = true; flight?.abort(); root.remove(); },
+    destroy() { disposed = true; flight?.abort(); stopWindow(); root.remove(); },
   };
 }
 
@@ -239,7 +320,8 @@ export function createCoordinatorConversationGroups(ports: {
   activeConversationId(): string;
   isRunning?(conversation: CoordinatorConversationRow): boolean;
   status?(conversation: CoordinatorConversationRow): 'running' | 'done' | 'failed' | 'cancelled' | null;
-  hasBackground?(conversation: CoordinatorConversationRow): boolean;
+  pageSize?: number;
+  pagePrefetchPx?: number;
   refresh?(): void;
   refreshActive?(): void;
 }) {
@@ -332,7 +414,7 @@ export function createCoordinatorConversationGroups(ports: {
               open: ports.open, renderRow: ports.renderRow,
               activeConversationId: ports.activeConversationId,
               isRunning: ports.isRunning, status: ports.status,
-              hasBackground: ports.hasBackground,
+              pageSize: ports.pageSize, pagePrefetchPx: ports.pagePrefetchPx,
               readExpanded: key => localStorage.getItem(`tofu.coordinator.conversations.expanded.${key}`) === 'true' ? true : null,
               writeExpanded: (key, value) => localStorage.setItem(`tofu.coordinator.conversations.expanded.${key}`, String(value)),
               refresh: ports.refresh, refreshActive: ports.refreshActive,

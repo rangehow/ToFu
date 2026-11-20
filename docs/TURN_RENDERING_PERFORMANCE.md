@@ -249,6 +249,22 @@ the owner's 2026-11-09 tab crash. Specs: `animation-frame-scheduler.test.ts`
 (an unchanged re-render writes nothing; a streamed delta writes only inside
 its own Turn).
 
+An expanded Coordinator group later held 1,112 Worker rows (11,220 of the
+page's 21,160 elements). Every sidebar render regenerated all their markup to
+compare it — 25–28 ms per expanded render, about 17 renders/s while Workers
+streamed — and each relative-time minute label aged by replacing the whole
+body (`innerHTML` of 1,121 rows): 155–175 ms per replacement, 8 long tasks
+totaling 2.0 s inside a 3 s window (live page, 2026-11-19). The owner reported
+the area flashing and the sidebar lagging. Decision: the group renders the
+conversation list's bounded row window (50 rows, extended 600 px before the
+scroll sentinel) and reconciles rendered rows by conversation id, so a label
+or status change writes only that row's leaves and no row loses hover, focus
+or its running-dot animation. The body keeps every member reachable by
+scrolling; only the mounted DOM is bounded. Rejected: a second per-row
+signature registry would duplicate the row renderer's inputs and drift from
+it. Specs: `coordinator-conversation-group.test.ts` (bounded page and paging;
+an aged label keeps its row node).
+
 Reader state is preserved per commit, not per moved node. Problem: the
 remaining long frames of a live Worker view (300 to 430 ms) were forced style
 recalculation inside `moveRetainedNodeBefore`, which snapshotted focus and

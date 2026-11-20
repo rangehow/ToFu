@@ -1,0 +1,229 @@
+{
+ "extractor": "pymupdf-raw",
+ "images": [
+  {
+   "base64": {
+    "$blob": "images/000.jpg",
+    "kind": "raster"
+   },
+   "bbox": [
+    2.0,
+    0.0,
+    593.28,
+    471.41
+   ],
+   "caption": "Figure 2: Speed-accuracy trade-off curves of pruningfunctions for α ∈0.8, 0.9, 0.95, 0.98, 0.99 and β ∈{0.05, ..., 0.95} on the de-en validation set. The x-axesare truncated for better visual comparison.",
+   "height": 349,
+   "mediaType": "image/jpeg",
+   "page": 4,
+   "pages": [
+    4
+   ],
+   "source": "figure_clip",
+   "width": 400
+  },
+  {
+   "base64": {
+    "$blob": "images/001.jpg",
+    "kind": "raster"
+   },
+   "bbox": [
+    52.86,
+    57.85,
+    542.42,
+    511.98
+   ],
+   "caption": "Figure 1: False pruning rates for different choices of αand |R| measured on the validation set.",
+   "height": 384,
+   "mediaType": "image/jpeg",
+   "page": 4,
+   "pages": [
+    4
+   ],
+   "source": "figure_clip",
+   "width": 400
+  },
+  {
+   "base64": {
+    "$blob": "images/002.jpg",
+    "kind": "raster"
+   },
+   "bbox": [
+    2.0,
+    280.49,
+    593.28,
+    538.95
+   ],
+   "caption": "Table 1: Statistics for MBR decoding on the test set for all language pair and metric settings. β = 0 indicatesstandard MBR. All values are averaged across 10 random trials.",
+   "height": 223,
+   "mediaType": "image/jpeg",
+   "page": 5,
+   "pages": [
+    5
+   ],
+   "source": "table_clip",
+   "width": 400
+  },
+  {
+   "base64": {
+    "$blob": "images/003.jpg",
+    "kind": "raster"
+   },
+   "bbox": [
+    2.0,
+    520.95,
+    593.28,
+    841.89
+   ],
+   "caption": "Table 2: Summary of run times for decoding methodson 100 sentences from the de-en test set for pruningMBR (α = 0.99), standard MBR, and beam search withbeam size 10, averaged over 3 trials.",
+   "height": 237,
+   "mediaType": "image/jpeg",
+   "page": 5,
+   "pages": [
+    5
+   ],
+   "source": "table_clip",
+   "width": 400
+  },
+  {
+   "base64": {
+    "$blob": "images/004.jpg",
+    "kind": "raster"
+   },
+   "bbox": [
+    2.0,
+    0.0,
+    593.28,
+    427.69
+   ],
+   "caption": "Figure 3 shows the false pruning rates for en-et andtr-en.",
+   "height": 305,
+   "mediaType": "image/jpeg",
+   "page": 7,
+   "pages": [
+    7
+   ],
+   "source": "figure_clip",
+   "width": 400
+  },
+  {
+   "base64": {
+    "$blob": "images/005.jpg",
+    "kind": "raster"
+   },
+   "bbox": [
+    288.14,
+    415.39,
+    542.41,
+    665.31
+   ],
+   "caption": "Figure 3: False pruning rates for different choices of αand |R| measured on the validation set.",
+   "height": 346,
+   "mediaType": "image/jpeg",
+   "page": 7,
+   "pages": [
+    7
+   ],
+   "source": "figure_clip",
+   "width": 376
+  },
+  {
+   "base64": {
+    "$blob": "images/006.jpg",
+    "kind": "raster"
+   },
+   "bbox": [
+    287.75,
+    415.39,
+    543.79,
+    787.1
+   ],
+   "caption": "Figure 4 shows the distribution of the number ofremaining hypotheses after each time step whenrunning our method on the de-en validation set,following the experimental setup of Section 4.1where |H1| = 256. This is provided to furtherillustrate the pruning process.",
+   "height": 561,
+   "mediaType": "image/jpeg",
+   "page": 7,
+   "pages": [
+    7
+   ],
+   "source": "figure_clip",
+   "width": 376
+  },
+  {
+   "base64": {
+    "$blob": "images/007.jpg",
+    "kind": "raster"
+   },
+   "bbox": [
+    52.86,
+    57.85,
+    542.43,
+    441.49
+   ],
+   "caption": "Figure 5: Speed-accuracy trade-off curves of pruningfunctions for α ∈0.8, 0.9, 0.95, 0.98, 0.99 and β ∈{0.05, ..., 0.95} on the en-et validation set.",
+   "height": 322,
+   "mediaType": "image/jpeg",
+   "page": 8,
+   "pages": [
+    8
+   ],
+   "source": "figure_clip",
+   "width": 400
+  },
+  {
+   "base64": {
+    "$blob": "images/008.jpg",
+    "kind": "raster"
+   },
+   "bbox": [
+    52.61,
+    57.85,
+    520.59,
+    504.12
+   ],
+   "caption": "Figure 4: Number of remaining hypotheses after eachtime step while running the pruning MBR algorithm forvarious choices of α on the de-en validation set. Thex-axis is the number of pseudo-references at a time step,and the y-axis is the number of hypotheses remainingafter pruning. Colored bars show t",
+   "height": 383,
+   "mediaType": "image/jpeg",
+   "page": 8,
+   "pages": [
+    8
+   ],
+   "source": "figure_clip",
+   "width": 400
+  },
+  {
+   "base64": {
+    "$blob": "images/009.jpg",
+    "kind": "raster"
+   },
+   "bbox": [
+    52.86,
+    434.42,
+    542.43,
+    772.7
+   ],
+   "caption": "Figure 6: Speed-accuracy trade-off curves of pruningfunctions for α ∈0.8, 0.9, 0.95, 0.98, 0.99 and β ∈{0.05, ..., 0.95} on the tr-en validation set.",
+   "height": 279,
+   "mediaType": "image/jpeg",
+   "page": 8,
+   "pages": [
+    8
+   ],
+   "source": "figure_clip",
+   "width": 400
+  }
+ ],
+ "isScanned": false,
+ "limits": {
+  "maxImageWidth": 400,
+  "maxImages": null,
+  "maxPages": 0,
+  "maxTextChars": 0
+ },
+ "method": "pymupdf_raw",
+ "processedPages": 8,
+ "text": "Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing, pages 12473–12480\nDecember 6-10, 2023 ©2023 Association for Computational Linguistics\nFaster Minimum Bayes Risk Decoding with Confidence-based Pruning\nJulius Cheng, Andreas Vlachos\nDepartment of Computer Science and Technology\nUniversity of Cambridge\n{jncc3,av308}@cam.ac.uk\nAbstract\nMinimum Bayes risk (MBR) decoding outputs\nthe hypothesis with the highest expected util-\nity over the model distribution for some utility\nfunction. It has been shown to improve accu-\nracy over beam search in conditional language\ngeneration problems and especially neural ma-\nchine translation, in both human and automatic\nevaluations. However, the standard sampling-\nbased algorithm for MBR is substantially more\ncomputationally expensive than beam search,\nrequiring a large number of samples as well as\na quadratic number of calls to the utility func-\ntion, limiting its applicability. We describe an\nalgorithm for MBR which gradually grows the\nnumber of samples used to estimate the utility\nwhile pruning hypotheses that are unlikely to\nhave the highest utility according to confidence\nestimates obtained with bootstrap sampling.\nOur method requires fewer samples and drasti-\ncally reduces the number of calls to the utility\nfunction compared to standard MBR while be-\ning statistically indistinguishable in terms of\naccuracy. We demonstrate the effectiveness\nof our approach in experiments on three lan-\nguage pairs, using chrF++ and COMET as util-\nity/evaluation metrics.\n1\nIntroduction\nMinimum Bayes risk (MBR) decoding (Bickel and\nDoksum, 1977; Goel and Byrne, 2000) has recently\ngained renewed attention as a decision rule for\nconditional sequence generation tasks, especially\nneural machine translation (NMT). In MBR, the\nsequence with the highest expected utility with re-\nspect to thez model distribution is chosen as the\noutput, where the utility is usually some measure\nof text similarity. This contrasts with the more com-\nmonly used maximum a posteriori (MAP) decision\nrule, which returns the sequence with the highest\nprobability under the model. MAP is generally in-\ntractable, and beam search is typically used to find\nan approximation. MBR is likewise intractable,\nand Eikema and Aziz (2020) propose an sampling-\nbased approximation algorithm.\nMBR has been shown to outperform MAP beam\nsearch in both automatic and qualitative evaluation\nin a diverse range of tasks (Suzgun et al., 2023),\nincluding NMT (Freitag et al., 2022a) and code\ngeneration (Shi et al., 2022). MBR also generalizes\nother previously proposed decoding methods and\nexplains their success (Bertsch et al., 2023).\nThe accuracy improvement from MBR comes at\na heavy cost: the number of samples used can reach\nthousands (Freitag et al., 2023), and the number\nof calls to the utility function required is quadratic\nin the number of samples. Often, the utility func-\ntion itself is a deep neural model, rendering MBR\nprohibitively expensive for many use cases.\nIn this work, we address the computational ef-\nficiency of MBR with an iterative pruning algo-\nrithm where low-performing hypotheses are re-\nmoved while the number of samples used to esti-\nmate utilities grows. Hypotheses are pruned based\non their estimated probability of being the true best\nhypothesis under the MBR objective, thus avoid-\ning making expensive fine-grained utility estimates\nfor hypotheses which are unlikely to be the final\nprediction.\nIn NMT experiments on three language pairs\nusing chrF++ (Popovi´c, 2015), and COMET (Rei\net al., 2020) as MBR utility and evaluation metrics,\nwe show that our method maintains the same level\nof accuracy as standard MBR while reducing the\nnumber of utility calls by a factor of at least 7 for\nchrF++ and 15 for COMET. Our algorithm can\nalso use fewer samples to reach a prediction by\nterminating early, unlike standard MBR.\n2\nMinimum Bayes risk decoding\nConditional sequence generation problems such as\nneural machine translation (NMT) model the prob-\nability of the next token yt given a source sequence\nx and prefix y<t with a neural network pθ. This\n12473\n\nmodel can be used to assign probabilities to full\nsequences pθ(y|x) via the chain rule.\nAt test time, a decision rule is employed to se-\nlect a single “best” sequence. The most common\ndecision rule is to return the highest probability\nsequence yMAP = arg maxy pθ(y|x). The exact\nsolution is generally intractable, and beam search\nis used to find an approximation.\nIn contrast, minimum Bayes risk decoding\n(MBR) (Goel and Byrne, 2000) outputs:\nyMBR = arg max\ny\nE¯y∼pθ(·|x)[u(y, ¯y)]\n= arg max\ny\nU(y, pθ(·|x)),\n(1)\nfor some utility function u, a measure of similarity\nbetween sequences, and U(y, Y) = Eˆy∼Y[u(y, ˆy)],\nwhere Y is either a probability distribution or an\narray of samples. We call U the expected utility\nfunction. Eikema and Aziz (2020) propose a sam-\npling method for neural language models where hy-\npotheses H and pseudo-references R are generated\nwith unbiased sampling, and yMBR is estimated\nas:\nyMBR ≈arg max\ny∈H\nU(y, R).\n(2)\nThis method, which we refer to as \"standard\" MBR,\nrequires |H|+|R| samples (assuming H ̸= R) and\n|H||R| calls to u. The latter is the main computa-\ntional bottleneck which we address in this work.\nRecent works on MBR focus on identifying ac-\ncurate and efficient generation methods (Eikema\nand Aziz, 2021; Freitag et al., 2023; Yan et al.,\n2022), and pruning H to a smaller size with a faster\nmethod prior to running standard MBR (Eikema\nand Aziz, 2021; Fernandes et al., 2022).\nFreitag et al. (2022a) and Eikema and Aziz\n(2021) show that MBR is more effective relative\nto MAP when the utility metric has high segment-\nlevel accuracy as measured by Freitag et al. (2021).\nSo, we use COMET (Rei et al., 2020), one of\nthe best available metrics for NMT, and chrF++\n(Popovi´c, 2015), as a simpler and faster yet rea-\nsonably good lexical metric. We heed the call of\nFreitag et al. (2022b) and do not use BLEU, which\nis obsoleted by newer metrics as both an evaluation\nand utility metric (Freitag et al., 2022a).\n3\nConfidence-based hypothesis pruning\nSampling-based MBR returns the highest-utility\nhypothesis from a set measured over pseudo-\nreferences sampled from the model. Speedups can\nbe achieved if low-performing hypotheses are re-\nmoved from consideration based on coarse utility\nestimates obtained from a subset of the pseudo-\nreferences. In other words, we can save time by not\ncomputing precise utility estimates for hypotheses\nwhich are unlikely to be chosen in the end.\nWe propose an iterative algorithm for MBR\nwhere the hypothesis set is gradually shrunk while\nthe pseudo-reference list grows. The procedure\nis shown in Algorithm 1. We start with an ini-\ntial hypothesis set H1, and at each time step t, a\npruning function uses a pseudo-reference list Rt of\nsize rt to select Ht+1 ⊆Ht. After the maximum\ntime step is reached or when the current hypothe-\nsis set contains one element, terminate and return\nthe highest utility hypothesis under all available\npseudo-references. The size of Rt grows accord-\ning to a pre-defined \"schedule\" r1, ..., rT .\nAlgorithm 1 Pruning MBR\nInput: Source sentence x.\nConstants: sample size schedule r = r1, ..., rT ,\nexpected utility function U, model parameters\nθ, pruning function prune, hypothesis genera-\ntion function gen(x, θ).\nOutput: An MBR prediction.\n1: R0 ←[ ]\n2: t ←1\n3: H1 ←gen(x, θ)\n4: while t ≤T and |Ht| > 1 do\n5:\nRt ←Rt−1\n6:\nwhile |Rt| < rt do\n7:\nAppend ˆy ∼pθ(·|x) to Rt\n8:\nend while\n9:\nHt+1 ←prune(Ht, Rt)\n10:\nt ←t + 1\n11: end while\n12: return arg maxy∈Ht U(y, Rt−1)\nThe goal of the pruning function is to exclude as\nmany hypotheses as possible to reduce the num-\nber of utility calls made in the future without\nexcluding the true top-ranking MBR hypothesis\narg maxy∈Ht U(y, pθ(·|x)), the true \"winner\".\nWe propose to prune hypotheses in Ht with low\nprobability of being the true winner and to estimate\nthis probability using nonparametric bootstrap re-\nsampling (Efron, 1979; Koehn, 2004); given an ini-\ntial collection of i.i.d. samples S from an unknown\ndistribution X, our beliefs about the true value of\nany statistic T(X) are represented by the distribu-\n12474\n\ntion p(T( ˆS)), where ˆS ∼boot(S) , and boot(S)\nreturns a with-replacement size-|S| resample of S.\nIn our case, we want to estimate the probability\nthat y is the true winner in Ht:\np\n\u0000 ^\n¯y∈H\nU(y, pθ(·|x)) ≥U(¯y, pθ(·|x))\n\u0001\n,\n(3)\nwhich we estimate as the chance that y wins in a\nbootstrap resample. Let ˆ\nRt ∼boot(Rt). Then the\nbootstrap estimator is:\nE\nˆ\nRt∼boot(Rt)\n\u0002\n1\n^\n¯y∈Ht\n(U(y, ˆ\nRt) ≥U(¯y, ˆ\nRt)\n\u0003\n. (4)\nThis estimator can be high variance because the\nprobability y winning in a bootstrap sample is very\nsmall when Ht is large, so instead we use the prob-\nability that y outranks a particular ¯¯y ∈Ht:\nE\nˆ\nRt∼boot(Rt)\n\u0002\n1(U(y, ˆ\nRt) ≥U(¯¯y, ˆ\nRt))\n\u0003\n.\n(5)\nThis statistic is invariant to the size of Ht be-\ncause it only considers utility estimates of y and\n¯¯y. It is an upper bound of Equation 4 because\nthe probability of y winning against all ¯y ∈Ht\ncannot be higher than the probability of winning\nagainst a particular ¯¯y ∈Ht. ¯¯y can be any element\nin Ht, but we set it to the winner under Rt, i.e.\n¯¯y = arg max¯y∈Ht U(¯y, Rt), to achieve a tighter\nupper bound.\nWe propose to prune y if its estimated proba-\nbility of beating ¯¯y is less than 1 −α, where α is\na confidence threshold 0 ≤α ≤1. In summary,\nthis procedure prunes some but not necessarily all\ny ∈Ht which are estimated to have less than 1−α\nchance of being the true winner. Algorithm 2 shows\nthe procedure in detail.\nNote that bootstrapped utility estimates do not\nrequire additional utility function calls because they\nreuse utility values already computed over Ht, Rt.\nAlso note that the bootstrap estimator is always\nbiased because Rt is never equal to pθ(·|x), and\nthe bias is worse when Rt is small. Nonetheless,\nwe show empirically that bootstrapping is effective\nin our pruning algorithm for modest sizes of Rt.\nAnother benefit of our pruning method compared\nto standard MBR is that it can terminate early if Ht\nhas only one remaining hypothesis, reducing the\ntotal number of pseudo-references needed.\nAs a baseline pruning function for comparison,\nwe rank each y ∈Ht by U(y, Rt) and prune the\nAlgorithm 2 Confidence-based pruning function\nInput: Hypothesis set H, pseudo-reference list R.\nConstants: Expected utility function U, confi-\ndence threshold α, number of bootstrap sam-\nples n.\nOutput: A subset of H.\n1: Hnew ←{}\n2: ¯¯y ←arg max¯y∈H U(¯y, R)\n3: H1 ←gen(x, θ)\n4: for i ←1 to n do\n5:\nˆRi ←boot(R)\n6: end for\n7: for y ∈H do\n8:\nw ←1\nn\nPn\ni 1(U(y, ˆRi) ≥U(¯¯y, ˆRi))\n9:\nif w > 1 −α then\n10:\nHnew ←Hnew ∪{y}\n11:\nend if\n12: end for\n13: return Hnew\nbottom-β proportion. At β = 0, no pruning oc-\ncurs and standard MBR decoding is recovered. We\nrefer to this baseline as pruneβ and our confidence-\nbased method as pruneα.\n4\nExperiments\nWe perform our experiments on NMT models\nwhich we train on the German-English (de-en),\nEnglish-Estonian (en-et), and Turkish-English (tr-\nen) news datasets from WMT18. We use the data\npreprocessing steps provided by the WMT18 orga-\nnizers, except that we exclude Paracrawl from the\nde-en dataset following Eikema and Aziz (2021).\nThe final training sets have 5.8 million, 1.9 mil-\nlion, and 207 thousand sentence pairs respectively.\nAll models are transformers of the base model size\nfrom Vaswani et al. (2017) and are trained without\nlabel smoothing until convergence.\nFor all language pairs and validation/test\ndatasets, we generate H1 with beam top-k with\nk = 2561. We generate 1024 pseudo-references\nR∗with epsilon sampling (Hewitt et al., 2022) with\nϵ = 0.02, following Freitag et al. (2023). In order\nto run multiple random trials efficiently, we simu-\nlate sampling pseudo-references by sampling from\nR∗without replacement. The experiments in Sec-\ntions 4.1 and 4.2 show averaged results from 10\ntrials. We use chrF++ and COMET as utility func-\n1Different sequences may have the same detokenization\nresult, so we have fewer than 256 hypotheses on average.\n12475\n\ntions and always match the evaluation metric to\nthe utility. chrF++ is computed using SacreBLEU\n(Post, 2018) with default settings. COMET is com-\nputed with the COMET-22 model from Rei et al.\n(2022). We use 500 bootstrap samples for pruneα.\nFor the pseudo-reference sample size schedule\nr1, ..., rT , the choice of r1 is pivotal in the speed-\naccuracy trade-off; |H1||R1| is a lower bound on\nthe number of utility calls needed, but the boot-\nstrap estimate is more biased when the sample\nsize is small.\nIn a preliminary experiment on\nthe validation set, we measure the \"false prun-\ning rate\", the rate that the estimated true winner,\narg max¯y∈H U(¯y, R∗) is pruned under different\nchoices of α and |R|. Based on results shown\nin Figure 1, we set r1 to 8 for COMET and 16 for\nchrF++ for all experiments. r2, ..., rT are set by\ndoubling at each time step until reaching 256.\nMore experimental details and figures for lan-\nguage pairs not shown here are in the Appendix.\nOur code is publicly available2.\nFigure 1: False pruning rates for different choices of α\nand |R| measured on the validation set.\n4.1\nSpeed-accuracy trade-off\npruneα and pruneβ allow control over the speed-\naccuracy trade-off with a single parameter. We ob-\nserve this trade-off over the validation set by com-\nparing the number of utility function calls made\nagainst various measures of accuracy. High eval-\nuation score is underlying goal, but we find that\nthe score changes very little across settings, so we\nalso evaluate pruning quality in terms of how well\nfinal predictions match those under standard MBR\nwith R∗. We use exact accuracy, whether the pre-\ndiction y equals arg max¯y∈H U(¯y, R∗), and recip-\nrocal rank (RR), equal to (P\n¯y∈H 1(U(¯y, R∗) ≥\nU(y, R∗)))−1 as a soft accuracy measure adapted\nfrom the mean reciprocal rank used in search\n(Craswell, 2009). Figure 2 shows that pruneα gen-\nerally outperforms pruneβ on all metrics.\n2https://github.com/juliusc/pruning_mbr\nFigure 2: Speed-accuracy trade-off curves of pruning\nfunctions for α ∈0.8, 0.9, 0.95, 0.98, 0.99 and β ∈\n{0.05, ..., 0.95} on the de-en validation set. The x-axes\nare truncated for better visual comparison.\n4.2\nTest results\nWe evaluate our methods on the test set with\nα = 0.99 and α = 0.9 and compare them to stan-\ndard MBR on the accuracy metrics described in\nSection 4.1 as well as the number of utility calls and\npseudo-references used. Table 1 shows that across\nall language pairs and metrics, our method achieves\nsimilar evaluation scores as standard MBR while\nusing much less computation, with the most dra-\nmatic case being en-et and COMET with α = 0.9\nwhich uses 3.5% as many utility calls and 32% as\nmany pseudo-references as the baseline.\nWhen comparing α = 0.99 with α = 0.9, we\nsee that while exact accuracy and RR differ, the\nevaluation score differs very little if at all, suggest-\ning that high-ranking hypotheses are often equally\ngood as one another, and finely discriminating be-\ntween them has diminishing returns.\n12476\n\nMetric: chrF++\nde-en\nen-et\ntr-en\nβ = 0\nα = 0.99\nα = 0.9\nβ = 0\nα = 0.99\nα = 0.9\nβ = 0\nα = 0.99\nα = 0.9\nScore\n62.18\n62.19\n62.11\n46.47\n46.48\n46.44\n42.63\n42.63\n42.64\nAccuracy\n0.749\n0.736\n0.648\n0.741\n0.728\n0.639\n0.761\n0.751\n0.660\nRR\n0.850\n0.840\n0.769\n0.843\n0.833\n0.762\n0.857\n0.850\n0.779\n# Pseudo-refs\n256.0\n234.9\n185.2\n256.0\n235.3\n188.5\n256.0\n238.7\n185.7\n# Utility calls\n65082\n9542\n5402\n63898\n9644\n5386\n65356\n8761\n5275\nMetric: COMET\nde-en\nen-et\ntr-en\nβ = 0\nα = 0.99\nα = 0.9\nβ = 0\nα = 0.99\nα = 0.9\nβ = 0\nα = 0.99\nα = 0.9\nScore\n78.37\n78.37\n78.41\n82.75\n82.74\n82.74\n73.70\n73.68\n73.65\nAccuracy\n0.872\n0.844\n0.742\n0.924\n0.898\n0.830\n0.897\n0.878\n0.791\nRR\n0.930\n0.911\n0.838\n0.959\n0.943\n0.898\n0.944\n0.932\n0.873\n# Pseudo-refs\n256.0\n200.3\n120.4\n256.0\n151.4\n82.6\n256.0\n177.8\n100.8\n# Utility calls\n65082\n3831\n2533\n63898\n2813\n2250\n65356\n3244\n2394\nTable 1: Statistics for MBR decoding on the test set for all language pair and metric settings. β = 0 indicates\nstandard MBR. All values are averaged across 10 random trials.\n4.3\nHuman evaluation\nWe confirm that our method is indistinguishable\nfrom standard MBR in human evaluation. On the\nde-en test set, for each instance, we sample 256\npseudo-references without replacement from R∗\nand use this pool to decode with both standard\nMBR and pruneα, α = 0.99. 85% of the predic-\ntions are the same, and for the rest, we asked bilin-\ngual readers of German and English to state which\nprediction they preferred. We obtained 125 ratings.\nThe standard MBR prediction won in 48 cases, lost\nin 42, and tied in 35. This fails the significance\ntest of Koehn (2004), so we conclude that pruneα\nwith α = 0.99 is not significantly different from\nstandard MBR on de-en.\n4.4\nRun times\nTo measure realistic run times, we implement a\npractical version of our algorithm and compare our\nmethod against standard MBR decoding and beam\nsearch. We run our algorithm with COMET as\nthe utility function and α = 0.99. With COMET,\nsentence embeddings can be cached, which greatly\nspeeds up utility function calls. Some of the the-\noretical gains seen in Section 4.2 are diminished\nin practice due to our iterative algorithm dividing\ncomputations over smaller batches. Our best im-\nplementation samples all 256 pseudo-references at\nonce but generates pseudo-reference sentence em-\nbeddings as needed. We run each algorithm on a\nset of 100 randomly sampled test instances. Further\nimplementation details are given in Appendix A.2.\nTable 2 provides a detailed breakdown of run times.\nAs expected, our method achieves the greatest time\nsavings on utility computation. However, it is still\nsubstantially slower than beam search.\nRun time (seconds)\nPrune MBR\nStd. MBR\nBeam\nGenerate H\n36.56\n36.56\n26.79\nGenerate R\n59.92\n59.92\nEmbed sentences\n100.50\n108.33\nCompute utilities\n12.96\n193.01\nBootstrap pruning\n0.63\nTotal\n210.57\n397.82\n26.79\nTable 2: Summary of run times for decoding methods\non 100 sentences from the de-en test set for pruning\nMBR (α = 0.99), standard MBR, and beam search with\nbeam size 10, averaged over 3 trials.\n5\nConclusion\nWe propose an iterative pruning algorithm for MBR\nalong with a pruning criterion based on confidence\nestimates derived from bootstrap resampling. In\nexperiments across diverse language pairs and met-\nrics, we show that our method consistently outper-\nforms our proposed baseline and achieves signifi-\ncant computational savings over standard sampling-\nbased MBR without sacrificing accuracy.\nOur\nmethod is a drop-in substitute for standard MBR\nthat requires no knowledge about the model pθ,\nhow H1 is generated, or the utility function.\n12477\n\nLimitations\nEven with our pruning algorithm, MBR is many\ntimes more costly to run than beam search. More\nAn important hyperparameter in our method is\nthe sample size schedule. We show why it is impor-\ntant to carefully choose the size of the first sample,\nbut not how the remaining schedule should be set,\nopting to simply double the size at each step. We\nleave this issue to future work.\nMethods such as MBR and reranking that di-\nrectly optimize a metric may exploit noise in the\nmetric to improve the score without actually im-\nproving quality (Fernandes et al., 2022). In these\nsettings, automatic evaluation is less trustworthy\nand should ideally be combined with human evalu-\nation. However, human evaluation is difficult and\nexpensive to obtain.\nAcknowledgements\nJulius Cheng is supported by a scholarship from\nHuawei. The authors would like to thank the bilin-\ngual readers who helped with the human evaluation\nand the anonymous reviewers for their helpful sug-\ngestions.\nReferences\nAmanda Bertsch, Alex Xie, Graham Neubig, and\nMatthew R. Gormley. 2023. It’s mbr all the way\ndown: Modern generation techniques through the\nlens of minimum bayes risk.\nP. J. Bickel and K. A. Doksum. 1977. Mathematical\nStatistics: Basic Ideas and Selected Topics. Holden-\nDay Company, Oakland, California.\nNick Craswell. 2009. Mean Reciprocal Rank, pages\n1703–1703. Springer US, Boston, MA.\nB. Efron. 1979. Bootstrap Methods: Another Look at\nthe Jackknife. The Annals of Statistics, 7(1):1 – 26.\nBryan Eikema and Wilker Aziz. 2020. Is MAP decoding\nall you need? the inadequacy of the mode in neural\nmachine translation. In Proceedings of the 28th Inter-\nnational Conference on Computational Linguistics,\npages 4506–4520, Barcelona, Spain (Online). Inter-\nnational Committee on Computational Linguistics.\nBryan Eikema and Wilker Aziz. 2021. Sampling-based\nminimum bayes risk decoding for neural machine\ntranslation. CoRR, abs/2108.04718.\nPatrick Fernandes, António Farinhas, Ricardo Rei, José\nDe Souza, Perez Ogayo, Graham Neubig, and Andre\nMartins. 2022. Quality-aware decoding for neural\nmachine translation.\nIn Proceedings of the 2022\nConference of the North American Chapter of the\nAssociation for Computational Linguistics: Human\nLanguage Technologies, pages 1396–1412, Seattle,\nUnited States. Association for Computational Lin-\nguistics.\nMarkus Freitag, Behrooz Ghorbani, and Patrick Fer-\nnandes. 2023. Epsilon sampling rocks: Investigating\nsampling strategies for minimum bayes risk decoding\nfor machine translation.\nMarkus Freitag, David Grangier, Qijun Tan, and Bowen\nLiang. 2022a. High quality rather than high model\nprobability: Minimum Bayes risk decoding with neu-\nral metrics. Transactions of the Association for Com-\nputational Linguistics, 10:811–825.\nMarkus Freitag, Ricardo Rei, Nitika Mathur, Chi-kiu Lo,\nCraig Stewart, Eleftherios Avramidis, Tom Kocmi,\nGeorge Foster, Alon Lavie, and André F. T. Martins.\n2022b. Results of WMT22 metrics shared task: Stop\nusing BLEU – neural metrics are better and more\nrobust. In Proceedings of the Seventh Conference\non Machine Translation (WMT), pages 46–68, Abu\nDhabi, United Arab Emirates (Hybrid). Association\nfor Computational Linguistics.\nMarkus Freitag, Ricardo Rei, Nitika Mathur, Chi-kiu Lo,\nCraig Stewart, George Foster, Alon Lavie, and Ondˇrej\nBojar. 2021. Results of the WMT21 metrics shared\ntask: Evaluating metrics with expert-based human\nevaluations on TED and news domain. In Proceed-\nings of the Sixth Conference on Machine Translation,\npages 733–774, Online. Association for Computa-\ntional Linguistics.\nVaibhava Goel and William J Byrne. 2000. Minimum\nbayes-risk automatic speech recognition. Computer\nSpeech & Language, 14(2):115–135.\nJohn Hewitt, Christopher Manning, and Percy Liang.\n2022.\nTruncation sampling as language model\ndesmoothing. In Findings of the Association for Com-\nputational Linguistics: EMNLP 2022, pages 3414–\n3427, Abu Dhabi, United Arab Emirates. Association\nfor Computational Linguistics.\nPhilipp Koehn. 2004. Statistical significance tests for\nmachine translation evaluation. In Proceedings of the\n2004 Conference on Empirical Methods in Natural\nLanguage Processing, pages 388–395, Barcelona,\nSpain. Association for Computational Linguistics.\nMyle Ott, Sergey Edunov, Alexei Baevski, Angela Fan,\nSam Gross, Nathan Ng, David Grangier, and Michael\nAuli. 2019. fairseq: A fast, extensible toolkit for\nsequence modeling. In Proceedings of the 2019 Con-\nference of the North American Chapter of the Associa-\ntion for Computational Linguistics (Demonstrations),\npages 48–53, Minneapolis, Minnesota. Association\nfor Computational Linguistics.\nMaja Popovi´c. 2015. chrF: character n-gram F-score\nfor automatic MT evaluation. In Proceedings of the\nTenth Workshop on Statistical Machine Translation,\n12478\n\npages 392–395, Lisbon, Portugal. Association for\nComputational Linguistics.\nMatt Post. 2018. A call for clarity in reporting BLEU\nscores. In Proceedings of the Third Conference on\nMachine Translation: Research Papers, pages 186–\n191, Brussels, Belgium. Association for Computa-\ntional Linguistics.\nRicardo Rei, José G. C. de Souza, Duarte Alves,\nChrysoula Zerva, Ana C Farinha, Taisiya Glushkova,\nAlon Lavie, Luisa Coheur, and André F. T. Martins.\n2022. COMET-22: Unbabel-IST 2022 submission\nfor the metrics shared task. In Proceedings of the\nSeventh Conference on Machine Translation (WMT),\npages 578–585, Abu Dhabi, United Arab Emirates\n(Hybrid). Association for Computational Linguistics.\nRicardo Rei, Craig Stewart, Ana C Farinha, and Alon\nLavie. 2020. COMET: A neural framework for MT\nevaluation. In Proceedings of the 2020 Conference\non Empirical Methods in Natural Language Process-\ning (EMNLP), pages 2685–2702, Online. Association\nfor Computational Linguistics.\nFreda Shi, Daniel Fried, Marjan Ghazvininejad, Luke\nZettlemoyer, and Sida I. Wang. 2022. Natural lan-\nguage to code translation with execution. In Proceed-\nings of the 2022 Conference on Empirical Methods\nin Natural Language Processing, pages 3533–3546,\nAbu Dhabi, United Arab Emirates. Association for\nComputational Linguistics.\nMirac Suzgun, Luke Melas-Kyriazi, and Dan Jurafsky.\n2023. Follow the wisdom of the crowd: Effective\ntext generation via minimum Bayes risk decoding.\nIn Findings of the Association for Computational\nLinguistics: ACL 2023, pages 4265–4293, Toronto,\nCanada. Association for Computational Linguistics.\nAshish Vaswani, Noam Shazeer, Niki Parmar, Jakob\nUszkoreit, Llion Jones, Aidan N Gomez, Ł ukasz\nKaiser, and Illia Polosukhin. 2017. Attention is all\nyou need. In Advances in Neural Information Pro-\ncessing Systems, volume 30. Curran Associates, Inc.\nJianhao Yan, Jin Xu, Fandong Meng, Jie Zhou, and\nYue Zhang. 2022. Dc-mbr: Distributional cooling\nfor minimum bayesian risk decoding. arXiv preprint\narXiv:2212.04205.\nA\nAdditional experimental details\nA.1\nAll experiments\nPreliminary experiments showed no significant dif-\nference between 500 and 1000 bootstrap samples\nwhen running pruneα, so we use 500 for all exper-\niments.\nFor efficiency, we use average sentence-level\nchrF++ instead of corpus-level chrF++ for corpus-\nlevel evaluations. This allows us to pre-compute\nthe sentence-level chrF++ for each hypothesis and\nobtain the corpus-level score of a set of predictions\nby simple averaging.\nAll experiments are implemented on top of our\nfork of Fairseq (Ott et al., 2019).\nA.2\nRun times\nThis section contains additional details for the ex-\nperiment in Section 4.4.\nFor both the standard and pruning MBR al-\ngorithms, we deduplicate and cache computa-\ntions whenever possible. For each unique pseudo-\nreference, its sentence embedding and utility scores\nagainst each y ∈Ht are only computed once.\nFor simplicity, all decoding methods are run on\none sequence at a time. Batching across sequences\nwould likely affect the relative performance char-\nacteristics of each method.\nAll experiments are conducted on the same ma-\nchine with one Nvidia Quadro RTX 8000 GPU.\nB\nFalse pruning rates for en-et, tr-en\nFigure 3 shows the false pruning rates for en-et and\ntr-en.\nFigure 3: False pruning rates for different choices of α\nand |R| measured on the validation set.\nC\nHypotheses remaining per time step\nFigure 4 shows the distribution of the number of\nremaining hypotheses after each time step when\nrunning our method on the de-en validation set,\nfollowing the experimental setup of Section 4.1\nwhere |H1| = 256. This is provided to further\nillustrate the pruning process.\n12479\n\nFigure 4: Number of remaining hypotheses after each\ntime step while running the pruning MBR algorithm for\nvarious choices of α on the de-en validation set. The\nx-axis is the number of pseudo-references at a time step,\nand the y-axis is the number of hypotheses remaining\nafter pruning. Colored bars show the mean, and error\nbars show the interquartile range.\nD\nSpeed-accuracy trade-off for en-et,\ntr-en\nFigure 5: Speed-accuracy trade-off curves of pruning\nfunctions for α ∈0.8, 0.9, 0.95, 0.98, 0.99 and β ∈\n{0.05, ..., 0.95} on the en-et validation set.\nFigure 6: Speed-accuracy trade-off curves of pruning\nfunctions for α ∈0.8, 0.9, 0.95, 0.98, 0.99 and β ∈\n{0.05, ..., 0.95} on the tr-en validation set.\n12480\n",
+ "textLength": 27844,
+ "totalPages": 8,
+ "truncated": false,
+ "warnings": []
+}

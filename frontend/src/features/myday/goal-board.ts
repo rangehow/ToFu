@@ -54,6 +54,8 @@ export interface MyDayGoalBoardPorts {
   readonly renderCalendar: () => void;
   /** Select today in the retained calendar (which calls ``show`` again). */
   readonly showToday: () => void;
+  /** <img> attributes of the one shipped brand mascot, cache-busted. */
+  readonly brandLogoAttrs: (size: number) => string;
   readonly document?: Document;
   readonly now?: () => Date;
   readonly warn?: (message: string, detail?: unknown) => void;
@@ -411,7 +413,8 @@ export function createMyDayGoalBoard(ports: MyDayGoalBoardPorts): Readonly<MyDay
     const active = goals.filter((goal) => goal.state === 'active');
     if (!active.length) {
       const empty = el('div', 'myday-empty');
-      empty.insertAdjacentHTML('afterbegin', MYDAY_PRESENTATION_ASSETS.emptyIllustration);
+      empty.insertAdjacentHTML('afterbegin',
+        `<img class="myday-empty-tofu" ${ports.brandLogoAttrs(56)}>`);
       empty.append(el('div', 'myday-empty-title', t('myday.goalsEmptyTitle')),
         el('div', 'myday-empty-hint', t('myday.goalsEmptyHint')));
       fragment.append(empty);

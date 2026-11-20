@@ -40,7 +40,7 @@ type PaperLifecycleWindow = Window & {
   _destroyResearchRuntime?: () => void;
   _destroyPaperRecommend?: () => void;
   _destroyArxivFetch?: () => void;
-  _destroyBabelRuntime?: () => void;
+  _destroyFulltextRuntime?: () => void;
   _destroyReportRuntime?: () => void;
   _destroyPaperPdfViewer?: () => void;
   _destroyPaperLifecycle?: typeof destroyPaperLifecycle;
@@ -224,7 +224,7 @@ export function destroyPaperSession(): void {
   state._destroyArxivFetch?.();
   destroyPodcastRuntime();
   destroyVideoRuntime();
-  state._destroyBabelRuntime?.();
+  state._destroyFulltextRuntime?.();
   state._destroyReportRuntime?.();
 }
 

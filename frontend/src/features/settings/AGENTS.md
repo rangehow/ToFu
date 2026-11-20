@@ -45,6 +45,12 @@
   close; committed routing refreshes preserve current drafts and credentials.
   `codex-shared-login.ts` captures separate commit and presentation callbacks.
   Device observation is per provider; a card retires only its own.
+- `subscription-navigation.ts` owns the brand directory, focus and selection;
+  `oauth-accounts.ts` mounts the revisioned inventory only in ChatGPT detail.
+  The directory reads rendered badges, never provider credentials or endpoints.
+  Entering Antigravity detail asks `antigravity-card.ts` to prepare a missing CLI;
+  overview status reads never install. Accepted installation settles after close,
+  but its notice only paints the original mount.
 - `kimi-code-login.ts` owns the Kimi Code card (device sign-in, status,
   sign-out). `subscription-plans.ts` owns the coding-plan key cards, one per
   `subscription` provider template: Connect stages through the existing Provider

@@ -33,6 +33,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -41,16 +42,53 @@ FIXTURES = PROJECT_ROOT / 'tests' / 'fixtures' / 'llm_replay'
 PROTOCOLS = ('openai', 'anthropic', 'responses')
 
 
+def _unique_object(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError('duplicate JSON member')
+        value[key] = item
+    return value
+
+
+def _read_json(text):
+    try:
+        return json.loads(text, object_pairs_hook=_unique_object)
+    except ValueError:
+        raise SystemExit('invalid byte-identity JSON') from None
+
+
 def _field(name: str, digest: str):
-    return json.loads((FIXTURES / 'requests' / f'{name}-{digest[:16]}.json').read_text())
+    from tests.support.llm_replay.normalize import json_digest
+    from tests.support.llm_replay.request_store import stored_request_path
+    if (name not in ('model', 'messages', 'system', 'tools')
+            or not isinstance(digest, str)
+            or re.fullmatch(r'[0-9a-f]{64}', digest) is None):
+        raise SystemExit('invalid byte-identity field identity')
+    try:
+        value = _read_json(stored_request_path(FIXTURES / 'requests', name, digest)
+                           .read_text(encoding='utf-8'))
+    except (OSError, UnicodeError):
+        raise SystemExit('byte-identity field unavailable') from None
+    if json_digest(value) != digest:
+        raise SystemExit('byte-identity field digest mismatch')
+    return value
 
 
 def recorded_requests():
     for script in sorted(FIXTURES.glob('*/script.jsonl')):
         steps = []
-        for line in script.read_text().splitlines():
-            step = json.loads(line)
-            digests = step.get('field_digests') or {}
+        try:
+            lines = script.read_text(encoding='utf-8').splitlines()
+        except (OSError, UnicodeError):
+            raise SystemExit('byte-identity scenario unavailable') from None
+        for line in lines:
+            step = _read_json(line)
+            if not isinstance(step, dict):
+                raise SystemExit('invalid byte-identity step')
+            digests = step.get('field_digests', {})
+            if not isinstance(digests, dict):
+                raise SystemExit('invalid byte-identity field identities')
             if 'messages' not in digests:
                 continue
             steps.append({name: _field(name, digest) for name, digest in digests.items()})
@@ -176,11 +214,16 @@ def run_rust(out, binary: str) -> tuple[int, int]:
                     plan = prepare_request(body, api_key='sk-byte-identity',
                                            base_url='http://127.0.0.1:9/v1', api_protocol=protocol)
                     rows.append((scenario, protocol, index, plan))
-    completed = subprocess.run([binary, 'byte-identity'], input='\n'.join(inputs) + '\n',
-                               capture_output=True, text=True, check=True)
-    answers = [json.loads(line) for line in completed.stdout.splitlines() if line.strip()]
+    try:
+        completed = subprocess.run([binary, 'byte-identity'], input='\n'.join(inputs) + '\n',
+                                   capture_output=True, text=True, check=False)
+    except (OSError, UnicodeError):
+        raise SystemExit('byte-identity comparator process failed') from None
+    if completed.returncode:
+        raise SystemExit('byte-identity comparator process failed')
+    answers = [_read_json(line) for line in completed.stdout.splitlines() if line.strip()]
     if len(answers) != len(rows):
-        raise SystemExit(f'{binary} answered {len(answers)} of {len(rows)} requests')
+        raise SystemExit(f'byte-identity comparator answered {len(answers)} of {len(rows)} requests')
     matched = 0
     for (scenario, protocol, index, plan), answer in zip(rows, answers):
         python_payload = plan.body.payload
@@ -189,7 +232,7 @@ def run_rust(out, binary: str) -> tuple[int, int]:
                 'python_payload': hashlib.sha256(python_payload).hexdigest(),
                 'python_bytes': len(python_payload)}
         if 'error' in answer:
-            line.update(match=False, cause=answer['error'])
+            line.update(match=False, cause='comparator_error')
         else:
             rust_payload = base64.b64decode(answer['payload_b64'])
             checks = {
@@ -203,18 +246,24 @@ def run_rust(out, binary: str) -> tuple[int, int]:
             if not checks['payload']:
                 offset = next((i for i, (a, b) in enumerate(zip(python_payload, rust_payload)) if a != b),
                               min(len(python_payload), len(rust_payload)))
-                line.update(first_diff=offset,
-                            python_context=python_payload[max(0, offset - 80):offset + 80].decode('utf-8', 'replace'),
-                            rust_context=rust_payload[max(0, offset - 80):offset + 80].decode('utf-8', 'replace'))
+                line.update(first_diff=offset)
         matched += bool(line['match'])
         out.write(json.dumps(line, sort_keys=True, ensure_ascii=False) + '\n')
     return matched, len(rows)
 
 
+def main(argv):
+    try:
+        with open(argv[0], 'w', encoding='utf-8') as handle:
+            if argv[1:2] == ['--rust']:
+                matched, total = run_rust(handle, argv[2])
+                print(f'{matched}/{total} requests byte-identical')
+                return 0 if matched == total else 1
+            print(run(handle), 'requests')
+    except (OSError, UnicodeError):
+        raise SystemExit('byte-identity output unavailable') from None
+    return 0
+
+
 if __name__ == '__main__':
-    with open(sys.argv[1], 'w', encoding='utf-8') as handle:
-        if sys.argv[2:3] == ['--rust']:
-            matched, total = run_rust(handle, sys.argv[3])
-            print(f'{matched}/{total} requests byte-identical')
-            raise SystemExit(0 if matched == total else 1)
-        print(run(handle), 'requests')
+    raise SystemExit(main(sys.argv[1:]))

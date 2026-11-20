@@ -236,7 +236,10 @@ def test_recovery_closes_the_episode_and_a_later_rise_is_a_new_episode(env):
     # The last rejection was at 195.5 s; the first accepted round a full minute later closes it.
     assert close['closedAtMs'] == _ms(256)
     assert close['evidence']['episode'] == {'productionRejected': 13, 'held': 13, 'longestWaitMs': 2400.0,
-                                            'firstRejectedAtMs': _ms(99.5), 'lastRejectedAtMs': _ms(195.5)}
+                                            'firstRejectedAtMs': _ms(99.5), 'lastRejectedAtMs': _ms(195.5),
+                                            'horizonMs': _ms(255.5), 'productionAcceptedSince': 7,
+                                            'auxiliaryAcceptedSince': 0}
+    assert close['cause'] == 'recovered'
     assert 'Recovered' in close['resolution'] and '…0733' in close['resolution']
     # The open and close of one episode share one delivery record: the close reaches the signal the open made.
     assert env.delivered[0]['delivery'] is env.delivered[1]['delivery']
@@ -405,3 +408,120 @@ def test_each_process_reports_as_itself_and_a_forked_shard_takes_its_own_identit
     assert watch.reporter == first
     watch._reporter_pid = os.getpid() + 1   # what a forked child sees
     assert watch.reporter not in (first, '')
+
+
+# ── How an episode closes when nothing routes to its lane (docs/modules/llm_io.md) ──
+# Live 2026-11-18: 15 quota alarms on …5409 / …4861 stayed open for hours because
+# an episode closed only at an accepted conversation round, and nothing routed to
+# those lanes any more (the Watchdog steps off them; 5409 was out of credit).
+
+
+def _scheduled_watch(env, monkeypatch):
+    """The env watch with a recording scheduler in place of the real timers."""
+    timers = []
+    watch = env.module.QuotaWatch(clock=lambda: env.clock[0], deliver=env.delivered.append,
+                                  schedule=lambda delay, callback: timers.append((env.clock[0] + delay, callback)))
+    monkeypatch.setattr(env.module, '_WATCH', watch)
+    env.watch = watch
+    return timers
+
+
+def _fire_due(env, timers):
+    for at, callback in [timer for timer in timers if timer[0] <= env.clock[0]]:
+        timers.remove((at, callback))
+        callback()
+
+
+def _rejected_and_held(env, second, *, retry_after_s=None):
+    env.clock[0] = T0 + second
+    error = _error('rpm', *CONTENDED)
+    if retry_after_s is not None:
+        error.retry_after_s = retry_after_s
+    with env.module.production_dispatch(OWNER):
+        env.module.observe_rejection(_slot(*CONTENDED), error, queue_wait_ms=0.0)
+        env.clock[0] = T0 + second + 1
+        env.module.observe_rejection(_slot(*CONTENDED), error, queue_wait_ms=1500.0)
+
+
+def test_an_avoided_lane_lapses_at_the_provider_window_without_any_probe(env, monkeypatch):
+    """Nothing routes to the lane after its rejections: the episode closes as lapsed, and nothing was sent."""
+    timers = _scheduled_watch(env, monkeypatch)
+    _rejected_and_held(env, 10)
+    [opened] = env.delivered
+    assert opened['kind'] == 'open'
+    # The timer is set to the provider's own horizon: one window after the last rejection.
+    assert [at for at, _ in timers] == [T0 + 11 + 60]
+    env.clock[0] = T0 + 70
+    _fire_due(env, timers)
+    assert len(env.delivered) == 1 and env.watch.open_appids() == {('example-corp', CREDENTIALS['0733'])}
+    env.clock[0] = T0 + 71
+    _fire_due(env, timers)
+    [_, closed] = env.delivered
+    assert closed['kind'] == 'close' and closed['cause'] == 'lapsed'
+    assert closed['delivery'] is opened['delivery'] and closed['closedAtMs'] == _ms(71)
+    assert closed['resolution'].startswith('Lapsed') and 'no probe' in closed['resolution']
+    assert closed['evidence']['episode']['productionAcceptedSince'] == 0
+    assert env.watch.open_appids() == set()
+    # The watch observed only the two rejections: it sent nothing to the lane to close the episode.
+    [lane] = env.watch.snapshot()
+    assert lane['episode'] is None and lane['productionRejectedTotal'] == 2
+
+
+def test_an_avoided_lane_lapses_on_a_read_of_open_appids_without_a_timer(env):
+    """The Watchdog's avoidance read reaches the horizon even where no timer runs."""
+    _rejected_and_held(env, 10)
+    env.clock[0] = T0 + 200
+    assert env.watch.open_appids() == set()
+    assert [(t['kind'], t.get('cause')) for t in env.delivered] == [('open', None), ('close', 'lapsed')]
+
+
+def test_the_hold_the_provider_named_extends_the_horizon(env, monkeypatch):
+    timers = _scheduled_watch(env, monkeypatch)
+    _rejected_and_held(env, 10, retry_after_s=180.0)
+    assert [at for at, _ in timers] == [T0 + 11 + 180]
+    env.clock[0] = T0 + 120
+    assert env.watch.open_appids() == {('example-corp', CREDENTIALS['0733'])}
+    env.clock[0] = T0 + 191
+    _fire_due(env, timers)
+    assert [t['kind'] for t in env.delivered] == ['open', 'close']
+
+
+def test_auxiliary_traffic_alone_lapses_the_episode_and_says_so(env):
+    _rejected_and_held(env, 10)
+    for second in (30, 50, 80):
+        env.clock[0] = T0 + second
+        env.module.observe_settlement(_slot(*CONTENDED), ttft_ms=900.0, queue_wait_ms=0.0)
+    closed = env.delivered[-1]
+    assert closed['kind'] == 'close' and closed['cause'] == 'lapsed' and closed['closedAtMs'] == _ms(80)
+    assert closed['evidence']['episode']['auxiliaryAcceptedSince'] == 3
+    assert 'auxiliary requests accepted on it meanwhile: 3' in closed['resolution']
+
+
+def test_a_recovered_lane_closes_at_its_horizon_as_recovered(env, monkeypatch):
+    timers = _scheduled_watch(env, monkeypatch)
+    _rejected_and_held(env, 10)
+    env.clock[0] = T0 + 30
+    with env.module.production_dispatch(OWNER):
+        env.module.observe_settlement(_slot(*CONTENDED), ttft_ms=900.0, queue_wait_ms=0.0)
+    assert len(env.delivered) == 1
+    # No further round: the timer at the horizon closes it on the round already accepted.
+    env.clock[0] = T0 + 71
+    _fire_due(env, timers)
+    closed = env.delivered[-1]
+    assert closed['cause'] == 'recovered' and closed['resolution'].startswith('Recovered')
+    assert closed['evidence']['episode']['productionAcceptedSince'] == 1
+
+
+def test_a_genuinely_ongoing_quota_stays_open(env, monkeypatch):
+    """Rejections inside every provider window keep the episode, and its single alert, open."""
+    timers = _scheduled_watch(env, monkeypatch)
+    for second in range(10, 900, 45):
+        _rejected_and_held(env, second)
+        with env.module.production_dispatch(OWNER):
+            env.clock[0] = T0 + second + 20
+            env.module.observe_settlement(_slot(*CONTENDED), ttft_ms=900.0, queue_wait_ms=4000.0)
+        _fire_due(env, timers)
+        assert env.watch.open_appids() == {('example-corp', CREDENTIALS['0733'])}
+    assert [t['kind'] for t in env.delivered] == ['open']
+    # One pending timer at a time, never one per rejection.
+    assert len(timers) == 1

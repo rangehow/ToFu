@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import stream from '../../../../tests/fixtures/office_facts/stream_v1.json';
 import { t } from '../../i18n';
-import { mountWorld } from './app';
+import { mountWorld, type WorldShell } from './app';
 import { LEAD, PROJECT, RUNNER, memberRunning, teamPage } from './testing/recorded';
 
 vi.mock('./office', () => ({
@@ -20,6 +20,10 @@ const COLD_OFFICE_READ_MS = 20_000;
 const answer = (data: unknown, status = 200) => new Response(JSON.stringify(status === 200 ? { meta: {}, data } : {}),
   { status, headers: { 'content-type': 'application/json' } });
 const frames: FrameRequestCallback[] = [];
+const SHELL: WorldShell = {
+  openConversation() {}, openQuestion() {}, answerPorts: () => undefined, downloadUrl: id => id, confirmDefault: async () => {},
+  dock() {}, classic() {}, push: null,
+};
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -58,7 +62,7 @@ function shown(root: HTMLElement) {
 it('shows a loading state, never an empty office or an error, until a cold 20 s office read answers', async () => {
   const root = document.createElement('div');
   document.body.append(root);
-  const page = mountWorld(root, { openChat() {}, openQuestion() {}, answerPorts: () => undefined, dock() {}, classic() {}, push: null });
+  const page = mountWorld(root, SHELL);
   const loading = { busy: 'true', loading: t('common.loading'), empty: false };
   expect(shown(root)).toEqual({ ...loading, progress: t('world.loading.progress', { done: 0, total: 1 }) });
   expect(page.office()!.people.size).toBe(0);
@@ -92,12 +96,41 @@ it('seats the Global Router as soon as it answers, without waiting for the folde
   }));
   const root = document.createElement('div');
   document.body.append(root);
-  const page = mountWorld(root, { openChat() {}, openQuestion() {}, answerPorts: () => undefined, dock() {}, classic() {}, push: null });
+  const page = mountWorld(root, SHELL);
   await vi.advanceTimersByTimeAsync(1_000);
   shown(root);
   expect([...page.office()!.people.keys()]).toEqual([ROUTER]);
   await vi.advanceTimersByTimeAsync(10_000);
   shown(root);
   expect([...page.office()!.people.keys()].sort()).toEqual([LEAD, ROUTER, RUNNER].sort());
+  page.dispose();
+});
+
+it("never flags the Watchdog for its own open signals: the owner sees '需要关注' only for an item he can act on", async () => {
+  // Live shape 2026-11-18: 15 open quota signals, each an alarm fact on the Watchdog's conversation.
+  const WATCHDOG = 'coordinator-watchdog';
+  const alarms = Array.from({ length: 15 }, (_, index) => ({ fact: 'alarm', key: `alarm:sig${index}`, conversationId: WATCHDOG,
+    source: 'watchdog_signal', signalId: `sig${index}` }));
+  const base = fetch as unknown as (url: string, init: RequestInit) => Promise<Response>;
+  vi.stubGlobal('fetch', vi.fn((url: string, init: RequestInit) => {
+    const path = new URL(url, 'http://tofu.invalid').pathname;
+    if (path === '/api/v4/router/watchdog') {
+      return Promise.resolve(answer({ availability: 'available', conversationId: WATCHDOG, projectPath: '/watchdog' }));
+    }
+    if (path === '/api/v4/router/office') {
+      return Promise.resolve(answer({ ...stream.snapshot, facts: [...stream.snapshot.facts, ...alarms] }));
+    }
+    return base(url, init);
+  }));
+  const root = document.createElement('div');
+  document.body.append(root);
+  const page = mountWorld(root, SHELL);
+  await vi.advanceTimersByTimeAsync(1_000);
+  shown(root);
+  const watchdog = page.office()!.people.get(WATCHDOG)!;
+  expect(watchdog.role).toBe('watchdog');
+  expect(watchdog.emphasis).toBeNull();
+  expect(page.office()!.attention.exceptions).toEqual([]);
+  expect(root.querySelector<HTMLElement>('.w-hud .w-chip[data-tone="exception"]')!.hidden).toBe(true);
   page.dispose();
 });

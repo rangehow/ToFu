@@ -3,8 +3,11 @@
 ## Scope and authority
 
 `lib/openapi/` assembles the registered HTTP surface from production route
-assembly and per-handler `@api_meta` declarations. Those declarations own
-product domain metadata; `contracts/api_v4.yaml` owns the release envelope.
+assembly and per-handler `@api_meta` declarations. The assembled document must
+equal `contracts/api_v1.yaml` without its `x-tofu-*` route records: that
+contract is the authority, and `scripts/gen_api_v1_contract.py` names
+any difference. Change the contract and the declaration together;
+`contracts/api_v4.yaml` owns the release envelope.
 Native protocols supply their generated components and operations, including
 Conversation Sync. `docs/contracts/API_CONTRACT.md` owns boundary behavior.
 The generated `contracts/api_endpoint_index_v1.json` inventories HTTP and
@@ -29,4 +32,4 @@ schema version, independent of the mounted API major.
 ## Verification
 
 `pytest -q tests/openapi tests/api/test_api_endpoint_index.py
- tests/api/test_api_contract_drift.py`, then `make contracts-check`.
+ tests/api/test_api_v1_contract.py tests/api/test_api_contract_drift.py`, then `make contracts-check`.

@@ -1926,6 +1926,27 @@ def get_task_modification_paths(base_path, task_id, *, conv_id=None, limit,
     return result
 
 
+def task_output_fingerprints(base_path, task_id, conv_id, paths):
+    """Find the last committed post-image for each cited task output."""
+    pending = set(paths)
+    result = {}
+    for row in reversed(_conversation_history(base_path, conv_id)):
+        path = row.get('path')
+        if path not in pending or row.get('basePath') != base_path:
+            continue
+        pending.remove(path)
+        image = row.get('postImage') or {}
+        digest = image.get('digest')
+        if (row.get('taskId') == task_id and row.get('convId') == conv_id
+                and row.get('type') in ('write_file', 'apply_diff')
+                and image.get('kind') == 'content' and isinstance(digest, str)
+                and re.fullmatch(r'[0-9a-f]{64}', digest)):
+            result[path] = digest
+        if not pending:
+            break
+    return {path: result[path] for path in paths if path in result}
+
+
 def get_conv_ids_with_modifications(base_path):
     """Get list of conversation IDs that have pending modifications."""
     return list({m.get('convId') for m in _metadata_history(base_path) if m.get('convId')})

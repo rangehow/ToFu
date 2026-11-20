@@ -22,7 +22,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Mapping
-from typing import Any, TypeGuard
+from typing import Any
 
 from lib.storage.errors import StorageError
 from lib.storage_authority_sql.adapters.base import Session
@@ -41,6 +41,9 @@ from lib.storage_authority_sql.turn_projection_head import (
 )
 
 USAGE_ROW_FIELDS = ("model", "preset", "effort", "provider_id", "providerId")
+_REQUEST_FIELDS = ("usageReceiptId", "taskId", "sourceRound", "round", "model",
+                   "provider_id", "providerId", "accountId", "subscriptionProvider",
+                   "requestTimestampMs", "pricingEvidence", "cost", "usage")
 _SETTINGS_FIELDS = ("model", "preset", "effort")
 _MAX_TITLE_FALLBACK_CHARACTERS = 256
 _INTEGER_TEXT = re.compile(r"[+-]?[0-9]+")
@@ -70,14 +73,31 @@ def tolerant_turn_timestamp(value: Any) -> int:
 def _usage_row(message: Mapping[str, Any], index: int,
                timestamp: Any, *, has_timestamp: bool) -> dict[str, Any] | None:
     usage = message.get("usage")
-    if not isinstance(usage, Mapping) or not usage:
-        return None
-    row: dict[str, Any] = {"index": index, "usage": dict(usage)}
+    row: dict[str, Any] = {"index": index, "usage": dict(usage) if isinstance(usage, Mapping) else {}}
     if has_timestamp:
         row["timestamp"] = timestamp
     row.update({field: message[field] for field in USAGE_ROW_FIELDS
                 if field in message})
-    return row
+    rounds = message.get("apiRounds")
+    if isinstance(rounds, list) and any(
+        isinstance(item, dict) and (isinstance(item.get("usage"), dict)
+                                   or isinstance(item.get("cost"), dict)
+                                   or (isinstance(item.get("usageReceiptId"), str) and item["usageReceiptId"])
+                                   or (isinstance(item.get("taskId"), str) and item["taskId"]
+                                       and type(item.get("sourceRound", item.get("round"))) is int
+                                       and item.get("sourceRound", item.get("round")) > 0))
+        for item in rounds
+    ):
+        row["apiRounds"] = [
+            {field: item[field] for field in _REQUEST_FIELDS if field in item}
+            if isinstance(item, dict) else {} for item in rounds
+        ]
+    for receipt in row.get("apiRounds", []):
+        usage = receipt.get("usage")
+        if isinstance(usage, dict):
+            receipt["usage"] = {key: value for key, value in usage.items()
+                                if not key.startswith("_")}
+    return row if row["usage"] or "apiRounds" in row else None
 
 
 def _title_fallback(message: Any, characters: int) -> str:
@@ -193,14 +213,11 @@ def _archive_usage(session: Session, conv_id: str, user_id: int, start: int,
     return len(messages), fallback, rows
 
 
-def _is_signed_64(value: object) -> TypeGuard[int]:
-    return (isinstance(value, int) and not isinstance(value, bool)
-            and -(2 ** 63) <= value < 2 ** 63)
-
-
 def _window(payload: Mapping[str, Any]) -> tuple[int, int, int]:
     start, end = payload.get("timestamp_gte"), payload.get("timestamp_lt")
-    if not _is_signed_64(start) or not _is_signed_64(end) or start >= end:
+    if any(isinstance(value, bool) or not isinstance(value, int)
+           or not -(2 ** 63) <= value < 2 ** 63 for value in (start, end)) \
+            or start >= end:
         raise StorageError(
             "database_protocol_error", "Invalid conversation usage window")
     characters = _integer(payload, "title_fallback_characters", default=0,

@@ -221,7 +221,7 @@ def _tool_schemas() -> dict:
             code_exec_enabled=False, browser_enabled=True, desktop_enabled=True,
             image_gen_enabled=True, human_guidance_enabled=True,
             scheduler_enabled=True, messages=[],
-            environment=EVERY_CAPABILITY_AVAILABLE)
+            environment=EVERY_CAPABILITY_AVAILABLE, schema_preview=True)
         tool_list, _ = assemble_tool_list(ctx)
         for t in tool_list or []:
             fn = (t or {}).get('function') or {}

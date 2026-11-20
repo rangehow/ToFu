@@ -98,7 +98,8 @@ class AttemptObserver:
     def call(self, transport, slot, *args, **kwargs):
         fields, started = self._start(slot)
         try:
-            result = ensure_provider_stream_result(transport(*args, **kwargs))
+            from lib.oauth.account_dispatch import call_in_account_scope
+            result = ensure_provider_stream_result(call_in_account_scope(slot, transport, *args, **kwargs))
         except BaseException as error:
             self.note_cause(type(error).__name__)
             self._complete(fields, started, error=error)
@@ -109,7 +110,9 @@ class AttemptObserver:
     async def acall(self, transport, slot, *args, **kwargs):
         fields, started = self._start(slot)
         try:
-            result = ensure_provider_stream_result(await transport(*args, **kwargs))
+            from lib.oauth.account_dispatch import scoped_account_dispatch
+            with scoped_account_dispatch(slot):
+                result = ensure_provider_stream_result(await transport(*args, **kwargs))
         except BaseException as error:
             self.note_cause(type(error).__name__)
             self._complete(fields, started, error=error)

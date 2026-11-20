@@ -875,6 +875,83 @@ def test_takeover_names_the_lost_lease_of_a_joined_worker(claimed, monkeypatch, 
     assert metadata['conversationWorkerExit']['proof'] == 'joined'
 
 
+@pytest.mark.parametrize('shape', [
+    'no_calls', 'read_only', 'cut_off', 'malformed_with_cut_off', 'malformed_with_read_only',
+    'missing_rounds', 'null_rounds', 'non_list_rounds', 'malformed_row',
+    'malformed_effect', 'malformed_state', 'malformed_recovery', 'malformed_receipt',
+])
+def test_a_joined_failure_records_cut_call_safety_only_after_classification(
+        claimed, monkeypatch, shape):
+    from lib import turn_lifecycle as turns
+    from lib.conversation_sync import worker_recovery
+    from lib.conversation_sync.worker_execution import execute_claimed_attempt
+    from lib.durable_worker import WorkerDomainSettlementUnknown
+    context, pair, factory, owner = claimed
+    call_shape = shape.removeprefix('malformed_with_')
+    row, review = deepcopy(_INTERRUPTED_CALLS.get(call_shape, (None, False)))
+    if row is not None:
+        row.update(roundNum=1, llmRound=0, toolArgs='{}')
+        row['executionEffect'].update(operationId=uuid.uuid4().hex, scope='attempt')
+
+    # The executor joins without a terminal Turn or result. Inject the
+    # exact recovery input below, independent of projection-writer timing.
+    _run_claimed(monkeypatch, lambda task: None)
+    monkeypatch.setattr(turns, '_drain_queue_after_settlement', lambda *a, **kw: None)
+    with pytest.raises(WorkerDomainSettlementUnknown, match='terminal Turn'):
+        execute_claimed_attempt(context, context.claim.payload)
+
+    if shape != 'no_calls':
+        # Fault-inject at the snapshot boundary: the normal projection writer
+        # may discard malformed evidence before it can reach recovery.
+        recover = worker_recovery.recover_exited_attempt
+
+        def recover_with_unreadable_rounds(context, attempt, turn, *, task):
+            projection = dict(turn['projection'])
+            if shape == 'missing_rounds':
+                del projection['toolRounds']
+            else:
+                call = deepcopy(_INTERRUPTED_CALLS['read_only'][0])
+                effect = call['executionEffect']
+                effect.update(operationId=uuid.uuid4().hex, scope='attempt')
+                projection['toolRounds'] = {
+                    'null_rounds': None,
+                    'non_list_rounds': {'unexpected': 'object'},
+                    'malformed_row': [None],
+                    'malformed_effect': [{**call, 'executionEffect': 'entered'}],
+                    'malformed_state': [{**call, 'executionEffect': {**effect, 'state': []}}],
+                    'malformed_recovery': [{**call, 'executionEffect': {**effect, 'recovery': []}}],
+                    'malformed_receipt': [{**call, 'toolModelContent': [None]}],
+                    'read_only': [row],
+                    'cut_off': [row],
+                    'malformed_with_cut_off': [None, row],
+                    'malformed_with_read_only': [None, row],
+                }[shape]
+            return recover(context, attempt, {**turn, 'projection': projection}, task=task)
+
+        monkeypatch.setattr(worker_recovery, 'recover_exited_attempt', recover_with_unreadable_rounds)
+    _recover(monkeypatch, context)
+
+    turn = turns.get_turn(pair['turn']['conversationId'], pair['turn']['turnId'],
+                          user_id=owner, include_projection=False)
+    assert turn['status'] == 'failed'
+    error = turn['settlement']['error']
+    assert (error['code'], error['retryPolicy']) == (
+        'worker_effect_outcome_unknown', {'mode': 'manual', 'automatic': False})
+    if review:
+        assert 'cutCallsClassifiedSafe' not in error
+        assert error['unknownEffects'] == [{'toolName': row['toolName'],
+            'toolCallId': row['toolCallId'], 'operationId': row['executionEffect']['operationId']}]
+    else:
+        if shape in ('no_calls', 'read_only'):
+            assert error['cutCallsClassifiedSafe'] is True
+        else:
+            assert 'cutCallsClassifiedSafe' not in error
+        assert not error.get('unknownEffects')
+    metadata = _exit_metadata(factory, context, owner)
+    assert metadata['usageComplete'] is False
+    assert metadata['conversationWorkerExit']['settlement'] == 'unknown'
+
+
 def test_takeover_settles_the_result_a_lost_lease_left_unsaved(claimed, monkeypatch):
     """Debt retained under a replaced claim can never commit, so it cannot gate recovery.
 
@@ -1213,3 +1290,92 @@ def test_a_missing_attempt_beside_its_turn_is_not_a_removal_verdict(claimed, mon
         cancel_claimed_attempt(context, context.claim.payload)
     assert turns.get_turn(pair['turn']['conversationId'], pair['turn']['turnId'],
                           user_id=owner)['turnId'] == pair['turn']['turnId']
+
+
+_FORWARDED_OWNER_WORDS = 'niutrans/tofu也一样处理啊，和rangehow/tofu同步就好。'
+
+
+def _steer_forward_into_orphaned_turn(claimed):
+    """Incident 2026-11-16: a Global Router forward steered into a Turn whose executor was gone.
+
+    The lead's Attempt still read ``running`` (its host had stopped), so
+    ``route_to_project`` answered ``steered`` and committed a pending user-steer
+    record that no executor would ever take.
+    """
+    from lib import turn_lifecycle as turns
+    from lib.router.forwarding import forwarded_message
+    from lib.turn_initiation import steer_author
+    context, pair, _factory, owner = claimed
+    enter(claimed, None)
+    forwarded = {'conversationId': 'coordinator-global-router', 'turnId': 'router-turn',
+                 'steerId': 'channel-owner-steer'}
+    message = forwarded_message(_FORWARDED_OWNER_WORDS, forwarded, note='Answers question hg_1',
+                                trigger={}, router_id='coordinator-global-router')
+    record = turns.commit_user_steer(
+        pair['turn']['conversationId'], pair['attempt']['attemptId'], command_id='router-forward:incident',
+        text=message['content'], user_id=owner, author=steer_author(message, actor='human'))
+    task = {'id': context.claim.task_id, '_activeWorkerCount': 0, '_userId': owner,
+            '_conversationWorkerContext': context}
+    return record['blockId'], task
+
+
+def _recover_failed(claimed, task):
+    from lib import turn_lifecycle as turns
+    from lib.conversation_sync.worker_recovery import recover_exited_attempt
+    context, pair, _factory, owner = claimed
+    attempt = turns.get_attempt(pair['attempt']['attemptId'], user_id=owner, include_execution_config=True)
+    turn = turns.get_turn(pair['turn']['conversationId'], pair['turn']['turnId'], user_id=owner)
+    recover_exited_attempt(context, attempt, turn, task=task)
+    turn = turns.get_turn(pair['turn']['conversationId'], pair['turn']['turnId'], user_id=owner)
+    assert turn['status'] == 'failed'
+    return {record['blockId']: record for record in turn['projection']['_userSteerInjects']}
+
+
+def test_a_turn_recovery_fails_requeues_the_forward_its_executor_never_took(claimed, monkeypatch):
+    """Recovery settles the Turn failed; the forward it never took becomes the lead's next Turn."""
+    from lib.scheduler.conversation_dispatch import ScheduledTurnDispatch
+    block_id, task = _steer_forward_into_orphaned_turn(claimed)
+    _context, pair, _factory, owner = claimed
+    sent = []
+
+    def dispatch(conversation_id, message, tools, **kwargs):
+        sent.append((conversation_id, message, kwargs))
+        return ScheduledTurnDispatch('queued', queue_id='next-turn')
+
+    monkeypatch.setattr('lib.scheduler.conversation_dispatch.dispatch_scheduled_turn', dispatch)
+    records = _recover_failed(claimed, task)
+    assert records[block_id]['deliveryState'] == 'queued'
+    assert records[block_id]['queueId'] == 'next-turn'
+    [(conversation_id, message, kwargs)] = sent
+    assert conversation_id == pair['turn']['conversationId']
+    # The owner's words keep their forwarded origin, so the next Turn verifies them again.
+    assert message['content'] == _FORWARDED_OWNER_WORDS
+    assert message['origin']['forwardedFrom']['steerId'] == 'channel-owner-steer'
+    assert (kwargs['command_id'], kwargs['inject_mode'], kwargs['user_id']) == (
+        'steer-requeue:' + block_id, 'queue', owner)
+
+
+def test_a_forward_the_lead_cannot_take_is_bounced_to_the_global_router(claimed, monkeypatch):
+    """A requeue the lead refuses is never silently pending: its sender learns why."""
+    from lib.scheduler.conversation_dispatch import ScheduledTurnDispatch
+    block_id, task = _steer_forward_into_orphaned_turn(claimed)
+    _context, pair, _factory, owner = claimed
+    sent = []
+
+    def dispatch(conversation_id, message, tools, **kwargs):
+        sent.append((conversation_id, message, kwargs))
+        return ScheduledTurnDispatch('busy' if conversation_id == pair['turn']['conversationId']
+                                     else 'started', 'router-task')
+
+    monkeypatch.setattr('lib.scheduler.conversation_dispatch.dispatch_scheduled_turn', dispatch)
+    records = _recover_failed(claimed, task)
+    assert records[block_id]['deliveryState'] == 'pending'
+    assert [conversation_id for conversation_id, _message, _kwargs in sent] == [
+        pair['turn']['conversationId'], 'coordinator-global-router']
+    _router, notice, kwargs = sent[1]
+    assert notice['origin']['initiator'] == 'peer'
+    assert 'forwardedFrom' not in notice['origin']
+    assert 'busy' in notice['content'] and _FORWARDED_OWNER_WORDS in notice['content']
+    assert pair['turn']['conversationId'] in notice['content']
+    assert kwargs['inject_mode'] == 'steer' and kwargs['user_id'] == owner
+    assert kwargs['command_id'].startswith('router-forward-undelivered:')

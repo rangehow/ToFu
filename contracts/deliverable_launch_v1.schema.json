@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tofu.local/contracts/deliverable_launch_v1.schema.json",
+  "title": "Deliverable launch contract v1",
+  "description": "Declared artifact contract for one headless non-coding deliverable run. Owner: lib/production/deliverable_launch.py (load_contract validates exactly these fields; tests/production/test_deliverable_launch.py keeps them aligned). Entry point: scripts/deliverable_run.py. Relative paths resolve against the contract file's folder.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "output_dir"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {
+      "enum": ["slides", "document"],
+      "description": "slides: lib/slides/recipe.py build_deck_from_topic. document: lib/longform/documents/pipeline.py run_document_pipeline (paper or resume, by the brief's type)."
+    },
+    "inputs": {
+      "type": "object",
+      "description": "Role -> path. slides: optional 'material' (UTF-8 file). document: required 'doc_dir' (holds document_brief.json and dossier.json, or the draft named by parameters.draft). Preflight also checks files the brief names (previous_pdf, template_dir, main_template).",
+      "additionalProperties": {"type": "string", "minLength": 1}
+    },
+    "parameters": {
+      "type": "object",
+      "description": "Kind-specific recipe arguments. slides: topic (required), lang, style, max_pages (integer), creative_mode. document: draft (main .tex file in doc_dir to revise), portfolio_policy (explicit trusted portfolio profile, owner-ccf-a; absent preserves generic behavior).",
+      "properties": {
+        "topic": {"type": "string"},
+        "lang": {"type": "string"},
+        "style": {"type": "string"},
+        "max_pages": {"type": "integer"},
+        "creative_mode": {"type": "string"},
+        "draft": {"type": "string"},
+        "portfolio_policy": {"type": "string", "description": "Document-only explicit trusted-caller portfolio policy; owner-ccf-a requires CCF A conference-tier eligibility. Publication-type recognition (including short/demo/findings/workshop exclusions) is reported separately and does not change the conference tier. Absent preserves generic venue behavior; unknown profiles fail closed in the recipe."}
+      },
+      "additionalProperties": false
+    },
+    "output_dir": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Recipe workdir; must be writable on its real filesystem (probe file created, fsynced, renamed, removed). launch_result.json is written here."
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "description": "slides: the deck model; document: the writer model. Absent: routing default."},
+        "endpoint": {"type": "string", "pattern": "^https?://", "description": "Running Tofu server's OpenAI-compatible endpoint; model routing, keys and accounting stay with the server. Installed only after preflight passes."}
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "deadline_s": {"type": ["number", "null"], "exclusiveMinimum": 0, "description": "Wall-clock deadline; on expiry the recipe's abort is set (observed at its abort checks) and the outcome is timeout."}
+      }
+    },
+    "owner_user_id": {"type": ["integer", "null"]},
+    "required_tools": {
+      "type": "array",
+      "description": "Extra prerequisites beyond the kind's renderer (slides: Playwright Chromium via lib/slides/readiness.py; document: latexmk via lib/paper/latex_layout.py).",
+      "items": {
+        "oneOf": [
+          {"type": "object", "additionalProperties": false, "required": ["executable"], "properties": {"executable": {"type": "string", "minLength": 1}}},
+          {"type": "object", "additionalProperties": false, "required": ["python_module"], "properties": {"python_module": {"type": "string", "minLength": 1}}}
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "outcome": {
+      "enum": ["scored", "timeout", "setup_error", "infra_error", "harness_error"],
+      "description": "launch_result.json outcome. scored: the recipe reached its own verdict (delivered true/false; a gate refusal is delivered=false with stage/errors). timeout: budget.deadline_s expired. setup_error: a declared prerequisite is missing or unusable as declared. infra_error: storage/renderer-launch/model-endpoint failure under a valid contract. harness_error: unclassified exception (a scored failure). setup_error and infra_error are not measurements."
+    }
+  }
+}

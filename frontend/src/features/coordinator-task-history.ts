@@ -12,18 +12,19 @@
  * (its content, for tests). Dependencies: the typed history read and board-change
  * subscription supplied by the caller; ui factories; the board's status glyph.
  */
-import { createButton, createDrawer, createField } from '../ui';
+import { createButton, createDialog, createDrawer, createField } from '../ui';
 import { t } from '../i18n';
 import type {
   CoordinatorProgressHistoryGroup, CoordinatorProgressHistoryPage, CoordinatorProgressHistoryTask,
   CoordinatorProgressTranslation,
 } from '../api/project-coordination.generated';
-import { coordinatorProgressGlyph, coordinatorProgressText } from './coordinator-progress';
+import { coordinatorProgressGlyph, coordinatorTaskExplanation, coordinatorTaskStatus } from './coordinator-progress';
+import { coordinatorProgressText } from './coordinator-progress-summary';
 import {
   HISTORY_GROUPS, appendPage, historyRows, historyTotal, rowOffsets, rowSignature, visibleRange,
   type HistoryCounts, type HistoryFilter, type HistoryRow,
 } from './coordinator-task-history-model';
-import './coordinator-task-history.css';
+import '../styles/application/34-coordinator-task-history.css';
 
 export interface CoordinatorTaskHistoryQuery { group?: CoordinatorProgressHistoryGroup; q?: string; cursor?: string }
 
@@ -83,6 +84,7 @@ export function createCoordinatorTaskHistory(ports: CoordinatorTaskHistoryPorts)
     own?.texts.find(entry => entry.source === text)?.text ?? coordinatorProgressText(state.translation, text);
   let generation = 0, loading = false, loadingMore = false, failed = false, moreFailed = false, refreshQueued = false;
   let loaded = false, alive = true;
+  let details: ReturnType<typeof createDialog> | null = null;
   let reading: AbortController | null = null, readingMore: AbortController | null = null;
   let rows: HistoryRow[] = [], offsets = rowOffsets([], ROW_HEIGHTS), taskPositions: number[] = [];
   const mounted = new Map<string, { el: HTMLElement; signature: string }>();
@@ -129,14 +131,22 @@ export function createCoordinatorTaskHistory(ports: CoordinatorTaskHistoryPorts)
     row.dataset.status = task.status;
     if (task.dropped) row.dataset.dropped = 'true';
     const line = node('div', 'coordinator-history-task-line');
-    const glyph = coordinatorProgressGlyph(task.status);
+    const status = task.dropped ? 'dropped' : coordinatorTaskStatus(task.status, task.reason, task.blocker);
+    const glyph = coordinatorProgressGlyph(status);
     const title = node('span', 'coordinator-history-task-title', say(task.title));
     title.id = `coordinator-history-${task.key}`;
     row.setAttribute('aria-labelledby', title.id);
     line.append(glyph, title);
     if (task.onBoard) line.append(badge('board', t('coordinatorHistory.onBoard')));
     if (task.dropped) line.append(badge('dropped', groupLabel('dropped')));
-    const note = node('div', 'coordinator-history-task-note', say(task.progress ?? ''));
+    if (status === 'waiting') line.append(badge('waiting', t('coordinatorProgress.status.waiting')));
+    if (status === 'limited') line.append(badge('limit', t('coordinatorProgress.status.limited')));
+    if (status === 'cancelled') line.append(badge('cancelled', t('coordinatorProgress.status.cancelled')));
+    if (task.status === 'completed') line.append(badge('completed', t('coordinatorProgress.status.completed')));
+    const reason = task.reason ? say(task.reason) : undefined;
+    const progress = task.progress ? say(task.progress) : undefined;
+    const explanation = coordinatorTaskExplanation(status, reason, progress, task.blocker);
+    const note = node('div', 'coordinator-history-task-note', explanation);
     const facts = [t('coordinatorHistory.firstSeen', { time: when(task.firstSeenAt, at) }),
       t(task.onBoard ? 'coordinatorHistory.updated' : 'coordinatorHistory.lastSeen', { time: when(task.onBoard ? task.changedAt : task.lastSeenAt, at) })];
     if (task.formerTitles?.length) facts.push(t('coordinatorHistory.formerTitles', { titles: task.formerTitles.map(say).join(' / ') }));
@@ -149,7 +159,20 @@ export function createCoordinatorTaskHistory(ports: CoordinatorTaskHistoryPorts)
     // Each line is cut to fit its fixed row; the tooltip keeps every text.
     row.title = [...new Set([say(task.title), task.title]),
       ...(task.formerTitles ?? []).map(former => t('coordinatorHistory.formerTitles', { titles: say(former) })),
-      say(task.progress ?? '')].filter(Boolean).join('\n');
+      explanation].filter(Boolean).join('\n');
+    if (task.dropped || reason) {
+      const button = createButton({ label: t('coordinatorHistory.explanation'), variant: 'ghost', size: 'sm', onClick: () => {
+        const body = node('div', 'coordinator-history-explanation');
+        body.append(node('p', 'coordinator-history-explanation-main', explanation));
+        if (progress && progress !== reason) body.append(node('p', 'coordinator-history-explanation-before',
+          t('coordinatorHistory.lastProgress', { text: progress })));
+        const dialog = createDialog({ title: say(task.title), body,
+          actions: [{ id: 'close', label: t('coordinatorHistory.close') }] });
+        details = dialog;
+        void dialog.open().finally(() => { if (details === dialog) details = null; });
+      } });
+      meta.append(button);
+    }
     row.append(line, note, meta);
     return row;
   }
@@ -184,7 +207,7 @@ export function createCoordinatorTaskHistory(ports: CoordinatorTaskHistoryPorts)
     for (let index = first; index < end; index++) {
       const row = rows[index];
       const signature = row.kind === 'task'
-        ? rowSignature(row) + JSON.stringify([row.task.title, row.task.progress ?? '', ...(row.task.formerTitles ?? [])]
+        ? rowSignature(row) + JSON.stringify([row.task.title, row.task.progress ?? '', row.task.reason ?? '', ...(row.task.formerTitles ?? [])]
           .map(text => displayed(text, row.task.translation)))
         : rowSignature(row);
       let entry = mounted.get(row.id);
@@ -326,6 +349,7 @@ export function createCoordinatorTaskHistory(ports: CoordinatorTaskHistoryPorts)
     destroy() {
       alive = false; generation++;
       reading?.abort(); readingMore?.abort();
+      details?.close();
       resize.disconnect(); unsubscribe();
       mounted.clear();
     },

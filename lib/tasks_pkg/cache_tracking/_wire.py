@@ -181,7 +181,7 @@ class DurableComparison:
 
 def compare_durable_baseline(
     baseline: dict, evidence: _WireEvidence, *, conv_id: str, model: str,
-    cache_read: int,
+    cache_read: int | None,
 ) -> DurableComparison:
     """Compare process-stable digests only; an absent side stays inert.
 
@@ -203,7 +203,7 @@ def compare_durable_baseline(
         {f: v for f, v in current_region.items() if region.get(f)}))
     _cached_prefix = baseline.get('read', 0) + baseline.get('write', 0)
     if '<bytes>controls' in culprits and not (
-            cache_read < _cached_prefix * 0.95
+            cache_read is not None and cache_read < _cached_prefix * 0.95
             and _cached_prefix - cache_read >= _MIN_CACHE_MISS_TOKENS):
         # Same rule as the live path: an equivalent control value that did
         # not cost read-back is not evidence.
@@ -216,7 +216,7 @@ def compare_durable_baseline(
     if '<bytes>controls' in culprits or model_change:
         logger.warning(
             '[CacheTrack] conv=%s call=1 ⚠ CACHE CONTROLS CHANGED since the '
-            'persisted predecessor round: %s (read %d, predecessor read %d).',
+            'persisted predecessor round: %s (comparable read %s, predecessor read %d).',
             conv_id, describe_control_change(
                 baseline.get('controls'), evidence.controls, model_change),
             cache_read, baseline.get('read', 0))
@@ -242,7 +242,7 @@ def compare_wire_evidence(
     prev: CacheState, evidence: _WireEvidence, *, conv_id: str,
     was_compaction: bool, expected_covers: bool, expected_rewrite_index: int,
     api_first_changed: int, client_changes: dict, message_count: int,
-    cache_read: int,
+    cache_read: int | None,
 ) -> WireComparison:
     """Compare only the prior prefix; newly appended messages are not edits."""
     _wire_available = evidence.fingerprint is not None
@@ -394,7 +394,7 @@ def compare_wire_evidence(
                 _region_culprits.remove('<bytes>controls')
                 _cached_prefix = (prev.last_cache_read_tokens
                                   + prev.last_cache_write_tokens)
-                if (cache_read < _cached_prefix * 0.95
+                if (cache_read is not None and cache_read < _cached_prefix * 0.95
                         and _cached_prefix - cache_read
                         >= _MIN_CACHE_MISS_TOKENS):
                     _wire_culprits.append('<bytes>controls')
@@ -450,6 +450,7 @@ def compare_wire_evidence(
                 and not was_compaction
                 and mid_anchor_out_of_window(evidence.markers)
                 and prev.last_cache_read_tokens > _MIN_CACHE_MISS_TOKENS
+                and cache_read is not None
                 and cache_read < prev.last_cache_read_tokens * 0.95
                 and (prev.last_cache_read_tokens - cache_read) >= _MIN_CACHE_MISS_TOKENS):
             _wire_culprits.append('<mid-out-of-window>')

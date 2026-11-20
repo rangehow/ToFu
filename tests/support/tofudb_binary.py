@@ -197,3 +197,42 @@ def ensure_engine_binary(project_root: Path) -> Path | None:
             return _RESOLVED
     _RESOLVED = None
     return None
+
+
+def ensure_storage_client_driver(project_root: Path) -> Path | None:
+    """The Rust storage.v2 client's differential driver (``tofu-storage-client-diff``).
+
+    Honors TOFU_STORAGE_CLIENT_DIFF_BIN first; otherwise builds
+    ``packages/tofu-storage-client`` with the same toolchain discovery, lock,
+    group retirement and stable-copy publication as the engine. None when no
+    cargo is available.
+    """
+    import fcntl
+
+    override = os.environ.get('TOFU_STORAGE_CLIENT_DIFF_BIN', '').strip()
+    if override:
+        binary = Path(override)
+        return binary if binary.is_file() and os.access(binary, os.X_OK) else None
+    cargo, environment = _discover_cargo(project_root)
+    if cargo is None:
+        return None
+    manifest = project_root / 'packages/tofu-storage-client/Cargo.toml'
+    from serverctl_pkg import native_engine
+    target = native_engine.cargo_target_directory(project_root, 'target-storage-client', {
+        name: value for name, value in os.environ.items() if name not in _SUITE_PLACEMENT_PINS})
+    stable = target / 'stable' / 'tofu-storage-client-diff'
+    stable.parent.mkdir(parents=True, exist_ok=True)
+
+    def build() -> Path:
+        with open(target / '.build.lock', 'w', encoding='utf-8') as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            env = dict(environment, CARGO_TARGET_DIR=str(target))
+            _run_build([str(cargo), 'build', '--locked', '--manifest-path', str(manifest)],
+                       cwd=manifest.parent, env=env, timeout=_CARGO_BUILD_TIMEOUT_SECONDS)
+            built = target / 'debug/tofu-storage-client-diff'
+            if not (built.is_file() and os.access(built, os.X_OK)):
+                raise RuntimeError('tofu-storage-client build returned no executable')
+            _sync_stable_copy(built, stable)
+        return stable
+
+    return _outside_test_deadline(build)

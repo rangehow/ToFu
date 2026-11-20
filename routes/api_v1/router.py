@@ -267,7 +267,7 @@ def router_office_read():
         try:
             return api_ok(validate(snapshot(_owner()), 'officeFacts'))
         except OfficeFactsClosed as error:
-            return api_error(str(error), status=503, error_code='office_facts_stopping')
+            return api_error(str(error), status=503, code='office_facts_stopping')
     except _TYPED_FAILURES as error:
         return _typed_error(error)
 
@@ -443,6 +443,30 @@ def router_owner_delegation():
         else:
             lifecycle_approval.set_delegation(owner, False, grantee=None, provenance=request_provenance())
         return api_ok(owner_delegation_state(owner))
+    except _TYPED_FAILURES as error:
+        return _typed_error(error)
+
+
+
+
+@api_v1_router_bp.route('/api/v1/router/questions/confirm-default', methods=['POST'])
+@require_scope('conversations')
+@api_meta(summary=("Settle an open non-blocking owner question on its stated default; nothing is sent to "
+                   "the lead"), tags=['router'], scope='conversations',
+          request_body=request_body('ownerQuestionConfirmRequest'))
+def router_question_confirm_default():
+    try:
+        _idempotency_key()
+        data = parse('ownerQuestionConfirmRequest')
+        from lib.router.proactive.questions import QuestionNotConfirmable, confirm_default
+        try:
+            record, card = confirm_default(_owner(), data['coordinatorId'], data['guidanceId'])
+        except QuestionNotConfirmable as error:
+            return api_error(str(error), status=409, code='owner_question_not_confirmable')
+        return api_ok(validate({
+            'coordinatorId': record['coordinatorId'], 'guidanceId': record['guidanceId'],
+            'defaultAcceptedAt': record['defaultAcceptedAt'], 'defaultAcceptedBy': record['defaultAcceptedBy'],
+            'card': card}, 'ownerQuestionConfirmation'))
     except _TYPED_FAILURES as error:
         return _typed_error(error)
 

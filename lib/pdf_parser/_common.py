@@ -1,5 +1,6 @@
 """lib/pdf_parser/_common.py — Shared constants and initialization for PDF parsing."""
 
+import importlib
 import os
 import threading
 
@@ -42,7 +43,9 @@ install_pymupdf_classic_policy()
 
 __all__ = ['HAS_PYMUPDF4LLM', 'HAS_PYMUPDF', 'HAS_DOCLING',
            'PYMUPDF_LOCK', 'PYMUPDF4LLM_UNAVAILABLE_REASON',
-           'current_parser_version', 'expected_parser_version']
+           'current_parser_version', 'expected_parser_version',
+           'import_preserving_quad_corrections', 'pymupdf4llm_available',
+           'pymupdf4llm_module', 'pymupdf4llm_status']
 
 # PyMuPDF's C library (MuPDF) is NOT thread-safe. The official docs state:
 # "PyMuPDF does not support running on multiple threads - doing so may cause
@@ -121,22 +124,98 @@ def _pymupdf4llm_installed() -> bool:
         return False
 
 
-try:
-    import pymupdf4llm  # noqa: F401
-    HAS_PYMUPDF4LLM = True
-except ImportError as e:
-    pymupdf4llm = None  # type: ignore[assignment]
-    HAS_PYMUPDF4LLM = False
-    PYMUPDF4LLM_UNAVAILABLE_REASON = _diagnose_pymupdf4llm_failure(
-        e, _pymupdf4llm_installed())
-    if PYMUPDF4LLM_UNAVAILABLE_REASON.startswith('version'):
-        logger.warning('[PDF] pymupdf4llm installed but failed to import '
-                       '(version/ABI mismatch) — Markdown PDF extraction '
-                       'disabled, falling back to raw text. Pin a compatible '
-                       'pymupdf: %s', e)
-    else:
-        logger.warning('[PDF] pymupdf4llm not installed — Markdown PDF '
-                       'extraction disabled: %s', e)
+# IMPORTANT: never import pymupdf4llm at module import time.
+#
+# pymupdf4llm.helpers.pymupdf_rag / document_layout call
+# ``pymupdf.TOOLS.unset_quad_corrections(True)`` while their module body runs.
+# That is a process-global MuPDF switch: it changes ascender/descender
+# geometry for EVERY later ``page.get_text``/``find_tables`` call in the
+# process, so merely importing this domain corrupted table cell text in
+# unrelated PDF paths. Availability is probed here with ``find_spec`` only;
+# the module itself is imported by :func:`pymupdf4llm_module` at the call
+# sites that actually need Markdown extraction.
+HAS_PYMUPDF4LLM = _pymupdf4llm_installed()
+PYMUPDF4LLM_UNAVAILABLE_REASON = (
+    '' if HAS_PYMUPDF4LLM
+    else 'not installed: no module spec for pymupdf4llm')
+
+_pymupdf4llm_module = None
+_pymupdf4llm_resolved = False
+# Reentrant: ``pymupdf4llm_module`` and the classic-rag loader in text.py both
+# snapshot/restore the MuPDF flag around their import.
+_PYMUPDF4LLM_IMPORT_LOCK = threading.RLock()
+
+
+def import_preserving_quad_corrections(module_name: str):
+    """Import ``module_name`` without leaking MuPDF's global quad flag.
+
+    pymupdf4llm's helpers disable quad corrections (a process-global MuPDF
+    setting) at import. The flag has no setter beyond
+    ``TOOLS.unset_quad_corrections``; the no-argument call returns its current
+    value without modifying it, so the prior state can be captured and
+    restored once the import — including a failed one that leaves a partially
+    initialized package behind — completes.
+
+    Returns the imported module. Raises whatever the import raises, after the
+    caller's flag state has been restored.
+    """
+    with _PYMUPDF4LLM_IMPORT_LOCK:
+        if not HAS_PYMUPDF or not hasattr(pymupdf.TOOLS,
+                                          'unset_quad_corrections'):
+            return importlib.import_module(module_name)
+        previous = pymupdf.TOOLS.unset_quad_corrections()
+        try:
+            return importlib.import_module(module_name)
+        finally:
+            pymupdf.TOOLS.unset_quad_corrections(previous)
+
+
+def pymupdf4llm_module():
+    """Return the imported ``pymupdf4llm`` module, or None if unavailable.
+
+    Imports lazily on first use. ``HAS_PYMUPDF4LLM`` and
+    ``PYMUPDF4LLM_UNAVAILABLE_REASON`` are refined from the cheap spec probe
+    to the real outcome here (an installed-but-ABI-incompatible package fails
+    only when imported).
+    """
+    global HAS_PYMUPDF4LLM, PYMUPDF4LLM_UNAVAILABLE_REASON
+    global _pymupdf4llm_module, _pymupdf4llm_resolved
+    if _pymupdf4llm_resolved:
+        return _pymupdf4llm_module
+    with _PYMUPDF4LLM_IMPORT_LOCK:
+        if _pymupdf4llm_resolved:
+            return _pymupdf4llm_module
+        try:
+            module = import_preserving_quad_corrections('pymupdf4llm')
+            HAS_PYMUPDF4LLM = True
+            PYMUPDF4LLM_UNAVAILABLE_REASON = ''
+        except ImportError as e:
+            module = None
+            HAS_PYMUPDF4LLM = False
+            PYMUPDF4LLM_UNAVAILABLE_REASON = _diagnose_pymupdf4llm_failure(
+                e, _pymupdf4llm_installed())
+            if PYMUPDF4LLM_UNAVAILABLE_REASON.startswith('version'):
+                logger.warning('[PDF] pymupdf4llm installed but failed to '
+                               'import (version/ABI mismatch) — Markdown PDF '
+                               'extraction disabled, falling back to raw '
+                               'text. Pin a compatible pymupdf: %s', e)
+            else:
+                logger.warning('[PDF] pymupdf4llm not installed — Markdown '
+                               'PDF extraction disabled: %s', e)
+        _pymupdf4llm_module = module
+        _pymupdf4llm_resolved = True
+        return module
+
+
+def pymupdf4llm_available() -> bool:
+    """True when pymupdf4llm can actually be imported in this environment."""
+    return pymupdf4llm_module() is not None
+
+
+def pymupdf4llm_status() -> tuple[bool, str]:
+    """Resolved (available, unavailable_reason) pair for diagnostics."""
+    available = pymupdf4llm_module() is not None
+    return available, ('' if available else PYMUPDF4LLM_UNAVAILABLE_REASON)
 
 # ─── Docling (optional, OPT-IN — used by mode='structured') ───
 # Heavy dep (~2 GB with torch). NOT auto-installed; user opts in via
@@ -200,4 +279,4 @@ def expected_parser_version() -> str:
     stays self-consistent (raw rows hit) while a FIXED env never serves
     raw-tagged rows as markdown-corpus hits."""
     return current_parser_version(
-        'pymupdf4llm' if HAS_PYMUPDF4LLM else 'pymupdf-raw')
+        'pymupdf4llm' if pymupdf4llm_available() else 'pymupdf-raw')

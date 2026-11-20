@@ -69,6 +69,7 @@ def create_application(shutdown_requested, plan):
         else:
             require_plan_match(plan, prepare_plan(project, environment), stage=stage)
         app.extensions['tofu_execution_import_source'] = pins
+        app.extensions['tofu_execution_retained_source_fingerprint'] = retained
         return app
     except BaseException:
         pins.join()
@@ -128,6 +129,24 @@ def _claim_gate(args, app, record, request_stop, loop):
     return gate
 
 
+def _with_source_diagnostic(app, apply, *, manual_detect=None):
+    """Report the primary's frozen pins, not its loaded code, plan or current checkout."""
+    fingerprint = app.extensions.get('tofu_execution_retained_source_fingerprint')
+
+    def dispatch(method, task_id, **kwargs):
+        if method == 'manual_detect':
+            if manual_detect is None:
+                raise PermissionError('Only the scheduler owner receives manual Detect')
+            return manual_detect(task_id, **kwargs)
+        if method != 'retained_source_fingerprint':
+            return apply(method, task_id, **kwargs)
+        if fingerprint is None:
+            raise RuntimeError('Resident retained-source fingerprint is unavailable')
+        return dict(fingerprint)
+
+    return dispatch
+
+
 async def _run_application(args, record, stopped, shutdown_requested, application_factory):
     from serverctl_pkg.execution_lifespan import run_execution_lifespan
     loop = asyncio.get_running_loop()
@@ -150,7 +169,13 @@ async def _run_application(args, record, stopped, shutdown_requested, applicatio
         apply = apply_command_control
         if gate is not None and not shard:
             apply = gate.apply_command_control
-        command_controls = CommandControlServer(record['serviceId'], apply)
+        manual_detect = None
+        if not shard:
+            from functools import partial
+            from lib.scheduler.manual_detect_control import apply_manual_detect
+            manual_detect = partial(apply_manual_detect, stopping=shutdown_requested)
+        command_controls = CommandControlServer(record['serviceId'], _with_source_diagnostic(
+            app, apply, manual_detect=manual_detect))
         record['commandControl'] = await command_controls.start()
         record['state'] = 'ready'
         record['error'] = ''
@@ -237,7 +262,9 @@ def serve(args, *, application_factory=create_application):
     args.report_fd = getattr(args, 'report_fd', None)
     if getattr(args, 'launch_environment', None) is None:
         args.launch_environment = dict(os.environ)
-    shutdown_requested = threading.Event()
+    from lib.agent_core.abort_signal import AbortSignal
+
+    shutdown_requested = AbortSignal()
     stopped = asyncio.Event()
     event_loop = None
     loop_lock = threading.Lock()

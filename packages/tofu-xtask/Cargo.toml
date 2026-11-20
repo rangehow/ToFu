@@ -1,0 +1,24 @@
+[package]
+name = "tofu-xtask"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+description = "Contract generators: derive Rust, TypeScript and Python artefacts from Tofu's machine-readable contracts"
+publish = false
+
+# Standalone like tofu-contracts: joining the root workspace would change the
+# lock file that tofu-runtime's build fingerprint reads.
+[workspace]
+
+[[bin]]
+name = "tofu-xtask"
+path = "src/main.rs"
+
+[dependencies]
+# preserve_order: contract key order decides struct field and item order.
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_yaml = "0.9"
+
+[lints.rust]
+unsafe_code = "forbid"

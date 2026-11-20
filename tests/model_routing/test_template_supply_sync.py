@@ -149,7 +149,8 @@ def test_missing_served_recipes_converge():
     assert claude_deps
     assert all(connections[row['connection_id']]['protocol'] == 'anthropic'
                for row in claude_deps)
-    assert all(row['probe_status'] == 'passed' for row in claude_deps)
+    # This prober only admits whole recipes; it supplies no exact-cell evidence.
+    assert all(row['probe_status'] == 'unprobed' for row in claude_deps)
 
     assert all('enabled' not in row for row in claude_deps)
     gemini_deps = [row for row in document['deployments']
@@ -476,7 +477,8 @@ def _install_deepseek_pair(repository, boundary):
     """
     bundle = _seed_mini_card(repository, boundary)
     access_id = bundle['provider_access']['provider_access_id']
-    connection_id = bundle['connections'][0]['connection_id']
+    connection_id = next(row['connection_id'] for row in bundle['connections']
+                         if not row.get('gateway_namespace'))
     document = repository.get(boundary).document
     for model_id in ('deepseek-v4.1-flash', 'deepseek-v4-flash'):
         document['models'].append({
@@ -494,6 +496,8 @@ def _install_deepseek_pair(repository, boundary):
             ('deepseek-v4-flash', ('deepseek-v4-flash-huawei',
                                    'deepseek-v4-flash-tencent')))):
         offering_id = f'off_rename_{index}'
+        document['credentials'][0]['authorization']['models'].append({
+            'creator_id': 'deepseek', 'model_id': model_id})
         document['offerings'].append({
             'offering_id': offering_id,
             'provider_access_id': access_id,
@@ -780,9 +784,11 @@ def test_template_probe_cells_start_without_window_and_preserve_evidence(monkeyp
     started = time.monotonic()
     result = template_supply._live_prober(base_url='https://example.invalid',
         protocol='openai', faces={}, api_key='private-key', extra_headers={}, recipes=[])
-    assert len(result) == count
+    assert len([key for key in result if isinstance(key, str)]) == count
     for i in range(count):
-        assert result[f'm{i}'] == ('unknown' if fail_start and i == 1 else 'ok')
+        expected = 'unknown' if fail_start and i == 1 else 'ok'
+        assert result[f'm{i}'] == expected
+        assert (f'm{i}', f'wire{i}', 'https://example.invalid', 'openai', ()) not in result
     assert len(called) == count - int(fail_start)
     assert not any(t.name.startswith('template-supply') for t in threading.enumerate())
     if not fail_start:
@@ -812,9 +818,11 @@ def test_template_probe_merges_face_and_credential_headers(monkeypatch, cell_hea
 
     monkeypatch.setattr(provider_probe, 'probe_one_cell', probe)
     before = dict(envelope)
-    assert template_supply._live_prober(
+    result = template_supply._live_prober(
         base_url='https://example.invalid/v1', protocol='openai', faces={},
-        api_key='synthetic-key', extra_headers=envelope, recipes=[]) == {'model': 'ok'}
+        api_key='synthetic-key', extra_headers=envelope, recipes=[])
+    assert result['model'] == 'ok'
+    assert list(result) == ['model']  # the fake returned no prepared request evidence
     assert received == [{**(cell_headers or {}), **envelope}]
     assert envelope == before
 
@@ -1068,3 +1076,132 @@ def test_claude_default_face_does_not_steal_a_tokrouter_connection():
     assert connections[ordinary['connection_id']]['gateway_namespace'] == 'anthropic'
     assert stats['added_connections'] == 1
     assert stats['repaired_deployments'] == 1
+
+
+def test_no_change_pass_commits_no_revision():
+    """A no-op CAS revision used to wake every sibling monitor: an ERROR storm."""
+    repository = InMemoryModelRoutingRepository()
+    boundary = _boundary()
+    _seed_mini_card(repository, boundary)
+    sync_template_supply(boundary=boundary, repository=repository, prober=_prober_ok)
+
+    before = repository.get(boundary).revision
+    stats = sync_template_supply(boundary=boundary, repository=repository, prober=_prober_ok)
+
+    assert repository.get(boundary).revision == before
+    assert stats['revision'] == before
+
+
+def test_concurrent_aggregate_change_is_reread_not_a_sweep_failure():
+    """Optimistic concurrency: a conflicting writer means recompute, not ERROR."""
+    repository = InMemoryModelRoutingRepository()
+    boundary = _boundary()
+    _seed_mini_card(repository, boundary)
+
+    original = InMemoryModelRoutingRepository.compare_and_swap
+    calls = {'count': 0}
+
+    def racing(self, boundary_arg, document, **kwargs):
+        calls['count'] += 1
+        if calls['count'] == 1:
+            # Another writer commits in between; our expected revision is stale.
+            stale = self.get(boundary_arg).revision
+            self._authorities[boundary_arg] = self._authorities[boundary_arg].__class__(
+                boundary_arg, stale + 1, self.get(boundary_arg).document, 0.0)
+        return original(self, boundary_arg, document, **kwargs)
+
+    import lib.model_routing.template_supply as supply
+    from lib.model_routing.domain import ModelRoutingError
+
+    class RacingRepository(InMemoryModelRoutingRepository):
+        pass
+
+    repository.__class__ = RacingRepository
+    RacingRepository.compare_and_swap = racing
+
+    stats = sync_template_supply(boundary=boundary, repository=repository, prober=_prober_ok)
+
+    assert stats['added_offerings'] > 0
+    assert repository.get(boundary).revision > 1
+
+
+def test_unroutable_connection_warns_once_per_identity(caplog):
+    repository = InMemoryModelRoutingRepository()
+    boundary = _boundary()
+    bundle = _seed_mini_card(repository, boundary)
+    import lib.model_routing.template_supply as supply
+    supply._unroutable_reported.clear()
+    # No Responses face at all: the tokrouter recipes have no connection.
+    access_id = bundle['provider_access']['provider_access_id']
+    document = repository.get(boundary).document
+    document['connections'] = [row for row in document['connections']
+                               if row.get('gateway_namespace') != 'tokrouter']
+    for credential in document['credentials']:
+        credential['authorization']['connection_ids'] = [
+            row['connection_id'] for row in document['connections']]
+    repository.compare_and_swap(boundary, document, expected_revision=1)
+
+    def only_unroutable(**kwargs):
+        # Serve only the pending tokrouter recipes: no face connection exists.
+        return {row['model_id']: 'ok' for row in kwargs['recipes']
+                if row['model_id'].startswith('tokrouter.')}
+
+    with caplog.at_level('WARNING'):
+        supply.sync_template_supply(boundary=boundary, repository=repository,
+                                    prober=only_unroutable)
+    warnings = [r for r in caplog.records if 'no routable connection' in r.message]
+    assert warnings, 'the unroutable recipe must be reported'
+    assert all(r.levelname == 'WARNING' for r in warnings)
+
+    with caplog.at_level('WARNING'):
+        supply.sync_template_supply(boundary=boundary, repository=repository,
+                                    prober=only_unroutable)
+    repeat = [r for r in caplog.records if 'no routable connection' in r.message]
+    assert repeat == warnings
+
+
+def test_owner_confirmed_pending_wire_is_supplied_not_unroutable(caplog):
+    """A pending recipe whose wire the owner bound to a known Model is supplied.
+
+    Live 2026-11-18: tokrouter.gpt-5.5.distill-m17 was confirmed as gpt-5.5 on
+    the TokRouter face, yet every pass reported 'no routable connection for
+    pending:tokrouter.gpt-5.5.distill-m17' because the pending identity no
+    longer matched and its only wire was already deployed.
+    """
+    repository = InMemoryModelRoutingRepository()
+    boundary = _boundary()
+    _seed_mini_card(repository, boundary)
+    import lib.model_routing.template_supply as supply
+
+    def serve_tokrouter(**kwargs):
+        return {row['model_id']: 'ok' for row in kwargs['recipes']
+                if row['model_id'].startswith('tokrouter.')}
+
+    supply.sync_template_supply(boundary=boundary, repository=repository,
+                                prober=serve_tokrouter)
+    current = repository.get(boundary)
+    document = current.document
+    pending = [row for row in document['offerings']
+               if str(row.get('pending_model_id') or '').startswith('tokrouter.')]
+    assert pending, 'the pending TokRouter recipe must first be supplied'
+    target = next(row for row in document['models'] if row['model_id'] != pending[0]['pending_model_id'])
+    for row in pending:
+        # Owner confirmation re-keys the offering (live: off_9169976d…).
+        rekeyed = row['offering_id'] + '-confirmed'
+        for deployment in document['deployments']:
+            if deployment['offering_id'] == row['offering_id']:
+                deployment['offering_id'] = rekeyed
+        row['offering_id'] = rekeyed
+        row.pop('pending_model_id')
+        row['identity_state'] = 'confirmed'
+        row['model'] = {'creator_id': target['creator_id'], 'model_id': target['model_id']}
+    repository.compare_and_swap(boundary, document, expected_revision=current.revision)
+
+    supply._unroutable_reported.clear()
+    with caplog.at_level('WARNING'):
+        supply.sync_template_supply(boundary=boundary, repository=repository,
+                                    prober=serve_tokrouter)
+    assert not [r for r in caplog.records if 'no routable connection' in r.message]
+    after = repository.get(boundary).document
+    for row in pending:
+        assert _offering(after, row['offering_id'])['stale'] is False

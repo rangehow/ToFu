@@ -230,6 +230,7 @@ pub struct CreatePairRequest {
     pub require_lane_idle: bool,
     pub require_parent_is_lane_tail: bool,
     pub expected_parent_projection_revision: Option<u64>,
+    pub expected_conversation_revision: Option<u64>,
     pub require_parent_not_stopped: bool,
     pub reject_if_human_queued: bool,
     pub input_turn_id: String,
@@ -3293,6 +3294,20 @@ fn public_turn(
 ) -> io::Result<Value> {
     let _profile = crate::request_profile::Probe::new(crate::request_profile::TURN_PUBLIC);
 
+    // Match SQL and the full conversation read: a legacy header without a
+    // presentation identity uses its own Turn ID, not an execution identity.
+    if document
+        .get("presentationId")
+        .is_none_or(|value| value.as_str() == Some(""))
+    {
+        if let Some(turn_id) = document.get("turnId").and_then(Value::as_str) {
+            document.insert(
+                "presentationId".to_owned(),
+                Value::String(turn_id.to_owned()),
+            );
+        }
+    }
+
     let context_revision = model_context_revision(&document)?;
     document.remove("_modelContextDisplayOffset");
     if let Some(slot) = document.get_mut("modelContextRevision") {
@@ -5358,6 +5373,13 @@ pub(crate) fn create_pair(
             return Err(typed_conflict(TurnConflictKind::ParentInvalid));
         }
     }
+    if let Some(expected) = request.expected_conversation_revision {
+        let revision =
+            crate::conversation_header::revision(database, transaction, &request.conversation_id)?;
+        if revision != expected {
+            return Err(typed_conflict(TurnConflictKind::LaneAdvanced));
+        }
+    }
     if let Some(expected) = request.expected_parent_projection_revision {
         let parent_id = request
             .parent_turn_id
@@ -5539,13 +5561,20 @@ pub(crate) fn create_pair(
         .as_ref()
         .map(|value| value.queue_id.as_str())
         .unwrap_or("");
+    let mut accepted_config = request.config.clone();
+    bind_accepted_capabilities(
+        &mut accepted_config,
+        &request.conversation_id,
+        &request.output_turn_id,
+        &request.output_attempt_id,
+    );
     let output_attempt = json!({
         "attemptId": request.output_attempt_id, "conversationId": request.conversation_id, "turnId": request.output_turn_id,
         "commandId": request.command_id, "taskId": "", "operation": "generate", "status": "pending",
         "baseProjectionRevision": 0, "resumeAnchor": {}, "createdAt": request.created_at_ms,
         "startedAt": null, "settledAt": null, "_dispatchMode": request.dispatch_mode,
         "_queueId": queue_id, "_queueState": if queue_id.is_empty() { "" } else { "pending" },
-        "_config": request.config, "_error": {}
+        "_config": accepted_config, "_error": {}
     });
     let output_attempt_document = output_attempt
         .as_object()
@@ -5643,7 +5672,7 @@ pub(crate) fn create_pair(
                 kind: binding.kind.clone(),
                 priority: binding.priority,
                 message: binding.message.clone(),
-                config: request.config.clone(),
+                config: accepted_config,
                 created_at_ms: binding.created_at_ms,
                 input_turn_id: request.input_turn_id.clone(),
                 output_turn_id: request.output_turn_id.clone(),
@@ -12138,6 +12167,25 @@ pub(crate) fn attempt_get_with_config(
     attempt_id: &str,
     include_execution_config: bool,
 ) -> io::Result<Option<Vec<u8>>> {
+    let Some(document) = read_attempt_document(database, transaction, attempt_id)? else {
+        return Ok(None);
+    };
+    let mut result = public_attempt(&document)?;
+    if include_execution_config {
+        let config = document
+            .get("_config")
+            .and_then(Value::as_object)
+            .ok_or_else(|| invalid_data("attempt execution config is malformed"))?;
+        result["config"] = Value::Object(config.clone());
+    }
+    encode_response(&result).map(Some)
+}
+
+fn read_attempt_document(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    attempt_id: &str,
+) -> io::Result<Option<Map<String, Value>>> {
     let claim_key = global_identity_claim_key(transaction, ATTEMPT_ID_CLAIM_NAMESPACE, attempt_id)?;
     let Some(locator) = database.entity_get(transaction, &claim_key)? else {
         return Ok(None);
@@ -12198,9 +12246,9 @@ pub(crate) fn attempt_get_with_config(
     {
         return Ok(None);
     }
-    let document = value
-        .as_object()
-        .ok_or_else(|| invalid_data("attempt document is malformed"))?;
+    let Value::Object(document) = &value else {
+        return Err(invalid_data("attempt document is malformed"));
+    };
     if located_conversation_id.is_some() {
         let turn_id = document
             .get("turnId")
@@ -12216,15 +12264,55 @@ pub(crate) fn attempt_get_with_config(
             return Ok(None);
         }
     }
-    let mut result = public_attempt(document)?;
-    if include_execution_config {
-        let config = document
-            .get("_config")
-            .and_then(Value::as_object)
-            .ok_or_else(|| invalid_data("attempt execution config is malformed"))?;
-        result["config"] = Value::Object(config.clone());
+    match value {
+        Value::Object(document) => Ok(Some(document)),
+        _ => Err(invalid_data("attempt document is malformed")),
     }
-    encode_response(&result).map(Some)
+}
+
+/// Read only the exact prospective source pin. Both witnesses come from this
+/// query's transaction; a pin freezes neither replay inputs nor execution rights.
+pub(crate) fn resume_plan_read(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    conversation_id: &str,
+    turn_id: &str,
+    attempt_id: &str,
+    projection_revision: u64,
+) -> io::Result<Vec<u8>> {
+    let unavailable = || encode_response(&json!({"status": "source_unavailable"}));
+    if !attempt_conversation_is_active(database, transaction, conversation_id, false)? {
+        return unavailable();
+    }
+    let Some(turn) = metadata_read::get_value(database, transaction, conversation_id, turn_id)?
+    else {
+        return unavailable();
+    };
+    if turn.get("currentAttemptId").and_then(Value::as_str) != Some(attempt_id)
+        || turn.get("projectionRevision").and_then(Value::as_u64) != Some(projection_revision)
+    {
+        return encode_response(&json!({"status": "stale_source"}));
+    }
+    let Some(attempt) = read_attempt_document(database, transaction, attempt_id)? else {
+        return unavailable();
+    };
+    let source_status = attempt.get("status").and_then(Value::as_str);
+    if attempt.get("attemptId").and_then(Value::as_str) != Some(attempt_id)
+        || attempt.get("conversationId").and_then(Value::as_str) != Some(conversation_id)
+        || attempt.get("turnId").and_then(Value::as_str) != Some(turn_id)
+        || !matches!(source_status, Some("interrupted" | "truncated" | "failed"))
+        || source_status != turn.get("status").and_then(Value::as_str)
+    {
+        return unavailable();
+    }
+    encode_response(&json!({
+        "status": "source_pinned",
+        "conversationId": conversation_id,
+        "turnId": turn_id,
+        "attemptId": attempt_id,
+        "projectionRevision": projection_revision,
+        "sourceStatus": source_status,
+    }))
 }
 
 /// Existence probe for the invocation registrar's fallback parent proof: an
@@ -13148,6 +13236,188 @@ fn tombstones_at(
         .collect()
 }
 
+type AttemptSource = (Option<String>, Option<Value>);
+
+fn attempt_source(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    public: &Value,
+    expected_revision: u64,
+) -> io::Result<AttemptSource> {
+    let current_revision = public
+        .get("projectionRevision")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| invalid_data("turn projection revision is malformed"))?;
+    if current_revision != expected_revision {
+        return Err(typed_conflict(TurnConflictKind::ProjectionStale));
+    }
+    let current_attempt_id = public
+        .get("currentAttemptId")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let current_attempt = match current_attempt_id.as_deref() {
+        None => None,
+        Some(attempt_id) => read_attempt_document(database, transaction, attempt_id)?
+            .filter(|attempt| {
+                attempt.get("attemptId").and_then(Value::as_str) == Some(attempt_id)
+                    && attempt.get("conversationId") == public.get("conversationId")
+                    && attempt.get("turnId") == public.get("turnId")
+            })
+            .as_ref()
+            .map(public_attempt)
+            .transpose()?,
+    };
+    if current_attempt.as_ref().is_some_and(|attempt| {
+        matches!(
+            attempt.get("status").and_then(Value::as_str),
+            Some("pending" | "running")
+        )
+    }) {
+        return Err(conflict("this turn already has a live attempt"));
+    }
+    Ok((current_attempt_id, current_attempt))
+}
+
+fn attempt_resume_anchor(
+    public: &Value,
+    operation: &str,
+    requested_anchor: Option<&Map<String, Value>>,
+) -> io::Result<Map<String, Value>> {
+    let settlement = public
+        .get("settlement")
+        .and_then(Value::as_object)
+        .ok_or_else(|| invalid_data("invalid stored turn settlement"))?;
+    let anchors = resume_option_anchors(settlement)?;
+    let anchor = if operation == "regenerate" {
+        // Regenerate is always available; a caller may echo its advertised
+        // anchor (`turn_start`), exactly as the SQL authority admits.
+        anchors.get("regenerate").cloned().unwrap_or_default()
+    } else {
+        anchors.get(operation).cloned().ok_or_else(|| {
+            conflict("attempt operation is not available for the current settlement")
+        })?
+    };
+    // A checkpoint anchor's retainedToolRoundPositions is a derived index of
+    // the canonical retention selection, not an independent choice. A caller
+    // that echoes every other field but omits that list asks for the SAME
+    // checkpoint, so refusing it strands valid saved work — production
+    // 2026-11-09, a Coordinator resuming a 367-round turn after a provider
+    // 402 received a bare database_conflict here. Admit that shorthand and
+    // substitute the stored anchor below: without positions the legacy
+    // fallback would keep rounds[..kept] INCLUDING superseded provider
+    // attempts, so the derived list must come from the settlement, never be
+    // recomputed from the projection. Any explicit positions or other field
+    // that differs still conflicts. The accepted anchor stays the stored
+    // canonical one, so a repeated command replays the same Attempt.
+    //
+    // The refusal keeps the bare `Conflict` taxonomy of this admission path:
+    // a resume anchor that does not match the current settlement is an
+    // ordinary optimistic-concurrency conflict like the surrounding
+    // live-attempt, parent and submitted-turn fences. `ConflictFence` is
+    // reserved for deterministic fences that carry a compile-time literal
+    // reason to the client (the ownership fences in worker_job.rs and the
+    // command-receipt identity fence in authority.rs); routing this check
+    // through it would change the variant callers match on and silently drop
+    // the reason SQL already returns ("The requested resume anchor is not
+    // current."). Do not "improve" the message by re-classifying it.
+    if let Some(requested) = requested_anchor {
+        if requested != &anchor {
+            let shorthand_matches = operation == "checkpoint_resume"
+                && !requested.contains_key("retainedToolRoundPositions")
+                && anchor.get("retainedToolRoundPositions").is_some()
+                && requested
+                    .iter()
+                    .all(|(key, value)| anchor.get(key) == Some(value))
+                && anchor.len() == requested.len() + 1;
+            if !shorthand_matches {
+                return Err(conflict("the requested resume anchor is not current"));
+            }
+        }
+    }
+    Ok(anchor)
+}
+
+fn attempt_later_turns(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    conversation_id: &str,
+    public: &Value,
+) -> io::Result<BTreeMap<String, DeleteTurnRow>> {
+    // Validate the complete later tail before staging ANY mutations,
+    // especially submitted-input edits: a live later Turn or rooted branch
+    // refuses every operation. Only regenerate discards that tail, and only
+    // the exact closure the owner acknowledged; a resume completes the
+    // earlier Turn in place and preserves every later Turn, whose model
+    // context reads only the lane prefix through its ordinal.
+    let lane_id = public
+        .get("laneId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid_data("turn lane identity is malformed"))?;
+    let ordinal = public
+        .get("ordinal")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| invalid_data("turn ordinal is malformed"))?;
+    let tail = lane_tail_turn_ids(database, transaction, conversation_id, lane_id, ordinal)?;
+    collect_deletion_closure(database, transaction, conversation_id, &tail, &[], None)
+}
+
+fn attempt_resume_projection(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    public: &Value,
+    current_attempt_id: Option<&str>,
+    current_attempt: Option<&Value>,
+    retain_history: bool,
+) -> io::Result<(Map<String, Value>, u64, EntityKey)> {
+    let conversation_id = public
+        .get("conversationId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid_data("turn conversation identity is malformed"))?;
+    let turn_id = public
+        .get("turnId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid_data("turn identity is malformed"))?;
+    let mut projection = public
+        .get("projection")
+        .and_then(Value::as_object)
+        .cloned()
+        .ok_or_else(|| invalid_data("turn projection is malformed"))?;
+    let count_key = attempt_turn_count_key(transaction, conversation_id, turn_id)?;
+    let stored_count = database.entity_get(transaction, &count_key)?;
+    let attempt_count = if stored_count.is_none() && current_attempt_id.is_some() {
+        1
+    } else {
+        decode_u64(stored_count, "turn attempt count is malformed")?
+    };
+    if retain_history && attempt_count <= 1 {
+        if let (Some(attempt_id), Some(current)) = (current_attempt_id, current_attempt) {
+            projection_history_with_execution_identity(
+                &mut projection,
+                attempt_id,
+                current.get("taskId").and_then(Value::as_str).unwrap_or(""),
+            );
+        }
+    }
+    Ok((projection, attempt_count, count_key))
+}
+
+// Same private issuance contract as conversation_sync.execution_identity.
+// An existing binding must survive copies unchanged so restore can refuse them.
+fn bind_accepted_capabilities(
+    config: &mut Map<String, Value>,
+    conversation: &str,
+    turn: &str,
+    attempt: &str,
+) {
+    if let Some(binding) = config
+        .get_mut("_conversationExecutionIdentity")
+        .and_then(|envelope| envelope.get_mut("capabilityBinding"))
+        .filter(|binding| binding.is_null())
+    {
+        *binding = json!({"conversationId": conversation, "turnId": turn, "attemptId": attempt});
+    }
+}
+
 pub(crate) fn attempt_create(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
@@ -13214,114 +13484,12 @@ pub(crate) fn attempt_create(
     )?;
     let raw_turn = materialize_turn(database, transaction, &stored)?;
     let public = public_turn(raw_turn.clone(), execution_epoch)?;
-    let current_revision = public
-        .get("projectionRevision")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| invalid_data("turn projection revision is malformed"))?;
-    if current_revision != request.expected_projection_revision {
-        return Err(typed_conflict(TurnConflictKind::ProjectionStale));
-    }
-    let current_attempt_id = public
-        .get("currentAttemptId")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    let current_attempt = match current_attempt_id.as_deref() {
-        None => None,
-        Some(attempt_id) => attempt_get(database, transaction, attempt_id)?
-            .map(|encoded| {
-                serde_json::from_slice::<Value>(&encoded)
-                    .map_err(|_| invalid_data("current attempt is malformed"))
-            })
-            .transpose()?,
-    };
-    if current_attempt.as_ref().is_some_and(|attempt| {
-        matches!(
-            attempt.get("status").and_then(Value::as_str),
-            Some("pending" | "running")
-        )
-    }) {
-        return Err(conflict("this turn already has a live attempt"));
-    }
-    let settlement = public
-        .get("settlement")
-        .and_then(Value::as_object)
-        .ok_or_else(|| invalid_data("invalid stored turn settlement"))?;
-    let anchors = resume_option_anchors(settlement)?;
-    let anchor = if request.operation == "regenerate" {
-        // Regenerate is always available; a caller may echo its advertised
-        // anchor (`turn_start`), exactly as the SQL authority admits.
-        anchors.get("regenerate").cloned().unwrap_or_default()
-    } else {
-        anchors.get(&request.operation).cloned().ok_or_else(|| {
-            conflict("attempt operation is not available for the current settlement")
-        })?
-    };
-    // A checkpoint anchor's retainedToolRoundPositions is a derived index of
-    // the canonical retention selection, not an independent choice. A caller
-    // that echoes every other field but omits that list asks for the SAME
-    // checkpoint, so refusing it strands valid saved work — production
-    // 2026-11-09, a Coordinator resuming a 367-round turn after a provider
-    // 402 received a bare database_conflict here. Admit that shorthand and
-    // substitute the stored anchor below: without positions the legacy
-    // fallback would keep rounds[..kept] INCLUDING superseded provider
-    // attempts, so the derived list must come from the settlement, never be
-    // recomputed from the projection. Any explicit positions or other field
-    // that differs still conflicts. The accepted anchor stays the stored
-    // canonical one, so a repeated command replays the same Attempt.
-    //
-    // The refusal keeps the bare `Conflict` taxonomy of this admission path:
-    // a resume anchor that does not match the current settlement is an
-    // ordinary optimistic-concurrency conflict like the surrounding
-    // live-attempt, parent and submitted-turn fences. `ConflictFence` is
-    // reserved for deterministic fences that carry a compile-time literal
-    // reason to the client (the ownership fences in worker_job.rs and the
-    // command-receipt identity fence in authority.rs); routing this check
-    // through it would change the variant callers match on and silently drop
-    // the reason SQL already returns ("The requested resume anchor is not
-    // current."). Do not "improve" the message by re-classifying it.
-    if let Some(requested) = request.resume_anchor.as_ref() {
-        if requested != &anchor {
-            let shorthand_matches = request.operation == "checkpoint_resume"
-                && !requested.contains_key("retainedToolRoundPositions")
-                && anchor.get("retainedToolRoundPositions").is_some()
-                && requested
-                    .iter()
-                    .all(|(key, value)| anchor.get(key) == Some(value))
-                && anchor.len() == requested.len() + 1;
-            if !shorthand_matches {
-                return Err(conflict("the requested resume anchor is not current"));
-            }
-        }
-    }
-    // Validate the complete later tail before staging ANY mutations,
-    // especially submitted-input edits: a live later Turn or rooted branch
-    // refuses every operation. Only regenerate discards that tail, and only
-    // the exact closure the owner acknowledged; a resume completes the
-    // earlier Turn in place and preserves every later Turn, whose model
-    // context reads only the lane prefix through its ordinal.
-    let lane_id = raw_turn
-        .get("laneId")
-        .and_then(Value::as_str)
-        .ok_or_else(|| invalid_data("turn lane identity is malformed"))?;
-    let ordinal = raw_turn
-        .get("ordinal")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| invalid_data("turn ordinal is malformed"))?;
-    let tail = lane_tail_turn_ids(
-        database,
-        transaction,
-        &request.conversation_id,
-        lane_id,
-        ordinal,
-    )?;
-    let later_rows = collect_deletion_closure(
-        database,
-        transaction,
-        &request.conversation_id,
-        &tail,
-        &[],
-        None,
-    )?;
+    let current_revision = request.expected_projection_revision;
+    let (current_attempt_id, current_attempt) =
+        attempt_source(database, transaction, &public, current_revision)?;
+    let anchor =
+        attempt_resume_anchor(&public, &request.operation, request.resume_anchor.as_ref())?;
+    let later_rows = attempt_later_turns(database, transaction, &request.conversation_id, &public)?;
     let discarded_rows = if request.operation == "regenerate" {
         later_rows
     } else {
@@ -13332,19 +13500,14 @@ pub(crate) fn attempt_create(
         &discarded_rows,
     )?;
 
-    let mut projection = public
-        .get("projection")
-        .and_then(Value::as_object)
-        .cloned()
-        .ok_or_else(|| invalid_data("turn projection is malformed"))?;
-    let count_key =
-        attempt_turn_count_key(transaction, &request.conversation_id, &request.turn_id)?;
-    let stored_count = database.entity_get(transaction, &count_key)?;
-    let attempt_count = if stored_count.is_none() && current_attempt_id.is_some() {
-        1
-    } else {
-        decode_u64(stored_count, "turn attempt count is malformed")?
-    };
+    let (mut projection, attempt_count, count_key) = attempt_resume_projection(
+        database,
+        transaction,
+        &public,
+        current_attempt_id.as_deref(),
+        current_attempt.as_ref(),
+        request.operation != "regenerate",
+    )?;
     if attempt_count >= MAX_ATTEMPTS_PER_TURN as u64 {
         return Err(crate::resource_exhaustion::domain_bound(
             "turn attempt history exceeds 64 entries",
@@ -13352,17 +13515,6 @@ pub(crate) fn attempt_create(
     }
     let mut rewound_thinking = false;
     if request.operation != "regenerate" {
-        if attempt_count <= 1 {
-            if let (Some(attempt_id), Some(current)) =
-                (current_attempt_id.as_deref(), current_attempt.as_ref())
-            {
-                projection_history_with_execution_identity(
-                    &mut projection,
-                    attempt_id,
-                    current.get("taskId").and_then(Value::as_str).unwrap_or(""),
-                );
-            }
-        }
         let lane_continues = matches!(request.operation.as_str(), "continue" | "answer_guidance")
             && projection.get("content").is_some_and(json_truthy);
         let content_tail = projection
@@ -13636,6 +13788,13 @@ pub(crate) fn attempt_create(
         .as_object()
         .cloned()
         .ok_or_else(|| invalid_input("attempt config must be an object"))?;
+    bind_accepted_capabilities(
+        &mut accepted_config,
+        &request.conversation_id,
+        &request.turn_id,
+        &request.attempt_id,
+    );
+    let settlement = &public["settlement"];
     accepted_config.insert("_resumeSource".to_owned(), json!({
         "attemptId": current_attempt_id.as_deref().unwrap_or(""),
         "taskId": current_attempt.as_ref().and_then(|value| value.get("taskId")).and_then(Value::as_str).unwrap_or(""),
@@ -14523,6 +14682,20 @@ fn load_event_record_state_with_projection(
         .ok_or_else(|| invalid_data("attempt status is malformed"))?;
     if !matches!(attempt_status, "pending" | "running") {
         return Ok(None);
+    }
+    match request.event_payload.get("_requireUnboundAttempt") {
+        None | Some(Value::Bool(false)) => {}
+        Some(Value::Bool(true)) if request.terminal && request.status == "failed" => {
+            if attempt_status != "pending"
+                || loaded_attempt.document.get("taskId").and_then(Value::as_str) != Some("")
+                || loaded_attempt.document.get("_queueState")
+                    .or_else(|| loaded_attempt.document.get("queueState"))
+                    .is_some_and(|value| value.as_str() != Some(""))
+            {
+                return Ok(None);
+            }
+        }
+        _ => return Err(invalid_input("Unbound fence requires a startup failure")),
     }
     // Flow-root fence, mirroring the SQL sidecar's `flow_root_attempt_id`
     // check: the declared root is only a hint — the immutable attempt config
@@ -15436,6 +15609,7 @@ fn publish_event_record(
         .and_then(Value::as_u64)
         .ok_or_else(|| invalid_data("turn projection revision is malformed"))?;
     let mut event_payload = request.event_payload.clone();
+    event_payload.remove("_requireUnboundAttempt");
     event_payload.remove("removedQueueIds");
     if let Some(acknowledgement) = &request.background_command_ack {
         if request.slim {

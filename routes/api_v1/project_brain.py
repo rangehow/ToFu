@@ -19,7 +19,7 @@ logger = get_logger(__name__)
 api_v1_project_brain_bp = Blueprint('api_v1_project_brain', __name__)
 
 
-def _path(explicit: str | None = '') -> str:
+def _path(explicit: str = '') -> str:
     path = str(explicit or decode_proxy_path_arg('path') or '').strip()
     if not path:
         raise ValueError('path is required')
@@ -112,7 +112,7 @@ def project_coordinator_budget_read():
 def project_coordinator_progress_read():
     try:
         from lib.conversations.coordinator_progress import CoordinatorTaskProgress
-        return api_ok(CoordinatorTaskProgress(_owner(), _path()).read())
+        return api_ok(CoordinatorTaskProgress(_owner(), _path()).read(principal=request_principal()))
     except Exception as exc:
         return _safe_route_error_response(exc)
 
@@ -242,12 +242,12 @@ def _dispatch_service(project_path):
 @api_v1_project_brain_bp.route('/api/v1/project/coordination/assignments', methods=['POST'])
 @require_scope('chat')
 @api_meta(summary='Explicitly authorize and dispatch a bounded no-tool consultation', tags=['project'],
-          scope='chat', request_body=dispatch_request_body('request'))
+          scope='chat', request_body=dispatch_request_body('publicRequest'))
 def project_assignment_create():
     from quart import request
     from lib.project_dispatch.contract import parse
     try:
-        data = parse('request')
+        data = parse('publicRequest')
         service, principal = _dispatch_service(data['projectPath'])
         return api_ok(service.authorize_and_dispatch(data, principal=principal,
                       command_id=request.headers.get('Idempotency-Key') or ''))

@@ -121,7 +121,7 @@ export const CONVERSATION_SYNC_SCHEMAS = {
         "type": "string"
       },
       "settlement": {
-        "$ref": "#/components/schemas/TurnSettlement"
+        "$ref": "#/components/schemas/AppendSettledTurnSettlement"
       },
       "status": {
         "enum": [
@@ -138,6 +138,72 @@ export const CONVERSATION_SYNC_SCHEMAS = {
       "actor",
       "projection"
     ],
+    "type": "object"
+  },
+  "AppendSettledTurnSettlement": {
+    "additionalProperties": false,
+    "description": "Caller-supplied settlement, without authority to record Coordinator Worker observations.",
+    "properties": {
+      "cause": {
+        "type": "string"
+      },
+      "continuation": {
+        "$ref": "#/components/schemas/TurnContinuation"
+      },
+      "error": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "evidence": {
+        "$ref": "#/components/schemas/TurnTerminationEvidence"
+      },
+      "outcome": {
+        "$ref": "#/components/schemas/TurnOutcome"
+      },
+      "providerFinishReason": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "resumeOptions": {
+        "items": {
+          "$ref": "#/components/schemas/TurnResumeOption"
+        },
+        "type": "array"
+      },
+      "retryChain": {
+        "description": "Bounded durable receipts for discarded whole-turn automatic retries.",
+        "items": {
+          "$ref": "#/components/schemas/TurnRetryReceipt"
+        },
+        "maxItems": 8,
+        "type": "array"
+      },
+      "streamState": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ProviderStreamState"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
     "type": "object"
   },
   "AttemptEvent": {
@@ -1238,6 +1304,37 @@ export const CONVERSATION_SYNC_SCHEMAS = {
       "state",
       "reason",
       "budget"
+    ],
+    "type": "object"
+  },
+  "CoordinatorWorkerObservation": {
+    "additionalProperties": false,
+    "properties": {
+      "attemptId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "deliveryStatus": {
+        "oneOf": [
+          {
+            "maxLength": 64,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "resultRevision": {
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "attemptId",
+      "resultRevision",
+      "deliveryStatus"
     ],
     "type": "object"
   },
@@ -5115,6 +5212,19 @@ export const CONVERSATION_SYNC_SCHEMAS = {
       "continuation": {
         "$ref": "#/components/schemas/TurnContinuation"
       },
+      "coordinatorWorkerObservations": {
+        "additionalProperties": {
+          "$ref": "#/components/schemas/CoordinatorWorkerObservation"
+        },
+        "description": "Worker result receipts observed by a completed Coordinator Turn, keyed by assignment ID.",
+        "minProperties": 1,
+        "propertyNames": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": "object"
+      },
       "error": {
         "oneOf": [
           {
@@ -7464,7 +7574,28 @@ export type TurnRetryReceipt = {
   "failureAttribution"?: JsonObject;
 };
 
+export type CoordinatorWorkerObservation = {
+  "attemptId": string;
+  "resultRevision": number;
+  "deliveryStatus": (string) | (null);
+};
+
 export type TurnSettlement = {
+  "outcome"?: TurnOutcome;
+  "cause"?: string;
+  "evidence"?: TurnTerminationEvidence;
+  "streamState"?: (ProviderStreamState) | (null);
+  "providerFinishReason"?: (string) | (null);
+  "error"?: (JsonObject) | (string) | (null);
+  "resumeOptions"?: ReadonlyArray<TurnResumeOption>;
+  "continuation"?: TurnContinuation;
+  "retryChain"?: ReadonlyArray<TurnRetryReceipt>;
+  "coordinatorWorkerObservations"?: {
+  [key: string]: CoordinatorWorkerObservation;
+};
+};
+
+export type AppendSettledTurnSettlement = {
   "outcome"?: TurnOutcome;
   "cause"?: string;
   "evidence"?: TurnTerminationEvidence;
@@ -7820,7 +7951,7 @@ export type AppendSettledTurnRequest = {
   "projection": TurnProjection;
   "kind"?: string;
   "status"?: "completed" | "interrupted" | "truncated" | "failed";
-  "settlement"?: TurnSettlement;
+  "settlement"?: AppendSettledTurnSettlement;
   "createdAt"?: number;
   "laneId"?: string;
   "runId"?: string;

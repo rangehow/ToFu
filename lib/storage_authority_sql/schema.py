@@ -10,7 +10,7 @@ from lib.storage.errors import StorageError
 from lib.storage_authority_sql.adapters.base import Session
 
 
-SCHEMA_VERSION = 70
+SCHEMA_VERSION = 71
 
 
 _TABLES = (
@@ -646,6 +646,14 @@ _TABLES = (
         config_json TEXT NOT NULL DEFAULT '{}',
         created_at BIGINT NOT NULL DEFAULT 0,
         updated_at BIGINT NOT NULL DEFAULT 0
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS swarm_run_lifecycle (
+        run_identity BLOB PRIMARY KEY NOT NULL,
+        swarm_key TEXT NOT NULL,
+        owner_id BIGINT NOT NULL,
+        receipt_json TEXT NOT NULL
     )
     """,
     """
@@ -2215,6 +2223,22 @@ def _sql_for_backend(session: Session, sql: str) -> str:
     return re.sub(r'\bJSONDOC\b', 'TEXT', sql)
 
 
+def swarm_mailbox_json_expression(backend: str, *path: str) -> str:
+    """Indexed mailbox selectors over the existing record, not a second owner."""
+    if backend == 'postgres':
+        return '(' + ' -> '.join(['value_json', *(repr(field) for field in path[:-1])]) + f' ->> {path[-1]!r})'
+    # Historical SQLite storage_records may store JSON bytes or text.
+    return ("CASE WHEN json_valid(CAST(value_json AS TEXT)) "
+            f"THEN json_extract(CAST(value_json AS TEXT), '$.{'.'.join(path)}') END")
+
+
+def swarm_disposed_mailbox_predicate(backend: str) -> str:
+    from lib.swarm.message_contract import NAMESPACE
+    from lib.swarm.persistence_contract import SWARM_MAILBOX_DISPOSITION_FIELD
+    return (f"namespace = '{NAMESPACE}' AND "
+            f"({swarm_mailbox_json_expression(backend, SWARM_MAILBOX_DISPOSITION_FIELD)}) IS NOT NULL")
+
+
 def initialize_schema(session: Session) -> None:
     for sql in _TABLES:
         # PostgreSQL has BYTEA rather than BLOB and uses its ordinary primary
@@ -2275,6 +2299,18 @@ def initialize_schema(session: Session) -> None:
         session.execute(_sql_for_backend(session, sql))
     for sql in _POST_MIGRATION_INDEXES:
         session.execute(sql)
+    from lib.swarm.message_contract import NAMESPACE as swarm_mailboxes
+    mailbox_index_kind = ' USING hash' if session.backend == 'postgres' else ''
+    session.execute('CREATE INDEX IF NOT EXISTS idx_swarm_lifecycle_key ON swarm_run_lifecycle(swarm_key)')
+    session.execute(f'CREATE INDEX IF NOT EXISTS idx_swarm_sessions_run ON swarm_sessions{mailbox_index_kind}(task_id)')
+    run_selector = swarm_mailbox_json_expression(session.backend, 'binding', 'swarmRunId')
+    key_selector = swarm_mailbox_json_expression(session.backend, 'binding', 'swarmKey')
+    session.execute('CREATE INDEX IF NOT EXISTS idx_swarm_mailbox_run '
+                    f'ON storage_records{mailbox_index_kind}(({run_selector})) '
+                    f"WHERE namespace = '{swarm_mailboxes}'")
+    session.execute('CREATE INDEX IF NOT EXISTS idx_swarm_mailbox_disposed_key '
+                    f'ON storage_records{mailbox_index_kind}(({key_selector})) '
+                    f'WHERE {swarm_disposed_mailbox_predicate(session.backend)}')
     if session.backend == 'postgres':
         from lib.storage.generated_project_dispatch_contract import SPEC
         private_names = ','.join("'" + name + "'" for name in sorted(SPEC['namespaces'].values()))

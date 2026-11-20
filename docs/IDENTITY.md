@@ -150,6 +150,27 @@ Extension downloads and agent installers mint a fresh device credential. If
 the credential authority is unavailable, download returns 503. Shipping a
 package known to be unable to connect is not a valid degraded mode.
 
+## Account-bound Codex model execution
+
+A Codex catalog's automatic model authorization is scoped to the account and
+exact provider wire name. A candidate carries the authorized account hashes
+through slot materialization; explicit manual grants keep their existing
+meaning and wire exclusions. A pending managed Codex offering is discoverable
+but cannot authorize ordinary inference. Owner revocation history suppresses
+scoped grants independently of subsequent discovery.
+
+The outbound Codex resolver takes the bearer and account from one immutable
+credential snapshot (owned, local, desktop, or refreshed). Automatic grants
+require an exact account claim in that bearer, matching both the credential
+metadata and the selected route's grant. The account header derives from the
+same snapshot, not from a second login read or caller-supplied headers. Native
+credential preparation binds the same grant and checks the final callback
+headers before allowing provider ingress. If an account switches after this
+check, the already sealed request can only send the old account's bearer;
+subsequent attempts must independently prove their current bearer. Alternatives
+rejected: checking current login during route compilation, and locking catalog
+publication against login; neither proves which bearer a later attempt sends.
+
 ## Borrowing an existing Codex login
 
 Problem: independently refreshing a copied Codex refresh token can race the

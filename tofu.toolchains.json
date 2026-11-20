@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "toolchains": {
+    "texlive2026": {
+      "description": "Persistent TeX Live used by isolated document delivery checks",
+      "location": "/mnt/your-fs",
+      "path": ["bin/x86_64-linux"],
+      "provides": ["latexmk", "pdflatex", "xelatex", "kpsewhich", "tlmgr"],
+      "install": "test -x \"$TOOLCHAIN_LOCATION/bin/x86_64-linux/tlmgr\" || { echo 'Bootstrap TeX Live once from the documented persistent src/tl.profile recipe first' >&2; exit 1; }; python3 scripts/install_document_tex_packages.py --location \"$TOOLCHAIN_LOCATION\""
+    },
+    "misans-test-fixture": {
+      "description": "Pinned offline MiSans assets for isolated slide tests",
+      "location": "/mnt/your-fs",
+      "env": {"TOFU_MISANS_FIXTURE": "{location}"},
+      "install": "python3 -m tests.support.misans_fixture \"$TOOLCHAIN_LOCATION\""
+    },
+    "poppler": {
+      "location": "/mnt/your-fs",
+      "path_append": ["bin"],
+      "provides": ["pdftotext", "pdffonts", "pdftoppm"],
+      "install": "/mnt/your-fs create -y -p \"$TOOLCHAIN_LOCATION\" -c conda-forge --override-channels poppler"
+    },
+    "ffmpeg": {
+      "description": "Development FFmpeg (current conda-forge release) with libx264 and the libass subtitles filter for isolated motion-video renders",
+      "location": "/mnt/your-fs",
+      "path_append": ["bin"],
+      "env": {"TOFU_FFMPEG": "{location}/bin/ffmpeg", "TOFU_FFPROBE": "{location}/bin/ffprobe"},
+      "provides": ["ffmpeg", "ffprobe"],
+      "install": "/mnt/your-fs create -y -p \"$TOOLCHAIN_LOCATION\" -c conda-forge --override-channels ffmpeg"
+    }
+  }
+}

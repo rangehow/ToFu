@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "tofu.llm-request-evidence/v1",
+  "title": "Per-attempt LLM request and cache-exchange evidence",
+  "description": "Bounded, content-free receipt returned by cache_exchange_receipt and preserved by loggable_cache_exchange. Absent frame_* keys mean this transport did not name its exact sent bytes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol",
+    "transport",
+    "verified",
+    "logical_input_items",
+    "sent_input_items",
+    "incremental",
+    "reused_connection",
+    "reused_idle_connection",
+    "full_reason",
+    "provider_input_tokens",
+    "provider_cached_tokens"
+  ],
+  "properties": {
+    "protocol": {
+      "enum": ["openai", "anthropic", "responses"]
+    },
+    "transport": {
+      "enum": ["http", "sse", "websocket", "native"]
+    },
+    "verified": {
+      "type": "boolean"
+    },
+    "logical_input_items": {
+      "$ref": "#/$defs/boundedCountOrNull"
+    },
+    "sent_input_items": {
+      "$ref": "#/$defs/boundedCountOrNull"
+    },
+    "incremental": {
+      "type": "boolean"
+    },
+    "reused_connection": {
+      "type": "boolean"
+    },
+    "reused_idle_connection": {
+      "type": "boolean"
+    },
+    "full_reason": {
+      "enum": [
+        null,
+        "no_checkpoint",
+        "request_fields_changed",
+        "input_not_list",
+        "history_shortened",
+        "history_changed",
+        "previous_output_changed",
+        "empty_delta",
+        "non_application_delta",
+        "provider_reconnect"
+      ]
+    },
+    "provider_input_tokens": {
+      "$ref": "#/$defs/boundedCountOrNull"
+    },
+    "provider_cached_tokens": {
+      "$ref": "#/$defs/boundedCountOrNull"
+    },
+    "frame_sha256": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "frame_bytes": {
+      "$ref": "#/$defs/boundedCountOrNull"
+    },
+    "frame_kind": {
+      "enum": ["full", "incremental", "reset", null]
+    },
+    "frame_reason": {
+      "enum": [
+        null,
+        "no_checkpoint",
+        "request_fields_changed",
+        "input_not_list",
+        "history_shortened",
+        "history_changed",
+        "previous_output_changed",
+        "empty_delta",
+        "non_application_delta",
+        "provider_reconnect"
+      ]
+    },
+    "frame_content_encoding": {
+      "enum": ["", "zstd", "gzip", "deflate", null]
+    }
+  },
+  "dependentRequired": {
+    "frame_sha256": [
+      "frame_bytes",
+      "frame_kind",
+      "frame_reason",
+      "frame_content_encoding"
+    ],
+    "frame_bytes": [
+      "frame_sha256",
+      "frame_kind",
+      "frame_reason",
+      "frame_content_encoding"
+    ],
+    "frame_kind": [
+      "frame_sha256",
+      "frame_bytes",
+      "frame_reason",
+      "frame_content_encoding"
+    ],
+    "frame_reason": [
+      "frame_sha256",
+      "frame_bytes",
+      "frame_kind",
+      "frame_content_encoding"
+    ],
+    "frame_content_encoding": [
+      "frame_sha256",
+      "frame_bytes",
+      "frame_kind",
+      "frame_reason"
+    ]
+  },
+  "$defs": {
+    "boundedCountOrNull": {
+      "description": "Exact 53-bit non-negative count, or unknown.",
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "maximum": 9007199254740991
+    }
+  }
+}

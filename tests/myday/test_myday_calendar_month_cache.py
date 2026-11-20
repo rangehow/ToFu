@@ -59,11 +59,18 @@ for (let day = 1; day <= 28; day += 1) {
   }
   busy[day] = { cost: day + 0.5, conversations };
 }
+busy[29] = { cost: 1.25, partial: true, conversations: {} };
+const now = new Date();
+const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+const tokenSnapshot = {date: today, total_cny: 3.5};
+let restored;
+global.MyDayTokenCosts = { restore: (snapshot) => { restored = snapshot; } };
 let calls = 0;
 global.Api = { daily: {
   calendar: () => {
     calls += 1;  // the first open answers; after the reload the server is slow
-    return calls === 1 ? Promise.resolve({ days: {}, conv_days: { 3: 4 }, cost_days: busy })
+    return calls === 1 ? Promise.resolve({ days: {}, conv_days: { 3: 4 }, cost_days: busy,
+      today_token_costs: tokenSnapshot })
       : new Promise(() => {});
   },
 } };
@@ -83,6 +90,8 @@ const tick = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     cachedMonths: stored.length,
     storedBytes: stored.length ? Buffer.byteLength(JSON.stringify(stored[0])) : null,
     limit: MYDAY_CACHE_RESOURCE_BUDGET.maximumMonthBytes,
+    partialCached: Object.hasOwn(stored[0]?.cost_days ?? {}, '29'),
+    restored,
     paintedCost: els.mydayCalGrid._html.includes('¥3.50'),
     paintedConversations: /mcal-dot unknown/.test(els.mydayCalGrid._html),
   }));
@@ -103,5 +112,7 @@ def test_a_busy_month_still_paints_the_calendar_from_the_cache(tmp_path):
     result = json.loads(proc.stdout.strip().splitlines()[-1])
     assert result['calls'] == 2, result
     assert result['cachedMonths'] == 1, f'the busy month was not cached: {result}'
+    assert not result['partialCached'], result
     assert result['storedBytes'] <= result['limit'], result
     assert result['paintedCost'] and result['paintedConversations'], result
+    assert result['restored']['total_cny'] == 3.5

@@ -40,6 +40,7 @@ from lib.swarm.integration._state import (
     _set_session,
     SwarmSessionConflict,
     add_session_alias,
+    reconcile_unenqueued_run,
     retire_previous_run_rows,
 )
 from lib.swarm.master import MasterOrchestrator
@@ -485,6 +486,71 @@ def execute_swarm_tool(fn_name: str, fn_args: dict, task: dict | None = None,
 #  spawn_agents — async; returns handle immediately
 # ═══════════════════════════════════════════════════════════
 
+def _reconcile_launch_interruption(task: dict) -> None:
+    """Use local pre-enqueue evidence, not a missing resident handle."""
+    identity = task.get('_swarmUnenqueuedRun')
+    if identity is None:
+        return
+    if not reconcile_unenqueued_run(identity):
+        from lib.storage.errors import StorageError
+        raise StorageError('database_conflict', 'Prior unenqueued swarm retirement unconfirmed')
+    if task.get('_swarmUnenqueuedRun') is identity:
+        task.pop('_swarmUnenqueuedRun')
+
+
+def _spawn_launch_handle(*, task_id: str, swarm_run_id: str, swarm_key: str,
+                         is_followup: bool, orchestration: dict,
+                         read_only_orchestration: bool,
+                         specs: list[SubTaskSpec]) -> dict:
+    """Project an accepted wave without reading or changing execution state."""
+    return {
+        'status':    'async_launched',
+        'swarm_id':  task_id,
+        # Stable across follow-up turns; swarm_id remains the launch-task alias.
+        'swarm_run_id': swarm_run_id,
+        # The conversation-scoped session key — the frontend stamps it onto
+        # the swarm panel so its reconciler probes /api/v1/swarm/status with
+        # the key that ALWAYS resolves (alias misses were a false-settle
+        # vector). Persisted inside toolContent, so it survives reload.
+        'swarm_key': swarm_key,
+        'is_followup': is_followup,
+        'orchestration': ({
+            'backend': 'local_swarm',
+            'mode': 'read_only',
+            'compositionMode': orchestration.get('compositionMode') or '',
+            'programmaticWorkers': bool(
+                orchestration.get('programmaticCalling') in ('auto', 'on')),
+        } if read_only_orchestration else {
+            'backend': 'local_swarm', 'mode': 'standard',
+        }),
+        'agents': [
+            {
+                'id':          s.id,
+                'role':        s.role,
+                # Full objective (not truncated): this handle is the only
+                # persisted source the swarm panel re-parses to rebuild agent
+                # cards after a reload (_recoverSwarmAgents in
+                # streaming_swarm_panel.js), and the card renders it verbatim
+                # with CSS wrapping. A [:N] cap here clips the displayed text
+                # mid-sentence. The text is the model's own spawn input, so
+                # echoing it in full is no new information in its context.
+                # (output_file is deliberately absent: neither the model nor
+                # the panel consumes the on-disk log path.)
+                'objective':   s.objective,
+                'required_for_completion': s.required_for_completion,
+            }
+            for s in specs
+        ],
+        'message': (
+            f'Launched {len(specs)} agent(s) in the background. '
+            'Continue with other work — completions arrive automatically '
+            'as <swarm-update> user messages carrying the outcome. To wait, use '
+            f'poll(ids=[<returned agent ids>], wait_s={POLL_WAIT_CAP_S}); it '
+            'returns as soon as an agent finishes. No-ID poll() is a snapshot, '
+            'not a wait for all agents.'),
+    }
+
+
 def _handle_spawn_agents(fn_args: dict, *,
                          task_id: str,
                          task: dict,
@@ -631,6 +697,16 @@ def _handle_spawn_agents(fn_args: dict, *,
     # back to task_id when there's no conv (tests, standalone).
     swarm_key = swarm_key_for(task)
     owner_id = task_user_id(task)
+    from lib.swarm import persistence
+    from lib.swarm.integration import _sql_lifecycle
+    try:
+        sql_lifecycle = not (task.get('_transientRuntime') or task.get('_invocationStorageFree')) and (
+            persistence.uses_sql_lifecycle())
+        if sql_lifecycle:
+            _sql_lifecycle.require_current_attempt(task, owner=owner_id)
+    except Exception as error:
+        return _swarm_tool_error('swarm_persistence_unavailable', retryable=False,
+                                 message=str(error), submission_state='rejected')
 
     # If a session already exists for this conversation, ADD to it instead
     # of creating a fresh one. This is how the main agent re-uses the same
@@ -647,9 +723,16 @@ def _handle_spawn_agents(fn_args: dict, *,
             'swarm_not_found', retryable=False,
             message='No swarm session exists for this conversation.',
             next_action='Call spawn_agents to start a new swarm session.')
+    if (sql_lifecycle and session is not None and not _sql_lifecycle.matches_scope(
+            getattr(session, '_sql_run_identity', None), task, project_path, owner=owner_id)):
+        return _swarm_tool_error('swarm_scope_denied', retryable=False,
+                                 message='No exact swarm in this task scope', submission_state='rejected')
     if session is not None and session.is_terminated:
         logger.info('[Swarm:%s] previous session terminated — recycling key', swarm_key)
-        _remove_session(swarm_key)
+        retired = _remove_session(swarm_key, expected=session, disposition='replacement')
+        if sql_lifecycle and not retired:
+            return _swarm_tool_error('swarm_retirement_unconfirmed', retryable=False,
+                                     message='Prior swarm run was not retired', submission_state='rejected')
         session = None
     if session is not None:
         existing_contract = ((session._parent_task_proxy.get('config') or {})
@@ -762,10 +845,12 @@ def _handle_spawn_agents(fn_args: dict, *,
 
     def _on_settled(k=swarm_key, owner=owner_id, source=continuation_source):
         import lib.swarm.integration as _pkg
-        return _pkg._maybe_autocontinue(k, owner, source_id=source)
+        writer = {'expected_writer': (session.task_id, session._checkpoint_writer_epoch)} if sql_lifecycle else {}
+        return _pkg._maybe_autocontinue(k, owner, source_id=source, **writer)
 
     deduped_dropped: list[SubTaskSpec] = []
     if session is None:
+        run_id = f'swarm:{uuid.uuid4().hex}' if sql_lifecycle else task_id
         conv_id = task.get('convId', cfg.get('convId', '')) or ''
         # Consume the already validated session grant; do not compile/copy a
         # broader parent catalog again after preparation succeeded.
@@ -818,7 +903,7 @@ def _handle_spawn_agents(fn_args: dict, *,
             parent_cfg['_toolOrchestration'] = dict(orchestration)
 
         session = MasterOrchestrator(
-            task_id=task_id,
+            task_id=run_id,
             conv_id=conv_id,
             user_id=owner_id,
             specs=specs,
@@ -842,8 +927,27 @@ def _handle_spawn_agents(fn_args: dict, *,
             on_settled=_on_settled,
             on_agent_usage=_child_usage_rollup(task),
         )
+        session._transient_runtime = parent_cfg['_transientRuntime']
+        session._spawning_task_id = task_id
+        def durable_config():
+            return _persist_config(cfg, model, thinking_enabled, project_path, parent_cfg,
+                                   user_id=owner_id, parent_task=session._parent_task_proxy,
+                                   tool_catalog=session.all_tools)
+
+        if sql_lifecycle:
+            try:
+                saved_config = durable_config()
+                session._sql_run_identity = persistence.run_identity(swarm_key, {
+                    'config': saved_config, 'task_id': run_id, 'conv_id': conv_id})
+            except Exception as error:
+                session.abort()
+                return _swarm_tool_error('swarm_context_preparation_failed', retryable=False,
+                                         message=str(error), submission_state='rejected')
         try:
-            _set_session(swarm_key, session, task_id=task_id)
+            if sql_lifecycle:
+                _set_session(swarm_key, session, task_id=task_id, require_empty=True)
+            else:
+                _set_session(swarm_key, session, task_id=task_id)
         except SwarmSessionConflict as exc:
             session.abort()
             return _swarm_tool_error(
@@ -855,27 +959,33 @@ def _handle_spawn_agents(fn_args: dict, *,
         # Registration excludes a concurrent recovery of this key, so rows an
         # earlier run left behind are recorded and reclaimed before this run's
         # session row replaces their header.
-        if not parent_cfg['_transientRuntime']:
-            retire_previous_run_rows(swarm_key, task_id)
-
-        # Persist the session so a server restart can rehydrate + resume it.
-        # ``config`` carries everything ``_rehydrate_one`` needs to rebuild the
-        # sub-agent tool list and model. Best-effort — never blocks the spawn.
-        try:
-            from lib.swarm import persistence
-            persistence.save_session(
-                swarm_key,
-                conv_id=conv_id, task_id=task_id,
-                specs=[s.to_dict() for s in specs],
-                config=_persist_config(cfg, model, thinking_enabled,
-                                       project_path, parent_cfg,
-                                       user_id=owner_id,
-                                       parent_task=session._parent_task_proxy,
-                                       tool_catalog=session.all_tools),
-                status='running')
-        except Exception as e:
-            logger.debug('[Swarm:%s] session persist failed (non-fatal): %s',
-                         swarm_key, e)
+        admission_failure = None
+        if sql_lifecycle:
+            def before_initial_enqueue(accepted):
+                nonlocal admission_failure
+                try:
+                    _reconcile_launch_interruption(task)
+                    worker_start = _sql_lifecycle.persist_launch(session, task, saved_config, accepted)
+                    from lib.swarm.master import release_assignment_owner
+                    admitted_ids = {id(spec) for spec in accepted}
+                    for spec in session.specs:
+                        if id(spec) not in admitted_ids:
+                            release_assignment_owner(spec)
+                    session.specs = list(accepted)
+                    return worker_start
+                except BaseException as error:
+                    admission_failure = error
+                    raise
+            session._before_initial_enqueue = before_initial_enqueue
+        else:
+            if not parent_cfg['_transientRuntime']:
+                retire_previous_run_rows(swarm_key, task_id)
+            # Preserve the native ordinary writer; it does not support exact shapes.
+            try:
+                persistence.save_session(swarm_key, conv_id=conv_id, task_id=task_id,
+                    specs=[s.to_dict() for s in specs], config=durable_config(), status='running')
+            except Exception as e:
+                logger.debug('[Swarm:%s] session persist failed (non-fatal): %s', swarm_key, e)
 
         try:
             session.run_in_background()
@@ -883,7 +993,7 @@ def _handle_spawn_agents(fn_args: dict, *,
             # Cycle detection raised by add_specs
             logger.warning('[Swarm:%s] spawn_agents rejected: %s',
                            swarm_key, e)
-            _remove_session(swarm_key)
+            _remove_session(swarm_key, expected=session, preserve_durable=sql_lifecycle)
             return _swarm_tool_error(
                 'agent_dependency_cycle', retryable=False,
                 message=(
@@ -893,18 +1003,54 @@ def _handle_spawn_agents(fn_args: dict, *,
                 next_action=(
                     'Re-issue spawn_agents without circular depends_on '
                     'entries.'))
-        except Exception as error:
+        except BaseException as error:
+            if admission_failure is not None:
+                stopped = session._aborted or task.get('aborted')
+                session.abort()
+                if stopped:
+                    from ._state import _record_results_then_delete
+                    _record_results_then_delete(swarm_key, session, disposition='stop')
+                else:
+                    task.setdefault('_swarmUnenqueuedRun', session._sql_run_identity)
+                    try:
+                        _reconcile_launch_interruption(task)
+                    except Exception:
+                        logger.warning('[Swarm:%s] exact launch retirement unconfirmed', run_id,
+                                       exc_info=True)
+                _remove_session(swarm_key, expected=session, preserve_durable=True)
+                if not isinstance(error, Exception):
+                    raise
+                return _swarm_tool_error('swarm_durable_admission_failed', retryable=False,
+                    message=str(error), submission_state='rejected',
+                    next_action='No workers were enqueued. A fresh launch must pass admission.')
+            if not isinstance(error, Exception):
+                raise
             logger.error('[Swarm:%s] launch outcome unconfirmed', session.task_id, exc_info=True)
             return _uncertain_launch_error(error, session, specs)
-        # On a fresh session, run_in_background's add_specs accepted everything
-        # (no prior state to dedup against). ``specs`` is already correct.
+        if sql_lifecycle:
+            specs = session.specs
     else:
         # Existing live session — inject new specs into the running scheduler.
         # A live session reached from a later turn: alias this task_id so
         # await_agents / get_agent_result on THIS turn resolve to it.
         add_session_alias(task_id, swarm_key)
+        roster_failure = None
+        def before_followup_enqueue(accepted):
+            nonlocal roster_failure
+            try:
+                worker_start = _sql_lifecycle.persist_roster(session, task, accepted)
+                session.register_followup_specs(
+                    accepted, parent_turn_id=str(task.get('_turnId') or ''))
+                return worker_start
+            except Exception as error:
+                roster_failure = error
+                raise
+
         try:
-            accepted_specs = session._scheduler.add_specs(specs)  # type: ignore[union-attr]
+            if sql_lifecycle:
+                accepted_specs = session._scheduler.add_specs(specs, before_enqueue=before_followup_enqueue)
+            else:
+                accepted_specs = session._scheduler.add_specs(specs)  # type: ignore[union-attr]
         except AgentDependencyCycleError as e:
             logger.warning('[Swarm:%s] follow-up spawn rejected: %s',
                            swarm_key, e)
@@ -920,6 +1066,13 @@ def _handle_spawn_agents(fn_args: dict, *,
                     'Re-issue spawn_agents without circular depends_on '
                     'entries.'))
         except Exception as error:
+            if roster_failure is not None:
+                from lib.swarm.master import release_assignment_owner
+                for spec in specs:
+                    release_assignment_owner(spec)
+                return _swarm_tool_error('swarm_durable_admission_failed', retryable=False,
+                    message=str(error), submission_state='rejected',
+                    next_action='No new workers were enqueued. Reconcile the exact durable roster before retrying.')
             logger.error('[Swarm:%s] launch outcome unconfirmed', session.task_id, exc_info=True)
             return _uncertain_launch_error(error, session, specs)
         from lib.swarm.master import release_assignment_owner
@@ -927,7 +1080,7 @@ def _handle_spawn_agents(fn_args: dict, *,
         for spec in specs:
             if id(spec) not in accepted_ids:
                 release_assignment_owner(spec)
-        if accepted_specs:
+        if accepted_specs and not sql_lifecycle:
             # Track followup specs in MasterOrchestrator so ``get_status``
             # (and the /api/v1/swarm/status route) sees the full agent list.
             session.register_followup_specs(
@@ -935,16 +1088,16 @@ def _handle_spawn_agents(fn_args: dict, *,
             # Update the persisted spec set so a restart rehydrates the full
             # roster (first wave + this follow-up wave).
             try:
-                from lib.swarm import persistence
-                persistence.save_session(
-                    swarm_key,
-                    conv_id=session.conv_id, task_id=session.task_id,
-                    specs=[s.to_dict() for s in session.specs],
-                    config=_persist_config(cfg, model, thinking_enabled,
-                                           project_path,
-                                           session._parent_task_proxy.get('config') or {},
-                                           user_id=session.user_id),
-                    status='running')
+                if not sql_lifecycle:
+                    persistence.save_session(
+                        swarm_key,
+                        conv_id=session.conv_id, task_id=session.task_id,
+                        specs=[s.to_dict() for s in session.specs],
+                        config=_persist_config(cfg, model, thinking_enabled,
+                                               project_path,
+                                               session._parent_task_proxy.get('config') or {},
+                                               user_id=session.user_id),
+                        status='running')
             except Exception as e:
                 logger.debug('[Swarm:%s] followup session persist failed: %s',
                              swarm_key, e)
@@ -969,52 +1122,10 @@ def _handle_spawn_agents(fn_args: dict, *,
         deduped_dropped = [s for s in specs if s.id not in accepted_ids]
         specs = accepted_specs
 
-    handle = {
-        'status':    'async_launched',
-        'swarm_id':  task_id,
-        # Stable across follow-up turns; swarm_id remains the launch-task alias.
-        'swarm_run_id': session.task_id,
-        # The conversation-scoped session key — the frontend stamps it onto
-        # the swarm panel so its reconciler probes /api/v1/swarm/status with
-        # the key that ALWAYS resolves (alias misses were a false-settle
-        # vector). Persisted inside toolContent, so it survives reload.
-        'swarm_key': swarm_key,
-        'is_followup': swarm_id_existing,
-        'orchestration': ({
-            'backend': 'local_swarm',
-            'mode': 'read_only',
-            'compositionMode': orchestration.get('compositionMode') or '',
-            'programmaticWorkers': bool(
-                orchestration.get('programmaticCalling') in ('auto', 'on')),
-        } if read_only_orchestration else {
-            'backend': 'local_swarm', 'mode': 'standard',
-        }),
-        'agents': [
-            {
-                'id':          s.id,
-                'role':        s.role,
-                # Full objective (not truncated): this handle is the only
-                # persisted source the swarm panel re-parses to rebuild agent
-                # cards after a reload (_recoverSwarmAgents in
-                # streaming_swarm_panel.js), and the card renders it verbatim
-                # with CSS wrapping. A [:N] cap here clips the displayed text
-                # mid-sentence. The text is the model's own spawn input, so
-                # echoing it in full is no new information in its context.
-                # (output_file is deliberately absent: neither the model nor
-                # the panel consumes the on-disk log path.)
-                'objective':   s.objective,
-                'required_for_completion': s.required_for_completion,
-            }
-            for s in specs
-        ],
-        'message': (
-            f'Launched {len(specs)} agent(s) in the background. '
-            'Continue with other work — completions arrive automatically '
-            'as <swarm-update> user messages carrying the outcome. To wait, use '
-            f'poll(ids=[<returned agent ids>], wait_s={POLL_WAIT_CAP_S}); it '
-            'returns as soon as an agent finishes. No-ID poll() is a snapshot, '
-            'not a wait for all agents.'),
-    }
+    handle = _spawn_launch_handle(
+        task_id=task_id, swarm_run_id=session.task_id, swarm_key=swarm_key,
+        is_followup=swarm_id_existing, orchestration=orchestration,
+        read_only_orchestration=read_only_orchestration, specs=specs)
     if deduped_dropped:
         handle['deduplicated'] = [
             {'id': s.id, 'objective': s.objective[:120]}
@@ -1064,6 +1175,7 @@ def _handle_await_agents(fn_args: dict, *, task_id: str,
                          task: dict | None = None,
                          abort_check: Callable | None = None,
                          pending_input_check: Callable[[], bool] | None = None,
+                         on_idle_timeout: Callable[[str], None] | None = None,
                          max_wait_s: float = AWAIT_AGENTS_HARD_CAP_SEC) -> str:
     # The retired await_agents tool keeps its 60-second cap; poll passes its own.
     # Resolve the conversation-scoped session (Option A): a "continue" turn
@@ -1128,6 +1240,10 @@ def _handle_await_agents(fn_args: dict, *, task_id: str,
         **({'pending_input_check': pending_input_check}
            if pending_input_check is not None else {}),
     )
+    if (on_idle_timeout is not None and ids_in and result.get('timed_out') is True
+            and not any(result.get(key) for key in ('completed', 'partial', 'unknown', 'cancelled', 'yield_reason'))
+            and set(result.get('still_running', ())) == set(ids_in)):
+        on_idle_timeout(session.continuation_source)
     result['status'] = 'ok'
     return json.dumps(result, ensure_ascii=False)
 

@@ -1,7 +1,8 @@
 """Owner Hope queue policy shared with hope-mcp and the CLI guard.
 
 The Global Router publishes this document through its normal reviewed
-publication. No Tofu code writes it. An entry may scope a ban to projects;
+publication. Router-home creation seeds it once with the contract's
+fail-safe default (``lib.router.home``); no code overwrites it. An entry may scope a ban to projects;
 an omitted `projects` applies globally. Unknown fields are invalid. If the
 file is missing or cannot be read, the fail-safe default
 (``lib.tools.hope_queue_policy.DEFAULT_ENTRIES``) applies.

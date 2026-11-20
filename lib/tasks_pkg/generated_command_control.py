@@ -2,7 +2,12 @@
 
 FORMAT = 'tofu.execution-command-control/v1'
 ACKNOWLEDGEMENT_SECONDS = 2.0
-METHODS = ('interrupt', 'background', 'swarm_abort', 'swarm_agent_stop', 'swarm_status', 'background_activity', 'storage_rpc_metrics', 'task_view', 'task_abort', 'guidance_answer', 'mcp_reconcile', 'device_policy_reconcile')
-OWNER_METHODS = ('background_activity', 'storage_rpc_metrics', 'mcp_reconcile', 'device_policy_reconcile')
+MANUAL_DETECT_FIELDS = ('conversation_id', 'turn_id', 'attempt_id', 'schedule_id')
+MANUAL_DETECT_TASK_ID_MAX = 256
+MANUAL_DETECT_PARAM_ID_MAX = 128
+MANUAL_DETECT_RESULT_FIELDS = ('success', 'result')
+MANUAL_DETECT_RESULT_MAX = 5000
+METHODS = ('interrupt', 'background', 'swarm_abort', 'swarm_agent_stop', 'swarm_status', 'background_activity', 'storage_rpc_metrics', 'task_view', 'task_abort', 'guidance_answer', 'mcp_reconcile', 'device_policy_reconcile', 'retained_source_fingerprint', 'manual_detect')
+OWNER_METHODS = ('background_activity', 'storage_rpc_metrics', 'mcp_reconcile', 'device_policy_reconcile', 'retained_source_fingerprint')
 REQUEST_FIELDS = ('format', 'serviceId', 'token', 'requestId', 'ownerId', 'method', 'taskId', 'params', 'deadlineUnixMs')
 RESPONSE_FIELDS = ('format', 'requestId', 'result', 'error')

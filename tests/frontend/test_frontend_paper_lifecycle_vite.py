@@ -36,7 +36,7 @@ global._paperScale = 1;
 const calls = { key: 0, selection: 0, unload: 0, library: 0,
   drop: 0, zoom: 0, render: 0, qa: 0, recPaint: 0, searchPaint: 0,
   qaDestroy: 0, pdfDestroy: 0,
-  researchDestroy: 0, podcastStop: 0, videoStop: 0, babelDestroy: 0 };
+  researchDestroy: 0, podcastStop: 0, videoStop: 0, fulltextDestroy: 0 };
 global._handlePaperKeyDown = () => { calls.key++; };
 global._handlePaperTextSelection = () => { calls.selection++; };
 global._teardownReadingTracker = () => { calls.unload++; };
@@ -51,7 +51,7 @@ global._lastArxivSearchQuery = 'paper';
 global._recStream = { status:'done' };
 global._paintRecommendFromState = () => { calls.recPaint++; };
 global._renderArxivSearchResults = () => { calls.searchPaint++; };
-global._destroyBabelRuntime = () => { calls.babelDestroy++; };
+global._destroyFulltextRuntime = () => { calls.fulltextDestroy++; };
 global._destroyPaperQA = () => { calls.qaDestroy++; };
 global._destroyPaperPdfViewer = () => { calls.pdfDestroy++; };
 global._destroyResearchRuntime = () => { calls.researchDestroy++; };
@@ -148,6 +148,6 @@ def test_native_lifecycle_is_idempotent_and_releases_every_listener(tmp_path):
     assert after_session['pdfDestroy'] == 1
     assert after_session['researchDestroy'] == 1
     assert result['mediaStopped'] is True
-    assert after_session['babelDestroy'] == 1
+    assert after_session['fulltextDestroy'] == 1
     assert result['scale'] > 1
     assert result['noListenersAfterDestroy'] is True

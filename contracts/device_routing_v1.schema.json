@@ -31,7 +31,9 @@
     "device_ambiguous": "Several devices match, or several are online and no default is marked for the tool's kind.",
     "device_offline": "The named or default device is offline.",
     "device_unavailable": "The device was lost (no poll within the liveness window) after the call was sent. Before the device claimed it, the call was withdrawn and never runs; after, its outcome is unknown and it is never retried elsewhere.",
-    "permission_denied": "The command's tier is outside ceiling AND device."
+    "permission_denied": "The command's tier is outside ceiling AND device.",
+    "stale_device_policy": "HTTP 409: the owner policy advanced; reread permissions before reviewing unsaved changes.",
+    "uncertain_write": "HTTP 503 from a policy PUT does not imply rollback. Reread the relevant policy before deciding what still needs to be saved."
   },
   "$defs": {
     "Tiers": {
@@ -75,7 +77,8 @@
         "ceilings": {"type": "object", "maxProperties": 4096,
                      "propertyNames": {"minLength": 1, "maxLength": 256},
                      "additionalProperties": {"$ref": "#/$defs/Ceiling"}},
-        "defaults": {"$ref": "#/$defs/Defaults"}
+        "defaults": {"$ref": "#/$defs/Defaults"},
+        "last_ceiling_write": {"$ref": "#/$defs/NodeId", "description": "Node changed by the immediately preceding owner policy mutation, present only for ceiling writes. Together with the record version and stored ceiling, recognizes an exact lost-ACK replay without writing again."}
       },
       "additionalProperties": false
     },
@@ -93,6 +96,7 @@
       "additionalProperties": false
     },
     "PermissionsListing": {
+      "description": "Includes bridge devices, active registry nodes including before their first poll, and devices with stored ceilings. All rows carry the same authoritative owner revision.",
       "type": "object",
       "required": ["permissions", "rev", "liveness_window_s"],
       "properties": {
@@ -104,8 +108,9 @@
     },
     "CeilingRequest": {
       "type": "object",
-      "required": ["tiers"],
+      "required": ["tiers", "expected_revision"],
       "properties": {
+        "expected_revision": {"type": "integer", "minimum": 0, "description": "Owner policy rev from a permissions read or successful write. Unversioned writes are rejected."},
         "tiers": {
           "type": "object",
           "properties": {
@@ -117,12 +122,36 @@
       },
       "additionalProperties": false
     },
+    "ExecutionReconcile": {"enum": ["applied", "refused", "unavailable", "not_split"]},
+    "CeilingResponse": {
+      "type": "object",
+      "required": ["node_id", "home", "device", "effective", "rev", "execution"],
+      "properties": {
+        "node_id": {"$ref": "#/$defs/NodeId"},
+        "home": {"$ref": "#/$defs/Tiers"},
+        "device": {"oneOf": [{"$ref": "#/$defs/Tiers"}, {"type": "null"}]},
+        "effective": {"$ref": "#/$defs/Tiers"},
+        "rev": {"type": "integer", "minimum": 0},
+        "execution": {"$ref": "#/$defs/ExecutionReconcile"}
+      },
+      "additionalProperties": false
+    },
     "DefaultsRequest": {
       "type": "object",
       "properties": {
         "computer": {"type": ["string", "null"], "minLength": 1, "maxLength": 256},
         "server": {"type": ["string", "null"], "minLength": 1, "maxLength": 256},
         "browser": {"type": ["string", "null"], "minLength": 1, "maxLength": 256}
+      },
+      "additionalProperties": false
+    },
+    "DefaultsWriteResponse": {
+      "type": "object",
+      "required": ["defaults", "rev", "execution"],
+      "properties": {
+        "defaults": {"$ref": "#/$defs/Defaults"},
+        "rev": {"type": "integer", "minimum": 0},
+        "execution": {"$ref": "#/$defs/ExecutionReconcile"}
       },
       "additionalProperties": false
     },

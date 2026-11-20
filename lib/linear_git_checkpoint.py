@@ -260,11 +260,18 @@ def resolve_publication_mode(project_path: str | Path) -> dict[str, Any]:
         refs.pop(name, None)
     retiring = ('Publication refs from an unrelated history will be retired; '
                 if unrelated else '')
-    if 'refs/tofu/candidate' in refs:
-        return decision(True, False, 'Integration candidate exists; linear checkpoint does not own publication')
     marker, stable = refs.get(CHECKPOINT_BASELINE_REF), refs.get(STABLE_REF)
-    if stable and not marker:
-        return decision(True, False, 'Existing stable history has no linear baseline ownership')
+    candidate = refs.get('refs/tofu/candidate')
+    if not marker:
+        # An isolated workspace initializes candidate and stable at HEAD before
+        # any publication; those refs carry nothing beyond the current commit.
+        # First activation adopts that pristine pair. A ref naming another
+        # commit still describes an existing publication, and linear mode must
+        # not take it over.
+        if candidate and candidate != head_sha:
+            return decision(True, False, 'Integration candidate exists; linear checkpoint does not own publication')
+        if stable and stable != head_sha:
+            return decision(True, False, 'Existing stable history has no linear baseline ownership')
     if marker and not stable:
         return decision(True, False, 'Linear baseline exists but stable ref is missing')
     if stable and stable != head_sha:
@@ -487,8 +494,7 @@ def _ensure_checkpoint_baseline(root: Path, head_sha: str) -> str:
             root, ', '.join(f'{name} -> {archive}' for name, archive in retired.items()))
     marker = _revision(root, CHECKPOINT_BASELINE_REF)
     stable = _revision(root, STABLE_REF)
-    if _revision(root, 'refs/tofu/candidate'):
-        raise LinearCheckpointError('Integration candidate exists; linear checkpoint does not own publication')
+    candidate = _revision(root, 'refs/tofu/candidate')
     if _revision(root, 'HEAD') != head_sha:
         raise LinearCheckpointError('HEAD moved during baseline activation')
     if marker:
@@ -501,19 +507,27 @@ def _ensure_checkpoint_baseline(root: Path, head_sha: str) -> str:
         if _git(root, ['merge-base', '--is-ancestor', marker, head_sha]).returncode:
             raise LinearCheckpointError('HEAD is outside the checkpoint baseline history')
         return stable
-    if stable:
+    if candidate and candidate != head_sha:
+        raise LinearCheckpointError('Integration candidate exists; linear checkpoint does not own publication')
+    if stable and stable != head_sha:
         raise LinearCheckpointError('Existing stable history is not owned by linear checkpoint')
     zero = '0' * len(head_sha)
     # --stdin commits the entire batch atomically on EOF, including Git 2.11.
     # Explicit start/prepare/commit controls require newer Git and add no
-    # isolation here because we send the whole transaction in one input.
-    transaction = '\n'.join((
+    # isolation here because we send the whole transaction in one input. A
+    # pristine candidate/stable pair at HEAD is verified and kept; only the
+    # baseline marker is created over it.
+    # One command per ref: update-ref rejects a transaction that verifies and
+    # then creates the same ref.
+    transaction = [
         f'verify HEAD {head_sha}',
-        f'verify refs/tofu/candidate {zero}',
-        f'create {STABLE_REF} {head_sha}',
+        f'verify refs/tofu/candidate {candidate or zero}',
+        (f'verify {STABLE_REF} {stable}' if stable
+         else f'create {STABLE_REF} {head_sha}'),
         f'create {CHECKPOINT_BASELINE_REF} {head_sha}',
         '',
-    ))
+    ]
+    transaction = '\n'.join(transaction)
     _git(root, ['update-ref', '-m', 'tofu: activate workspace checkpoint baseline',
                 '--stdin'], input_text=transaction, check=True)
     return head_sha
@@ -860,6 +874,7 @@ def _publish_verified_refs(
     base_sha: str,
     stable_sha: str,
     target_sha: str,
+    candidate_sha: str = '',
 ) -> None:
     """Atomically publish the development branch and verified stable ref."""
     ancestor = _git(root, [
@@ -875,7 +890,7 @@ def _publish_verified_refs(
     transaction = '\n'.join((
         f'update {branch_ref} {target_sha} {base_sha}',
         f'update {STABLE_REF} {target_sha} {stable_sha}',
-        f'verify refs/tofu/candidate {"0" * len(base_sha)}',
+        f'verify refs/tofu/candidate {candidate_sha or "0" * len(base_sha)}',
         '',
     ))
     process = _git(
@@ -948,6 +963,11 @@ def _capture_repository_leased(task: dict[str, Any], user_id: int,
             raise LinearCheckpointError(
                 f'{root}: HEAD does not resolve to a commit')
         stable_sha = _ensure_checkpoint_baseline(root, base_sha)
+        # Observe the integration candidate once with the baseline. Linear mode
+        # owns publication once its marker exists; an unchanged candidate ref
+        # (even one a managed workspace initialized at HEAD) is inert, and the
+        # publication transaction verifies exactly this value.
+        candidate_sha = _revision(root, 'refs/tofu/candidate')
 
         index_path = ''
         try:
@@ -961,7 +981,8 @@ def _capture_repository_leased(task: dict[str, Any], user_id: int,
                 return {
                     'projectRoot': str(root), 'status': 'no_changes',
                     'baseSha': base_sha, 'checkpointSha': base_sha,
-                    'stableSha': stable_sha, 'stableUpdated': False,
+                    'stableSha': stable_sha, 'candidateSha': candidate_sha,
+                    'stableUpdated': False,
                     'verification': (
                         'not_needed' if capture_consistent
                         else 'workspace_changed'),
@@ -1013,7 +1034,8 @@ def _capture_repository_leased(task: dict[str, Any], user_id: int,
                 'branchRef': branch_ref,
                 'checkpointRef': checkpoint_ref,
                 'changedPaths': changed_paths[:128],
-                'stableSha': stable_sha, 'stableUpdated': False,
+                'stableSha': stable_sha, 'candidateSha': candidate_sha,
+                'stableUpdated': False,
                 'verification': 'pending', 'verificationDetail': '',
                 'captureConsistent': capture_consistent,
                 'indexSynchronized': False,
@@ -1368,7 +1390,7 @@ def _promote_captured_checkpoint(task, row, root, target_sha, stable_sha, select
             or current_branch.stdout.strip() != branch_ref
             or _revision(root, STABLE_REF) != stable_sha
             or stable_sha != row.get('stableSha')
-            or _revision(root, 'refs/tofu/candidate')
+            or _revision(root, 'refs/tofu/candidate') != str(row.get('candidateSha') or '')
         ):
             row['verification'] = 'workspace_changed'
             row['verificationDetail'] = (
@@ -1394,7 +1416,8 @@ def _promote_captured_checkpoint(task, row, root, target_sha, stable_sha, select
                 raise _PublicationDeferred('HEAD moved before publication')
             _publish_verified_refs(
                 root, branch_ref=branch_ref, base_sha=head_sha,
-                stable_sha=stable_sha, target_sha=promoted_sha)
+                stable_sha=stable_sha, target_sha=promoted_sha,
+                candidate_sha=str(row.get('candidateSha') or ''))
 
             # Ref publication is irreversible here. If index installation
             # subsequently fails, report the published state, never rollback.

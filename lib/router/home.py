@@ -11,9 +11,10 @@ Entry points: ``router_home_location(user_id)`` (pure path, no effects),
 ``is_router_home(user_id, path)`` and ``owner_resources(user_id)`` (the
 owner's shared resource registry, docs/ROUTER.md R13).
 
-Creation writes README.md, .gitignore and the write-once ``RESOURCES.md``
+Creation writes README.md, .gitignore, the write-once ``RESOURCES.md``
 seed (a bundle's ``router_home/RESOURCES.md``, else an empty registry; never
-secrets), runs ``git init`` (which makes the
+secrets) and the write-once ``HOPE_QUEUE_POLICY.json`` seed (the contract's
+fail-safe default, R16), runs ``git init`` (which makes the
 home its own repository top level even when the data directory lies inside a
 source checkout), then reuses ``prepare_managed_repository`` for the baseline
 commit, generated AGENTS.md guidance and shared-data policy. Existing files and
@@ -148,6 +149,25 @@ def _resources_seed() -> str:
     return _RESOURCES
 
 
+def _hope_queue_policy_seed() -> str:
+    """The R16 policy seed: exactly the contract's fail-safe default (the global m17 ban).
+
+    The guards enforce that default when the file is missing, so seeding it
+    changes no decision; it makes the owner's source exist where RESOURCES.md
+    and the guards name it, ready for the Global Router's reviewed edits.
+    """
+    import json
+    from lib.tools.hope_queue_contract import schema
+    return json.dumps(schema()['x-fail-safe-default'], indent=2, ensure_ascii=False) + '\n'
+
+
+def _seed_owner_files(home: str) -> None:
+    """Write-once owner sources a home must hold; owner or reviewed-Worker edits win."""
+    from lib.tools.hope_queue_policy import POLICY_FILENAME
+    _write_once(os.path.join(home, 'RESOURCES.md'), _resources_seed())
+    _write_once(os.path.join(home, POLICY_FILENAME), _hope_queue_policy_seed())
+
+
 def _write_once(path: str, content: str) -> None:
     if os.path.lexists(path):
         return
@@ -191,8 +211,9 @@ def router_home_path(user_id: int) -> str:
     if os.path.isdir(os.path.join(home, '.git')) and _has_commit(home):
         # R13: a home created before the registry seed must not point leads at a
         # missing RESOURCES.md. Write-once; the owner or a reviewed Worker may
-        # edit or delete it afterwards and nothing here restores or overwrites it.
-        _write_once(os.path.join(home, 'RESOURCES.md'), _resources_seed())
+        # edit it afterwards and nothing here overwrites it. The same holds for the
+        # R16 HOPE_QUEUE_POLICY.json, which a home recreated on a new host lacked.
+        _seed_owner_files(home)
         return home
     # The same cross-process per-root lock as managed repository preparation:
     # concurrent `git init` runs race on template and config lock files.
@@ -200,7 +221,7 @@ def router_home_path(user_id: int) -> str:
     with _repo_lock(home):
         _write_once(os.path.join(home, 'README.md'), _README)
         _write_once(os.path.join(home, '.gitignore'), _GITIGNORE)
-        _write_once(os.path.join(home, 'RESOURCES.md'), _resources_seed())
+        _seed_owner_files(home)
         if not os.path.lexists(os.path.join(home, '.git')):
             initialized = _git(home, 'init', '-q')
             if initialized.returncode:

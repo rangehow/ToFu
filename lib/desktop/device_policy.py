@@ -25,7 +25,6 @@ from functools import lru_cache
 import json
 from pathlib import Path
 import threading
-from typing import Any
 import uuid
 
 from lib.agent_core.storage_errors import StorageError
@@ -46,6 +45,10 @@ class PolicyNotFound(LookupError):
     """The node or device is not the owner's."""
 
 
+class StaleDevicePolicy(ValueError):
+    """The caller's ceiling snapshot is no longer current."""
+
+
 @lru_cache(maxsize=None)
 def _validator(name: str):
     from jsonschema import Draft202012Validator
@@ -53,7 +56,7 @@ def _validator(name: str):
                                  '$ref': '#/$defs/' + name})
 
 
-def validate(value: Any, name: str) -> Any:
+def validate(value, name: str):
     error = next(_validator(name).iter_errors(value), None)
     if error is not None:
         location = '.'.join(str(part) for part in error.absolute_path) or name
@@ -99,11 +102,11 @@ def _read(owner: int, client) -> tuple[dict, int]:
     return value, row['version']
 
 
-def policy(owner, *, client=None) -> tuple[dict, int]:
+def policy(owner, *, client=None, fresh=False) -> tuple[dict, int]:
     """``(record, rev)`` for one owner; ``rev`` 0 means nothing was ever stored."""
     owner = require_user_id(owner, context='device policy')
-    if client is not None:
-        return _read(owner, client)
+    if fresh or client is not None:
+        return _read(owner, client or _default_client)
     with _cache_lock:
         cached = _cache.get(owner)
         generation = _generation[0]
@@ -117,29 +120,65 @@ def policy(owner, *, client=None) -> tuple[dict, int]:
     return deepcopy(value), rev
 
 
-def _mutate(owner, change, *, client=None) -> tuple[dict, int]:
+def _mutate(owner, change, *, client=None, ceiling_write=None, nodes=(), keep_policy=False) -> tuple[dict, int]:
     """Apply ``change(record)`` under CAS; returns the committed ``(record, rev)``."""
     owner = require_user_id(owner, context='device policy')
     reader = client or _default_client
     while True:
         value, version = _read(owner, reader)
+        if ceiling_write is not None:
+            expected, node_id, ceiling = ceiling_write
+            if version != expected:
+                if (version == expected + 1 and value.get('last_ceiling_write') == node_id
+                        and value['ceilings'].get(node_id) == ceiling):
+                    # Recover a commit whose storage/HTTP acknowledgement was lost.
+                    if not nodes:
+                        invalidate(owner)
+                        _notify_changed(owner, version)
+                        return value, version
+                    return _commit_policy(owner, reader, value, version, nodes, check_only=True)
+                raise StaleDevicePolicy('Device permissions changed; reread before saving.')
         updated = change(deepcopy(value))
         if updated is None or updated == value:
-            return value, version
+            if not nodes:
+                return value, version
+            if keep_policy or not any('next' in node for node in nodes):
+                try:
+                    return _commit_policy(owner, reader, value, version, nodes, check_only=True)
+                except StorageError as error:
+                    if error.code == 'database_conflict' and _read(owner, reader)[1] != version:
+                        continue
+                    raise
+        if ceiling_write is None:
+            updated.pop('last_ceiling_write', None)
+        else:
+            updated['last_ceiling_write'] = node_id
         validate(updated, 'PolicyRecord')
         try:
-            receipt = reader(write=True).command('record.put', {
-                'namespace': NAMESPACE, 'key': str(owner), 'value': updated,
-                'expected_version': version,
-            }, 'device-policy:' + uuid.uuid4().hex)
+            return _commit_policy(owner, reader, updated, version, nodes)
         except StorageError as error:
             if error.code == 'database_conflict':
-                continue
+                if not nodes or _read(owner, reader)[1] != version:
+                    continue
             raise
-        rev = int((receipt or {}).get('version') or version + 1)
+
+
+def _commit_policy(owner, reader, updated, version, nodes, *, check_only=False):
+    payload = {'namespace': NAMESPACE, 'key': str(owner), 'value': updated,
+               'expected_version': version}
+    if nodes:
+        payload.update(owner=owner, nodes=list(nodes), check_only=check_only)
+    operation = 'record.device_policy_commit' if nodes else 'record.put'
+    try:
+        receipt = reader(write=True).command(operation, payload, 'device-policy:' + uuid.uuid4().hex)
+    except StorageError:
+        # An uncertain answer may conceal a committed revocation.
         invalidate(owner)
-        _notify_changed(owner, rev)
-        return updated, rev
+        raise
+    rev = receipt['version'] if nodes else int((receipt or {}).get('version') or version + 1)
+    invalidate(owner)
+    _notify_changed(owner, rev)
+    return updated, rev
 
 
 def _notify_changed(owner: int, rev=None) -> None:
@@ -214,34 +253,38 @@ def permissions_view(owner, node_id: str, capabilities=None, *, record=None, rev
                      'effective': effective, 'rev': int(rev or 0)}, 'DevicePermissions')
 
 
-def permissions_listing(owner, agents) -> dict:
-    """PermissionsListing over the owner's known agents plus every stored ceiling."""
-    record, rev = policy(owner)
+def permissions_listing(owner, agents, *, registered_node_ids=()) -> dict:
+    """Fresh permissions and CAS revision, independent of enforcement caching."""
+    record, rev = policy(owner, fresh=True)
     rows = {}
     for agent in agents:
         rows[agent['agent_id']] = permissions_view(
             owner, agent['agent_id'], agent.get('capabilities'), record=record, rev=rev,
             known=True)
-    for node_id in record['ceilings']:
-        rows.setdefault(node_id, permissions_view(owner, node_id, record=record, rev=rev,
-                                                  known=False))
+    for node_id in dict.fromkeys((*registered_node_ids, *record['ceilings'])):
+        if node_id not in rows:
+            rows[node_id] = permissions_view(owner, node_id, record=record, rev=rev, known=False)
     return validate({'permissions': rows, 'rev': rev,
                      'liveness_window_s': LIVENESS_WINDOW_S}, 'PermissionsListing')
 
 
 # ── owner commands ────────────────────────────────────────────────────────
 
-def set_ceiling(owner, node_id: str, tiers: object, *, client=None) -> tuple[dict, int]:
-    """Replace one node's ceiling; ``tiers`` (request input) must be CeilingRequest.tiers."""
-    validated = validate({'tiers': tiers}, 'CeilingRequest')['tiers']
+def set_ceiling(owner, node_id: str, tiers: dict, *, expected_revision: int,
+                client=None, nodes=()) -> tuple[dict, int]:
+    """Replace one node's ceiling only against the caller's observed owner rev."""
+    validate({'tiers': tiers, 'expected_revision': expected_revision}, 'CeilingRequest')
+    if type(expected_revision) is not int:
+        raise ValueError('expected_revision must be an integer')
     if not isinstance(node_id, str) or not 1 <= len(node_id) <= 256:
         raise ValueError('node_id is required')
-    ceiling = {tier: bool(validated.get(tier)) for tier in CEILING_TIERS}
+    ceiling = {tier: bool(tiers.get(tier)) for tier in CEILING_TIERS}
 
     def change(record):
         record['ceilings'][node_id] = ceiling
         return record
-    return _mutate(owner, change, client=client)
+    return _mutate(owner, change, client=client,
+                   ceiling_write=(expected_revision, node_id, ceiling), nodes=nodes)
 
 
 def defaults(owner) -> dict:
@@ -249,17 +292,22 @@ def defaults(owner) -> dict:
     return dict(record['defaults'])
 
 
-def set_defaults(owner, changes: dict, *, client=None) -> tuple[dict, int]:
+def set_defaults(owner, changes: dict, *, client=None, nodes=()) -> tuple[dict, int]:
     """Set or clear (None) the default device of each named kind."""
     validate(changes, 'DefaultsRequest')
 
     def change(record):
         record['defaults'].update(changes)
         return record
-    return _mutate(owner, change, client=client)
+    return _mutate(owner, change, client=client, nodes=nodes)
 
 
-def forget_node(owner, node_id: str, *, client=None) -> tuple[dict, int]:
+def commit_node_metadata(owner, witness, *, client=None):
+    """CAS an existing node without advancing policy or reusing a stale row version."""
+    return _mutate(owner, lambda value: value, client=client, nodes=(witness,), keep_policy=True)
+
+
+def forget_node(owner, node_id: str, *, client=None, nodes=()) -> tuple[dict, int]:
     """A removed or re-paired node starts over read-only and stops being a default."""
     def change(record):
         record['ceilings'].pop(node_id, None)
@@ -267,10 +315,10 @@ def forget_node(owner, node_id: str, *, client=None) -> tuple[dict, int]:
             if value == node_id:
                 record['defaults'][kind] = None
         return record
-    return _mutate(owner, change, client=client)
+    return _mutate(owner, change, client=client, nodes=nodes)
 
 
-def transfer_node(owner, old_node_id: str, new_node_id: str, *, client=None) -> tuple[dict, int]:
+def transfer_node(owner, old_node_id: str, new_node_id: str, *, client=None, nodes=()) -> tuple[dict, int]:
     """A confirmed re-pair of a known device (lib/desktop/node_registry.py, predecessor):
     the new node ID inherits the old one's ceiling (unless it has its own) and defaults."""
     def change(record):
@@ -281,7 +329,7 @@ def transfer_node(owner, old_node_id: str, new_node_id: str, *, client=None) -> 
             if value == old_node_id:
                 record['defaults'][kind] = new_node_id
         return record
-    return _mutate(owner, change, client=client)
+    return _mutate(owner, change, client=client, nodes=nodes)
 
 
 __all__ = [

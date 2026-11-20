@@ -9,6 +9,16 @@ repeated completion callbacks and acknowledgements.
 from __future__ import annotations
 
 
+def _writer_epoch(session) -> int:
+    # Read only a captured instance field, not a delegated/dynamic attribute.
+    return vars(session).get('_checkpoint_writer_epoch', 0)
+
+
+def _matches_writer(item: dict, session) -> bool:
+    return ((not item.get('swarm_run_id') or item['swarm_run_id'] == session.task_id)
+            and item.get('checkpoint_writer_epoch', 0) == _writer_epoch(session))
+
+
 def acknowledge_presented_results(task: dict) -> bool:
     pending = task.get('_swarm_inject_pending') or []
     if not pending:
@@ -23,8 +33,7 @@ def acknowledge_presented_results(task: dict) -> bool:
     if session is not None:
         # Confirmed consumption may retire an older session's local receipt,
         # but it must never mark that ID delivered in the replacement session.
-        pending = [item for item in pending if not item.get('swarm_run_id')
-                   or item['swarm_run_id'] == session.task_id]
+        pending = [item for item in pending if _matches_writer(item, session)]
         if not pending:
             task.pop('_swarm_inject_pending', None)
             return True
@@ -33,7 +42,9 @@ def acknowledge_presented_results(task: dict) -> bool:
         return False  # No current identity witness: retain for reconciliation.
     ids = list(dict.fromkeys(str(item['agent_id']) for item in pending if item.get('agent_id')))
     if ids and not (task.get('_transientRuntime') or task.get('_invocationStorageFree')):
-        if session is None or not persistence.mark_delivered(key, ids, task_id=session.task_id):
+        epoch = pending[0].get('checkpoint_writer_epoch', 0)
+        if session is None or not persistence.mark_delivered(key, ids, task_id=session.task_id,
+                **({'checkpoint_writer_epoch': epoch} if epoch else {})):
             return False
     if session is not None:
         session.mark_results_delivered(ids)
@@ -54,16 +65,19 @@ def restore_unconsumed_results(task: dict) -> None:
         raise ValueError('result restoration belongs to another owner')
     if session is not None:
         session.restore_unconsumed_results([item['agent_id'] for item in pending
-            if item.get('agent_id') and (not item.get('swarm_run_id')
-            or item['swarm_run_id'] == session.task_id)])
+            if item.get('agent_id') and _matches_writer(item, session)])
     restored = 0
     try:
         for item in tuple(pending):
+            if session is not None and not _matches_writer(item, session):
+                restored += 1  # A new writer owns its own durable recovery hints.
+                continue
             agent_inbox.enqueue(key, item.get('value') or '', mode='swarm-update',
                                 priority=item.get('priority') or 'later',
                                 agent_id=item.get('agent_id') or '',
                                 extra={'status': item.get('status') or '',
-                                       'swarm_run_id': item.get('swarm_run_id') or ''})
+                                       'swarm_run_id': item.get('swarm_run_id') or '',
+                                       'checkpoint_writer_epoch': item.get('checkpoint_writer_epoch', 0)})
             restored += 1
     finally:
         # Retire only the restored prefix, once: large batches stay linear.
@@ -79,9 +93,10 @@ def stage_tool_results(task: dict, session, payloads: list[dict]) -> None:
         raise ValueError('result presentation belongs to another owner')
     from lib.agent_inbox import format_swarm_update
     pending = task.setdefault('_swarm_inject_pending', [])
-    known = {(item.get('swarm_run_id'), item.get('agent_id')) for item in pending}
+    known = {item.get('agent_id') for item in pending if _matches_writer(item, session)}
+    epoch = _writer_epoch(session)
     for row in payloads:
-        identity = (session.task_id, row['agent_id'])
+        identity = row['agent_id']
         if identity in known:
             continue
         known.add(identity)
@@ -92,4 +107,27 @@ def stage_tool_results(task: dict, session, payloads: list[dict]) -> None:
             tokens=row.get('tokens') or 0, result=row.get('result') or row.get('final_answer') or '',
             output_file=row.get('output_file') or '', error=row.get('error') or '')
         pending.append({'agent_id': row['agent_id'], 'swarm_run_id': session.task_id,
+                        'checkpoint_writer_epoch': epoch,
                         'status': row.get('status') or 'completed', 'value': value, 'priority': 'later'})
+
+
+def current_result_hints(key, items):
+    """Only the current writer's hints may drive prompt input or automatic wake."""
+    if not items:
+        return items
+    from lib.swarm.integration import get_active_session
+    session = get_active_session(key)
+    if session is None:
+        from lib.swarm import persistence
+        header = persistence.load_session(key, include_agents=False) if any(
+            item.get('swarm_run_id') for item in items) else None
+        return [item for item in items if not item.get('swarm_run_id') or (
+            header is not None and item['swarm_run_id'] == header.get('task_id')
+            and item.get('checkpoint_writer_epoch', 0) == header.get('checkpoint_writer_epoch', 0))]
+    identity = vars(session).get('_sql_run_identity')
+    if identity is not None:
+        from lib.swarm import persistence
+        row = persistence.load_session(key, identity=identity, include_agents=False)
+        if row is None or row.get('checkpoint_writer_epoch', 0) != _writer_epoch(session):
+            return []
+    return [item for item in items if _matches_writer(item, session)]

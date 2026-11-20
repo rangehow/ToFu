@@ -1,0 +1,962 @@
+{
+ "description": "Display-layer result shapes (tool_display, canvas links, tool links, MCP media): every tool answers the recorded shape named by its `case` argument, else the CallToolResult in its `result` argument.",
+ "serverInfo": {
+  "name": "display-replay",
+  "version": "1.0.0"
+ },
+ "tools": [
+  {
+   "name": "experiment_get",
+   "description": "experiment_get (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "experiment_fork",
+   "description": "experiment_fork (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "experiment_data_fork",
+   "description": "experiment_data_fork (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "experiment_run",
+   "description": "experiment_run (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "list_projects",
+   "description": "list_projects (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "create_project",
+   "description": "create_project (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "edit_file",
+   "description": "edit_file (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "list_files",
+   "description": "list_files (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "read_doc",
+   "description": "read_doc (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "login",
+   "description": "login (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "create_issue",
+   "description": "create_issue (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "batch_commit",
+   "description": "batch_commit (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "batch_delete",
+   "description": "batch_delete (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "push_files",
+   "description": "push_files (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "get_log_file",
+   "description": "get_log_file (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "list_log_files",
+   "description": "list_log_files (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "experiment_update_params",
+   "description": "experiment_update_params (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "experiment_api_serving",
+   "description": "experiment_api_serving (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "eval_get",
+   "description": "eval_get (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "read",
+   "description": "read (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  }
+ ],
+ "calls": {
+  "experiment_get": {
+   "by": "case",
+   "reflect": "result",
+   "cases": {
+    "not_run_error": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"ok\": false, \"error\": \"has not run yet\"}"
+       }
+      ],
+      "structuredContent": {
+       "ok": false,
+       "error": "has not run yet"
+      }
+     }
+    },
+    "not_run_state": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"ok\": true, \"data\": {\"experimentId\": 381153, \"state\": \"not_run\", \"canvasUrl\": \"https://model.internal.example.com/user/modelManage/experimentalTaskDetail/381153\"}}"
+       }
+      ],
+      "structuredContent": {
+       "ok": true,
+       "data": {
+        "experimentId": 381153,
+        "state": "not_run",
+        "canvasUrl": "https://model.internal.example.com/user/modelManage/experimentalTaskDetail/381153"
+       }
+      }
+     }
+    },
+    "resolved": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"ok\": true, \"data\": {\"experimentId\": 381154}}"
+       }
+      ],
+      "structuredContent": {
+       "ok": true,
+       "data": {
+        "experimentId": 381154
+       }
+      }
+     }
+    },
+    "failed_with_id": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"ok\": false, \"data\": {\"experimentId\": 381154}}"
+       }
+      ],
+      "structuredContent": {
+       "ok": false,
+       "data": {
+        "experimentId": 381154
+       }
+      }
+     }
+    },
+    "id_task_id": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"ok\": true, \"data\": {\"id\": 381154, \"taskId\": 381154}}"
+       }
+      ],
+      "structuredContent": {
+       "ok": true,
+       "data": {
+        "id": 381154,
+        "taskId": 381154
+       }
+      }
+     }
+    },
+    "nested_payload": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"ok\": true, \"data\": {\"payload\": {\"experimentId\": 381154}}}"
+       }
+      ],
+      "structuredContent": {
+       "ok": true,
+       "data": {
+        "payload": {
+         "experimentId": 381154
+        }
+       }
+      }
+     }
+    },
+    "bool_id": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"ok\": true, \"data\": {\"experimentId\": true}}"
+       }
+      ],
+      "structuredContent": {
+       "ok": true,
+       "data": {
+        "experimentId": true
+       }
+      }
+     }
+    },
+    "denied": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"ok\": false, \"error\": \"denied\"}"
+       }
+      ],
+      "structuredContent": {
+       "ok": false,
+       "error": "denied"
+      }
+     }
+    }
+   }
+  },
+  "experiment_fork": {
+   "by": "case",
+   "reflect": "result",
+   "cases": {
+    "forked": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"ok\": true, \"data\": {\"experimentId\": 381154, \"experimentName\": \"new canvas\", \"page\": \"https://model.internal.example.com/user/modelManage/experimentalTaskDetail/381154\"}}"
+       }
+      ],
+      "structuredContent": {
+       "ok": true,
+       "data": {
+        "experimentId": 381154,
+        "experimentName": "new canvas",
+        "page": "https://model.internal.example.com/user/modelManage/experimentalTaskDetail/381154"
+       }
+      }
+     }
+    },
+    "resolved": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"ok\": true, \"data\": {\"experimentId\": 381154}}"
+       }
+      ],
+      "structuredContent": {
+       "ok": true,
+       "data": {
+        "experimentId": 381154
+       }
+      }
+     }
+    },
+    "denied": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"ok\": false, \"error\": \"denied\"}"
+       }
+      ],
+      "structuredContent": {
+       "ok": false,
+       "error": "denied"
+      }
+     }
+    },
+    "dry_run": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"ok\": true, \"data\": {\"dry_run\": true, \"experimentId\": 381154}}"
+       }
+      ],
+      "structuredContent": {
+       "ok": true,
+       "data": {
+        "dry_run": true,
+        "experimentId": 381154
+       }
+      }
+     }
+    },
+    "wrapped": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"items\": [{\"ok\": true, \"data\": {\"experimentId\": 381491, \"experimentName\": \"Fork canvas\", \"page\": \"https://model.internal.example.com/user/modelManage/experimentalTaskDetail/381491\"}}], \"summary\": \"Tool returned a structured result.\"}"
+       }
+      ],
+      "structuredContent": {
+       "items": [
+        {
+         "ok": true,
+         "data": {
+          "experimentId": 381491,
+          "experimentName": "Fork canvas",
+          "page": "https://model.internal.example.com/user/modelManage/experimentalTaskDetail/381491"
+         }
+        }
+       ],
+       "summary": "Tool returned a structured result."
+      }
+     }
+    },
+    "original": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"items\": [{\"data\": {\"experimentId\": 381491, \"experimentName\": \"repair2788167074-CPU-Simple-sdklock-r4-1q-7d-oct9\", \"modelId\": 3819071, \"modelSource\": \"inherit-node\", \"page\": \"https://model.internal.example.com/user/modelManage/experimentalTaskDetail/381491\"}, \"ok\": true}], \"summary\": \"Tool returned a structured result.\\n[Original source retained; use search_tool_artifact or read_tool_artifact with artifactRef to inspect it.]\"}"
+       }
+      ],
+      "structuredContent": {
+       "items": [
+        {
+         "data": {
+          "experimentId": 381491,
+          "experimentName": "repair2788167074-CPU-Simple-sdklock-r4-1q-7d-oct9",
+          "modelId": 3819071,
+          "modelSource": "inherit-node",
+          "page": "https://model.internal.example.com/user/modelManage/experimentalTaskDetail/381491"
+         },
+         "ok": true
+        }
+       ],
+       "summary": "Tool returned a structured result.\n[Original source retained; use search_tool_artifact or read_tool_artifact with artifactRef to inspect it.]"
+      }
+     }
+    }
+   }
+  },
+  "experiment_data_fork": {
+   "by": "case",
+   "reflect": "result",
+   "cases": {
+    "forked": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"ok\": true, \"data\": {\"experimentId\": 381154, \"experimentName\": \"new canvas\", \"page\": \"https://model.internal.example.com/user/modelManage/experimentalTaskDetail/381154\"}}"
+       }
+      ],
+      "structuredContent": {
+       "ok": true,
+       "data": {
+        "experimentId": 381154,
+        "experimentName": "new canvas",
+        "page": "https://model.internal.example.com/user/modelManage/experimentalTaskDetail/381154"
+       }
+      }
+     }
+    },
+    "resolved": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"ok\": true, \"data\": {\"experimentId\": 381154}}"
+       }
+      ],
+      "structuredContent": {
+       "ok": true,
+       "data": {
+        "experimentId": 381154
+       }
+      }
+     }
+    },
+    "denied": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"ok\": false, \"error\": \"denied\"}"
+       }
+      ],
+      "structuredContent": {
+       "ok": false,
+       "error": "denied"
+      }
+     }
+    },
+    "dry_run": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"ok\": true, \"data\": {\"dry_run\": true, \"experimentId\": 381154}}"
+       }
+      ],
+      "structuredContent": {
+       "ok": true,
+       "data": {
+        "dry_run": true,
+        "experimentId": 381154
+       }
+      }
+     }
+    },
+    "wrapped": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"items\": [{\"ok\": true, \"data\": {\"experimentId\": 381491, \"experimentName\": \"Fork canvas\", \"page\": \"https://model.internal.example.com/user/modelManage/experimentalTaskDetail/381491\"}}], \"summary\": \"Tool returned a structured result.\"}"
+       }
+      ],
+      "structuredContent": {
+       "items": [
+        {
+         "ok": true,
+         "data": {
+          "experimentId": 381491,
+          "experimentName": "Fork canvas",
+          "page": "https://model.internal.example.com/user/modelManage/experimentalTaskDetail/381491"
+         }
+        }
+       ],
+       "summary": "Tool returned a structured result."
+      }
+     }
+    },
+    "original": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"items\": [{\"data\": {\"experimentId\": 381491, \"experimentName\": \"repair2788167074-CPU-Simple-sdklock-r4-1q-7d-oct9\", \"modelId\": 3819071, \"modelSource\": \"inherit-node\", \"page\": \"https://model.internal.example.com/user/modelManage/experimentalTaskDetail/381491\"}, \"ok\": true}], \"summary\": \"Tool returned a structured result.\\n[Original source retained; use search_tool_artifact or read_tool_artifact with artifactRef to inspect it.]\"}"
+       }
+      ],
+      "structuredContent": {
+       "items": [
+        {
+         "data": {
+          "experimentId": 381491,
+          "experimentName": "repair2788167074-CPU-Simple-sdklock-r4-1q-7d-oct9",
+          "modelId": 3819071,
+          "modelSource": "inherit-node",
+          "page": "https://model.internal.example.com/user/modelManage/experimentalTaskDetail/381491"
+         },
+         "ok": true
+        }
+       ],
+       "summary": "Tool returned a structured result.\n[Original source retained; use search_tool_artifact or read_tool_artifact with artifactRef to inspect it.]"
+      }
+     }
+    }
+   }
+  },
+  "experiment_run": {
+   "by": "case",
+   "reflect": "result",
+   "cases": {
+    "started": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"ok\": true, \"data\": {\"started\": [381153, 381154, 381155]}}"
+       }
+      ],
+      "structuredContent": {
+       "ok": true,
+       "data": {
+        "started": [
+         381153,
+         381154,
+         381155
+        ]
+       }
+      }
+     }
+    }
+   }
+  },
+  "list_projects": {
+   "by": "case",
+   "reflect": "result",
+   "cases": {
+    "owner_a": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "[{\"id\": \"6a1e782e9ba0ae3d7727a668\", \"name\": \"Private owner A project\"}]"
+       }
+      ]
+     }
+    }
+   }
+  },
+  "create_project": {
+   "by": "case",
+   "reflect": "result",
+   "cases": {
+    "my_paper": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "Created Overleaf project [My Paper]\n   project_id: 6a1e782e9ba0ae3d7727a668  (short: 6a1e7…a668)\n   Open: https://www.overleaf.com/project/6a1e782e9ba0ae3d7727a668"
+       }
+      ]
+     }
+    }
+   }
+  },
+  "edit_file": {
+   "by": "case",
+   "reflect": "result",
+   "cases": {
+    "self_hosted": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "Edited x.tex in project (aaaaa…aaaa) https://overleaf.mycorp.com/project/aaaaaaaaaaaaaaaaaaaaaaaa"
+       }
+      ]
+     }
+    },
+    "corp_tag": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "✅ Edited 'acl_latex.tex' in project [Tofu] (6a1e7…a668) https://overleaf.corp.example.com/project/6a1e782e9ba0ae3d7727a668"
+       }
+      ]
+     }
+    },
+    "plain": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{}"
+       }
+      ]
+     }
+    }
+   }
+  },
+  "list_files": {
+   "by": "case",
+   "reflect": "result",
+   "cases": {
+    "plain": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{}"
+       }
+      ]
+     }
+    }
+   }
+  },
+  "read_doc": {
+   "by": "case",
+   "reflect": "result",
+   "cases": {
+    "harvest_url": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "See https://km.corp.example.com/page/2761323464 for details"
+       }
+      ]
+     }
+    },
+    "after_harvest": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"ok\": true, \"title\": \"My Doc\", \"url\": \"https://km.internal.example.com/collabpage/2761323464\"}"
+       }
+      ]
+     }
+    },
+    "my_doc": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"ok\": true, \"title\": \"My Doc\", \"markdown\": \"…\"}"
+       }
+      ],
+      "structuredContent": {
+       "ok": true,
+       "title": "My Doc",
+       "markdown": "…"
+      }
+     }
+    },
+    "my_doc_short": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"ok\": true, \"title\": \"My Doc\"}"
+       }
+      ],
+      "structuredContent": {
+       "ok": true,
+       "title": "My Doc"
+      }
+     }
+    },
+    "private_doc": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"title\":\"Private document\",\"url\":\"https://private.example/page/1234567\"}"
+       }
+      ]
+     }
+    },
+    "plain": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{}"
+       }
+      ]
+     }
+    }
+   }
+  },
+  "login": {
+   "by": "case",
+   "reflect": "result",
+   "cases": {
+    "approval_timeout": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "timed out waiting for approval"
+       }
+      ],
+      "isError": true
+     }
+    }
+   }
+  },
+  "create_issue": {
+   "by": "case",
+   "reflect": "result",
+   "cases": {
+    "created": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "created issue #5"
+       }
+      ]
+     }
+    }
+   }
+  },
+  "batch_commit": {
+   "by": "case",
+   "reflect": "result",
+   "cases": {
+    "committed": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "committed 3 files"
+       }
+      ]
+     }
+    }
+   }
+  },
+  "batch_delete": {
+   "by": "case",
+   "reflect": "result",
+   "cases": {
+    "deleted": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "deleted 2 files"
+       }
+      ]
+     }
+    }
+   }
+  },
+  "push_files": {
+   "by": "case",
+   "reflect": "result",
+   "cases": {
+    "pushed": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "pushed 1 file"
+       }
+      ]
+     }
+    }
+   }
+  },
+  "get_log_file": {
+   "by": "case",
+   "reflect": "result",
+   "cases": {
+    "tail": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "SMOKE-RJH-001 line"
+       }
+      ]
+     }
+    }
+   }
+  },
+  "list_log_files": {
+   "by": "case",
+   "reflect": "result",
+   "cases": {
+    "files": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "stdout\nstderr"
+       }
+      ]
+     }
+    }
+   }
+  },
+  "experiment_update_params": {
+   "by": "case",
+   "reflect": "result",
+   "cases": {
+    "ok": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"ok\": true}"
+       }
+      ],
+      "structuredContent": {
+       "ok": true
+      }
+     }
+    }
+   }
+  },
+  "experiment_api_serving": {
+   "by": "case",
+   "reflect": "result",
+   "cases": {
+    "ok": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"ok\": true}"
+       }
+      ],
+      "structuredContent": {
+       "ok": true
+      }
+     }
+    }
+   }
+  },
+  "eval_get": {
+   "by": "case",
+   "reflect": "result",
+   "cases": {
+    "ok": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\"ok\": true}"
+       }
+      ],
+      "structuredContent": {
+       "ok": true
+      }
+     }
+    }
+   }
+  },
+  "read": {
+   "by": "case",
+   "reflect": "result",
+   "cases": {
+    "text_and_image": {
+     "result": {
+      "content": [
+       {
+        "type": "text",
+        "text": "document body"
+       },
+       {
+        "type": "image",
+        "data": "cG5nLWJ5dGVz",
+        "mimeType": "image/png"
+       }
+      ]
+     }
+    },
+    "embedded_resources": {
+     "result": {
+      "content": [
+       {
+        "type": "resource",
+        "resource": {
+         "uri": "synthetic:body",
+         "text": "complete body"
+        }
+       },
+       {
+        "type": "resource",
+        "resource": {
+         "uri": "synthetic:binary",
+         "blob": "SECRETBASE64"
+        }
+       }
+      ]
+     }
+    },
+    "unsupported_svg": {
+     "result": {
+      "content": [
+       {
+        "type": "image",
+        "data": "eA==",
+        "mimeType": "image/svg+xml"
+       }
+      ]
+     }
+    },
+    "not_base64": {
+     "result": {
+      "content": [
+       {
+        "type": "image",
+        "data": "not base64!",
+        "mimeType": "image/png"
+       }
+      ]
+     }
+    }
+   }
+  }
+ }
+}

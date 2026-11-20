@@ -72,11 +72,17 @@ _cleanup_timer: threading.Timer | None = None
 def task_has_running_agents(*, task_id: str, user_id: int) -> bool:
     """Fence an owning task's worktree until its registered children settle."""
     with _sessions_lock:
-        return any(session.task_id == task_id and session.user_id == user_id
+        return any((getattr(session, '_spawning_task_id', None)
+                    or (getattr(session, '_parent_task_proxy', {}).get('config') or {}).get('_swarmParentTaskId')
+                    or session.task_id) == task_id
+                   and session.user_id == user_id
                    and not session.is_terminated for session in _active_sessions.values())
 _cleanup_timer_starts = 0
 _cleanup_timer_retirements = 0
 _RETIRED_ALIAS_CAPACITY = max(8, MAX_SESSIONS * 4)
+# Recent Stop addresses only; SQL owns the outcome. Never repopulate a
+# missing address by following a conversation key or task alias.
+_stop_addresses: dict[tuple[int, str], dict] = {}
 #: Keys whose TTL teardown (inbox clear, durable delete, abort) runs on a
 #: retirement worker after the session left the registry. A re-registration
 #: of the same key waits for that key's event: a late delete would otherwise
@@ -214,11 +220,18 @@ def _cleanup_stale_sessions():
     stale_ids = [
         key for key, ts in _session_timestamps.items()
         if now - ts > SESSION_TTL_SECONDS
+        # Progress can be silent while a provider call or settlement owns
+        # the session. Only the driver judges whether its work has stalled.
+        and not getattr(_active_sessions.get(key), 'has_live_driver', False)
+        and getattr(_active_sessions.get(key), 'has_live_work', False) is not True
         and not _key_is_live(key)
         and not _session_is_producing(key)
     ]
     expired = []
     for key in stale_ids:
+        if getattr(_active_sessions.get(key), 'is_restart_suspended', False) is True:
+            _retire_terminal_session_locked(key)
+            continue
         session = _active_sessions.pop(key, None)
         _session_timestamps.pop(key, None)
         _purge_aliases(key)
@@ -276,7 +289,9 @@ def _retire_expired_sessions(expired: list[tuple[str, object]]) -> None:
             _retirement_workers.discard(threading.current_thread())
 
 
-def _record_results_then_delete(key: str, session) -> bool:
+def _record_results_then_delete(key: str, session, *, correlation=None,
+                                disposition='ordinary_retirement', identity=None,
+                                checkpoint_writer_epoch=None, observation=None) -> bool:
     """Reclaim a retired session's resumable rows once its results are durable.
 
     The conversation-keyed session/agent rows are resumable state; each agent
@@ -287,20 +302,54 @@ def _record_results_then_delete(key: str, session) -> bool:
     """
     from lib.swarm import persistence
     try:
-        recorded = (session.record_run_results() if session is not None
-                    else persistence.archive_session_results(key))
+        if session is not None and getattr(session, '_transient_runtime', False) is True:
+            return True
+        if persistence.uses_sql_lifecycle():
+            if identity is None:
+                identity = getattr(session, '_sql_run_identity', None)
+            if identity is None:
+                header = persistence.load_session(key, include_agents=False, required=True)
+                if header is None:
+                    return session is None
+                identity = persistence.run_identity(key, header)
+                if session is not None and (identity['run_id'] != session.task_id
+                        or identity['owner_id'] != session.user_id
+                        or identity['conversation_id'] != session.conv_id):
+                    return False
+            if correlation is not None:
+                correlation.update(owner=identity['owner_id'], conversation=identity['conversation_id'],
+                                   run=identity['run_id'])
+            epoch = (getattr(session, '_checkpoint_writer_epoch', 0)
+                     if session is not None else checkpoint_writer_epoch)
+            options = {'observation': observation} if observation is not None else {}
+            if epoch is not None and disposition != 'stop':
+                options['checkpoint_writer_epoch'] = epoch
+            return persistence.dispose_run(identity, disposition, **options)
+        if session is not None:
+            recorded = session.record_run_results()
+        elif correlation is None:
+            recorded = persistence.archive_session_results(key)
+        else:
+            recorded = persistence.archive_session_results(key, correlation=correlation)
     except Exception:
-        logger.warning('[Swarm:%s] run result recording failed', key, exc_info=True)
+        if observation is not None and observation['requested']:
+            # A command or receipt read can fail after deletion commits. The
+            # correlated outcome is the only claim we can make in this case.
+            return False
+        if observation is None:
+            logger.warning('[Swarm:%s] retirement preparation or storage failed', key, exc_info=True)
         recorded = False
     if not recorded:
-        logger.warning('[Swarm:%s] run results not all recorded; durable session '
-                       'rows retained instead of deleted', key)
+        logger.warning('[Swarm:%s] retirement stopped: result archive not confirmed', key)
         return False
-    persistence.delete_session(key)
+    if observation is None:
+        persistence.delete_session(key)
+    else:
+        persistence.delete_session(key, observation=observation)
     return True
 
 
-def retire_previous_run_rows(swarm_key: str, swarm_run_id: str) -> None:
+def retire_previous_run_rows(swarm_key: str, swarm_run_id: str, *, identity=None) -> bool:
     """Record and reclaim rows an earlier run left under this conversation key.
 
     A run's rows can outlive its in-memory session (a restart that did not
@@ -318,10 +367,38 @@ def retire_previous_run_rows(swarm_key: str, swarm_run_id: str) -> None:
         # load_session already logged the storage failure.
         logger.debug('[Swarm:%s] earlier-run rows not checked before a new run',
                      swarm_key)
-        return
-    if header is None or header.get('task_id') == swarm_run_id:
-        return
-    _record_results_then_delete(swarm_key, None)
+        return False
+    if header is None:
+        return True
+    if identity is not None:
+        from lib.storage.errors import StorageError
+        previous = persistence.run_identity(swarm_key, header)
+        if {**previous, 'run_id': swarm_run_id} != identity:
+            raise StorageError('database_conflict', 'Prior swarm run is outside the launch scope')
+        if previous == identity or header.get('status') != 'terminated':
+            return False  # A missing resident handle is not proof the old run ended.
+        return _record_results_then_delete(swarm_key, None, identity=previous,
+                                           disposition='replacement',
+                                           checkpoint_writer_epoch=header.get('checkpoint_writer_epoch', 0))
+    if header.get('task_id') == swarm_run_id:
+        return True
+    return _record_results_then_delete(swarm_key, None)
+
+
+def reconcile_unenqueued_run(identity: dict) -> bool:
+    """Retire only the generation whose pre-enqueue callback failed locally.
+
+    A historical Stop/replacement is not permission to change that outcome,
+    and absence of a resident session alone is not evidence of no enqueue.
+    """
+    from lib.swarm import persistence
+
+    key = identity['swarm_key']
+    row = persistence.load_session(key, include_agents=False, required=True, identity=identity)
+    if row is None:
+        return True
+    return _record_results_then_delete(key, None, identity=identity, disposition='replacement',
+                                       checkpoint_writer_epoch=row.get('checkpoint_writer_epoch', 0))
 
 
 def _retire_expired_session(key: str, session) -> None:
@@ -329,7 +406,17 @@ def _retire_expired_session(key: str, session) -> None:
         agent_inbox.clear(key, modes=['swarm-update'])
     except Exception as e:
         logger.warning('[Swarm:%s] expired session inbox clear failed: %s', key, e)
-    _record_results_then_delete(key, session)
+    from lib.tasks_pkg.message_input_receipts import mailbox_log_fields
+    correlation = dict(owner=getattr(session, 'user_id', None),
+                       conversation=getattr(session, 'conv_id', None),
+                       run=getattr(session, 'task_id', None))
+    observation = dict(requested=False, outcome='not_requested', scope='-')
+    _record_results_then_delete(key, session, correlation=correlation, observation=observation)
+    logger.info('Swarm mailbox retirement category=%s outcome=%s scope=%s',
+                'ttl_delete_requested' if observation['requested'] else 'ttl_delete_not_requested',
+                observation['outcome'], observation['scope'],
+                extra={'tofu_event_name': 'swarm_mailbox_retirement',
+                       'tofu_event_fields': mailbox_log_fields(**correlation)})
     # Drop the in-flight latch of a reaped conversation so it never strands.
     with _autocontinue_lock:
         _autocontinue_inflight.discard(key)
@@ -493,7 +580,8 @@ def _get_session(task_id: str) -> MasterOrchestrator | None:
 def _retire_terminal_session_locked(key: str) -> None:
     """Retire terminal memory only; durable results and inbox remain owned."""
     session = _active_sessions.get(key)
-    if session is None or not bool(getattr(session, 'is_terminated', False)):
+    if (session is None or not bool(getattr(session, 'is_terminated', False))
+            or getattr(session, 'has_live_work', False) is True):
         return
     _active_sessions.pop(key, None)
     _session_timestamps.pop(key, None)
@@ -540,7 +628,7 @@ def reserve_session(swarm_key: str):
 
 
 def _set_session(swarm_key: str, session: MasterOrchestrator, *,
-                 task_id: str = '', reserved: bool = False):
+                 task_id: str = '', reserved: bool = False, require_empty: bool = False):
     """Register *session* under its stable swarm key.
 
     ``task_id`` (when distinct) is recorded as an alias so route callers and
@@ -554,6 +642,8 @@ def _set_session(swarm_key: str, session: MasterOrchestrator, *,
             _cleanup_stale_sessions()
             retiring = _retiring_sessions.get(swarm_key)
             if retiring is None:
+                if require_empty and swarm_key in _active_sessions:
+                    raise SwarmSessionConflict('swarm key is already active')
                 _register_session_locked(
                     swarm_key, session, task_id=task_id, reserved=reserved)
                 return
@@ -597,7 +687,8 @@ def _register_session_locked(swarm_key: str, session: MasterOrchestrator, *,
         raise
 
 
-def _remove_session(task_id: str, *, preserve_durable: bool = False):
+def _remove_session(task_id: str, *, preserve_durable: bool = False,
+                    expected=None, disposition='ordinary_retirement'):
     """Remove the session resolved from *task_id* (task id or swarm key).
 
     Also reclaims the resumable DB rows — ``_remove_session`` is only called
@@ -605,9 +696,14 @@ def _remove_session(task_id: str, *, preserve_durable: bool = False):
     swarm replaced by a new wave), never on DETACH. Every settled result is
     first recorded under its ``swarm_run_id`` (``_record_results_then_delete``).
     """
-    key = _resolve_key(task_id)
+    retirement = None
     with _sessions_lock:
+        key = _resolve_key(task_id)
+        if expected is not None and _active_sessions.get(key) is not expected:
+            return False
         session = _active_sessions.pop(key, None)
+        if not preserve_durable and getattr(session, '_sql_run_identity', None) is not None:
+            retirement = _retiring_sessions[key] = threading.Event()
         _session_timestamps.pop(key, None)
         for alias in [a for a, k in _key_aliases.items() if k == key]:
             _key_aliases.pop(alias, None)
@@ -619,8 +715,14 @@ def _remove_session(task_id: str, *, preserve_durable: bool = False):
     # whose delivery owners are still live — clearing them mid-turn would
     # strand their durable rows until settlement (the stuck "result
     # delivered-unconfirmed" banner).
-    agent_inbox.clear(key, modes=['swarm-update'])
-    _record_results_then_delete(key, session)
+    try:
+        agent_inbox.clear(key, modes=['swarm-update'])
+        return _record_results_then_delete(key, session, disposition=disposition)
+    finally:
+        if retirement is not None:
+            with _sessions_lock:
+                _retiring_sessions.pop(key, None)
+            retirement.set()
 
 
 def add_session_alias(task_id: str, swarm_key: str):
@@ -704,11 +806,12 @@ def resident_swarm_status(task_id: str, *, user_id: int) -> dict | None:
         agents_info = []
         for sid, info in session.get_status(include_tool_timeline=True).items():
             agents_info.append({'id': sid, **info})
+        draining = getattr(session, 'is_draining_handoff', False) is True
         return {
-            'active':     not session.is_terminated and not session.is_restart_suspended,
+            'active':     draining or (not session.is_terminated and not session.is_restart_suspended),
             'known':      True,
             'terminated': session.is_terminated and not session.is_restart_suspended,
-            'awaitingContinue': session.is_restart_suspended,
+            'awaitingContinue': session.is_restart_suspended and not draining,
             'task_id':    task_id,
             'swarm_run_id': str(session.task_id or ''),
             'agents':     agents_info,
@@ -931,19 +1034,47 @@ def abort_swarm(task_id: str, *, user_id: int) -> dict:
     """
     from lib.identity import require_user_id
 
+    from lib.swarm import persistence
+
     owner_user_id = require_user_id(user_id, context='swarm abort')
-    session = _get_session(task_id)
-    if session is None or int(session.user_id) != owner_user_id:
-        return {'success': False, 'outcome': 'not_found', 'error': 'No active swarm for this task'}
+    address = (owner_user_id, task_id)
+    with _sessions_lock:
+        target = next(((key, candidate) for key, candidate in _active_sessions.items()
+                       if candidate.task_id == task_id and int(candidate.user_id) == owner_user_id), None)
+        identity = _stop_addresses.get(address)
+        if target is not None:
+            key, session = target
+            identity = getattr(session, '_sql_run_identity', None) or identity
+            if identity is not None:
+                _stop_addresses.pop(address, None)
+                _stop_addresses[address] = dict(identity)
+                if len(_stop_addresses) > _RETIRED_ALIAS_CAPACITY:
+                    _stop_addresses.pop(next(iter(_stop_addresses)))
+    succeeded = {'success': True, 'outcome': 'aborted', 'task_id': task_id}
     try:
-        session.abort()
-        _remove_session(task_id)
-        logger.info('[swarm] Aborted swarm for task %s', task_id)
-        return {'success': True, 'outcome': 'aborted', 'task_id': task_id}
-    except Exception as e:
-        logger.error('[swarm] Error aborting %s: %s', task_id, e, exc_info=True)
-        _remove_session(task_id)
-        return {'success': False, 'outcome': 'failed', 'error': str(e)}
+        if target is not None:
+            session.abort()
+            reclaimed = _remove_session(key, expected=session, disposition='stop')
+            if reclaimed or (identity is None and not persistence.uses_sql_lifecycle()):
+                return succeeded
+        if identity is not None:
+            receipt = persistence.read_lifecycle(identity)
+            if receipt and receipt.get('disposition') == 'stop':
+                return succeeded
+            # Retry an unconfirmed Stop only at the pinned address. A
+            # successor at the same key is not a source of either authority
+            # or evidence for this operation.
+            if target is None and receipt and receipt.get('disposition') is None:
+                if persistence.dispose_run(identity, 'stop'):
+                    return succeeded
+        else:
+            if persistence.has_committed_stop(run_id=task_id, owner_id=owner_user_id):
+                return succeeded
+            if target is None:
+                return {'success': False, 'outcome': 'not_found', 'error': 'No active swarm for this run'}
+    except Exception:
+        logger.warning('[swarm] Stop outcome unconfirmed for run %s', task_id, exc_info=True)
+    return {'success': False, 'outcome': 'failed', 'error': 'Swarm Stop durability not confirmed'}
 
 
 _STOPPABLE_AGENT_STATUSES = frozenset({'running', 'retrying'})

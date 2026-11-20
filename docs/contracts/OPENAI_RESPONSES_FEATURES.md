@@ -105,12 +105,18 @@ receipt. It checks the immutable task-level enabled catalog.
 ## WebSocket mode
 
 `lib/llm/responses_websocket.py` runs a sync agent tool loop on a task-local
-persistent connection. Public routes opt in with `responses.transport=websocket`;
+persistent connection while a task is active. Public routes opt in with `responses.transport=websocket`;
 the Codex subscription profile always uses it for task rounds, because Codex
 CLI's built-in provider does (`supports_websockets`, handshake
 `OpenAI-Beta: responses_websockets=2026-02-06`). That public flag does not
-govern the Codex contract. Connections are never shared across tasks,
-credentials, accounts, models, or upstream URLs.
+govern the Codex contract. After a verified terminal Codex response with a response ID, the process
+parks the connection and its checkpoint in a bounded idle pool. The next
+task can take it exclusively, even from a different thread, when conversation,
+owner, credential, account, endpoint, handshake (including the Codex model
+routing hint) and egress still match. A model change reaches the same socket
+but `compare_request_prefix` sees the changed fixed field and resets the
+chain. The task-local Codex routing token starts fresh. Public Responses and
+task-only calls close their socket on completion.
 
 Frames are the flat `{"type": "response.create", ...body}` envelope. A round
 continues the chain (`previous_response_id` plus only the delta) when all of
@@ -118,7 +124,8 @@ these hold, mirroring Codex CLI's `prepare_websocket_request`:
 
 - every non-input field is unchanged (`input`, `previous_response_id`,
   `stream`, `client_metadata` and `generate` may differ);
-- the previous input is an exact prefix of the new input;
+- the previous input is a decoded-item prefix of the new input (logical
+  compatibility, not a byte comparison);
 - the next items match the previous response's `output`, compared by
   model-visible identity (reasoning ciphertext; call id, name and arguments;
   message role, phase and text);
@@ -138,9 +145,18 @@ missing `websockets`, refused upgrade), the same request uses SSE and the task
 keeps SSE for its remaining rounds; a socket that fails after a send raises a
 retryable failure (never replayed inside the attempt) and also moves the task
 to SSE. The socket follows the HTTP transport's egress decision (desktop
-relay, healthiest subscription route, configured proxy). A terminal assistant
-response and task-lane teardown close the connection without waiting for the
-peer's closing handshake.
+relay, healthiest subscription route, configured proxy). Task teardown
+closes active connections. An aborted or unverified stream cannot park a
+checkpoint. The first completed exchange on a new or checked-out Codex socket
+records whether it sent an incremental frame, the actual input item count, and
+the provider's input and cached token counts when present. Full frames carry
+a content-free reason distinguishing missing checkpoints, request changes,
+history changes, previous-output changes and provider reconnects. Every
+exchange also names the exact sent frame: `frame_sha256` over the
+`response.create` text written to the socket, its byte length, `frame_kind`
+(`full`, `incremental` or `reset`) and the content encoding. The hash covers
+the socket bytes, not the complete HTTP body; a full frame's bounded reason is
+`frame_reason`.
 
 On Codex the socket also carries the turn's `x-codex-turn-state` in
 `client_metadata`, records `codex.rate_limits` frames as subscription quota

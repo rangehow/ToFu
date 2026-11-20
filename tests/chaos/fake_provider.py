@@ -1,4 +1,4 @@
-"""Scripted Anthropic Messages endpoint for fault injection.
+"""Scripted local provider for fault injection (Anthropic by default).
 
 Responsibility: answer the isolated instance's model requests from a per-turn
 script so a test decides, request by request, whether the provider streams a
@@ -22,6 +22,9 @@ import json
 import re
 import threading
 import uuid
+from copy import deepcopy
+
+from tests.support.normal_provider_streams import normal_stream
 
 MARKER = re.compile(r'\[chaos turn=([0-9a-f]+)\]')
 MODEL_ID = 'chaos-model'
@@ -75,7 +78,9 @@ def _sse(event: str, payload: dict) -> bytes:
 
 
 class ScriptedProvider:
-    def __init__(self):
+    def __init__(self, *, protocol: str = 'anthropic'):
+        assert protocol in ('anthropic', 'openai', 'openai_responses')
+        self.protocol = protocol
         self._lock = threading.Lock()
         self._scripts: dict[str, list[dict]] = {}
         self._requests: dict[str, list[dict]] = {}
@@ -107,11 +112,11 @@ class ScriptedProvider:
 
     def requests(self, nonce: str) -> list[dict]:
         with self._lock:
-            return list(self._requests.get(nonce, []))
+            return deepcopy(self._requests.get(nonce, []))
 
     # request handling ------------------------------------------------------
     def _next_step(self, body: dict) -> tuple[str | None, dict]:
-        messages = body.get('messages') or []
+        messages = body.get('messages') or body.get('input') or []
         nonce = None
         for message in messages:
             if message.get('role') != 'user':
@@ -131,6 +136,14 @@ class ScriptedProvider:
             step = steps[min(len(seen), len(steps) - 1)]
             results = [block for block in (messages[-1].get('content') if messages else None) or []
                        if isinstance(block, dict) and block.get('type') == 'tool_result']
+            if self.protocol == 'openai':
+                results = [{'type': 'tool_result', 'tool_use_id': message['tool_call_id'],
+                            'content': message['content']} for message in messages
+                           if message.get('role') == 'tool']
+            elif self.protocol == 'openai_responses':
+                results = [{'type': 'tool_result', 'tool_use_id': message['call_id'],
+                            'content': message['output']} for message in messages
+                           if message.get('type') == 'function_call_output']
             if step['kind'] == 'tool' and callable(step['input']):
                 history = [block for message in messages if message.get('role') == 'user'
                            and isinstance(message.get('content'), list)
@@ -138,6 +151,7 @@ class ScriptedProvider:
                            if isinstance(block, dict) and block.get('type') == 'tool_result']
                 step = {**step, 'input': step['input'](result_texts(history))}
             seen.append({'step': step['kind'], 'tool_results': results, 'messages': len(messages),
+                         'protocol': self.protocol, 'body': deepcopy(body),
                          'last': json.dumps(messages[-1] if messages else None)[:2000],
                          'tools': sorted(t.get('name', '') for t in body.get('tools') or [] if isinstance(t, dict))})
             return nonce, step
@@ -165,16 +179,44 @@ def _handler(provider: ScriptedProvider):
 
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers.get('Content-Length') or 0)) or b'{}')
-            if not self.path.endswith('/messages'):
+            endpoint = {'anthropic': '/messages', 'openai': '/chat/completions',
+                        'openai_responses': '/responses'}[provider.protocol]
+            if not self.path.endswith(endpoint):
                 return self._json(404, {'type': 'error', 'error': {'type': 'not_found_error', 'message': self.path}})
             _nonce, step = provider._next_step(body)
             if step['kind'] == 'http_error':
                 headers = {'retry-after': step['retry_after']} if step['retry_after'] else {}
                 return self._json(step['status'], {'type': 'error', 'error': {
                     'type': step['error_type'], 'message': f'chaos injected {step["status"]}'}}, headers)
+            if provider.protocol != 'anthropic':
+                assert body.get('stream'), 'ordinary Chat/Responses fixture supports streaming only'
+                return self._ordinary_stream(step)
             if not body.get('stream'):
                 return self._json(200, self._message(step))
             self._stream(step)
+
+        def _ordinary_stream(self, step):
+            assert step['kind'] in ('hold', 'text', 'tool')
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/event-stream')
+            self.send_header('Connection', 'close')
+            self.end_headers()
+            self.close_connection = True
+            try:
+                if step['kind'] == 'hold':
+                    self._write(b': controlled pre-tool hold\n\n')
+                    provider.held.set()
+                    step['release'].wait()
+                    provider.held.clear()
+                    step = step['then']
+                assert step['kind'] in ('text', 'tool')
+                arguments = json.dumps(step['input']) if step['kind'] == 'tool' else ''
+                self._write(normal_stream(provider.protocol,
+                    call_id='call-' + uuid.uuid4().hex, response_id='resp-' + uuid.uuid4().hex,
+                    name=step.get('name'), fragments=[arguments] if arguments else None,
+                    text=step.get('text', '')))
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return
 
         def _message(self, step):
             content = [{'type': 'text', 'text': step.get('text') or 'Done.'}]

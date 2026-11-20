@@ -154,6 +154,13 @@ class NativeContextPolicy:
         from lib.llm_dispatch.native_context_scope import native_context_scope
         with native_context_scope(self.task, metadata, output, deadline_monotonic_ns=request.deadline_monotonic_ns):
             from lib.tasks_pkg.orchestrator._root_agent_loop import prepare_round_context, admit_round_context
+            from lib.tasks_pkg.failure_attribution import record_active_round
+            record_active_round(self.task, request.round)
+            native = self.task.get('_nativePreparedInvocation')
+            if native is not None:
+                from lib.tasks_pkg.native_invocation import NativePreparedInvocation
+                if isinstance(native, NativePreparedInvocation):
+                    native.record_startup_context_notes(self.task, request.round)
             self.task.setdefault('_firstDispatchRound', request.round)
             prepare_round_context(self.task, request.messages, round_num=request.round,
                 tid=task_log_tag(self.task_id), model=metadata['logical_model'],

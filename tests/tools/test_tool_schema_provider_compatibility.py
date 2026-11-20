@@ -149,6 +149,8 @@ def test_argument_alternatives_are_optional_declared_properties(
 
 
 def _example(schema):
+    if schema.get('enum'):
+        return schema['enum'][0]
     if schema.get('type') == 'object':
         return {key: _example(schema['properties'][key])
                 for key in schema.get('required') or ()}

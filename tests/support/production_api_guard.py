@@ -159,6 +159,39 @@ def _audit(event: str, args: tuple) -> None:
                     f'test tried to start a child process aimed at the production Tofu: {reason}')
 
 
+def dotenv_without_lifecycle_authority(loader, names):
+    """A dotenv loader that re-scrubs lifecycle authority after each load.
+
+    The scrub above removes this shell's production identity once. The
+    application's own boot loads the checkout's ``.env`` later, and that file
+    names the running server's ``PORT``; the loader only skips values already
+    present, so a scrubbed name comes back. Every child this process starts then
+    inherits a production-looking port and the guard refuses it — observed as
+    ``EnginePreparationError: Cannot read the storage engine source manifest ...
+    (ProductionConnectionRefused)`` when a booted test server read its engine
+    manifest. Restoring the scrubbed names keeps the file's ordinary
+    configuration and drops only the identity the conftest removed.
+    """
+    names = tuple(names)
+
+    def load(*args, **kwargs):
+        target = kwargs.get('environ')
+        if target is None and len(args) > 1:
+            target = args[1]
+        target = target if target is not None else os.environ
+        before = {name: target.get(name) for name in names}
+        try:
+            return loader(*args, **kwargs)
+        finally:
+            for name, value in before.items():
+                if value is None:
+                    target.pop(name, None)
+                else:
+                    target[name] = value
+
+    return load
+
+
 def guard_this_process(environment) -> None:
     """Treat the ports the inherited environment names as production ports, and watch every
     connection and process launch of this process. tests/conftest.py calls this before it scrubs

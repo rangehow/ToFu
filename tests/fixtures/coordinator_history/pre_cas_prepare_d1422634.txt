@@ -1,0 +1,40 @@
+def _prepare_write(self, scope, build, translation_target, read_transcript, expected_revision):
+        from lib.conversations.coordinator_commitments import check_commitments, merge_commitments
+        from lib.conversations.coordinator_task_history import record_board
+        row = self._head()
+        original = row['value'] if row else None
+        if original and original['scope']['bindingRevision'] > scope['bindingRevision']:
+            raise PermissionError('Coordinator binding changed')
+        current = original if original and original['scope'] == scope else None
+        previous = current['board'] if current else None
+        revision = previous['revision'] if previous else 0
+        if expected_revision is not None and revision != expected_revision:
+            raise ValueError(f'task board revision is {revision}, not {expected_revision}; '
+                             'read the current board before retrying')
+        request = build(previous)
+        if request is None:
+            return None, None
+        validate_progress(request, 'progressRequest')
+        for task in request['tasks']:
+            if 'reason' in task and task['status'] not in _REASON_STATUSES:
+                raise ValueError(f"task {task['title']!r}: reason is only for pending (what it waits for) or cancelled (why it stopped)")
+        if previous and previous['summary'] == request['summary'] and previous['tasks'] == request['tasks']:
+            return current, None
+        now_seconds = self.clock()
+        now = int(now_seconds * 1000)
+        check_commitments(previous, request, now=now_seconds)
+        commitments = merge_commitments(previous, request, (current or {}).get('commitments'), now=now)
+        board = {'revision': revision + 1, 'updatedAt': now,
+                 'summary': request['summary'], 'tasks': deepcopy(request['tasks'])}
+        head = {'scope': scope, 'board': board}
+        if commitments:
+            head['commitments'] = commitments
+        translations = _stored_translations(current, translation_target) if current else {}
+        if kept := _translation(translation_target, translations, board):
+            head['translation'] = kept
+        keys = record_board(scope, previous, (current or {}).get('taskKeys'), board,
+                            client=self.client, read_transcript=read_transcript,
+                            translation=(current or {}).get('translation'), translation_target=translation_target)
+        if keys is not None:
+            head['taskKeys'] = keys
+        return validate_progress(head, 'progressHead'), row['version'] if row else 0

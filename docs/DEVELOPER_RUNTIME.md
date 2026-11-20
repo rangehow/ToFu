@@ -52,6 +52,16 @@ identity or restrict admission.
 This is a composition mode, not another orchestrator or provider-routing state
 machine.
 
+Knowledge schema discovery does not admit durable storage. The shared argument
+repair index imports `lib.knowledge.tool`, whose package facade also loads
+`store`; that import must remain storage-free even though the transient tool
+registry omits knowledge retrieval when `durable_state_available` is false.
+`store.publish_portable_originals` admits the storage error contract only when
+called, preserving full-application publication and typed rollback behavior.
+An eager storage import here otherwise disables the optional repair index after
+a swallowed import failure; treating that failure as an allowed wheel import
+would conceal the broken repair path.
+
 **Ingress affinity initialization — Problem:** ordinary embedded and worker task creation imported Quart solely to discover that no request existed. **Decision:** `manager/_registry.py` queries request affinity when Quart is already loaded. Web requests retain clipped direct keys and reconnectability; background tasks retain conversation-store inheritance and durable birth metadata. Explicit principal/owner validation still precedes every task. **Alternatives considered:** importing the framework on every first task taxes storage-free composition; skipping affinity for all transient tasks loses real request routing metadata. Verify `tests/tasks_pkg/test_task_ingress_affinity.py` and `benchmarks/task_affinity_measure.py`; first-task clocks exclude common imports, and loaded-web/long-residency checks remain separate boundaries.
 
 ## Python composition
@@ -158,6 +168,23 @@ positive value bounds the run, and zero refuses.
 - `--timeout-s 0` and negative values are argument errors (exit 2).
 - The Python API default (600 s) and HTTP `/agent.run`, which maps an omitted
   or null body `timeout_s` to 600, are unchanged.
+
+The public runtime stamps an absolute execution expiry at `start`, before
+routing/setup, from `timeout_s`. It intersects that expiry with any earlier
+`config.executionLimits.deadline`, preserving token/tool limits and the caller's
+original object. Existing model/tool admission, invocation cancellation and the
+execution-allowance notice consume that same deadline; changing a result/event
+wait duration cannot extend execution authorization. Without a run timeout,
+caller-supplied limits remain intact and absent limits remain absent. A deadline
+observed inside execution retains the existing `execution_deadline_exceeded`
+cause; it need not be the outer wait's `AgentTimeoutError`/CLI exit 3.
+
+This is deadline plumbing, **not mandatory finalization or task verification**.
+Exit 0 from a shell command does not certify a deliverable or suppress later
+reads. No time is reserved from observed round duration. The contracts do not
+supply a bounded artifact-write plus applicable-verifier operation, so no safe
+mandatory reserve can currently be derived. See [deadline-only evaluation and
+missing finalization contract](HARNESS_DEADLINE.md).
 
 `--tools` is always forwarded as a tag list.
 
@@ -588,6 +615,13 @@ working tree with an isolated setuptools `build_base`, extracts it as the only
 application path beside the test interpreter's installed dependencies, and runs
 the declared `tofu-agent` console entry point under `-S` outside the checkout.
 A scripted loopback provider requests one `run_command` round and then answers.
+`tests/tofu_agent/test_headless_protocol_file_parity.py` separately runs the
+checkout CLI against Chat Completions and Responses loopback fixtures with the
+same read-only three-line text file. Fragmented JSON arguments preserve a path
+with Unicode, spaces and quotes; the next request must retain the matching call
+before its exact line content, and the CLI must settle one tool round. This is
+synthetic checkout coverage, not installed-wheel cross-protocol coverage,
+durable/reconnect history, real-provider capability, or general interoperability.
 The run must exit 0 with `ok: true` and write its marker, every loaded
 application module must come from the wheel, and the only unshipped application
 import it may attempt is the optional tool-result-artifact storage handler.
@@ -606,14 +640,76 @@ in-call wait port `lib.agent_core.storage_waits`, the command-value encoder
 `lib.agent_core.storage_json` that sizes pre-compaction archives, and the round
 drain's `lib.tasks_pkg.inbox_delivery` flag); the agent core reaches Project
 Brain settlement through `ConversationStore.flush_file_signals`; modules a run imports catch
-`StorageError` from `lib.agent_core.storage_errors`, never `lib.storage.errors`;
-Project Brain resolves its storage client on use; storage-free runs skip
+`StorageError` from `lib.agent_core.storage_errors`, never `lib.storage.errors`.
+This includes `lib.oauth.account_dispatch`: ordinary API-key attempts enter its
+account scope too, without loading storage or changing credential selection.
+`tests/oauth/test_account_dispatch_storage_free.py` verifies that scope in a
+fresh storage-denying process and checks the storage adapter's exact exception
+class identity. Project Brain resolves its storage client on use; storage-free runs skip
 Coordinator presence; title generation reads the manifest only while building
-its prompt. The stdlib-only root module `chromium_env`, which the environment
+its prompt. The pure conversation execution-identity module reads the worker
+witness config key from its canonical JSON contract, not from the excluded
+storage package. Scheduler registration and context selection both reach this
+module before an ordinary CLI model round. The storage-free CLI tool-round and
+credential-refusal specifications cover this boundary; durable Detect checks
+still resolve their storage owner only when invoked. The stdlib-only root module `chromium_env`, which the environment
 capability probe imports, ships beside `runtime_guards`.
 Alternatives: shipping `lib.storage` or `frontend/` makes full-application
 authorities public wheel contents, which the artifact check forbids; re-export
 shims keep two import paths; catching each import error hides a broken artifact.
+
+### Storage-free execution ports and server-only owners
+
+The caller supplies an explicit `PrincipalContext` (or chooses `AgentRuntime.local`),
+a complete `ModelRoutingConfig` v2 access envelope including its referenced
+secrets, and an admitted local project root for filesystem tools. `AgentRuntime`
+owns the transient `TaskRuntime`, event/result lifetime, in-memory routing
+repository and the issued request-routing authority shared with child invocations.
+Optional custom tools use the existing tool environment; native execution and
+repository extraction require their documented trusted configuration objects.
+Request JSON never installs a repository, workspace grant or authorization port.
+
+| Shared execution boundary | Storage-free composition | Full-application/server-only adapter |
+|---|---|---|
+| Model access and credential recognition | Issued request-routing repository and owner/tenant boundary; the common invocation enters `credential_redaction_scope`, retaining fingerprint-only state per run | Durable model-routing repository and its change stamp |
+| Round boundary reads | No durable requests for an ordinary transient job label; decide required reads before resolving a storage client | Turn/Attempt, requirement-source, inbox and working-fact owners; inherited issued requirements are not discarded merely because a child is transient |
+| Project dispatch admission | Existing common predicates still run; no dispatch carrier means no durable authority lookup | Human grants, continuation/delegation/dependency records, live revocation and publication receipts require `ProjectDispatchRepository`'s owned storage/Turn/conversation ports |
+| Command workspace scratch | Local commands retain their caller's temporary environment and do not acquire server checkout lifecycle | `task_spares`/`integration_control` own pooled checkout scratch, placement, delivery and reclamation |
+| Semantic Turn revision | `lib.agent_core.model_context_revision` owns the pure value projection used by both compositions | Storage continuation consumes that same projection, not a copied implementation |
+| Durable completion and cross-conversation state | Not provided by the public runtime; capabilities must not imply a saved conversation | `ConversationStore`, terminal persistence, knowledge/memory, scheduler, billing and application lifecycle |
+
+Modules present in the broad wheel manifest are not a promise that their server
+adapters can execute without their required ports. The public constructor does
+not expose a dispatch repository, durable round-prefetch adapter or integration
+workspace service. Installing storage or inventing grants from request config is
+not a supported way to supply them. Authorization, local-root restrictions,
+credential selection and the common redactor remain enabled in both compositions.
+Vault and server-config credential recognition retain their existing local
+sources; the runtime's model keys come from its own issued authority, never an
+unrelated durable owner table.
+
+For repeatable independent baseline/candidate checks, build each wheel with an
+isolated setuptools build/egg-info root, then run with the test interpreter:
+
+```sh
+PYTHONPATH=$PWD .venv/bin/python3 scripts/check_agent_wheel_run.py /absolute/baseline.whl --output /new/evidence/baseline
+PYTHONPATH=$PWD .venv/bin/python3 scripts/check_agent_wheel_run.py /absolute/candidate.whl --output /new/evidence/candidate
+```
+
+Each invocation installs just that wheel (`uv pip --target --no-deps --offline`),
+then launches its declared CLI under `-S` outside the checkout against a loopback
+model stub. The stub invokes the real command tool, writes a file, and prints a
+synthetic model credential through the command environment. The second model
+request and final result must contain its redaction marker, not the credential;
+missing imports (including swallowed ones), stdout/stderr and the result are
+saved under that evidence root. Dependencies are borrowed from the test
+interpreter's site-packages, never editable checkout imports. A failed baseline
+still leaves its evidence; use a separate invocation/output root for each arm.
+Add `--credential-refusal` with another fresh output root to request an
+unavailable named credential alongside the safe command: the real tool must
+return `Credential request rejected`, leave the refused command's file absent,
+and retain the successful sibling result. No live service or running experiment
+is restarted by this workflow.
 
 The clean-wheel smoke installs only the wheel outside the repository, checks
 that database drivers and full-app assets are absent while setup assets are

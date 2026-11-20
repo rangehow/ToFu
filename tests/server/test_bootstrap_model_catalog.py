@@ -56,8 +56,9 @@ def test_bootstrap_loader_projects_authored_offering_recipes():
     templates = bootstrap._load_provider_templates()
     by_key = {template['key']: template for template in templates}
 
-    assert by_key['longcat']['offering_recipes']
-    assert by_key['longcat']['models'] == by_key['longcat']['offering_recipes']
+    assert 'yourprovider' in by_key
+    assert by_key['yourprovider']['offering_recipes']
+    assert by_key['yourprovider']['models'] == by_key['yourprovider']['offering_recipes']
 
 
 def test_bootstrap_stages_secret_free_provider_and_selected_default(

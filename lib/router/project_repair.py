@@ -161,15 +161,78 @@ def _replayed(record: dict) -> dict:
                           'get_conversation_status on conversation_id; a failed one needs a new idempotency_key.')}
 
 
+def _replacement_folder(scope: dict) -> str:
+    from lib.conversations.coordinator_tools import coordinator_folder
+    from .registered_projects import folder_has_project
+    folder_id = coordinator_folder(scope)
+    if not folder_id or not folder_has_project(scope['user_id'], folder_id, scope['project_path']):
+        raise PermissionError('The current lead has no owned folder for this project; use the owner’s '
+                              'Replace coordinator action or ask the Global Router for recovery')
+    return folder_id
+
+
+def _replace_own_binding(task: dict, scope: dict, arguments: dict) -> dict:
+    """Use the owner's create-and-bind operation, scoped to the executing lead."""
+    from lib import lifecycle_approval as gate
+    from lib.conversations.project_coordination import ProjectCoordinationRepository
+    from lib.identity import PrincipalContext
+    from lib.router.binding import global_router
+    from lib.router.watchdog.binding import is_watchdog_scope
+    from lib.tasks_pkg.manager import task_user_id
+    from .owner_delegation import _live_router_attempt, delegated_action, router_requester
+
+    owner, project = scope['user_id'], scope['project_path']
+    conversation_id, revision = scope['conversation_id'], scope['binding_revision']
+    principal = PrincipalContext.from_payload(task.get('_principalContext') or {})
+    requester = router_requester(task, scope)
+    if (requester['kind'] != 'project_lead' or is_watchdog_scope(scope)
+            or principal.owner_user_id != owner or task_user_id(task) != owner
+            or task.get('convId') != conversation_id):
+        raise PermissionError('Only the executing Project Lead can replace its own binding')
+    target = {'kind': 'project', 'action': 'replace_own_binding', 'path': project,
+              'conversationId': conversation_id}
+    bindings = ProjectCoordinationRepository(owner)
+
+    def replace():
+        folder_id = _replacement_folder(scope)
+        _live_router_attempt(task, scope)
+        grant = gate.check_delegation(owner, requester, SCOPE)
+        current_router = global_router(owner, create=False)
+        grantee = grant['grantee']
+        if (current_router['availability'] != 'available'
+                or current_router['conversationId'] != grantee['conversationId']
+                or current_router['revision'] != grantee['bindingRevision']):
+            raise gate.DelegationRefused('owner_delegation_router_changed',
+                                         'The grant does not belong to the current Global Router; nothing ran.')
+        return {'binding': bindings.create(
+            project, folder_id=folder_id, expected_revision=revision, replace_conversation_id=conversation_id,
+            command_id=gate.delegated_action_id(owner, requester, SCOPE, arguments['idempotency_key']))}
+
+    result, action_id = delegated_action(task, scope, arguments, scope_name=SCOPE,
+                                         target=target, action=replace, allow_project_lead=True)
+    if result.get('replayed'):
+        return {**result, 'binding': bindings.read(project), 'action_id': action_id}
+    return {**result, 'status': 'completed', 'execution_started': False, 'action_id': action_id,
+            'next_step': 'The new binding is in place. No Turn was started. Old binding grants no longer '
+                         'authorize work; existing conversations and receipts were not moved.'}
+
+
 def repair_project(task: dict, scope: dict, arguments: dict, *, dispatch=None) -> dict:
-    """Open and start one repair conversation in a project whose Project Router cannot run."""
+    """Replace the caller's own binding, or open Global Router recovery for an unavailable lead."""
+    from .policy import is_router_scope
+    arguments = validate(dict(arguments), 'projectRepair')
+    if arguments.get('action') == 'replace_own_binding':
+        return _replace_own_binding(task, scope, arguments)
+    if not is_router_scope(scope):
+        raise PermissionError('Only the Global Router can open recovery for another lead; a running Project '
+                              'Lead may only use replace_own_binding for itself')
+    return _open_repair_conversation(task, scope, arguments, dispatch=dispatch)
+
+
+def _open_repair_conversation(task: dict, scope: dict, arguments: dict, *, dispatch=None) -> dict:
     from lib import lifecycle_approval as gate
     from . import forwarding
     from .owner_delegation import resolve_trigger, router_requester
-    from .policy import is_router_scope
-    if not is_router_scope(scope):
-        raise PermissionError('Only the owner\u2019s Global Router can act under the owner\u2019s delegation')
-    arguments = validate(dict(arguments), 'projectRepair')
     owner, router_id = scope['user_id'], scope['conversation_id']
     project = forwarding._target_project(scope, arguments['project_path'])
     requester = router_requester(task, scope)

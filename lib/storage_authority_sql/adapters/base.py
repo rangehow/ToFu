@@ -18,6 +18,7 @@ class Session(Protocol):
 
     def worker_lease_authority(self) -> WorkerLeaseAuthoritySnapshot: ...
 
+    def utf8_bytes_sql(self, column: str) -> str: ...
     def lock_key(self, namespace: str, key: str) -> None: ...
     def index_exists(self, index_name: str) -> bool: ...
     def execute(self, sql: str, params: tuple[Any, ...] = ()) -> int: ...
@@ -32,6 +33,14 @@ class Session(Protocol):
     def fetch_one_for_update_skip_locked(
         self, sql: str, params: tuple[Any, ...] = (),
     ) -> Mapping[str, Any] | None: ...
+
+
+def utf8_byte_order(session: Session, column: str, *, descending: bool = False) -> str:
+    """Order a trusted column by UTF-8 byte length, then unsigned bytes."""
+    binary = session.utf8_bytes_sql(column)
+    length = f'length({binary})'
+    direction = ' DESC' if descending else ''
+    return f'{length}{direction},{binary}{direction}'
 
 
 Operation = Callable[[Session], Any]

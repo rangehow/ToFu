@@ -36,6 +36,11 @@ class Store:
         return self
 
     def query(self, operation, payload, **kwargs):
+        if operation == 'record.list':
+            keys = sorted(key for namespace, key in self.rows
+                          if namespace == payload['namespace'] and key.startswith(payload['prefix'])
+                          and key > payload.get('after_key', ''))[:payload['limit']]
+            return [{'key': key, **deepcopy(self.rows[(payload['namespace'], key)])} for key in keys]
         assert operation == 'record.get'
         return deepcopy(self.rows.get((payload['namespace'], payload['key'])))
 
@@ -81,6 +86,10 @@ def board():
 
 
 def request(tasks, summary='Two promises and one finished task.'):
+    # A pending row states its wait as a typed claim; these boards promise a due.
+    for task in tasks:
+        if task['status'] == 'pending':
+            task.setdefault('blocker', {'kind': 'next_action', 'action': 'Continue: ' + task['title']})
     return {'summary': summary, 'tasks': tasks}
 
 

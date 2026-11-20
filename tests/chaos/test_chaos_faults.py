@@ -140,13 +140,14 @@ def _resumes_by_itself(turn: dict) -> bool:
 
 
 @contextlib.contextmanager
-def _running_chaos(root: Path, *, reasoning: dict | None = None, **instance_options):
-    provider = fp.ScriptedProvider().start()
+def _running_chaos(root: Path, *, reasoning: dict | None = None,
+                   protocol: str = 'anthropic', **instance_options):
+    provider = fp.ScriptedProvider(protocol=protocol).start()
     instance = ChaosInstance(root, **instance_options)
     try:
         instance.start()
         harness = Chaos(instance, provider)
-        harness.client.install_route(provider.base_url, reasoning=reasoning)
+        harness.client.install_route(provider.base_url, reasoning=reasoning, protocol=protocol)
         yield harness
     finally:
         try:

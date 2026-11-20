@@ -15,6 +15,7 @@ from lib.oauth.manager._state import (
     _active_servers,
     _servers_lock,
     _update_active_flow,
+    guard_flow_write,
 )
 
 logger = get_logger(__name__)
@@ -67,12 +68,13 @@ def _finalize_login_success(
     Returns:
         The standard success payload.
     """
-    _update_active_flow(
+    if not _update_active_flow(
         provider,
         flow_id,
         status='success',
         email=token.get('email', ''),
-    )
+    ):
+        return {'error': 'OAuth flow has changed. Please start a new login.'}
     audit_kwargs = {'provider': provider, 'email': token.get('email', '')}
     if via:
         audit_kwargs['via'] = via
@@ -183,22 +185,28 @@ def exchange_code(provider: str, code: str, state: str = '', *,
 
     logger.info('[OAuth] Exchanging code for %s tokens (code_len=%d)', provider, len(code))
 
-    _update_active_flow(provider, flow_id, status='exchanging')
+    if not _update_active_flow(provider, flow_id, status='exchanging'):
+        return {'error': 'OAuth flow has changed. Please start a new login.'}
 
-    from lib.oauth.token_store import OAuthExchangeError
+    from lib.oauth.token_store import OAuthExchangeError, guarded_login_write
+    guard = guard_flow_write(provider, flow_id, owner_user_id)
     try:
-        if provider == 'claude':
-            from lib.oauth.claude import claude_exchange_code
-            token = claude_exchange_code(code, pkce_verifier, state=state,
-                                         user_id=str(owner_user_id),
-                                         redirect_uri=flow_redirect_uri)
-        elif provider == 'codex':
-            from lib.oauth.codex import codex_exchange_code
-            token = codex_exchange_code(
-                code, pkce_verifier, user_id=str(owner_user_id))
-        else:
-            token = None
+        with guarded_login_write(guard):
+            if provider == 'claude':
+                from lib.oauth.claude import claude_exchange_code
+                token = claude_exchange_code(code, pkce_verifier, state=state,
+                                             user_id=str(owner_user_id),
+                                             redirect_uri=flow_redirect_uri)
+            elif provider == 'codex':
+                from lib.oauth.codex import codex_exchange_code
+                token = codex_exchange_code(
+                    code, pkce_verifier, user_id=str(owner_user_id))
+            else:
+                token = None
     except OAuthExchangeError as e:
+        with guard(provider) as current:
+            if not current:
+                return {'error': 'OAuth flow has changed. Please start a new login.'}
         # Surface the REAL upstream reason (e.g. a 403 geo/edge block) instead
         # of the misleading generic "code may have expired".
         envelope = _exchange_error_envelope(e)
@@ -242,14 +250,16 @@ def store_token(provider: str, token_response: dict, *,
         return {'error': 'No active OAuth flow found. Please start a new login first.'}
     flow_id = str(flow.get('flow_id') or '')
 
-    from lib.oauth.token_store import OAuthExchangeError
+    from lib.oauth.token_store import OAuthExchangeError, guarded_login_write
+    guard = guard_flow_write(provider, flow_id, owner_user_id)
     try:
-        if provider == 'claude':
-            from lib.oauth.claude import claude_store_token
-            token = claude_store_token(token_response)
-        elif provider == 'codex':
-            from lib.oauth.codex import codex_store_token
-            token = codex_store_token(token_response)
+        with guarded_login_write(guard):
+            if provider == 'claude':
+                from lib.oauth.claude import claude_store_token
+                token = claude_store_token(token_response)
+            elif provider == 'codex':
+                from lib.oauth.codex import codex_store_token
+                token = codex_store_token(token_response)
     except OAuthExchangeError as e:
         envelope = _exchange_error_envelope(e)
         _update_active_flow(
@@ -267,6 +277,14 @@ def logout_oauth(provider: str, *, owner_user_id: int | None = None) -> dict:
 
     # Capture the account identity before deleting the credential so derived
     # account-scoped caches can be invalidated without ever storing the raw id.
+    # Invalidate before deletion; a callback that was already exchanging
+    # must not publish behind logout. Do not hold this lock during deletion
+    # (Codex publication acquires its refresh lock before the flow lock).
+    with _flows_lock:
+        flow = _active_flows.pop(provider, None) or {}
+        cancel = flow.get('cancel_event')
+        if cancel is not None:
+            cancel.set()
     stored = load_token(provider) or {}
     deleted = delete_token(provider)
     if not deleted:
@@ -284,14 +302,6 @@ def logout_oauth(provider: str, *, owner_user_id: int | None = None) -> dict:
     except Exception as deprovision_error:
         logger.error('[OAuth] Failed to deprovision provider for %s: %s',
                      provider, deprovision_error, exc_info=True)
-
-    # Signal before removing the flow: ``stop_device_flow`` obtains the
-    # cancel_event from that record. Popping first made logout claim success
-    # while the old poll thread could continue exchanging a credential.
-    from lib.oauth.manager._device import stop_device_flow
-    stop_device_flow(provider)
-    with _flows_lock:
-        _active_flows.pop(provider, None)
 
     # Shut down any running relay server
     with _servers_lock:

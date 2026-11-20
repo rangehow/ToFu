@@ -195,10 +195,7 @@ def test_published_delivery_real_panel_bytes_consent_reload_and_owner(browser, d
     # Native published-ID action opens the actual retained panel, not a gallery dummy.
     page.get_by_role('button',name='Open published file',exact=True).focus();page.keyboard.press('Enter')
     panel=page.locator('#artifact-panel');panel.wait_for(state='visible')
-    # Published attachments render as one file card (41e71bdbf5): the card is
-    # named for its kind and its heading is the file name.
-    card=panel.locator('[data-art-body]').get_by_role('article',name='Published attachment')
-    assert card.is_visible() and card.get_by_role('heading',name='report.zip',exact=True).is_visible()
+    assert panel.locator('[data-art-body]').get_by_role('heading',name='Published attachment').is_visible()
     assert panel.locator('iframe,script').count()==0
     assert file_id not in ''.join(path for path in counts if path.endswith('/raw'))
     assert 'report.zip' in panel.text_content()
@@ -233,7 +230,7 @@ def test_published_delivery_real_panel_bytes_consent_reload_and_owner(browser, d
     panel.get_by_role('button',name='Download original interactive document',exact=True).click()
     page.evaluate('document.querySelector("#open-1").click()')
     page.get_by_role('dialog').wait_for(state='detached')
-    panel.get_by_role('article',name='Published attachment').wait_for(state='visible')
+    panel.get_by_role('heading',name='Published attachment').wait_for(state='visible')
     page.keyboard.press('Escape');page.locator('#open-0').click()
     preview.get_by_role('heading',name='Published prototype').wait_for(state='visible')
     panel.get_by_role('button',name='Download original interactive document',exact=True).click()

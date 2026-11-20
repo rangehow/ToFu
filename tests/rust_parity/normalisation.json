@@ -1,0 +1,41 @@
+{
+ "format": "tofu.rust-parity.normalisation/v1",
+ "reviewed": "2026-11-18",
+ "policy": "Only per-request identities and wall-clock values are normalised. Every other byte, including header order, JSON key order, number spelling and string escaping, is compared exactly. Adding a rule needs a reason naming the source of the varying value; a rule that hides a real difference is a defect.",
+ "wireRules": [
+  {
+   "id": "provider-trace-id",
+   "boundary": "provider_wire",
+   "partSuffix": ":header:M-TraceId",
+   "action": "drop",
+   "reason": "lib/llm/_sse_core.prepare_request mints a random per-request trace id (uuid); it identifies the request, it is not request content"
+  },
+  {
+   "id": "sse-heartbeat",
+   "boundary": "sse_stream",
+   "eventType": "sync.heartbeat",
+   "action": "drop-frame-type",
+   "reason": "routes/conversation_sync_v3.py emits sync.heartbeat only after heartbeatIntervalMs without a change, so whether and where one appears in a replay is wall-clock timing, not replayed content"
+  }
+ ],
+ "durableStateRules": [
+  {
+   "id": "durable-ids",
+   "action": "rename-by-first-appearance",
+   "keys": ["conversationId", "turnId", "attemptId", "parentTurnId", "currentAttemptId", "taskId", "toolCallId", "presentationId", "commandId", "operationId"],
+   "reason": "identities minted per deployment (uuid4 / nonce); renamed consistently so equal structure compares equal and a swapped reference still differs"
+  },
+  {
+   "id": "chaos-nonce",
+   "action": "rename-by-first-appearance",
+   "pattern": "chaos turn=[0-9a-f]+",
+   "reason": "the scripted provider's per-Turn nonce embedded in the user text (tests/chaos/fake_provider.py MARKER)"
+  },
+  {
+   "id": "durable-timestamps",
+   "action": "replace",
+   "keys": ["createdAt", "updatedAt", "startedAt", "settledAt", "occurredAt", "ts", "tStart", "tEnd", "execStartTs"],
+   "reason": "wall-clock epoch milliseconds of the run"
+  }
+ ]
+}

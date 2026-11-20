@@ -1,6 +1,64 @@
 # Changelog
 
 
+## [0.19.3] - 2026-11-19
+
+### Added
+- PDF translation pipeline foundation: pure-CPU structural extraction feeds a
+  block-level translator with per-block layout budgets, and a solved re-layout
+  plan renders back to a faithful PDF that keeps the source images and vector
+  content while replacing only the translated glyphs. A render fidelity gate
+  covers identity, longer text, refusal and CJK cases.
+- Coordinator task-board and continuation: typed waits are owner-actionable and
+  carry terminal limits; typed waits and idle rows are read on the task board,
+  a pending row requires a typed blocker, and typed blockers are projected into
+  continuation briefs.
+- Motion video: registered FFmpeg SRT burn-in is proven end to end, with a
+  persistent FFmpeg toolchain for isolated renders.
+
+### Changed
+- Native ABI CI routing: the oracle runs in the public workflow without the
+  absent internal-only checker, so the kernel lane no longer depends on it.
+- Publication: 0.19.3 is published to both `rangehow/ToFu` and
+  `NiuTrans/ToFu`. The organization mirror keeps its existing `main`
+  (`9beb2923…`) as the merge's first parent; this is an owner-authorized
+  one-off admission of already-public foreign ancestry, with no force-push,
+  deletion or history rewrite.
+
+### Fixed
+- The browser extension recovers startup-configuration serialization after a
+  storage read failure, carries the startup URL intent through preseed, rejects
+  invalid stored types and fences stale configuration behind newer user intent.
+- The ordinary document preview enforces the conference year: a preview for a
+  pinned venue template whose year differs is refused before the build is
+  scheduled, and the preview year-check paths found in review are closed.
+
+### Known issues
+- Downgrade is not supported: a schema-71 client cannot complete the rollback
+  handshake against an already-authenticated schema-70 engine. No rollback
+  safety is claimed.
+- The public `CI` workflow is red on the current `main` commit
+  (`14dedece54ed`): `test-slow`, `test-api`, `test-unit` shards 1, 2 and 4, and
+  `visual-nightly` fail, so the aggregated `CI required` job fails. This
+  release does not fix those pre-existing failures.
+- macOS desktop packages for this release are unsigned and not notarized;
+  Developer ID signing and notarization remain paused.
+
+### Storage engine certification
+
+0.19.3 ships a certified TofuDB storage engine.
+
+- Engine source SHA-256: `0e96a9e1f86d6b47e148f84ad38e0ae5cc3803b093697af852562315f613b7d7`
+- Storage contract SHA-256: `1cf99a8423ba779ea47ea29f2f469b520d64f6e62c7f060e812f1b6490681bb3`
+- Engine binary SHA-256: `0c7b2eec824e604123609d4cd0b4fd04c9878e13bf1425ae035761a58e4e4735`
+- Certified: 2026-11-20T00:39:12Z (started 00:25:45Z; 13m 27s wall, 1201.9 s of checks)
+- Record: `packages/tofu-db/target/engine-certifications/0e96a9e1f86d6b47e148f84ad38e0ae5cc3803b093697af852562315f613b7d7/1cf99a8423ba779ea47ea29f2f469b520d64f6e62c7f060e812f1b6490681bb3/certification.json`
+- Checks (all pass): build, certify, certify-no-online-background, ff-native, cargo-lib, cargo-fastpath, load, rollback.
+
+A 0.19.2 user can install 0.19.3 and start normally: restart preparation
+deploys the certified engine for this source automatically; no separate
+engine-replacement step is required.
+
 ## [0.19.2] - 2026-11-15
 
 ### Changed

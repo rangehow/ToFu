@@ -1,11 +1,14 @@
 """URL and content deduplication for search results."""
 
+import functools
+import importlib
 import re
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from tofu_search.log import get_logger
 
 logger = get_logger(__name__)
+_native = importlib.import_module('tofu_search._native_kernels').native
 
 __all__ = ['canonical_url_key', 'group_by_content', 'attach_similar_snippets',
            'dedup_by_content', 'dedup_by_full_content']
@@ -110,23 +113,23 @@ def group_by_content(results: list[dict], threshold: float = 0.45) -> list[list[
     is a presentation hint, not page equivalence or independent corroboration.
     Rows remain request-owned references so completed fetch evidence survives.
     """
-    shingle_sets = []
-    for r in results:
-        title = (r.get('title') or '').strip()
-        snippet = (r.get('snippet') or '').strip()
-        shingle_sets.append(_text_to_shingles(f'{title} {snippet}'))
+    texts = [f"{(r.get('title') or '').strip()} {(r.get('snippet') or '').strip()}"
+             for r in results]
+    return [[results[index] for index in group]
+            for group in _group_indices(texts, threshold)]
 
-    groups = []
-    keep_indices = []
-    for i, r in enumerate(results):
-        for group, ki in zip(groups, keep_indices, strict=True):
-            sim = _jaccard(shingle_sets[i], shingle_sets[ki])
-            if sim >= threshold:
-                group.append(r)
+
+def _group_indices(texts: list[str], threshold: float) -> list[list[int]]:
+    """Each text joins the first group whose representative reaches threshold."""
+    shingle_sets = [_text_to_shingles(text) for text in texts]
+    groups: list[list[int]] = []
+    for i, shingles in enumerate(shingle_sets):
+        for group in groups:
+            if _jaccard(shingles, shingle_sets[group[0]]) >= threshold:
+                group.append(i)
                 break
         else:
-            groups.append([r])
-            keep_indices.append(i)
+            groups.append([i])
     return groups
 
 
@@ -241,12 +244,28 @@ def dedup_by_full_content(results: list[dict], threshold: float = 0.78) -> list[
     """
     if len(results) <= 1:
         return results
-    fingerprints = [_full_text_shingles(r.get('full_content') or '') for r in results]
+    decisions = _full_content_duplicates(
+        [r.get('full_content') or '' for r in results], threshold)
     kept: list[dict] = []
-    kept_indices: list[int] = []
     removed = 0
-    for idx, result in enumerate(results):
-        fp = fingerprints[idx]
+    for result, duplicate_of in zip(results, decisions, strict=True):
+        if duplicate_of is None:
+            kept.append(result)
+        else:
+            removed += 1
+            _merge_duplicate_evidence(kept[duplicate_of], result)
+    if removed:
+        logger.info('[FullContentDedup] %d->%d results (removed %d mirrors, threshold=%.2f)',
+                    len(results), len(kept), removed, threshold)
+    return kept
+
+
+def _full_content_duplicates(texts: list[str], threshold: float) -> list[int | None]:
+    """Per text: None keeps it, k names the kept position it near-copies."""
+    fingerprints = [_full_text_shingles(text) for text in texts]
+    kept_indices: list[int] = []
+    decisions: list[int | None] = []
+    for idx, fp in enumerate(fingerprints):
         duplicate_of = None
         if fp:
             for kept_pos, kept_idx in enumerate(kept_indices):
@@ -255,12 +274,27 @@ def dedup_by_full_content(results: list[dict], threshold: float = 0.78) -> list[
                     duplicate_of = kept_pos
                     break
         if duplicate_of is None:
-            kept.append(result)
             kept_indices.append(idx)
-        else:
-            removed += 1
-            _merge_duplicate_evidence(kept[duplicate_of], result)
-    if removed:
-        logger.info('[FullContentDedup] %d->%d results (removed %d mirrors, threshold=%.2f)',
-                    len(results), len(kept), removed, threshold)
-    return kept
+        decisions.append(duplicate_of)
+    return decisions
+
+
+# The Python bodies above are the parity oracle; the native kernels replace the
+# membership decisions when the extension is installed. Row handling stays here.
+PYTHON_KERNELS = {'_group_indices': _group_indices,
+                  '_full_content_duplicates': _full_content_duplicates,
+                  '_text_to_shingles': _text_to_shingles,
+                  '_full_text_shingles': _full_text_shingles,
+                  'canonical_url_key': canonical_url_key}
+if _native is not None:
+    _group_indices = _native.group_indices
+    _full_content_duplicates = _native.full_content_duplicates
+
+    @functools.wraps(canonical_url_key)
+    def canonical_url_key(url: str) -> str:
+        if type(url) is str or url is None:
+            try:
+                return _native.canonical_url_key(url)
+            except UnicodeEncodeError:  # lone surrogates cannot cross into Rust
+                pass
+        return PYTHON_KERNELS['canonical_url_key'](url)

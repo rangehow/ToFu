@@ -2,7 +2,7 @@
 import { createDialog } from '../../ui';
 import { mountWorkingFacts } from './panel';
 import type { WorkingFactsPorts, Text } from './ports';
-import './working-facts.css';
+import '../../styles/application/34-working-facts.css';
 
 export function openWorkingFacts(conversationId: string, ports: WorkingFactsPorts, text: Text): () => void {
   const body = document.createElement('div');

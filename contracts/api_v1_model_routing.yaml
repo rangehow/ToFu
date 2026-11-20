@@ -348,14 +348,23 @@ components:
           uniqueItems: true
           items: {type: string, maxLength: 64}
     ModelRoutingPutRequest:
-      type: object
-      additionalProperties: false
-      required: [expected_revision, model_routing]
-      properties:
-        model_routing:
-          $ref: '#/components/schemas/ModelRoutingDocument'
-        expected_revision:
-          $ref: '#/components/schemas/Revision'
+      anyOf:
+        - type: object
+          additionalProperties: false
+          required: [expected_revision, model_routing]
+          properties:
+            model_routing:
+              $ref: '#/components/schemas/ModelRoutingDocument'
+            expected_revision:
+              $ref: '#/components/schemas/Revision'
+        - type: object
+          additionalProperties: false
+          required: [expected_revision, codex_registration_enabled]
+          properties:
+            codex_registration_enabled:
+              type: boolean
+            expected_revision:
+              $ref: '#/components/schemas/Revision'
     ProviderBundle:
       type: object
       additionalProperties: false

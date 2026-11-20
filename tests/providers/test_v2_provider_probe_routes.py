@@ -34,7 +34,7 @@ class ReadOnlyRepository:
         offering.pop('model')
         offering.update(identity_state='pending_identity', pending_model_id='alpha')
         credential = document['credentials'][0]
-        credential.update(kind='api_key', secret_reference='secret-a', enabled=False)
+        credential.update(kind='api_key', secret_reference='secret-a', enabled=True)
         document['credentials'].append({
             **deepcopy(credential), 'credential_id': CREDENTIAL_IDS[1],
             'secret_reference': 'secret-a-second',
@@ -512,3 +512,137 @@ def test_retarget_only_sync_hot_reloads_dispatcher(harness, monkeypatch):
     stats = routes._sync_one_card_from_template(BOUNDARY, harness.repository, 'provider-a')
     assert stats['repaired_deployments'] == 1
     assert reloads == [True]
+
+
+def test_bulk_detect_does_not_resolve_disabled_credentials(harness):
+    for row in harness.repository.document['credentials']:
+        row['enabled'] = False
+    status, body = harness.request('POST', START, {'force': True})
+    assert status == 400, body
+    assert harness.repository.resolved == []
+    assert harness.queued == []
+
+
+def test_explicit_disabled_column_resolves_only_the_selected_key(harness):
+    for row in harness.repository.document['credentials']:
+        row['enabled'] = False
+    harness.repository.document['offerings'][0]['enabled'] = True
+    status, body = harness.request('POST', START, {
+        'force': True, 'targets': [target()], 'only': {'key_idxs': [1]}})
+    assert status == 200, body
+    assert harness.repository.resolved == ['secret-a-second']
+    assert {cell[0] for cell in harness.queued[0][1]} == {1}
+
+
+@pytest.mark.parametrize('only', [
+    {}, {'model_ids': []}, {'key_idxs': []},
+    {'model_ids': [], 'key_idxs': [0]},
+    {'model_ids': ['alpha-wire-a'], 'key_idxs': []},
+    {'key_idxs': [99]}, {'key_idxs': [0, 99]},
+    {'key_idxs': [-1]}, {'model_ids': ['not-selected']},
+    {'model_ids': ['alpha-wire-a', 'not-selected']},
+])
+def test_explicit_scope_must_match_before_any_secret_is_resolved(harness, only):
+    harness.repository.document['offerings'][0]['enabled'] = True
+    response = harness.request('POST', START, {
+        'force': True, 'targets': [target()], 'only': only})
+    assert_error(response, 'provider_probe_empty_scope')
+    assert harness.repository.resolved == []
+    assert harness.queued == []
+    assert harness.network == []
+
+
+def test_absent_scope_is_bulk_but_present_valid_scope_preserves_disabled_cell(harness):
+    harness.repository.document['offerings'][0]['enabled'] = True
+    for credential in harness.repository.document['credentials']:
+        credential['enabled'] = False
+    response = harness.request('POST', START, {
+        'force': True, 'targets': [target()],
+        'only': {'model_ids': ['alpha-wire-a'], 'key_idxs': [1]}})
+    assert response[0] == 200, response[1]
+    assert harness.repository.resolved == ['secret-a-second']
+    assert [(cell[0], cell[3]) for cell in harness.queued[0][1]] == [(1, 'alpha-wire-a')]
+
+
+@pytest.mark.parametrize('only', [{'model_ids': []}, {'model_ids': ['not-selected']}, {'key_idxs': [99]}])
+@pytest.mark.parametrize('cache_location', ['memory', 'disk'])
+def test_cached_probe_cannot_hide_invalid_explicit_scope(harness, only, cache_location):
+    import routes.api_v1.providers as routes
+
+    harness.repository.document['offerings'][0]['enabled'] = True
+    status, body = harness.request('POST', START, {'force': True})
+    assert status == 200, body
+    harness.repository.resolved.clear()
+    harness.queued.clear()
+    if cache_location == 'disk':
+        harness.cached = {'status': 'done', 'cells': {'0::alpha-wire-a': {
+            'key_idx': 0, 'model_id': 'alpha-wire-a', 'status': 'ok'}}}
+        routes.CELL_PROBE_TASKS.clear()
+    response = harness.request('POST', START, {'only': only})
+    assert_error(response, 'provider_probe_empty_scope')
+    assert harness.repository.resolved == []
+    assert harness.queued == []
+
+
+_SCOPE_CASES = [
+    ('omitted', None, False),
+    ('empty-object', {}, True),
+    ('empty-model', {'model_ids': []}, True),
+    ('blank-model', {'model_ids': ['alpha-wire-a', ' ']}, True),
+    ('nonstring-model', {'model_ids': ['alpha-wire-a', 4]}, True),
+    ('unknown-model', {'model_ids': ['alpha-wire-a', 'missing']}, True),
+    ('valid-model', {'model_ids': ['alpha-wire-a']}, False),
+    ('duplicate-model', {'model_ids': ['alpha-wire-a', 'alpha-wire-a']}, False),
+    ('empty-column', {'key_idxs': []}, True),
+    ('invalid-column', {'key_idxs': [0, 99]}, True),
+    ('noninteger-column', {'key_idxs': [0, '1']}, True),
+    ('valid-column', {'key_idxs': [1]}, False),
+    ('duplicate-column', {'key_idxs': [1, 1]}, False),
+]
+
+
+@pytest.mark.parametrize('cache', ['absent', 'running', 'completed', 'disk'])
+@pytest.mark.parametrize('disabled', [False, True], ids=['enabled', 'disabled'])
+@pytest.mark.parametrize('_name,only,invalid', _SCOPE_CASES, ids=[case[0] for case in _SCOPE_CASES])
+def test_scope_membership_is_atomic_before_cache_or_secret(
+        harness, cache, disabled, _name, only, invalid):
+    import routes.api_v1.providers as routes
+
+    harness.repository.document['offerings'][0]['enabled'] = True
+    if cache != 'absent':
+        status, body = harness.request('POST', START, {'force': True})
+        assert status == 200, body
+        if cache == 'disk':
+            routes.CELL_PROBE_TASKS.clear()
+            harness.cached = {'status': 'done', 'cells': {'0::alpha-wire-a': {
+                'key_idx': 0, 'model_id': 'alpha-wire-a', 'status': 'ok'}}}
+        elif cache == 'completed':
+            for task in routes.CELL_PROBE_TASKS.values():
+                task['status'] = 'done'
+    for credential in harness.repository.document['credentials']:
+        credential['enabled'] = not disabled
+    harness.repository.resolved.clear()
+    harness.queued.clear()
+    body = {'targets': [target()]}
+    if only is not None:
+        body['only'] = only
+    status, response = harness.request('POST', START, body)
+    if invalid:
+        assert status == 400, response
+        assert harness.repository.resolved == []
+        assert harness.queued == []
+        assert harness.network == []
+        return
+    # Duplicate members are set semantics (the schema has no uniqueItems).
+    if status == 200:
+        if harness.queued:
+            work = harness.queued[0][1]
+            assert len({(cell[0], cell[3]) for cell in work}) == len(work)
+            if only and 'key_idxs' in only:
+                assert {cell[0] for cell in work} == set(only['key_idxs'])
+                if disabled:
+                    assert harness.repository.resolved == ['secret-a-second']
+    else:
+        assert disabled and not (only and 'key_idxs' in only), response
+        assert harness.repository.resolved == []
+        assert harness.queued == []

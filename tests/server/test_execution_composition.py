@@ -312,7 +312,7 @@ def test_api_readiness_cannot_hide_missing_executor(departed_execution, monkeypa
     monkeypatch.setattr(existing.sm, 'read_lock_status', lambda *args: {'running': True, 'pid': 987654})
     monkeypatch.setattr(manager, '_identity_error', lambda *args: None)
     monkeypatch.setattr(manager, '_port_conflict', lambda *args: (False, None))
-    monkeypatch.setattr(manager, '_http_probe', lambda *args: {'liveness': True, 'ready': True})
+    monkeypatch.setattr(manager, '_http_probe', lambda *args, **_kwargs: {'liveness': True, 'ready': True})
     monkeypatch.setattr(existing.sm, 'port_accepts', lambda *args, **kwargs: True)  # the API listens
     snapshot = manager.status(probe_health=True)
     assert snapshot['liveness'] is True

@@ -165,6 +165,16 @@ def _round_num(task: dict) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
 
 
+def _defer_native_startup_note(task: dict, fields: dict, *, session_signature=None) -> bool:
+    native = task.get('_nativePreparedInvocation')
+    if native is None:
+        return False
+    from lib.tasks_pkg.native_invocation import NativePreparedInvocation
+    return (isinstance(native, NativePreparedInvocation)
+            and native.defer_startup_context_note(
+                task, fields, session_signature=session_signature))
+
+
 def _record_session_context_note(task: dict, manifest: list[dict]) -> None:
     """Fire-once-per-conversation note witnessing committed static session
     context (platform_static, project_rules, …). Aggregate, not per-block, for
@@ -182,6 +192,9 @@ def _record_session_context_note(task: dict, manifest: list[dict]) -> None:
         return
     body = ('Session context injected into the model-visible message stream:\n'
             + '\n'.join(f'- {i}' for i in ids))
+    if _defer_native_startup_note(task, dict(kind='session-context', text=body,
+            action='prompt', reason='session_context_committed'), session_signature=signature):
+        return
     try:
         from lib.tasks_pkg.segments import record_injected_note
         note = record_injected_note(task, llm_round=_round_num(task),
@@ -211,6 +224,10 @@ def _record_committed_context_notes(task: dict, manifest: list[dict]) -> None:
     round_num = _round_num(task)
     for row in rows:
         try:
+            if _defer_native_startup_note(task, dict(kind='context-injection',
+                    text=str(row.get('noteText') or ''), action='prompt',
+                    reason=str(row.get('registryId') or row.get('id') or ''))):
+                continue
             record_injected_note(task, llm_round=round_num, kind='context-injection',
                                  text=str(row.get('noteText') or ''),
                                  action='prompt',

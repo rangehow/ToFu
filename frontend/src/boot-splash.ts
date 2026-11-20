@@ -134,17 +134,20 @@ export const BOOT_SPLASH_POLICY = Object.freeze({
 type BootPhaseLabelKey =
   | 'update.phase.frontend_assets'
   | 'update.phase.storage_boundary'
+  | 'update.phase.storage_authority_sql'
   | 'update.phase.storage_sidecar'
   | 'update.phase.storage_recovery'
   | 'update.phase.model_routing'
   | 'update.phase.critical_imports'
   | 'update.phase.background_workers'
   | 'update.phase.optional_services'
-  | 'update.phase.readiness';
+  | 'update.phase.readiness'
+  | 'update.phase.execution_service';
 
 const PHASE_LABEL_KEYS: Readonly<Record<string, BootPhaseLabelKey>> = Object.freeze({
   frontend_assets: 'update.phase.frontend_assets',
   storage_boundary: 'update.phase.storage_boundary',
+  storage_authority_sql: 'update.phase.storage_authority_sql',
   storage_sidecar: 'update.phase.storage_sidecar',
   storage_recovery: 'update.phase.storage_recovery',
   model_routing: 'update.phase.model_routing',
@@ -152,6 +155,7 @@ const PHASE_LABEL_KEYS: Readonly<Record<string, BootPhaseLabelKey>> = Object.fre
   background_workers: 'update.phase.background_workers',
   optional_services: 'update.phase.optional_services',
   readiness: 'update.phase.readiness',
+  execution_service: 'update.phase.execution_service',
 });
 
 function withFallback(

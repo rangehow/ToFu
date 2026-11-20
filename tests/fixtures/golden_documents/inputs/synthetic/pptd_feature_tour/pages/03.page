@@ -1,0 +1,79 @@
+pageType: content
+background:
+  type: solid
+  color: $bg
+elements:
+- elementId: title
+  elementType: text
+  bounds:
+  - 64
+  - 40
+  - 1152
+  - 70
+  content:
+    text: <p>图表：column / line / pie</p>
+    style: $title
+- elementId: column
+  elementType: chart
+  bounds:
+  - 64
+  - 140
+  - 560
+  - 260
+  chartType: column
+  data:
+    categories:
+    - Q1
+    - Q2
+    - Q3
+    series:
+    - name: 收入
+      values:
+      - 1.5
+      - 2.25
+      - 3
+    - name: Cost
+      values:
+      - 1
+      - 1.25
+      - 1.75
+- elementId: trend
+  elementType: chart
+  bounds:
+  - 656
+  - 140
+  - 560
+  - 260
+  chartType: line
+  data:
+    categories:
+    - 1月
+    - 2月
+    - 3月
+    - 4月
+    series:
+    - name: Users
+      values:
+      - 3
+      - 5
+      - 4
+      - 8
+- elementId: share
+  elementType: chart
+  bounds:
+  - 64
+  - 420
+  - 560
+  - 260
+  chartType: pie
+  data:
+    categories:
+    - A
+    - B
+    - C
+    series:
+    - name: Share
+      values:
+      - 50
+      - 30
+      - 20

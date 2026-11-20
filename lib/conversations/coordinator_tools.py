@@ -180,6 +180,9 @@ def _review_receipt(view: dict) -> dict:
                 'this result) or delegate_project_work with rework_of {assignmentId, grantRevision, '
                 'resultRevision} copied from this receipt. Only a rework may supersede an undelivered accept '
                 'or reject; otherwise the review is immutable.')
+    elif view['canonicalDelivery']:
+        step = ('Recorded as Coordinator judgment, not human acceptance. Delivery is canonical; '
+                'no publication action is needed for this result.')
     elif view.get('publication'):
         step = ('Publication is asynchronous: poll this assignment_id with wait_s, which waits until its '
                 'delivery is canonical or held, and confirm canonical_delivery before reporting completion.')
@@ -303,20 +306,24 @@ def _execute_coordinator_tool(task: dict, name: str, arguments: dict, *, runtime
             if files:
                 result = {**result, 'files': files}
         elif name == 'update_task_progress':
-            from lib.conversations.coordinator_progress import progress_view, publish_task_board
+            from lib.conversations.coordinator_progress import (
+                CoordinatorTaskProgress, progress_view, publish_task_board, validate_board_call)
             from lib.tools.todo import render_todo_snapshot
             progress_scope = {
                 'owner': scope['user_id'], 'projectPath': scope['project_path'],
                 'coordinatorId': scope['conversation_id'], 'bindingRevision': scope['binding_revision'],
             }
-            published, plan = publish_task_board(task, progress_scope, arguments)
-            # ``plan`` is the board as the checklist this task now holds; it is
-            # also the receipt that proves that checklist visible to the model.
-            result = {'revision': published['board']['revision'], 'changed': published['changed'],
-                      'task_count': len(published['board']['tasks']), 'plan': render_todo_snapshot(plan),
-                      'next_step': 'Shown to the human above this chat and kept as your checklist. Send the '
-                                   'complete board again whenever a task starts, advances, finishes or is dropped.'}
-            progress = progress_view(progress_scope, published['board'], plan)
+            if 'read' in arguments:
+                validate_board_call(arguments)
+                result = CoordinatorTaskProgress(scope['user_id'], scope['project_path']).read_for_coordinator(
+                    progress_scope, title=arguments['read'].get('title'))
+            else:
+                published, plan = publish_task_board(task, progress_scope, arguments)
+                board = published['board']
+                result = {'revision': board['revision'], 'changed': published['changed'],
+                          'task_count': len(board['tasks']), 'plan': render_todo_snapshot(plan),
+                          'next_step': 'Shown to the human above this chat and kept as your checklist.'}
+                progress = progress_view(progress_scope, board, plan)
         elif name in {'dispatch_project_assignment', 'get_project_assignment'}:
             from lib.identity import PrincipalContext
             from lib.project_dispatch.repository import ProjectDispatchRepository
@@ -351,6 +358,9 @@ def _execute_coordinator_tool(task: dict, name: str, arguments: dict, *, runtime
             # Every lead restarts under the owner's full delegation (docs/ROUTER.md R9).
             from lib.router.owner_delegation import restart_server
             result = restart_server(task, scope, arguments)
+        elif name == 'repair_project':
+            from lib.router.project_repair import repair_project
+            result = repair_project(task, scope, arguments)
         elif name in _router_only_tools():
             from lib.router.tools import execute_router_tool
             result = execute_router_tool(task, scope, name, arguments)

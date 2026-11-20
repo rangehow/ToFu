@@ -13,6 +13,7 @@ from lib.log import get_logger
 
 logger = get_logger(__name__)
 
+from lib.tasks_pkg.tool_display._context import _handle_ids
 from lib.tasks_pkg.tool_display._mcp import compose_mcp_display, _mcp_links
 
 
@@ -520,6 +521,16 @@ def _tool_display_local_serve(fn_name, fn_args, tc_id, tc_args_str):
     return display, {'toolName': fn_name}
 
 
+def _handle_label(args, handle):
+    """The command behind a handle when enrichment resolved one, else the handle."""
+    labels = args.get('_handle_labels')
+    if isinstance(labels, dict):
+        label = str(labels.get(handle) or '').strip()
+        if label:
+            return label
+    return handle
+
+
 def _tool_display_scheduler(fn_name, fn_args, tc_id, tc_args_str):
     """Human labels for scheduler/timer tools (frontend renders SVG icon).
 
@@ -543,16 +554,23 @@ def _tool_display_scheduler(fn_name, fn_args, tc_id, tc_args_str):
         action = str(args.get('action') or '').strip()
         display = f'Await task: {action}' if action else 'Await task'
     elif fn_name == 'poll':
-        handles = [str(handle).strip() for handle in (
-            [args.get('id')] + (args.get('ids') if isinstance(args.get('ids'), list) else []))
-            if str(handle or '').strip()]
+        handles = _handle_ids(args)
         waiting = ' (wait)' if args.get('wait_s') else ''
-        shown = handles[0] if len(handles) == 1 else f'{len(handles)} handles'
-        display = (f'Poll: {shown}{waiting}' if handles
-                   else 'Poll background handles')
+        # An opaque bg_* id answers none of the user's questions; the handle
+        # is resolved to the command it waits on by ``enrich_display_args``.
+        # Unresolved handles (swarm agents, task ids) keep the raw id.
+        if len(handles) == 1:
+            display = f'Poll: {_handle_label(args, handles[0])}{waiting}'
+        elif handles:
+            first = _handle_label(args, handles[0])
+            display = (f'Poll {len(handles)} handles: {first} '
+                       f'+{len(handles) - 1}{waiting}')
+        else:
+            display = 'Poll background handles'
     elif fn_name == 'kill':
         handle = str(args.get('id') or '').strip()
-        display = f'Kill: {handle}' if handle else 'Kill background handle'
+        display = (f'Kill: {_handle_label(args, handle)}' if handle
+                   else 'Kill background handle')
     elif fn_name == 'timer_create':
         instr = str(args.get('check_instruction') or '').strip()
         clip = instr if len(instr) <= 60 else instr[:59] + '…'
@@ -1021,7 +1039,7 @@ _WORKFLOW_TOOL_LABELS = {
     'router_instruction_list': 'List standing instructions',
     'router_instruction_cancel': 'Cancel a standing instruction',
     'restart_server': 'Restart Tofu for the owner',
-    'repair_project': 'Repair a project whose Project Router cannot run',
+    'repair_project': 'Recover a Project Router or replace the current lead binding',
     'broadcast_project_message': 'Broadcast a message to every lead and running Worker',
     'watchdog_snapshot': 'Read router health',
     'watchdog_resolve_signals': 'Close fault signals',

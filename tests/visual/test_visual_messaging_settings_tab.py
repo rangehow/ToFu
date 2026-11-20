@@ -6,7 +6,8 @@ summary is its name and a one-line status read from the application's own
 endpoints over isolated test storage (no route interception). Expanding a bot
 platform renders its panel, and ``setting:<platform>`` jump chips open the tab
 with that section expanded. Nothing here submits credentials or starts a 微信
-login, so no platform is ever contacted.
+login, so no platform is ever contacted. The WeChat delivery presentation
+case intercepts only the outbox read to exercise synthetic active items.
 """
 from __future__ import annotations
 
@@ -32,17 +33,15 @@ def _open_app_in_chinese(page, live_server):
 def _open_messaging_tab(page):
     page.evaluate('() => window.openSettings()')
     page.locator('.settings-tab[data-tab="messaging"]').click()
-    # Every shown status line fills in from its own read; a section hidden for
-    # a missing overlay adapter reads nothing (af46df8e41).
-    page.wait_for_function("""() => document.querySelector('#msgPlatform_feishu .msg-platform-status')
-      ?.textContent.trim() && [...document.querySelectorAll('#messagingPlatforms > details:not([hidden])')]
-      .every((el) => el.querySelector('.msg-platform-status').textContent.trim())""")
+    # Every status line fills in from its own read.
+    page.wait_for_function("""() => [...document.querySelectorAll('#messagingPlatforms .msg-platform-status')]
+      .every((el) => el.textContent.trim())""")
     return page.locator('#settingsTab_messaging')
 
 
 def _sections(page):
     return page.eval_on_selector_all('#messagingPlatforms > details', """els => els.map((el) => ({
-      platform: el.dataset.platform, open: el.open, hidden: el.hidden,
+      platform: el.dataset.platform, open: el.open,
       name: el.querySelector('.msg-platform-name').textContent.trim(),
       status: el.querySelector('.msg-platform-status').textContent.trim()}))""")
 
@@ -63,13 +62,8 @@ def test_one_tab_lists_every_platform_collapsed_with_a_status_line(page, live_se
     assert [section['platform'] for section in sections] == PLATFORMS
     assert [section['name'] for section in sections] == NAMES
     assert not any(section['open'] for section in sections)
-    # 大象 is an overlay channel: shown only with its adapter (docs/PUBLIC_CORE.md).
-    from lib.channels.adapters import installed_channel_adapters
-    dx_installed = 'dx' in installed_channel_adapters()
-    assert [section['hidden'] for section in sections] == [p == 'dx' and not dx_installed for p in PLATFORMS]
     # Isolated storage holds no account of these platforms.
-    shown = [section['status'] for section in sections[1:] if not section['hidden']]
-    assert shown == ['未设置'] * (5 if dx_installed else 4), sections
+    assert [section['status'] for section in sections[1:]] == ['未设置'] * 5, sections
     for platform in PLATFORMS:
         assert not page.locator(f'#settingsTab_{platform}').is_visible()
     page.screenshot(path=str(Path(screenshot_dir) / 'messaging-settings-collapsed-desktop.png'))
@@ -118,6 +112,32 @@ def test_wechat_binds_by_qr_login_without_a_secret_field(page, live_server, scre
     # Starting a login would ask 微信 for a QR code; the button is checked, never pressed.
     assert panel.get_by_role('button', name='开始扫码登录', exact=True).is_enabled()
     page.screenshot(path=str(Path(screenshot_dir) / 'messaging-settings-wechat-desktop.png'))
+
+
+def test_wechat_outbox_distinguishes_recorded_sent_queued_and_uncertain_delivery(page, live_server):
+    def item(state, **extra):
+        return {'id': f'ob-{state}', 'thread': 'wechat:uid:mfrgg', 'threadTitle': 'Fixture chat',
+                'text': state, 'replyTo': None, 'state': state,
+                'origin': {'kind': 'tool', 'conversationId': 'fixture', 'turnId': 'fixture'},
+                'createdAtMs': 1, 'updatedAtMs': 1, 'externalId': None, 'error': None,
+                'attachments': [], 'approvalCode': 'ABCDEF', 'authority': 'owner', 'decision': None, **extra}
+
+    # Settled sends normally leave the active list. Inject one only to verify
+    # the common presentation in the shipped Settings page, not the API listing policy.
+    page.route('**/api/v4/channels/outbox?channel=wechat', lambda route: route.fulfill(json={'items': [
+        item('queued'), item('unknown', deliveryEvidence='delivery_unconfirmed'),
+        item('sent', deliveryEvidence='acceptance_unverified'),
+    ]}))
+    _open_app_in_chinese(page, live_server)
+    _open_messaging_tab(page)
+    page.locator('#msgPlatform_wechat > summary').click()
+    chips = page.locator('#settingsTab_wechat .channel-outbox-item .channel-chip')
+    from playwright.sync_api import expect
+    expect(chips).to_have_text(['排队中', '送达情况未确认', '已记录发送 · 平台接收未确认'])
+    expect(chips.nth(2)).to_have_attribute('data-tone', 'idle')
+    expect(page.locator('#settingsTab_wechat .channel-outbox')).not_to_contain_text('iLink 已接收')
+    page.set_viewport_size({'width': 390, 'height': 844})
+    assert _no_horizontal_overflow(page.locator('#settingsTab_wechat'))
 
 
 @pytest.mark.parametrize('platform', ['qq', 'feishu'])

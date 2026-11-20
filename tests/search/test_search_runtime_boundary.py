@@ -45,6 +45,27 @@ def test_server_registration_and_bootstrap_schema_do_not_load_search():
 
 
 @pytest.mark.unit
+def test_request_schema_reads_cold_capabilities_without_activating_providers():
+    proc = _run_isolated('''
+import sys
+from lib.tools.search import build_search_tool, search_tool_for_request
+assert "tofu_search" not in sys.modules
+preview = build_search_tool()
+assert "tofu_search" not in sys.modules
+live = search_tool_for_request()
+assert "tofu_search" in sys.modules
+assert "lib.search.search_bridge" not in sys.modules
+assert "lib.tasks_pkg.handlers.search._core" not in sys.modules
+assert "academic" in live["function"]["parameters"]["properties"]["vertical"]["enum"]
+assert search_tool_for_request() == live
+assert build_search_tool() == preview
+print("SEARCH-SCHEMA-STABLE")
+''')
+    assert proc.returncode == 0, proc.stderr[-1200:]
+    assert 'SEARCH-SCHEMA-STABLE' in proc.stdout
+
+
+@pytest.mark.unit
 def test_readiness_import_validation_keeps_optional_search_dormant():
     proc = _run_isolated('''
 import importlib.abc

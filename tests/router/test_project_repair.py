@@ -8,13 +8,17 @@ only while the project's Router cannot run; it hears the repair's outcome once.
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 from types import SimpleNamespace
 
 import pytest
 
 from lib import lifecycle_approval as gate
+from lib.conversations.project_coordination import ProjectCoordinationRepository
+from lib.identity import PrincipalContext
 from lib.lifecycle_approval import DelegationRefused
 from lib.router import project_repair
+from lib.router.owner_delegation import _live_router_attempt as LIVE_ATTEMPT
 from lib.scheduler.conversation_dispatch import ScheduledTurnDispatch
 from lib.storage.errors import StorageError
 from tests.router.test_delegated_action import approvals, delegation as delegation  # noqa: F401  (fixtures)
@@ -60,6 +64,9 @@ def repair(delegation, monkeypatch):
     s.records.command = command
 
     class Conversations:
+        def __init__(self, client=None):
+            pass
+
         def get(self, conversation_id, *, user_id, include_messages=False):
             assert user_id == OWNER and include_messages is False
             row = s.conversations.get(conversation_id)
@@ -211,6 +218,143 @@ def test_only_the_global_router_repairs(repair):
             'project_path': repair.project, 'title': 'Repair', 'note': NOTE, 'reason': 'x',
             'source_turn_id': 'owner-turn', 'idempotency_key': 'k'})
     assert repair.calls == []
+
+
+@pytest.fixture
+def replacement(repair, monkeypatch):
+    """Real coordination repository and live-attempt checks over isolated storage ports."""
+    from lib import turn_lifecycle
+    from lib.router import owner_delegation
+    from lib.conversations import project_coordination, repository
+    # The base repair fixture mocks binding reads; this lane exercises the actual CAS.
+    monkeypatch.setattr(project_coordination, 'ProjectCoordinationRepository', ProjectCoordinationRepository)
+    bindings = ProjectCoordinationRepository(OWNER, conversations=repository.ConversationRepository())
+    # The binding repository normally uses its imported repository class.
+    monkeypatch.setattr(project_coordination, 'ConversationRepository', repository.ConversationRepository)
+    monkeypatch.setattr(owner_delegation, '_live_router_attempt', LIVE_ATTEMPT)
+    project = repair.project
+    repair.conversations['coordinator-project']['settings']['projectPath'] = project
+    repair.conversations['router'] = {'settings': {'projectPath': repair.scope['project_path']}}
+    def seed(path, conversation_id):
+        path, key = bindings._identity(path)
+        repair.records.rows[(project_coordination.NAMESPACE, key)] = {
+            'version': 1, 'value': {'user_id': OWNER, 'projectPath': path, 'conversationId': conversation_id}}
+    seed(project, 'coordinator-project')
+    seed(repair.scope['project_path'], 'router')
+    repair.task.update(convId='coordinator-project', _turnId='lead-turn', _attemptId='lead-attempt')
+    repair.scope = {**repair.scope, 'conversation_id': 'coordinator-project', 'project_path': project}
+    repair.task['_coordinatorDispatchScope'] = repair.scope
+    repair.attempt = {'status': 'running', 'taskId': repair.task['id'], 'attemptId': 'lead-attempt',
+                      'turnId': 'lead-turn', 'conversationId': 'coordinator-project', 'createdAt': 1000}
+    monkeypatch.setattr(turn_lifecycle, 'get_attempt', lambda attempt_id, *, user_id: repair.attempt)
+    monkeypatch.setattr(turn_lifecycle, 'get_turn', lambda conv, turn, **kw: {'conversationId': conv, 'turnId': turn})
+    repair.folder = {'id': 'folder-tofu', 'projectPaths': [project]}
+    monkeypatch.setattr('lib.conversations.folders.owner_folders', lambda: SimpleNamespace(
+        get=lambda user, folder: repair.folder if user == OWNER and folder == 'folder-tofu' else None))
+    repair.bindings = bindings
+    repair.arguments = {'action': 'replace_own_binding', 'under_delegation': True,
+                        'reason': 'The current lead binding needs replacement', 'idempotency_key': 'replace'}
+    return repair
+
+
+def test_running_project_lead_replaces_only_its_own_binding(replacement):
+    from lib.conversations.coordinator_tools import execute_coordinator_tool
+    from lib.router.contract import validate
+    s = replacement
+    s.grant()
+    result = json.loads(execute_coordinator_tool(s.task, 'repair_project', s.arguments))
+    assert result['status'] == 'completed' and result['execution_started'] is False
+    new = s.bindings.read(s.project)
+    assert result['binding'] == new and new['revision'] == 2
+    assert new['availability'] == 'available' and new['conversationId'] != s.task['convId']
+    assert s.task['convId'] in s.conversations and 'router' in s.conversations
+    assert len(s.created) == 1 and not s.calls
+    [record] = s.audit()
+    validate(record, 'ownerDelegatedAction')
+    assert (record['status'], record['scope'], record['requester']['kind'], record['target']['path']) == (
+        'completed', 'project_repair', 'project_lead', s.project)
+    assert record['trigger']['kind'] == 'owner_delegation'
+    # Replacing yourself loses the old binding authority, including on a retry.
+    replay = json.loads(execute_coordinator_tool(s.task, 'repair_project', s.arguments))
+    assert replay['execution_started'] is False and len(s.created) == 1
+    assert s.bindings.read(s.project) == new
+
+
+@pytest.mark.parametrize('fault', ['no-grant', 'revoked', 'narrow', 'tenant', 'owner', 'foreign-conversation',
+                                  'peer-target', 'stale', 'stopped', 'failed-attempt', 'folder', 'global-changed'])
+def test_own_binding_repair_fails_closed(replacement, fault):
+    s = replacement
+    if fault != 'no-grant':
+        s.grant()
+    if fault == 'revoked':
+        s.revoke()
+    if fault == 'narrow':
+        with open(gate._APPROVALS_FILE) as handle:
+            document = json.load(handle)
+        document['delegations'][str(OWNER)].update(coverage='enumerated', scopes=['project_repair'])
+        with open(gate._APPROVALS_FILE, 'w') as handle:
+            json.dump(document, handle)
+    if fault in {'owner', 'tenant'}:
+        s.task['_principalContext'] = PrincipalContext.user(
+            subject_id='test', owner_user_id=OWNER + (fault == 'owner'),
+            tenant_id='foreign' if fault == 'tenant' else None).to_payload()
+    if fault == 'foreign-conversation':
+        s.task['convId'] = 'not-the-lead'
+    if fault == 'peer-target':
+        s.arguments['project_path'] = '/another/project'
+    if fault == 'stale':
+        s.scope['binding_revision'] = 2
+    if fault == 'stopped':
+        from lib.project_dispatch.repository import record_stop
+        record_stop(OWNER, s.task['convId'], 2, client=s.records)
+    if fault == 'failed-attempt':
+        s.attempt['status'] = 'failed'
+    if fault == 'folder':
+        s.folder['projectPaths'] = ['/another/project']
+    if fault == 'global-changed':
+        s.conversations['router']['settings']['archived'] = True
+    with pytest.raises((PermissionError, ValueError)):
+        project_repair.repair_project(s.task, s.scope, s.arguments)
+    assert s.bindings.read(s.project)['revision'] == 1
+    assert not s.created and not s.calls
+
+
+def test_revocation_after_audit_acceptance_still_blocks_replacement(replacement, monkeypatch):
+    s = replacement
+    s.grant()
+    begin = gate.begin_delegated_action
+
+    def accept_then_revoke(*args, **kwargs):
+        receipt = begin(*args, **kwargs)
+        s.revoke()
+        return receipt
+
+    monkeypatch.setattr(gate, 'begin_delegated_action', accept_then_revoke)
+    with pytest.raises(DelegationRefused) as refused:
+        project_repair.repair_project(s.task, s.scope, s.arguments)
+    assert refused.value.code == 'owner_delegation_not_granted'
+    assert s.bindings.read(s.project)['revision'] == 1 and not s.created
+    assert s.audit()[0]['status'] == 'failed'
+
+
+def test_replacement_never_overwrites_a_concurrent_owner_binding(replacement, monkeypatch):
+    s = replacement
+    s.grant()
+    command = s.records.command
+
+    def concurrent_owner_change(operation, payload, command_id=None, **kwargs):
+        result = command(operation, payload, command_id, **kwargs)
+        if operation == 'conversation.create':
+            # The preceding read passed, but an owner clears the binding before the CAS.
+            s.bindings.bind(s.project, '', expected_revision=1, command_id='owner-clear')
+        return result
+
+    monkeypatch.setattr(s.records, 'command', concurrent_owner_change)
+    with pytest.raises(StorageError, match='CAS conflict'):
+        project_repair.repair_project(s.task, s.scope, s.arguments)
+    binding = s.bindings.read(s.project)
+    assert binding['availability'] == 'unbound' and binding['revision'] == 2
+    assert not s.calls and s.audit()[0]['status'] == 'failed'
 
 
 # ── the Router hears each repair Turn's outcome once ────────────────────────

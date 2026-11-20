@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.installer.test_install_unattended import _executable, _run
+from tests.installer.test_install_unattended import _executable, _run, installer  # noqa: F401
 
 export = pytest.importorskip('export', reason='export.py is not shipped in opensource builds')
 
@@ -24,6 +24,7 @@ import export_pkg._export_core as export_core  # noqa: E402
 import export_pkg._internal as internal  # noqa: E402
 import export_pkg._lists as lists  # noqa: E402
 import export_pkg._orchestrate as orchestrate  # noqa: E402
+__all__ = ['installer']
 
 pytestmark = pytest.mark.unit
 

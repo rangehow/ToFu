@@ -51,7 +51,47 @@
       "type": "array",
       "items": {"$ref": "#/$defs/deployment"}
     },
-    "migration": {"$ref": "#/$defs/migrationMetadata"}
+    "migration": {"$ref": "#/$defs/migrationMetadata"},
+    "subscription_accounts": {
+      "x-tofu-private": true,
+      "description": "Private OAuth lifecycle metadata, omitted from generic routing projections. The encrypted secret reference identifies one immutable authorization generation.",
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["provider", "account_id", "subject_fingerprint", "secret_reference", "alias", "is_default", "expires_at"],
+        "properties": {
+          "provider": {"enum": ["codex", "claude", "kimi"]},
+          "account_id": {"type": "string", "pattern": "^oa_[a-f0-9]{32}$"},
+          "subject_fingerprint": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "secret_reference": {"type": "string", "pattern": "^oauth_[a-f0-9]{32}$"},
+          "alias": {"type": "string", "maxLength": 128},
+          "is_default": {"type": "boolean"},
+          "expires_at": {"type": "number", "minimum": 0}
+        }
+      }
+    },
+    "codex_seen_history": {
+      "type": "array",
+      "description": "Retained owner-scoped Codex observations; absent history is not proof of freshness.",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["provider_access_id", "credential_id", "account_fingerprint", "complete", "wire_model_ids", "models", "pending_wire_model_ids"],
+        "properties": {
+          "provider_access_id": {"type": "string", "minLength": 1},
+          "credential_id": {"type": "string", "minLength": 1},
+          "account_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "complete": {"type": "boolean"},
+          "wire_model_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+          "pending_wire_model_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+          "models": {"type": "array", "uniqueItems": true, "items": {"type": "object", "additionalProperties": false, "required": ["creator_id", "model_id"], "properties": {"creator_id": {"type": "string", "minLength": 1}, "model_id": {"type": "string", "minLength": 1}}}}
+        }
+      }
+    },
+    "revocation_history": {
+      "type": "array",
+      "description": "Owner-scoped retained model and wire revocations, including removed entities.",
+      "items": {"$ref": "#/$defs/revocationHistoryEntry"}
+    }
   },
   "$defs": {
     "inferenceProfile": {
@@ -90,6 +130,10 @@
                 "effort",
                 "reasoning_effort"
               ]
+            },
+            "effort_knowledge": {
+              "const": "undocumented",
+              "description": "Creator reasoning exists but its effort ladder and default are not documented; only implicit default execution is known."
             },
             "supported_efforts": {
               "type": "array",
@@ -231,6 +275,18 @@
           "minLength": 1,
           "maxLength": 128
         }
+      }
+    },
+    "revocationHistoryEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["credential_id", "creator_id", "model_id", "model_revoked", "excluded_wire_model_ids"],
+      "properties": {
+        "credential_id": {"$ref": "#/$defs/identifier"},
+        "creator_id": {"$ref": "#/$defs/identifier"},
+        "model_id": {"$ref": "#/$defs/identifier"},
+        "model_revoked": {"type": "boolean"},
+        "excluded_wire_model_ids": {"$ref": "#/$defs/identifierList"}
       }
     },
     "identifier": {
@@ -449,7 +505,26 @@
           "type": "array",
           "uniqueItems": true,
           "items": {"$ref": "#/$defs/wireGrant"}
+        },
+        "codex_account_grants": {
+          "description": "Server-issued managed Codex grants keyed by the exact bearer account fingerprint. Each row grants only one exact wire; manual grants and revocations are independent.",
+          "type": "object",
+          "propertyNames": {"pattern": "^[0-9a-f]{64}$"},
+          "additionalProperties": {
+            "type": "array", "uniqueItems": true,
+            "items": {"$ref": "#/$defs/codexAccountWireGrant"}
+          }
         }
+      }
+    },
+    "codexAccountWireGrant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["creator_id", "model_id", "wire_model_id"],
+      "properties": {
+        "creator_id": {"const": "openai"},
+        "model_id": {"$ref": "#/$defs/identifier"},
+        "wire_model_id": {"$ref": "#/$defs/identifier"}
       }
     },
     "credentialMetadata": {

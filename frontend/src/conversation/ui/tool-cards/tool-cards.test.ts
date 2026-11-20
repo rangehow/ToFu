@@ -161,6 +161,24 @@ describe('update_task_progress', () => {
     expect(primaryText(host)).not.toContain('\\n- [ ]');
   });
 
+  it('shows only the selected read result and never treats a missing result as an empty board', () => {
+    const read = { ...round, toolArgs: JSON.stringify({ read: { title: 'A selected task' } }),
+      toolContent: JSON.stringify({ revision: 5, tasks: [{ title: 'A selected task', status: 'pending' }] }) };
+    const host = render(read, 'en');
+    expect(host.querySelector('.ptool-coord-task-title')!.textContent).toBe('A selected task');
+    expect(host.querySelector('summary .ptool-coord-summary')!.textContent).toBe('A selected task');
+    expect(render({ ...read, toolContent: '{}' }, 'en').querySelector('.ptool-todo-empty')).toBeNull();
+  });
+
+  it('does not repeat the whole board inside a change-only receipt', () => {
+    const patch = { ...round, toolArgs: JSON.stringify({ changes: [{ title: 'A change', status: 'pending' }] }),
+      toolContent: JSON.stringify({ revision: 5, changed: true, task_count: 200 }),
+      todoState: { todos: [{ content: 'An unrelated task', status: 'pending' }] } };
+    const host = render(patch, 'en');
+    expect(primaryText(host)).not.toContain('An unrelated task');
+    expect(host.querySelector('.ptool-todo-empty')).toBeNull();
+  });
+
   it('shows a due date and a dropped task', () => {
     const board = { ...round, toolArgs: JSON.stringify({ summary: 'One due.', tasks: [
       { title: 'Ship it', status: 'in_progress', progress: 'Half done', due: '2026-11-20' },

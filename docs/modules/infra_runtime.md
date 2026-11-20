@@ -29,6 +29,7 @@
 | Production teardown; automation effects join before storage closes | `lib/server/server_shutdown.py`, `lib/automations/runtime.py` | `shutdown_production_runtime()`, `stop_workers()` |
 | Restart handoff and managed lifecycle generation | `serverctl_pkg/application_restart.py`, `lib/server/server_reexec.py`, `supervisor_protocol.py`, `supervisor.py` | `begin_server_reexec()`, `execute_pending_server_reexec()`, `refresh_supervisor()`, `/reload`, `/restart-deferred` |
 | Native storage lifetime across Web restarts | `serverctl_pkg/native_storage_service.py`, `serverctl_pkg/native_storage_host.py`, `lib/storage/supervisor.py` | [Native lifecycle contract](../NATIVE_STORAGE_LIFECYCLE.md); managed daemon reuse, v2 attachment, drained upgrades and full-stop ownership |
+| Readiness liveness contract: probe deadline, timeout run, per-probe latency | `serverctl_pkg/readiness_liveness.py`, `server_manager.py` | [Readiness liveness contract](#readiness-liveness-contract) |
 | Out-of-band outage alert | `serverctl_pkg/oob_alert.py` | [Out-of-band outage alert](../STORAGE_OPERATIONS.md#out-of-band-outage-alert): a watcher process outside the application that alerts the owner without TofuDB |
 
 `lib.agent_core.push` and `lib.agent_core.task_runtime` are the only module
@@ -96,8 +97,10 @@ Both server factories forward `native_image`, `native_root`, `native_token_count
   live phase, `server_boot_failed` with the latched error) until ready.
   Probes, `/api/boot*`, `/api/client-error` and non-API paths stay
   answerable; runner-less assemblies (test factories, embedders) are unfenced.
-- The browser projects `/api/v4/boot` into a compact, non-modal dock (`frontend/src/boot-splash.ts`), with expandable phase diagnostics, durations and retry errors. Reading and drafting stay available; shared composer send admission remains closed until ready, including Enter/direct image sends. Backend admission stays default-deny. Failure retains phase-local retry; post-ready storage blips stay with the storage banner. `ProductionStartupSteps.post_ready` owns idempotent reconstructible recovery and the OAuth / world-model catalogue projections (`lib.server.server_background_services.start_post_ready_catalog_sync`) after the gate, never delaying readiness; turn-settlement stays with boot recovery and the backstop. Workspace intent recovery uses configured roots and explicit owner/task registrations; the round commit owner captures file/cwd diagnostics separately. Problem: rescanning modification journals per orphaned task blocks readiness behind project writers, and legacy index duplicates replay identical work. Decision: keep required intent acknowledgment synchronous without journal reads and deduplicate acknowledged owner/project/work identities within each bounded recovery page; failed intents remain retryable. Alternative rejected: moving ownership settlement past readiness would expose unsettled work as claimable.
+- The browser projects `/api/v4/boot` into a compact, non-modal dock (`frontend/src/boot-splash.ts`), with expandable phase diagnostics, durations and retry errors. Reading and drafting stay available; shared composer send admission remains closed until ready, including Enter/direct image sends. Backend admission stays default-deny. Failure retains phase-local retry; post-ready storage blips stay with the storage banner. `ProductionStartupSteps.post_ready` owns idempotent reconstructible recovery after the gate; turn-settlement stays with boot recovery and the backstop. Workspace intent recovery uses configured roots and explicit owner/task registrations; the round commit owner captures file/cwd diagnostics separately. Problem: rescanning modification journals per orphaned task blocks readiness behind project writers, and legacy index duplicates replay identical work. Decision: keep required intent acknowledgment synchronous without journal reads and deduplicate acknowledged owner/project/work identities within each bounded recovery page; failed intents remain retryable. Alternative rejected: moving ownership settlement past readiness would expose unsettled work as claimable.
 - Background-command recovery splits the same way: the record scan (which gates wakes and workspace capture) stays in the readiness phase, while the collective background-batch wake, which starts model turns, runs from `_run_post_ready_deferred` for the task-recovery role and is retried by the maintenance tick. Measured 2026-10-23: the in-phase wake cost ~17 s of a 95 s recovery phase, 5 s of it a reaper self-wait on the dispatching thread's own non-reentrant `_dispatch_lock`; `dispatch_next_queued` now skips a nested entry on the owning thread immediately. The dominant remaining cost on large stores is the native Project Brain recovery snapshot (9 pages, 70.6 s holding the authority on that boot), which scales with stored history rather than active work.
+
+**Local routing before recovery and claims.** Problem: the post-ready API catalogue writer could advance the aggregate after the execution host issued a native route witness. Decision: the common production lifecycle first activates personal routing, reconciles stored OAuth provider projections and converges the world catalogue (including metadata repairs) in phase 4, before storage recovery and worker entry. Only `all` or the split primary `execution` owns these writes. Durable queue insertion does not issue a route; ordinary generation HTTP requests still require composite readiness. On-demand shards inherit the primary's completed prerequisite rather than replaying it. A failed required projection fails the routing phase and prevents recovery and claims on that host. The request process retains the Codex feed and borrowed-login discovery, but starts them only after composite API/execution readiness. The GET-capable OAuth status, device-login, adapter OAuth/status and self-healing adapter status handlers, legacy OAuth commands, and model-routing credential-hint repair also require that same verdict; genuinely read-only requests keep the local-ready fast path. Phase 7 waits for the durable worker’s initial authority-watch enrollment and executor setup. A typed setup failure reaches the boot runner; shutdown can interrupt and join enrollment. Readiness never waits for a first claim (a shard’s gate opens only after publication). Alternative rejected: accepting stale witnesses or silently reminting would weaken the revision fence; later legitimate aggregate commits must still reject stale native witnesses before credential resolution.
 
 **Workspace recovery handoff.** The readiness-critical work-item pass acknowledges durable workspace terminal intent only; the lifecycle-owned integration worker then captures checkpoints and delivers or preserves them. A slow Git scan of one old checkout cannot hold HTTP readiness. Failed intent writes retain active retry eligibility, and task completion never implies delivery. See [restart handoff](../CONTINUOUS_DELIVERY.md#decision-and-execution) and `tests/project_mod/test_startup_workspace_intent.py`.
 
@@ -227,6 +230,14 @@ instead of failing closed.
 
 Publication retains the pinned current and previous graphs plus dropped generations inside a bounded age/byte window (`scripts/vite_asset_retention.mjs`), so a long-lived tab's content-hashed chunk URLs keep resolving across rebuilds. Before a source-checkout `start`, approved `restart`, or cold manager launch, native engine preparation verifies compiled source identity (see [STORAGE_TOFUDB.md](../STORAGE_TOFUDB.md)); `serverctl.py` validates the manifest's SHA-256 over every authoring input and may rebuild once only for the owning frontend role with local Vite. Content rather than timestamps distinguishes drift, so a valid prebuilt release needs no Node; a mismatched or corrupt graph fails before a live worker is stopped. The stdlib manager invokes the same isolated `prepare-frontend` command for cold starts and automatic crash recovery. Approved restarts prepare once before shutdown for every backend, then pass that exact launch environment (including managed engine pins) through the replacement spawn. Problem: rebuilding changing source after stopping the old worker can refuse the replacement and leave no listener. Decision: consume the successful preparation within that one restart; concurrent lifecycle changes invalidate it before shutdown. The receipt is never persisted; only the retries of that same replacement reuse it (below), and every later recovery prepares afresh. Runtime artifact/pin checks remain active. Alternative rejected: repeating a repair-capable preflight after shutdown makes source edits a service outage. Real-process tests prove preparation failure preserves the old listener and successful restart needs no second build. The browser labels missing replacement responses as waiting for the server, reserving readiness wording for an actual boot phase reported by the replacement. Once nothing has answered for the existing slow window (`_RESTART_SLOW_AFTER_S`, counted from the last answer of any process), the card and a toast name the host check (`python3 serverctl.py status` shows the manager's `Problem`; `restart -y` retries) while observation continues. Problem (2026-11-06): the manager refused after stopping the worker and the card promised an automatic refresh for 42 minutes; once no process answers, nothing can relay the cause. Alternative rejected: a manager-served fallback page on the application port duplicates bind, TLS and authentication policy outside the worker. Verify `restartWaitNotice` in `frontend/src/features/settings/restart-observation.test.ts` and the unreachable scenario in `tests/frontend/test_frontend_update_restart_force.py`.
 
+**Deferred restart fence.** The Supervisor acknowledges a queued request
+before its storage and worker checks. Settings and Global Router retain
+restart precedence while following the manager outcome for that exact request.
+A refusal releases precedence and rolls back the acceptance stamp while the
+old worker stays online. If the manager disappears without settling the
+request, the reported quiescence allowance plus the existing lifecycle budget
+bounds the fence.
+
 **A restart that stopped its old server always ends serving (owner request 2026-11-06).** Problem: twice on 2026-11-06 a restart stopped the API worker, then `_ensure_resident_services` raised while replacing a resident host (14:11 `execution shutdown failed: TimeoutError:`, 22:40 `native storage shutdown failed: clean close was not confirmed`). `_spawn` latched `crashloop`, which reconciliation never retries, so nothing served until an operator restarted (42 and 69 minutes; the second boot then re-dispatched seven lanes at once). Decision: `LifecycleManager.restart` has one commit point, the stop of the old worker. Every refusal is decided before it, while the old worker serves: argument and environment validation, frontend and resident preparation, the configuration fence, the prepared environment's production admission and the resident hosts' stop/ensure refusals (`ResidentService.replacement_refusal`, the same checks `stop` and `ensure` raise). After it the manager completes the replacement. An explicit replacement retires a resident host's unconfirmed close, storage included ([native lifecycle](../NATIVE_STORAGE_LIFECYCLE.md#restart-upgrade-and-failures)), and kills a host past its existing stop budget. A replacement that still fails is a failed generation (`_replacement_failed`): it is charged to the existing windowed failure budget and reconciliation retries it with the existing backoff, reusing the restart's prepared launch (in memory) and explicitness (`replacementRetry` in the manager state); only an exhausted budget latches `crashloop`. The restart then answers `ok` with `retrying` instead of 409, so `serverctl.py restart` waits for readiness. The manager records the outcome as `lastRestart` in its state and `status` (`started`, `refused` with its stage, `retrying`, `deferred`, `spawned`, `paused`, plus `uncleanCloses`) and logs it in `server-manager.log`: `worker restart refused at <stage> stage ...; the serving worker is retained`, `explicit restart replaced a native storage host whose close was not confirmed: ...`, `worker replacement failed to start (failure k/5 ...): ...; retrying in Ns`, and `worker restart replacement spawned in Xs; recovered <service> after an unclean close`. `server_manager.read_restart_outcome` serves it to the Router's restart status ([ROUTER.md R9](../ROUTER.md#r9-the-owners-delegation-the-global-router-acts-for-the-owner-owner-decision-2026-11-06)). Alternatives rejected: a watchdog that re-drives a refused restart (a second lifecycle owner racing the manager, restarting into the same latch); retrying the start stage without retirement (the failed close refuses every retry); a new start-stage retry budget or timeout (principle 5; the worker failure budget already bounds a persistent failure). Verify `tests/server/test_restart_always_serves.py` (the real manager, API worker and resident storage host with injected stop outcomes), `test_only_an_explicit_replacement_may_retire_a_failed_storage_close` and the restart-status specs in `tests/router/test_owner_delegation.py`. Real-worker lifecycle tests retire every process under their `tmp_path` and fail when one outlives the test (`no_process_outlives_its_test`).
 
 **A full data volume refuses a restart before stop, never midway (2026-11-18).** Problem: at 11:15 the DolphinFS account quota refused file creates on `data/` (EDQUOT on `.native-storage-service.lock` and `server-manager-state.json.lock`, then EREMOTEIO on the state temp file) for about 20 s, just after a planned restart had stopped its old worker. `_replacement_failed` raised from its own `_save()`, the exception escaped `restart`, and the server came back only through the lifecycle monitor's automatic recovery (114 s after the request). Decision: the manager's state file is the restart's own durable dependency, so `restart` writes it once at the end of admission; an `OSError` there refuses at stage `state persistence` ("the server manager cannot write its state file ...") while the old worker keeps serving. After stop, failure records (`_refuse_restart`, `_replacement_failed`) persist best-effort through `_save_failure_record`: an unwritable state file is logged, the in-memory retry drives reconciliation, and its next successful save persists the state. This concerns only the manager's state file and refuses no user work (principle 3); it adds no free-space floor or setting (principle 5). Alternatives rejected: a free-bytes or inode headroom probe (the quota is per account and invisible to `statvfs` on this mount, which reports the 28 PiB pool with zero inode counts, and any threshold would be a tuning knob); making every `_save` non-raising (`stop` relies on its pre-signal save failing closed). Verify `test_an_unwritable_state_file_refuses_before_the_old_server_stops` and `test_a_quota_hit_after_stop_is_retried_instead_of_aborting_the_restart` in `tests/server/test_restart_always_serves.py`.
@@ -277,6 +288,8 @@ Verification:
 **A scratch server never serves open auth beyond loopback (2026-11-13).** Problem: GAME-UI-2's first scratch server (10:24-10:27) bound `0.0.0.0` with open auth, in which every request is the local admin, while carrying the production `TOFU_PROJECT_PATH`. `server.py` binds every interface by default (owner decision 2026-08-04, for the desktop-agent LAN flow) and the auth mode defaults to `open`; the boot banner (`lib/server/server_boot_report.py`) only warns about the combination. Decision: a `TOFU_RUN_SERVER` start whose auth mode is `open` refuses a non-loopback bind before it listens, with the typed `UnauthenticatedNetworkBind` (`lib/server_boot/exposure.py`), whose message says to bind `127.0.0.1` or require credentials (`TOFU_AUTH_MODE=private`). Loopback is `localhost` or a loopback IP, IPv4-mapped included; `0.0.0.0`, `::`, any other address and any other host name are not. Production's own launch is unaffected, because the guard is evaluated only for `TOFU_RUN_SERVER=1`. Production serves as a manager worker (`TOFU_SERVER_WORKER=1`, `TOFU_MANAGED_BY=supervisor`, no `TOFU_RUN_SERVER`: read from `/proc/<pid>/environ` of the serving pid on 2026-11-13) that binds `0.0.0.0` in the default open mode (no `data/config/auth.json`, no `BIND_HOST`) behind its outer boundary, the case the banner's warning describes. The desktop app's `TOFU_RUN_SERVER` child pins `BIND_HOST=127.0.0.1` (`desktop/launcher.py`); bootstrap, Docker and install starts never set `TOFU_RUN_SERVER`. No setting relaxes the guard: the existing `TOFU_AUTH_MODE=private` is the only way to serve a network address. The recipe binds `127.0.0.1` and clears the conftest's inherited lifecycle variables, which now include `TOFU_PROCESS_ROLE`: GAME-UI-2's `scratch-server.sh` had to clear it too, since commands the live server runs carry its execution host's role. Alternatives rejected: refusing open auth beyond loopback for every start (production itself would refuse at its next restart); changing the bind default to loopback (reverses the owner's 2026-08-04 decision for every launch); a warning only (already exists, and nothing read it). Verification: `tests/server_boot/test_scratch_server_network_exposure.py`, including a real `server.py` scratch start on `0.0.0.0` that exits before listening.
 
 **A refused reload never signals the manager (2026-11-06).** Problem: `supervisor_protocol.refresh_supervisor` treated every non-ok `/reload` answer (409, 403, a transport timeout) as a pre-protocol Supervisor and SIGTERMed its verified PID. A running manager checks `expectedFingerprint` against disk hashed with its own loaded `SUPERVISOR_SOURCE_FILES`, so the first generation that extended that list (2026-11-05 23:38, this host's per-minute cron `serverctl.py ensure`) was refused with 409. The signalled manager's resident storage host drained with it, and the watchdog's successor left the preserved worker without storage for 1 h 40 min ([native lifecycle](../NATIVE_STORAGE_LIFECYCLE.md#restart-upgrade-and-failures)). Decision: a manager whose `/health` reports `protocolVersion` is never signalled; its refusal or a failed request is a typed `SupervisorRefreshError` carrying its message. A 409 whose `diskFingerprint` differs from the loaded `sourceFingerprint` proves the manager stale by its own definition, so the client reloads to that digest once and verifies the re-executed image with its own definition. Retirement remains only for a verified pre-protocol manager whose `/reload` answers 404. Alternatives rejected: teaching `/reload` to accept a differing request fingerprint leaves every already-running manager on the old check until it is restarted; importing the new closure into the old manager to hash it runs unloaded code in the long-lived process; restarting the manager for a closure change drains every manager-bound resident service. Activation: this change keeps `SUPERVISOR_SOURCE_FILES` unchanged, so the running manager's own check accepts it and the next `serverctl.py ensure` re-execs it in place. Verification: `test_real_supervisor_reloads_in_place_when_its_closure_definition_changes`, `test_refresh_never_signals_a_manager_that_speaks_the_reload_protocol` and `test_refresh_retires_only_a_verified_pre_protocol_manager` in `tests/server/test_supervisor.py`.
+
+**The closure definition is read from disk, never from the import (2026-11-18).** Problem: a long-lived importer (the serving worker that runs the delegated restart's refresh, and the manager itself) hashed disk with the `SUPERVISOR_SOURCE_FILES` it imported at boot. After a landing extended that list, the stale worker and the stale manager agreed on the old-list digest, the manager accepted `/reload` and re-execed in 0.4 s, then reported the new list's digest; the worker polled for its own digest until its 42 s budget expired and refused the owner's restart as `restart_supervisor_stale`, and every retry got 409 because the current manager's disk digest never equals the worker's. The timeout also reported the exec gap's socket error ("connection refused") although the manager answered healthy for 41 s. Decision: `supervisor_source_fingerprint` hashes the list that the project's `supervisor_protocol.py` declares on disk (parsed with `ast`, falling back to the imported list only when that file is unreadable or mid-write, which still changes the digest because the file is in the closure), so every process computes one definition for one disk state; a healthy `/health` answer replaces the last transport error, and the timeout names the answered and expected generations. Alternatives rejected: a longer refresh budget never converges because the digests differ permanently; trusting any re-executed manager whose `startedAt` advanced proves a restart, not that it loaded the current disk; reloading `supervisor_protocol` inside the serving worker mutates its live dependencies. Activation: the fix lives in the refreshing process, so a worker that imported the older module keeps refusing until it is replaced by a path that runs fresh code (a new `serverctl.py`/`request_deferred_worker_restart` process). Verification: `test_a_client_that_loaded_an_older_closure_list_still_proves_the_reexec` and `test_refresh_timeout_names_the_generation_the_manager_answers` in `tests/server/test_supervisor.py`.
 
 Frontend validation always runs the target checkout's verifier in a fresh interpreter, including in-app restart of the current checkout. Problem: the serving worker caches validator code and the authoring-input inventory at import time; after an update, Node can build with new rules while that worker rejects the valid graph using old rules. Decision: check the complete graph and source freshness with the target generation before and after repair. Alternatives rejected: repeated rebuilding cannot reconcile different rules; reloading modules inside the serving worker mutates its live dependencies.
 
@@ -409,6 +422,105 @@ imports `tofu_agent.runtime`, not `server.py`, and exposes only health,
 capabilities, agent submission, process-memory task replay, abort, and custom
 tool resolution. A non-loopback bind is default-deny without a bearer token; it
 must never grow storage, accounts, billing, conversation, or frontend lifecycles.
+
+## Readiness liveness contract
+
+Problem: on 2026-11-18 from 15:26 to 15:29 `/api/ready` answered in 2–3.5 s,
+past the manager's 2 s probe. Each slow answer read as a failed probe: the
+manager logged `is live but not ready ... timed out`, held `degraded`, and
+the Global Router counted outages. A slow server was counted as dead
+(2026-11-13 00:22–00:35 was the same failure in the out-of-band watcher).
+
+Decision: one liveness contract, defined once in
+`serverctl_pkg/readiness_liveness.py`:
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `READINESS_PROBE_DEADLINE_SECONDS` | 10 s | How long one readiness probe waits for an answer, over all its requests. Any HTTP answer in time is an answer. |
+| `READINESS_TIMEOUT_RUN` | 3 | Consecutive deadline expiries after which the server counts as down. |
+
+- The server counts as down only when nothing answers. A refused or reset
+  connection is down at once. A deadline expiry is `slow`, and the standing
+  verdict holds, until `READINESS_TIMEOUT_RUN` expiries in a row. An answer
+  ends the run. A slow but answering server is never counted down.
+- A probe stops at its first deadline expiry. It does not try `/api/health`
+  or the other scheme: a server that accepted the request but did not answer
+  it cannot answer them sooner.
+- A 503 is still an answer: the worker is live but not ready (storage,
+  boot, execution host), exactly as before.
+- Detection bound: the manager probes every `DEFAULT_MONITOR_INTERVAL`
+  (5 s) after each reconcile, so a hung worker counts down within
+  `READINESS_TIMEOUT_RUN × deadline + (READINESS_TIMEOUT_RUN − 1) × interval`
+  = 40 s of its first unanswered probe starting. A dead one (refused)
+  counts down at its next probe, within one interval.
+- Counting down never restarts a worker. As before, a worker that fails
+  identity liveness is held `degraded` (a stale heartbeat only marks a
+  possible wedge); only a process exit or an explicit restart replaces it.
+  Restart logic is unchanged.
+- The deadline is longer than the slowest measured answer of a serving
+  worker (3.5 s) by a wide margin, and the bound stays under a minute.
+
+Consumers:
+
+- `server_manager.probe_application_readiness` takes the deadline as its
+  default and returns `outcome` (`answered`/`timeout`/`unanswered`) and
+  `latencySeconds`. `LifecycleManager._account_readiness_probe` applies the
+  run. The monitor's probes carry the run in the state file
+  (`readinessProbe`: `at`, `pid`, `outcome`, `latencySeconds`,
+  `consecutiveTimeouts`, `verdict`, `ready`, `source`), which the manager's
+  `/status` returns. A status snapshot is judged against that
+  run but never changes it. A run belongs to one worker PID: a new worker
+  starts at zero. The run's last expiry logs one
+  `ERROR worker pid=N gave no readiness answer: ...` line to
+  `logs/server-manager.log`. Slow answers log nothing there; they never
+  produce `is live but not ready`.
+- No probe waits under the lifecycle lock. A monitor tick decides under the
+  lock, releases it, probes, and re-takes it to apply the verdict only if
+  its probe ticket is still current: no lifecycle operation ran meanwhile
+  (`start`, `stop`, `restart`, spawn and terminate each advance
+  `_lifecycle_epoch`), the desired state is still running, and the same
+  worker (PID and start time) holds the instance lock. `status` probes the
+  same way. A probe that fails the check judges nothing, not even the
+  timeout run; it is logged with `verdict: stale`, and a status snapshot
+  then reports no live verdict (`ready` null). So `status`, `stop` and
+  `restart` never wait for a probe, and a probe started before a stop or a
+  restart can never mark the new state running or degraded.
+- Every probe, monitor or status, appends one JSON line to
+  `logs/readiness-probes.jsonl`. The file holds the current local day; the
+  previous day moves to `readiness-probes.jsonl.1` at the first probe of a
+  new day. At one probe per 5 s and about 200 bytes a line that is about
+  3.5 MB a day, 7 MB retained, inside the global `logs/` budget.
+- `serverctl.py` probes the worker directly with the same deadline. Its
+  manager `/status?probe=1` read allows `deadline + 2 s` (one live probe
+  plus the read itself); `probe=0` allows 2 s, as does the watcher's.
+- The out-of-band watcher (`serverctl_pkg/oob_alert.py`) probes once a
+  minute with the same rule. It records `latencySeconds` and
+  `consecutiveTimeouts` per tick in `probes.jsonl`. An incident from a
+  timeout run opens at the run's first timeout. It runs as a standalone
+  installed copy, so it mirrors the two constants;
+  `tests/server/test_oob_alert.py::test_named_constants_match_their_owning_sources`
+  pins them to this owner.
+- Outage metrics read these records: down time is a refused probe or a
+  completed timeout run, never a `slow` probe.
+
+Alternatives rejected:
+
+- Keeping the 2 s deadline and only requiring consecutive timeouts. The
+  15:26–15:27 episode was 74 s of back-to-back 2 s expiries, so it would
+  still count as down.
+- Waiting for an answer without a deadline. A worker that accepts
+  connections but never answers would never count down.
+- Cross-checking the manager's state file (the watcher's former
+  `manager_ready`). The manager itself counted slow as degraded, so the
+  check inherited the error. One rule in every consumer replaces it.
+- An env var or setting for either value. AGENTS.md rule 5: a deadline or
+  run length is a liveness contract, defined once here.
+
+Specs: the readiness liveness cases in `tests/server/test_server_manager.py`
+(a real 2.2 s and 3.4 s answer, a hung worker, a refused port, the timeout
+run in reconcile and status; a probe held open while `status`, `stop`,
+`restart` and concurrent live status probes proceed, and its stale verdict
+discarded) and `tests/server/test_oob_alert.py`.
 
 ## Storage and identity
 

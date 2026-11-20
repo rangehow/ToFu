@@ -97,6 +97,14 @@ function asked(extra: Record<string, unknown> = {}): any {
 }
 
 describe('non-blocking questions answer through the chat', () => {
+  it('reads as answered on its default once the owner confirmed it from a card', async () => {
+    const ports = createChoiceInteractionPorts({ conversationId: 'owned', turnId: 'turn',
+      readTurn: async () => asked({ guidanceDefault: 'Under 500', guidanceDefaultAccepted: { at: 1, by: 1 } }),
+      createAttempt: vi.fn(), commandId: () => 'cmd', replyInChat: vi.fn(), text: (key, fallback) => `${key}|${fallback}` });
+    expect(await ports.load('hg_chat', signal())).toMatchObject({ state: 'answered', response: 'Under 500',
+      note: 'toolHumanGuidance.defaultConfirmed|Default confirmed' });
+  });
+
   it('stays answerable after settlement and sends a quoted chat reply instead of a command', async () => {
     const createAttempt = vi.fn();
     const replyInChat = vi.fn(async () => 'sent' as const);

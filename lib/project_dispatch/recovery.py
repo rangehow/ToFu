@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Mapping
+from contextlib import ExitStack
 
 from lib.conversations.project_identity import normalize_project_path
 from lib.identity import require_user_id
@@ -140,7 +141,11 @@ def recover_project_dispatch(owner: int, project: str, *, recipient_id=None, coo
     clock = clock if clock is not None else time.time
     # Discovery only: every decision below re-reads its own row or snapshot, so
     # concurrent writers cannot make this read uncertain (repository.discover).
-    rows, settled = repository.discover()
+    # Dependency reachability still needs the full backward graph.
+    if recipient_id is not None and prerequisite_id is None:
+        rows, settled = repository.discover(recipient_id=recipient_id)
+    else:
+        rows, settled = repository.discover()
     if repository.storage_version == 1 and len(rows) > LIMITS['assignmentsPerProject']:
         raise ValueError('Project dispatch recovery record exceeds its bounded capacity')
     # Persisted edges point backward in insertion order. One pass includes
@@ -346,10 +351,10 @@ def revoke_conversation_dispatch(conversation_id, *, user_id, occurred_at=None,
 
     The acknowledged Stop watermark is the withdrawal: admission refuses every
     grant created before it, so a watermark failure propagates as an
-    unconfirmed Stop. Revoking the referenced grant records follows it; one
-    that loses its bounded CAS returns ``pending_revocation``. Settlement or
-    startup recovery revokes an unstarted grant it would otherwise retry from
-    the same watermark, and a repeated Stop revokes any referenced grant.
+    unconfirmed Stop. Revoking the referenced grant records follows it; a busy
+    publication lock or a lost bounded CAS returns ``pending_revocation``.
+    Settlement or startup recovery revokes an unstarted grant it would otherwise
+    retry from the same watermark, and a repeated Stop revokes any referenced grant.
 
     ``occurred_at`` is the human Stop's own time. A repeated Stop of an already
     ended attempt passes its settlement time (0 when unknown): the watermark
@@ -382,20 +387,26 @@ def revoke_conversation_dispatch(conversation_id, *, user_id, occurred_at=None,
         return (not row['grant']['revoked'] and row['grant']['createdAt'] <= timestamp
                 and conversation_id in (row['request']['coordinatorId'], row['request']['recipientId']))
 
-    # The repository lock orders revocation against publication's final checks,
-    # and unrelated integration work can hold it for minutes. The acknowledged
-    # watermark already withdrew every grant, so a conversation that no grant
-    # references has nothing to order and its Stop never waits for the lock.
+    # A conversation with no referenced grant has nothing to order against publication.
     try:
         if not any(referenced(row) for row in repository.list()):
             return outcome
     except DispatchContention:
         pass
-    if lock_factory is None:
-        from lib.integration_control import _repo_lock
-        lock_factory = _repo_lock
-    with lock_factory(project):
+    from lib.integration_control import IntegrationLockBusy, _repo_lock
+    lock_factory = lock_factory or _repo_lock
+    with ExitStack() as lock:
         try:
+            lock.enter_context(lock_factory(project, wait=False))
+        except IntegrationLockBusy:
+            # The acknowledged watermark already withdrew authority; never wait
+            # for a publisher to finish before acknowledging Stop.
+            outcome['withdrawal'] = 'pending_revocation'
+            logger.info('[ProjectDispatch] Stop recorded; publication lock busy '
+                        'owner=%s conversation=%s', owner, conversation_id)
+            return outcome
+        try:
+            # Reread under the same lock as publication's final checks.
             for row in repository.list():
                 if not referenced(row):
                     continue

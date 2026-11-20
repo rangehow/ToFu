@@ -132,13 +132,15 @@ def test_authority_observes_actual_pinned_bytes_before_cleanup(tmp_path, monkeyp
     authority = ConversationAuthority('tofudb', binary, tmp_path)
     def start():
         pinned.write_bytes(binary.read_bytes())
+    retained = []
     engine = SimpleNamespace(_binary=pinned, _client=SimpleNamespace(_timeout=POLICY['rpc_deadline_seconds']),
-                             start=start, stop=pinned.unlink)
+                             start=start, stop=pinned.unlink, retain_logs=lambda: retained.append(True))
     authority.engine = engine
     monkeypatch.setattr(provenance, 'build_identity',
                         lambda _: {'format': 'tofu-db-build.v1', 'source_sha256': 'a' * 64})
     authority.start()
     expected = provenance.fingerprint(binary)
+    assert retained == [True]
     assert engine._expected_sha256 == expected
     assert authority.declared_artifact == {'binary_sha256': expected}
     assert authority.artifact_before['binary_sha256'] == expected

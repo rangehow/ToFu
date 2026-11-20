@@ -232,3 +232,20 @@ def test_deadline_kills_inherited_pipe_child_after_leader_exits(tmp_path):
                 os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+
+
+@pytest.mark.parametrize('system_scope', [None, 'providers', 'reports:maintain', 'optimizer:maintain'])
+def test_scheduled_child_keeps_composed_tenant_and_row_owner(system_scope):
+    from lib.scheduler.manager import _task_process_principal
+
+    parent = PrincipalContext.system(
+        subject_id='distributed-scheduler', tenant_id='tenant-fixture',
+        scopes={'scheduler:run'})
+    child = _task_process_principal(
+        {'user_id': 23}, system_scope=system_scope, process_principal=parent)
+
+    assert child.owner_user_id == 23
+    assert child.tenant_id == 'tenant-fixture'
+    assert child.kind == ('system' if system_scope else 'user')
+    assert child.scopes == frozenset({system_scope or 'agents:scheduler'})
+    assert PrincipalContext.from_payload(child.to_payload()) == child

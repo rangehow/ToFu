@@ -159,14 +159,9 @@ upgrades retain settings and replace the existing installation.
 
 ## CI / Automated Builds
 
-Push a version tag to trigger builds on all platforms:
-
-```bash
-git tag v0.10.0
-git push origin v0.10.0
-```
-
-This runs `.github/workflows/build-desktop.yml` which produces:
+A push to `main` triggers `.github/workflows/build-desktop.yml` when `VERSION`
+does not have a complete release. The matching `CHANGELOG.md` entry is required.
+There is no tag-push trigger. The workflow produces:
 - `Tofu-Setup-<ver>-win64.exe` — Windows installer (Inno Setup)
 - `Tofu-<ver>-macos-arm64.dmg` — macOS disk image, Apple Silicon
 - `Tofu-<ver>-macos-x86_64.dmg` — macOS disk image, Intel
@@ -191,17 +186,53 @@ platform/architecture assets are present, so a partial build never ships as Late
 
 ## Manual workflow dispatch
 
-Go to Actions → "Build Desktop" → "Run workflow" to build without tagging.
+Go to Actions → **Build Desktop** → **Run workflow**, select the trusted candidate
+ref, leave **Build and verify both macOS candidates** checked (`verify_macos_only:
+true`, the manual default), and leave the version override empty. Use a ref with
+a matching changelog entry. Only the frontend and native macOS build jobs run;
+no Git tag or GitHub Release is written. Unchecking that input enables the normal
+release flow, not a dry run.
 
-## Code Signing (optional)
+## macOS release trust
 
-For distribution without OS warnings:
-- **Windows**: Get an EV code signing certificate, add to GitHub Secrets as `WIN_CERT_PFX` + `WIN_CERT_PASSWORD`
-- **macOS**: Enroll in Apple Developer Program ($99/yr), add `MACOS_CERT_P12` + `MACOS_CERT_PASSWORD` + `MACOS_NOTARY_APPLE_ID` / `MACOS_NOTARY_TEAM_ID` / `MACOS_NOTARY_PASSWORD`
+A signed checksum does not grant Gatekeeper trust. The desktop release builds
+only the full `Tofu.app` (PyInstaller) and two native DMGs (`create-dmg`), not a
+separate controlled-end DMG or a `.pkg`.
 
-The signing steps are already wired into `build-desktop.yml` but **commented out**
-(inert) until those secrets exist — uncomment them to enable. Without signing,
-users will see SmartScreen (Windows) or Gatekeeper (macOS) warnings on first launch.
+1. An authorized release owner must configure `MACOS_CERT_P12` (base64-encoded
+   Developer ID **Application** PKCS#12 including the private key) and
+   `MACOS_CERT_PASSWORD`, plus `MACOS_NOTARY_APPLE_ID`, `MACOS_NOTARY_TEAM_ID` and
+   `MACOS_NOTARY_PASSWORD` (an app-specific password). The certificate and notary
+   account must belong to the same Apple Developer team. Do not use an ad-hoc,
+   development or Developer ID Installer certificate. The separate
+   `RELEASE_SIGNING_PRIVATE_KEY` and `RELEASE_SIGNING_PUBLIC_KEY` must still match
+   for publication of signed `SHA256SUMS`.
+2. Prepare the proposed new `VERSION` and matching changelog entry on a trusted
+   candidate branch, not `main` (a push to `main` can publish). On the approved
+   CI repository, run `gh workflow run build-desktop.yml --ref <candidate-ref>
+   -f verify_macos_only=true`. Each native architecture must sign via
+   PyInstaller, pass the frozen startup smoke, finish and sign the DMG, get an
+   **Accepted** Apple notarization result for the DMG, then staple it. CI checks
+   the final image integrity and signature, validates its ticket, and assesses
+   the DMG and the mounted app with Gatekeeper enabled. It also verifies the
+   mounted app's nested code signatures, bundle ID/version, and app/engine
+   architecture. Missing signing inputs or any failed check stop the job;
+   there is no unsigned publication fallback. The DMG holds the stapled ticket;
+   there is no separate downloadable app to notarize.
+3. Download the resulting CI artifacts (not a latest release). On a clean Mac
+   of each architecture with Gatekeeper enabled, compare the candidate DMG to
+   its `.verified.sha256` using `shasum -a 256 -c`, then verify the final DMG with
+   `bash scripts/verify_macos_dmg.sh <dmg> <arch> <version> <team-id>`. Open the
+   quarantined download in Finder, drag the app to Applications, and launch it.
+   Do not remove quarantine or override Gatekeeper if it fails; retain the
+   filename, SHA-256 and exact alert.
+4. Only after verification and separate approval, send that approved source
+   with its **new** version and matching changelog entry through the normal
+   release flow. The release build reruns the native checks. Its promotion job
+   requires both DMGs to match the bytes verified in that same run before
+   signing `SHA256SUMS` and promoting the release. Compare the published
+   and mirrored files to those digests. A source fix does not repair previously
+   downloaded DMGs. Windows Authenticode signing remains unconfigured in CI.
 
 ## Adding New Optional Components
 

@@ -31,6 +31,17 @@ describe('withdrawn owner question card', () => {
     expect(html).toContain('data-hg-reply="chat"');
   });
 
+  it('marks a non-blocking card the owner confirmed on its default, and keeps its chat reply', () => {
+    const html = guidance.renderGuidanceHtml({
+      toolName: 'ask_human', status: 'done', guidanceBlocking: false, guidanceId: 'hg_three',
+      guidanceQuestion: 'Venue?', guidanceDefaultAccepted: { at: 1, by: 1 },
+    }, header);
+    expect(html).toContain('hg-default-confirmed');
+    expect(html).toContain('toolHumanGuidance.defaultConfirmedBadge');
+    expect(html).not.toContain('toolHumanGuidance.nonBlockingBadge');
+    expect(html).toContain('data-hg-reply="chat"');
+  });
+
   it('an answer given anyway wins over the withdrawal', () => {
     const html = guidance.renderGuidanceHtml({
       toolName: 'ask_human', status: 'submitted', guidanceId: 'hg_one', _hgUserResponse: 'do both',

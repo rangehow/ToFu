@@ -345,6 +345,22 @@ capability and context/output headroom from shared declared/family/learned clamp
 Missing Deployment output limits use the same model/route clamp as transport,
 not an invented limit or an unconditional rejection.
 
+**Absent legacy main supply.** A continuation may have no strict main-model match
+in its already initialized legacy picker scope even while the owner repository
+admits other summarizers. Under `aa-cheapest`, use the same independent compiler
+and private mint in this case, with no reachable main price baseline. Paid
+candidates still need both known quotes and pass billing-stop admission; owner
+resources rank after them. A present but unjoinable or ambiguous main, cold or
+invalidated picker, conflicting identity, separate request-owned authority, or
+incompatible issued native binding is not proof of absent legacy supply. This
+path never treats a cold pool as empty or selects an ambient slot. Quotes do not
+initialize the pool; unquoted dispatch can complete the ordinary pool load before
+rechecking strict model presence. Endpoint admission is unchanged. The rejected alternatives are selecting whichever slot
+happens to be visible and treating every failed main join as permission to spend.
+A request-local exact witness exclusion affects only that revision's route;
+credential-source exclusions remain separate and can cover credential aliases.
+Specs: `tests/compaction/test_global_auxiliary_candidates.py`.
+
 The auxiliary transport allowance is bounded by the existing shared output
 clamp and remaining learned context, but never below the priced summary target;
 complete-output validation still refuses truncation. Early source planning may

@@ -44,10 +44,11 @@ logger = get_logger(__name__)
 class _Flight:
     """One in-flight overview computation and the loop that owns it."""
 
-    __slots__ = ('loop', 'task', 'detached')
+    __slots__ = ('loop', 'task', 'detached', 'day')
 
-    def __init__(self, loop: asyncio.AbstractEventLoop):
+    def __init__(self, loop: asyncio.AbstractEventLoop, day: _dt.date):
         self.loop = loop
+        self.day = day
         self.task: asyncio.Task | None = None
         self.detached = False
 
@@ -123,21 +124,28 @@ async def _compute(key: tuple[int, int, int], flight: _Flight) -> dict:
             logger.warning('[DailyReport] Calendar conv-days %d-%02d: %s',
                            year, month, e)
         cost_days = {}
+        today_token_costs = None
         try:
             raw_costs = await asyncio.to_thread(
                 cost._get_monthly_costs, year, month, owner_user_id=owner_id)
             cost_days = {
                 day_num: {'cost': day_data['cost'],
-                          'conversations': day_data['conversations']}
+                          'conversations': day_data['conversations'],
+                          **({'partial': True} if day_data.get('partial') else {})}
                 for day_num, day_data in raw_costs.items()
+                if day_data['cost'] > 0 or day_data.get('partial') or ('token_costs' in day_data and day_data['conversations'])
             }
+            today_token_costs = next((day_data['token_costs'] for day_data in raw_costs.values()
+                                      if 'token_costs' in day_data), None)
         except Exception as e:
             logger.warning('[DailyReport] Calendar cost calc %d-%02d: %s',
                            year, month, e)
-        overview = {'days': days, 'conv_days': conv_days,
-                    'cost_days': cost_days, 'ts': time.monotonic()}
+        overview = {'days': days, 'conv_days': conv_days, 'cost_days': cost_days,
+                    'ts': time.monotonic(), 'calendar_date': flight.day}
+        if today_token_costs is not None:
+            overview['today_token_costs'] = today_token_costs
         with _flights_lock:
-            if not flight.detached:
+            if not flight.detached and _dt.date.today() == flight.day:
                 cost._calendar_cache.set(key, overview)
         return overview
     finally:
@@ -158,14 +166,17 @@ async def month_overview(year: int, month: int, *, owner_user_id) -> dict:
     owner_id = require_user_id(owner_user_id, context='daily report calendar')
     key = (owner_id, year, month)
     loop = asyncio.get_running_loop()
+    day = _dt.date.today()
     with _flights_lock:
         cached = cost._calendar_cache.get(key)
-        if cached is not None:
+        if cached is not None and cached['calendar_date'] == day:
             return cached
         flight = _flights.get(key)
         # A flight owned by another (closed) loop cannot be awaited here.
-        if flight is None or flight.loop is not loop:
-            flight = _Flight(loop)
+        if flight is None or flight.loop is not loop or flight.day != day:
+            if flight is not None:
+                flight.detached = True
+            flight = _Flight(loop, day)
             flight.task = loop.create_task(_compute(key, flight))
             flight.task.add_done_callback(_retrieve_outcome)
             _flights[key] = flight

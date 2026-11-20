@@ -2,7 +2,7 @@
 
 Responsibility: page the owner's project coordination bindings (the ordinary
 ``project.coordination.binding.v1`` records, keyed by owner). ``router_projects``
-projects each into passive facts: availability, active Worker and request
+projects each into passive facts: availability, execution health, active Worker and request
 counts from the project's newest dispatch history page, and the latest report
 pointer; the router home is not a project and is omitted. ``project_leads``
 is the directory every lead reads to message another project's lead (R13):
@@ -28,6 +28,7 @@ from lib.log import get_logger
 from lib.storage.errors import StorageError
 
 from .contract import validate
+from .project_execution_health import execution_health, execution_health_wire
 
 logger = get_logger(__name__)
 
@@ -98,6 +99,7 @@ def router_projects(owner: int, arguments: dict, *, client=None) -> dict:
         entry = {'project_path': project, 'coordinator_conversation_id': binding['conversationId'],
                  'binding_revision': binding['revision'], 'availability': binding['availability']}
         if binding['availability'] == 'available':
+            entry['execution_health'] = execution_health(bindings.user_id, binding['conversationId'], client=client)
             try:
                 entry.update(_activity(bindings.user_id, project, binding))
                 entry['last_report'] = _last_report(bindings.user_id, project)
@@ -196,7 +198,7 @@ def _proactive_view(owner: int, project: str, binding: dict, *, client=None) -> 
 
 _WIRE_NAMES = {
     'project_path': 'projectPath', 'coordinator_conversation_id': 'coordinatorConversationId',
-    'binding_revision': 'bindingRevision', 'availability': 'availability',
+    'binding_revision': 'bindingRevision', 'availability': 'availability', 'execution_health': 'executionHealth',
     'active_workers': 'activeWorkers', 'active_requests': 'activeRequests',
     'workers_coverage': 'workersCoverage', 'last_report': 'lastReport',
     'board_summary': 'boardSummary', 'board_revision': 'boardRevision',
@@ -219,6 +221,8 @@ def router_projects_wire(page: dict) -> dict:
     projects = []
     for entry in page['projects']:
         wire = {_WIRE_NAMES[key]: value for key, value in entry.items()}
+        if 'executionHealth' in wire:
+            wire['executionHealth'] = execution_health_wire(wire['executionHealth'])
         if wire.get('lastReport') is not None:
             wire['lastReport'] = {_REPORT_WIRE_NAMES[key]: value for key, value in wire['lastReport'].items()}
         projects.append(wire)

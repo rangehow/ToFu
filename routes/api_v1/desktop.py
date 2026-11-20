@@ -342,20 +342,23 @@ def _direct_lan_candidate() -> str:
 
     Same honesty guard as the LAN discovery responder (lib/desktop/
     pairing.py): advertising an address the server cannot be reached at
-    sends every discovering agent to a dead route.
+    sends every discovering agent to a dead route. The port is the one this
+    request arrived on (the minting server's own listener), never the
+    environment's ``PORT``/``_TOFU_RUNTIME_PORT``: a test or scratch Home
+    inherits those from the production Tofu that launched it, and its link
+    would send a joining node to production.
     """
     if _server_bind_class() == 'loopback':
+        return ''
+    from quart import request
+    server = request.server
+    if not server or not isinstance(server[1], int) or server[1] <= 0:
         return ''
     from lib.desktop.pairing import lan_ip
     ip = lan_ip()
     if not ip:
         return ''
-    try:
-        port = int(os.environ.get('_TOFU_RUNTIME_PORT') or '15000')
-    except (TypeError, ValueError) as e:
-        logger.debug('[Desktop] bad _TOFU_RUNTIME_PORT: %s', e)
-        port = 15000
-    return 'http://%s:%d' % (ip, port)
+    return 'http://%s:%d' % (ip, server[1])
 
 
 def _visitor_os() -> str:
@@ -436,7 +439,7 @@ def _bridge_credentials(owner_user_id: int, tenant_id: str | None) -> list[dict]
     ]
 
 
-def _node_row(record, agent, credential, transport, predecessor=None, *, policy: dict) -> dict:
+def _node_row(record, agent, credential, transport, predecessor=None, policy=None) -> dict:
     from lib.desktop.device_policy import permissions_view
     from lib.desktop_wire.node_protocol import granted_tiers
     agent = agent or {}
@@ -514,7 +517,7 @@ def _node_listing(owner_user_id: int, tenant_id: str | None, agents) -> list[dic
             bound.add(record['replacement']['credentialId'])
         nodes.append(_node_row(record, agent, credentials.get(record['credentialId']),
                                transport_facts(owner_user_id, record['nodeId']), predecessor,
-                               policy=policy))
+                               policy))
     for agent in live.values():
         credential = credentials.get(agent.get('key_id') or '')
         if credential:
@@ -649,18 +652,23 @@ async def desktop_node_rename(node_id):
 def desktop_node_remove(node_id):
     """SYNC on purpose: credential revocation blocks on storage I/O."""
     from lib.desktop import list_agents
-    from lib.desktop.node_registry import NodeRegistry
+    from lib.desktop.node_registry import NodeNotFound, NodeRegistry, NodeStateError
     from .auth import request_principal
     principal = request_principal()
     owner_user_id = principal.require_owner(context='desktop node remove')
     registry = NodeRegistry(owner_user_id, tenant_id=principal.tenant_id)
     if registry.get(node_id) is not None:
-        outcome = registry.forget(node_id)
+        try:
+            outcome = registry.forget(node_id)
+        except NodeNotFound:
+            return api_not_found('not_found', message='node not found')
+        except NodeStateError as error:
+            return api_conflict(str(error), source='api_v1.desktop.node_remove')
         _follow_policy(owner_user_id)
         return api_ok({'removed': node_id, 'credential': outcome['revoked_credentials'][0],
                        'disconnected': outcome['disconnected']})
     agent = next((a for a in list_agents(user_id=str(owner_user_id))
-                  if a['agent_id'] == node_id), None)
+                  if a['agent_id'] == node_id and not a.get('key_id')), None)
     if agent is None:
         return api_not_found('not_found', message='node not found')
     return api_conflict(
@@ -1222,9 +1230,11 @@ async def desktop_token_revoke(key_id):
     if not row or _BRIDGE_SCOPE not in (row.get('scopes') or []):
         return api_not_found('not_found',
                              message='bridge token not found')
-    from lib.desktop.node_registry import NodeRegistry
-    forgotten = NodeRegistry(owner_user_id, tenant_id=principal.tenant_id) \
-        .forget_credential(key_id)
+    from lib.desktop.node_registry import NodeRegistry, NodeStateError
+    try:
+        forgotten = NodeRegistry(owner_user_id, tenant_id=principal.tenant_id).forget_credential(key_id)
+    except NodeStateError as error:
+        return api_conflict(str(error), source='api_v1.desktop.token_revoke')
     if forgotten:
         _follow_policy(owner_user_id)
     revoke_key(

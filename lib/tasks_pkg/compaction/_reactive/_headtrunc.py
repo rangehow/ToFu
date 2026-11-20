@@ -183,27 +183,32 @@ def _head_truncate_once(messages: list, task: dict | None = None,
             if complete:
                 newest_complete = True
 
-    def _drop_pos() -> int:
-        pos = system_end
-        while pos < len(messages):
-            end = _round_block_end(messages, pos)
-            if not any(id(message) in protected
-                       for message in messages[pos:end]):
-                return pos
-            pos = end
-        # Irreducible context stays over budget for final admission to refuse.
-        return len(messages)
+    # Walk protected units once and publish the retained projection once.
+    # Keep the historical behavior for malformed input: when dropping a
+    # separator exposes orphan results next to a retained call, the next
+    # legacy scan would treat those results as part of that protected unit.
+    kept = messages[:system_end]
+    cursor = system_end
+    follows_kept_call = False
 
-    def _pop_block(pos: int) -> list:
-        """Pop the pairing-safe unit at ``pos`` and return the popped messages
-        (a whole tool-call round when ``pos`` starts on assistant.tool_calls,
-        else the single message)."""
-        if pos >= len(messages):
-            return []
-        end = _round_block_end(messages, pos)
-        block = messages[pos:end]
-        del messages[pos:end]
-        return block
+    def _next_drop_block() -> list:
+        nonlocal cursor, follows_kept_call
+        while cursor < len(messages):
+            end = _round_block_end(messages, cursor)
+            block = messages[cursor:end]
+            cursor = end
+            role = block[0].get('role')
+            if follows_kept_call and role == 'tool':
+                kept.extend(block)
+                continue
+            if not any(id(message) in protected for message in block):
+                return block
+            kept.extend(block)
+            follows_kept_call = role == 'assistant' and bool(block[0].get('tool_calls'))
+        return []
+
+    def _remaining() -> list:
+        return kept + messages[cursor:]
 
     if byte_target is not None:
         dropped = 0
@@ -212,8 +217,8 @@ def _head_truncate_once(messages: list, task: dict | None = None,
         # Subtract each popped message's own wire bytes instead; recompute the
         # true whole-list size ONCE after the loop for the log/audit value.
         cur_bytes = _estimate_wire_bytes(messages)
-        while cur_bytes > byte_target and len(messages) > system_end + 4:
-            block = _pop_block(_drop_pos())
+        while cur_bytes > byte_target and len(messages) - dropped > system_end + 4:
+            block = _next_drop_block()
             if not block:
                 break
             try:
@@ -223,8 +228,10 @@ def _head_truncate_once(messages: list, task: dict | None = None,
             except Exception as _e:
                 logger.debug('[HeadTruncate] per-msg wire estimate failed '
                              '(%s) — recomputing whole list', _e)
-                cur_bytes = _estimate_wire_bytes(messages)
+                cur_bytes = _estimate_wire_bytes(_remaining())
             dropped += len(block)
+        if dropped:
+            messages[:] = _remaining()
         # Belt-and-suspenders: never leave an orphan tool result at the head.
         dropped += _strip_leading_orphan_tools(messages, system_end)
         if dropped:
@@ -265,13 +272,15 @@ def _head_truncate_once(messages: list, task: dict | None = None,
     # so subtracting each popped message keeps cur_tokens bit-identical to a
     # fresh full walk — without the O(n^2) re-sum every iteration.
     cur_tokens = _estimate_total_tokens(messages)
-    while cur_tokens > target_measure and len(messages) > system_end + 4:
-        block = _pop_block(_drop_pos())
+    while cur_tokens > target_measure and len(messages) - dropped > system_end + 4:
+        block = _next_drop_block()
         if not block:
             break
         for popped in block:
             cur_tokens -= _estimate_msg_tokens(popped)
         dropped += len(block)
+    if dropped:
+        messages[:] = _remaining()
     # Belt-and-suspenders: never leave an orphan tool result at the head.
     dropped += _strip_leading_orphan_tools(messages, system_end)
 

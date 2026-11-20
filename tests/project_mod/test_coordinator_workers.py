@@ -70,11 +70,12 @@ def runtime(base_runtime, monkeypatch):
             turn, attempt, task = (prefix + conv for prefix in ('turn-', 'attempt-', 'task-'))
             if attempt in r.attempts:
                 return SimpleNamespace(value={})
+            accepted = trusted.capture(request['config'], owner, kwargs['principal'], conv)
             trusted.bind_execution(turn, attempt)
             r.turns[turn] = {'conversationId': conv, 'turnId': turn, 'actor': 'assistant',
                             'projectionRevision': 1, 'projection': {'content': ''}}
             r.attempts[attempt] = {'conversationId': conv, 'turnId': turn, 'attemptId': attempt,
-                                  'taskId': task, 'status': 'running'}
+                                  'taskId': task, 'status': 'running', 'config': accepted}
             r.calls.append(conv)
             return SimpleNamespace(value={})
     r.service = ProjectDispatchService(r.c.repo, commands=Commands(),
@@ -124,6 +125,38 @@ def test_one_human_request_creates_and_starts_independent_worker_without_grant_c
     assert replay == result and len(r.calls) == len(r.created) == 1
     assert 'error' in r.call('delegate_project_work', **{**r.args, 'brief': 'Different request'})
     assert len(r.calls) == len(r.created) == 1
+
+
+def test_fresh_worker_inherits_current_coordinator_selection_at_admission(runtime, monkeypatch):
+    r = runtime
+    monkeypatch.setattr('lib.project_dispatch.delegation.owner_default_model', lambda owner: 'model-a')
+    settings = r.c.conversations.rows['coordinator']['settings']
+    settings.update(model='model-a', modelRef={'creator_id': 'test', 'model_id': 'model-a'},
+                    preferredProviderId='coordinator-only-provider')
+    r.attempts['coordinator-attempt']['config'].update(model='model-a')
+
+    def admitted(result, model):
+        assert result['dispatch'] == 'accepted', result
+        row = r.c.repo.read(result['assignment_id'])
+        assert row['request']['model'] == model
+        config = r.attempts[row['execution']['attemptId']]['config']
+        assert config['model'] == model
+        assert not {'modelRef', 'preferredProviderId', 'preset'} & config.keys()
+
+    first = r.call('delegate_project_work', **r.args)
+    admitted(first, 'model-a')
+    settings.update(model='model-b', modelRef={'creator_id': 'test', 'model_id': 'model-b'})
+    admitted(r.call('delegate_project_work', **{**r.args, 'idempotency_key': 'changed'}), 'model-b')
+    # Replay never changes an already-authorized birth or its accepted attempt.
+    from lib.conversations.coordinator_births import BIRTHS_KEY
+    r.task.pop(BIRTHS_KEY, None)
+    assert r.call('delegate_project_work', **r.args) == first
+    admitted(first, 'model-a')
+    settings.update(modelOverride='model-c', workerModel='model-d')
+    admitted(r.call('delegate_project_work', **{**r.args, 'idempotency_key': 'explicit'}), 'model-d')
+    del settings['workerModel']
+    admitted(r.call('delegate_project_work', **{**r.args, 'idempotency_key': 'session'}), 'model-c')
+    assert r.attempts['coordinator-attempt']['config']['model'] == 'model-a'
 
 
 def test_project_history_lists_worker_without_delegation_and_exact_lookup_keeps_it(runtime, monkeypatch):

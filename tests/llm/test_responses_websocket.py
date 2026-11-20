@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from lib.oauth.codex import CodexAccessTokenSnapshot
+
+import hashlib
 import json
 import time
 from types import SimpleNamespace
@@ -32,10 +35,12 @@ class _ScriptedConnection:
     def __init__(self, *scripts):
         self.scripts = list(scripts)
         self.sent = []
+        self.raw_sent = []
         self.events = []
         self.closed = False
 
     def send(self, payload):
+        self.raw_sent.append(payload)
         self.sent.append(json.loads(payload))
         self.events = list(self.scripts.pop(0))
 
@@ -117,9 +122,11 @@ def _fresh_thread_state():
     from lib.llm import responses_websocket as ws
     ws._sessions().clear()
     ws._disabled_tasks().clear()
+    ws._idle_checkpoints.clear()
     yield
     ws._sessions().clear()
     ws._disabled_tasks().clear()
+    ws._idle_checkpoints.clear()
 
 
 def test_continuation_sends_previous_response_id_and_only_new_input(
@@ -133,7 +140,7 @@ def test_continuation_sends_previous_response_id_and_only_new_input(
     first_plan = prepare_request(
         _canonical_body(with_tool_output=False), api_key='key',
         base_url='https://api.openai.com/v1', api_protocol='responses')
-    first_msg, first_finish, _ = ws.stream_responses_websocket(first_plan)
+    first_msg, first_finish, first_usage = ws.stream_responses_websocket(first_plan)
     assert first_finish == 'tool_calls'
     assert first_msg['tool_calls'][0]['function']['name'] == 'read_files'
     assert connection.closed is False
@@ -141,7 +148,7 @@ def test_continuation_sends_previous_response_id_and_only_new_input(
     second_plan = prepare_request(
         _canonical_body(with_tool_output=True), api_key='key',
         base_url='https://api.openai.com/v1', api_protocol='responses')
-    second_msg, second_finish, _ = ws.stream_responses_websocket(second_plan)
+    second_msg, second_finish, second_usage = ws.stream_responses_websocket(second_plan)
     assert second_finish == 'stop'
     assert second_msg['content'] == 'done'
 
@@ -159,7 +166,100 @@ def test_continuation_sends_previous_response_id_and_only_new_input(
     # The sealed body stays the complete HTTP-valid request for SSE fallback.
     sealed = second_plan.body.wire_body()
     assert sealed['stream'] is True and len(sealed['input']) == 3
+    exchange = second_usage['_cache_exchange']
+    assert exchange['transport'] == 'websocket' and exchange['incremental']
+    assert exchange['reused_connection'] and not exchange['reused_idle_connection']
+    assert exchange['logical_input_items'] == 3 and exchange['sent_input_items'] == 1
+    assert exchange['provider_input_tokens'] == 4
+    assert exchange['provider_cached_tokens'] is None
     assert connection.closed is True
+
+    # Each receipt names the exact response.create text written to the socket.
+    first_exchange = first_usage['_cache_exchange']
+    assert first_exchange['frame_kind'] == 'full'
+    assert exchange['frame_kind'] == 'incremental'
+    for index, receipt in enumerate((first_exchange, exchange)):
+        raw = connection.raw_sent[index].encode('utf-8')
+        assert receipt['frame_sha256'] == hashlib.sha256(raw).hexdigest()
+        assert receipt['frame_bytes'] == len(raw)
+        assert receipt['frame_content_encoding'] == ''
+        assert receipt['sent_input_items'] == len(connection.sent[index]['input'])
+        assert (receipt['protocol'], receipt['transport']) == (
+            'responses', 'websocket')
+    assert first_exchange['sent_input_items'] == first_exchange['logical_input_items']
+    assert exchange['sent_input_items'] == 1
+    assert exchange['frame_reason'] is None
+    # Full and incremental frames are different bytes and never share a digest.
+    assert first_exchange['frame_sha256'] != exchange['frame_sha256']
+
+
+@pytest.mark.parametrize('cut', ['initial_open', 'during_setup', 'after_open', 'during_budget_mark', 'reconnect'])
+def test_recovery_authority_fences_websocket_open_and_frame(monkeypatch, cut):
+    from lib.llm import responses_websocket as ws
+    from lib.llm._sse_core import prepare_request
+    from lib.llm.llm_errors import ModelAdmissionRefused
+    from lib.llm.request import physical_model_dispatch_scope
+
+    revoked = cut == 'initial_open'
+    opens, upgrades = [], []
+    connection = _ScriptedConnection(_tool_call_round(), [
+        {'type': 'error', 'error': {'code': 'previous_response_not_found'}},
+    ])
+
+    def connect(*args, **kwargs):
+        nonlocal revoked
+        opens.append(args[0])
+        if cut == 'during_setup':
+            revoked = True
+        cls = kwargs['create_connection']
+        object.__new__(cls).handshake()
+        if cut == 'after_open':
+            revoked = True
+        return connection
+
+    refusal = ModelAdmissionRefused('fixture authority revoked')
+
+    def guard():
+        if revoked or (cut == 'reconnect' and len(connection.sent) == 2):
+            raise refusal
+
+    def mark_dispatched():
+        nonlocal revoked
+        revoked = True
+
+    def plan(with_tool_output=False):
+        prepared = prepare_request(_canonical_body(with_tool_output=with_tool_output),
+            api_key='fixture-key', base_url='https://fixture.invalid/v1', api_protocol='responses')
+        if cut == 'during_budget_mark':
+            prepared.model_budget_lease = SimpleNamespace(mark_dispatched=mark_dispatched)
+        return prepared
+
+    monkeypatch.setattr(ws, '_websocket_proxy', lambda *a: None)
+    monkeypatch.setattr('websockets.sync.client.connect', connect)
+    monkeypatch.setattr('websockets.sync.client.ClientConnection.handshake', lambda self: upgrades.append(True))
+    if cut == 'during_budget_mark':
+        unrelated = _ScriptedConnection()
+        ws._sessions()['unrelated'] = ws._Session(connection=unrelated, state_key='unrelated')
+        close = connection.close
+
+        def close_with_error():
+            close()
+            raise OSError('fixture close failure')
+
+        monkeypatch.setattr(connection, 'close', close_with_error)
+    with physical_model_dispatch_scope(guard):
+        if cut == 'reconnect':
+            ws.stream_responses_websocket(plan())
+        with pytest.raises(ModelAdmissionRefused, match='fixture authority revoked') as caught:
+            ws.stream_responses_websocket(plan(with_tool_output=cut == 'reconnect'))
+    assert caught.value is refusal
+    assert len(opens) == (0 if cut == 'initial_open' else 1)
+    assert len(upgrades) == (0 if cut in ('initial_open', 'during_setup') else 1)
+    assert len(connection.sent) == (2 if cut == 'reconnect' else 0)
+    if cut == 'during_budget_mark':
+        assert connection.closed
+        assert all(entry.connection is not connection for entry in ws._sessions().values())
+        assert ws._sessions()['unrelated'].connection is unrelated and not unrelated.closed
 
 
 def _continuation_session(previous, output):
@@ -179,7 +279,7 @@ def test_continuation_keeps_every_occurrence_of_recycled_tool_outputs():
     current = dict(previous, input=[
         *prior, dict(_CALL, id='other-id'), dict(result), dict(result)])
 
-    assert ws._continuation_input(session, current) == [result, result]
+    assert ws._continuation_input(session, current) == ([result, result], '')
 
 
 @pytest.mark.parametrize('drift', [
@@ -215,8 +315,17 @@ def test_any_drift_resets_the_chain_with_complete_input(drift):
                           semantic_id='test')
     session = _continuation_session(previous, [dict(_CALL)])
 
-    payload, request = ws._request_payload(SimpleNamespace(body=sealed), session)
+    payload, request, full_reason = ws._request_payload(SimpleNamespace(body=sealed), session)
 
+    assert full_reason == {
+        'instructions': 'request_fields_changed',
+        'tools': 'request_fields_changed',
+        'reasoning': 'request_fields_changed',
+        'history': 'history_changed',
+        'replayed_output': 'previous_output_changed',
+        'model_item_in_delta': 'non_application_delta',
+        'nothing_new': 'empty_delta',
+    }[drift]
     assert payload['previous_response_id'] is None
     assert payload['input'] == current['input']
     assert request == current
@@ -236,8 +345,9 @@ def test_exact_extension_continues_and_detaches_the_sealed_body():
                           semantic_id='test')
     session = _continuation_session(previous, [dict(_CALL, status='completed')])
 
-    payload, request = ws._request_payload(SimpleNamespace(body=sealed), session)
+    payload, request, full_reason = ws._request_payload(SimpleNamespace(body=sealed), session)
 
+    assert full_reason == ''
     assert payload['previous_response_id'] == 'resp_prev'
     assert payload['input'] == [tool_output]
     assert 'stream' not in payload and 'stream' not in request
@@ -385,10 +495,8 @@ def test_non_object_websocket_event_is_typed_malformed_stream(monkeypatch):
 
 @pytest.fixture
 def codex_identity(monkeypatch):
-    monkeypatch.setattr('lib.oauth.codex.codex_get_valid_token',
-                        lambda *args, **kwargs: 'access-tok')
-    monkeypatch.setattr('lib.oauth.token_store.load_token',
-                        lambda *args, **kwargs: {'account_id': 'acc-1'})
+    monkeypatch.setattr('lib.oauth.codex.codex_get_valid_token_snapshot',
+                        lambda *args, **kwargs: CodexAccessTokenSnapshot('access-tok', 'acc-1'))
     monkeypatch.setattr('lib.oauth.codex_catalog.cached_codex_provider_models',
                         lambda: [])
     monkeypatch.setattr('lib.oauth.codex_version.codex_client_version',
@@ -401,10 +509,10 @@ def codex_identity(monkeypatch):
     _reset_subscription_quota_cache_for_tests()
 
 
-def _codex_plan(messages):
+def _codex_plan(messages, *, task_id='task-codex', conv_id='conv-1'):
     from lib.llm._sse_core import prepare_request
     return prepare_request({
-        'model': 'gpt-6-sol', '_task_id': 'task-codex', '_conv_id': 'conv-1',
+        'model': 'gpt-6-sol', '_task_id': task_id, '_conv_id': conv_id,
         # The public experiment flag's default; Codex follows its first-party
         # WebSocket contract regardless.
         '_responses_transport': 'sse',
@@ -447,7 +555,7 @@ def _round_two_messages(first_msg):
 
 
 def test_codex_tool_loop_continues_on_one_socket_with_side_channels(
-        monkeypatch, codex_identity):
+        monkeypatch, codex_identity, caplog):
     from lib.llm import responses_websocket as ws
     from lib.oauth.codex_turn_state import turn_state
 
@@ -457,8 +565,9 @@ def test_codex_tool_loop_continues_on_one_socket_with_side_channels(
 
     first_plan = _codex_plan([{'role': 'user', 'content': 'read the file'}])
     assert first_plan.responses_transport == 'websocket'
-    first_msg, first_finish, first_usage = ws.stream_responses_websocket(
-        first_plan)
+    with caplog.at_level('INFO', logger='lib.llm.responses_websocket'):
+        first_msg, first_finish, first_usage = ws.stream_responses_websocket(
+            first_plan)
     assert first_finish == 'tool_calls'
     second_plan = _codex_plan(_round_two_messages(first_msg))
     _msg, second_finish, _usage = ws.stream_responses_websocket(second_plan)
@@ -490,7 +599,68 @@ def test_codex_tool_loop_continues_on_one_socket_with_side_channels(
     assert quota['primary']['resets_at'] == 1793774203
     # Side-channel frames are transport metadata, not unknown stream events.
     assert first_plan.wire_translator.unknown_event_types == set()
-    assert connection.closed is True and ws._sessions() == {}
+    assert connection.closed is False and ws._sessions() == {}
+
+    # The first completed exchange logs the exact sent-frame identity and
+    # nothing payload-sized.
+    first_raw = connection.raw_sent[0].encode('utf-8')
+    first_log = next(
+        record.getMessage() for record in caplog.records
+        if record.name == 'lib.llm.responses_websocket'
+        and 'trace=' in record.getMessage())
+    assert 'frame_kind=full' in first_log
+    assert f'frame_sha256={hashlib.sha256(first_raw).hexdigest()}' in first_log
+    assert f'frame_bytes={len(first_raw)}' in first_log
+    assert 'read the file' not in first_log
+
+
+@pytest.mark.parametrize('change', [None, 'conversation', 'owner', 'credential',
+                                    'proxy', 'history'])
+def test_codex_terminal_response_can_continue_in_next_task(
+        monkeypatch, codex_identity, change):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from lib.llm import responses_websocket as ws
+    from lib.oauth.codex_turn_state import observe_turn_state
+
+    opener = {'role': 'user', 'content': 'hi'}
+    followup = {'role': 'user', 'content': 'continue'}
+    old_socket = _ScriptedConnection(_text_round())
+    fresh_socket = _ScriptedConnection(_text_round(response_id='resp_3'))
+    same_socket = change in (None, 'history')
+    if same_socket:
+        old_socket.scripts.append(_text_round(response_id='resp_3'))
+    _install_connection(ws, monkeypatch, old_socket, fresh_socket)
+    monkeypatch.setattr(ws, '_websocket_proxy',
+                        lambda plan, owner: 'http://proxy:3128'
+                        if change == 'proxy' else None)
+
+    def first_turn():
+        result = ws.stream_responses_websocket(_codex_plan([opener]), owner_scope='1')
+        ws.release_task_websockets('task-codex')
+        return result.message
+
+    # A settled task can hand off to a different durable-worker thread.
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        assistant = executor.submit(first_turn).result()
+    assert not old_socket.closed
+    observe_turn_state('task-codex', 'first-turn-only')
+    first_item = dict(opener, content='edited') if change == 'history' else opener
+    second = _codex_plan(
+        [first_item, assistant, followup], task_id='next-task',
+        conv_id='other' if change == 'conversation' else 'conv-1')
+    if change == 'credential':
+        second.hdrs = dict(second.hdrs, Authorization='Bearer changed')
+    ws.stream_responses_websocket(second, owner_scope='2' if change == 'owner' else '1')
+
+    frame = (old_socket if same_socket else fresh_socket).sent[-1]
+    assert 'x-codex-turn-state' not in frame.get('client_metadata', {})
+    if change is None:
+        assert frame['previous_response_id'] == 'resp_2'
+        assert len(frame['input']) == 1
+    else:
+        assert frame['previous_response_id'] is None
+        assert len(frame['input']) == 3
 
 
 _PREVIOUS_REJECTED = {'type': 'error', 'status': 400, 'error': {
@@ -522,6 +692,87 @@ def test_refused_continuation_reconnects_and_resends_complete_input_once(
     assert replayed['previous_response_id'] is None
     assert [item['type'] for item in replayed['input']] == [
         'message', 'reasoning', 'function_call', 'function_call_output']
+
+
+def test_chain_reset_resends_complete_input_as_a_bounded_reset_frame(
+        monkeypatch):
+    from lib.llm._sse_core import prepare_request
+    from lib.llm.cache_exchange import loggable_cache_exchange
+    from lib.llm import responses_websocket as ws
+
+    refused = _ScriptedConnection(_tool_call_round(), [
+        {'type': 'error', 'error': {'code': 'previous_response_not_found'}},
+    ])
+    reset = _ScriptedConnection(_text_round())
+    _install_connection(ws, monkeypatch, refused, reset)
+
+    first_plan = prepare_request(
+        _canonical_body(with_tool_output=False), api_key='key',
+        base_url='https://api.openai.com/v1', api_protocol='responses')
+    first_msg, _finish, _usage = ws.stream_responses_websocket(first_plan)
+    second_plan = prepare_request(
+        _canonical_body(with_tool_output=True), api_key='key',
+        base_url='https://api.openai.com/v1', api_protocol='responses')
+    _msg, finish, second_usage = ws.stream_responses_websocket(second_plan)
+
+    assert finish == 'stop'
+    # The refused frame carried the delta; the retry reconnects and resends the
+    # complete input as a new chain.
+    assert refused.sent[1]['previous_response_id'] == 'resp_1'
+    assert reset.sent[0]['previous_response_id'] is None
+    exchange = second_usage['_cache_exchange']
+    raw = reset.raw_sent[0].encode('utf-8')
+    assert exchange['frame_kind'] == 'reset'
+    assert exchange['frame_sha256'] == hashlib.sha256(raw).hexdigest()
+    assert exchange['frame_bytes'] == len(raw)
+    assert exchange['sent_input_items'] == len(reset.sent[0]['input']) == 3
+    assert exchange['frame_reason'] == 'provider_reconnect'
+    assert exchange['frame_content_encoding'] == ''
+    assert loggable_cache_exchange(exchange)['frame_reason'] == 'provider_reconnect'
+    # The lost incremental frame and this reset full frame describe the same
+    # logical request, and their exact bytes must not be conflated.
+    refused_hash = hashlib.sha256(refused.raw_sent[1].encode('utf-8')).hexdigest()
+    assert exchange['frame_sha256'] != refused_hash
+    assert (exchange['protocol'], exchange['transport']) == (
+        'responses', 'websocket')
+
+
+def test_every_websocket_frame_reason_validates_against_the_contract():
+    from pathlib import Path
+
+    from jsonschema import Draft202012Validator
+
+    from lib.llm import responses_websocket as ws
+    from lib.llm._sse_core import prepare_request
+    from lib.llm.cache_exchange import (
+        FULL_REASONS, cache_exchange_receipt, loggable_cache_exchange)
+    from lib.llm.sent_frame import sent_frame
+
+    schema = json.loads((Path(__file__).resolve().parents[2]
+                         / 'contracts/llm_request_evidence_v1.schema.json')
+                        .read_text(encoding='utf-8'))
+    validator = Draft202012Validator(schema)
+    plan = prepare_request(
+        _canonical_body(with_tool_output=False), api_key='key',
+        base_url='https://api.openai.com/v1', api_protocol='responses')
+
+    # Server refusal codes are detection vocabulary, not frame reasons: a
+    # refused chain is resent as provider_reconnect.
+    assert ws._CHAIN_RESET_CODES.isdisjoint(ws._RESET_FRAME_REASONS)
+    assert ws._RESET_FRAME_REASONS <= set(FULL_REASONS)
+    _payload, _request, reconnect = ws._request_payload(
+        plan, ws._Session(connection=None), force_full=True)
+    assert reconnect == 'provider_reconnect'
+
+    for reason in FULL_REASONS:
+        frame = sent_frame(
+            plan.body, '{"type":"response.create"}', transport='websocket',
+            kind='reset' if reason in ws._RESET_FRAME_REASONS else 'full',
+            reason=reason, sent_items=1)
+        receipt = cache_exchange_receipt(
+            plan.body, {}, transport='websocket', verified=True, frame=frame)
+        validator.validate(receipt)
+        validator.validate(loggable_cache_exchange(receipt))
 
 
 def test_connection_limit_reconnects_and_a_second_refusal_is_retryable(

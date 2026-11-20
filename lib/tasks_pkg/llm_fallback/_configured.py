@@ -7,7 +7,6 @@ from lib import log
 from lib.llm import AbortedError
 from lib.llm.conversion import ProtocolConversionError
 from lib.llm.llm_errors import _ERR_BODY_LIMIT, ModelRefusalError
-from lib.llm_dispatch.credential_reservation import fallback_dispatch
 from lib.log import get_logger, task_log_tag
 from lib.tasks_pkg.event_delivery import EventDeliveryError, EventDeliveryRevoked
 
@@ -16,7 +15,6 @@ from . import _errors, _pool, _recovery, _refusal, _requests, _retry, _transport
 logger = get_logger(__name__)
 
 
-@fallback_dispatch()
 def call_configured_fallback(
     task,
     body,
@@ -36,11 +34,7 @@ def call_configured_fallback(
     fallback_disabled,
     on_tool_call_ready=None,
 ):
-    """Serve the admitted configured fallback or settle its actual failure.
-
-    Every dispatch of the attempt, its recovery and its rescue avoids
-    experiment-reserved credentials (docs/NETWORK.md).
-    """
+    """Serve the admitted configured fallback or settle its actual failure."""
     from lib.tasks_pkg.message_input_receipts import MessageInputScopeError
 
     try:
@@ -101,8 +95,10 @@ def call_configured_fallback(
         )
         if _fb_kind == 'content_filter':
             # Remember the refused request's history: the NEXT request returns
-            # to the primary; only this attempt's own appended tool rows
-            # stay on the fallback (_switch.retry_primary_for_messages).
+            # to the primary; only this attempt's own appended tool rows stay
+            # on the fallback after that one probe
+            # (_switch.retry_primary_for_messages). A refusal that happened ON
+            # the return probe marks this episode's probe as spent.
             _switch.record_refused_history(task, messages)
 
         fallback_body, _vision_fallback_from = _requests.prepare_fallback_body(
@@ -341,6 +337,7 @@ def call_configured_fallback(
                 preset='medium',
                 thinking_enabled=True,
                 round_num=round_num,
+                primary_error=e,
             )
     except MessageInputScopeError:
         _errors._clear_failed_fallback_stamp(task)

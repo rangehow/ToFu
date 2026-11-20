@@ -374,6 +374,7 @@ def create_turn_pair(conversation_id: str, *, command_id: str,
                      input_actor: str = 'human', input_kind: str = 'input',
                      require_parent_is_lane_tail: bool = False,
                      expected_parent_projection_revision: int | None = None,
+                     expected_conversation_revision: int | None = None,
                      require_parent_not_stopped: bool = False,
                      require_lane_idle: bool = False,
                      reject_if_human_queued: bool = False,
@@ -428,6 +429,10 @@ def create_turn_pair(conversation_id: str, *, command_id: str,
             output_presentation_id or f'{command_id}:output'),
         'queue_binding': queue_binding or {},
     }
+    if expected_conversation_revision is not None:
+        if type(expected_conversation_revision) is not int or expected_conversation_revision < 0:
+            raise ValueError('Invalid expected conversation revision')
+        payload['expected_conversation_revision'] = expected_conversation_revision
     if expected_parent_projection_revision is not None:
         if (type(expected_parent_projection_revision) is not int
                 or expected_parent_projection_revision < 0 or not parent_turn_id):
@@ -611,6 +616,28 @@ def lane_turns_newest_first(
     user_id = require_user_id(user_id, context='read lane turns')
     yield from _lane_turns_newest_first(conversation_id, lane_id, user_id=user_id, limit=1,
                                         before_ordinal=before_ordinal)
+
+
+def turns_changed_since(
+    conversation_id: str, *, user_id: Any, since_ms: int, known_revisions: Mapping[str, int],
+) -> dict[str, Any]:
+    """The conversation's Turns (every lane) changed since ``since_ms``, read like the lane walk.
+
+    One ``turn.list_delta``: a Turn is returned when its ``updated_at`` falls in
+    the authority's overlap window from ``since_ms`` and its projection revision
+    is beyond ``known_revisions`` (or unknown); ``deletedTurnIds`` are the
+    tombstones of that span and ``serverNowMs`` the watermark of the next read.
+    A delta beyond the authority's row or response bound raises its
+    resource-bound ``StorageError``; nothing here falls back to a whole-lane read.
+    """
+    user_id = require_user_id(user_id, context='read changed turns')
+    delta = _turn_client().query('turn.list_delta', {
+        'conversation_id': conversation_id, 'user_id': user_id, 'since_ms': int(since_ms),
+        'known_revisions': dict(known_revisions),
+    }) or {}
+    return {'turns': list(delta.get('turns') or []),
+            'deletedTurnIds': [str(turn_id) for turn_id in delta.get('deletedTurnIds') or []],
+            'serverNowMs': int(delta.get('serverNowMs') or 0)}
 
 
 def activate_queued_turn_pair(
@@ -1109,15 +1136,19 @@ def claim_attempt_start(attempt_id: str, *, user_id: Any) -> bool:
     raise last_error or RuntimeError('Attempt claim retry loop exited')
 
 
-def fail_start(attempt_id: str, error: Any, *, user_id: Any) -> None:
-    # Validate ownership before constructing an internal task carrier. Worker
-    # event recording derives scope from the durable attempt, but callers at
-    # the command boundary must still name the authenticated owner explicitly.
+def fail_start(attempt_id: str, error: Any, *, user_id: Any,
+               only_if_unbound: bool = False) -> None:
+    """Settle startup failure, optionally without acquiring a start claim.
+
+    An unbound failure races Stop and executor admission in the event
+    transaction. If its terminal write did not commit, the attempt remains
+    in accepted-attempt recovery, which can repeat the authorization decision.
+    """
     user_id = require_user_id(user_id, context='fail turn attempt start')
-    get_attempt(attempt_id, user_id=user_id)
     task = {'_attemptId': attempt_id, '_userId': user_id,
             'id': '', 'status': 'error',
-            'error': error, 'content': '', 'thinking': '', 'toolRounds': []}
+            'error': error, 'content': '', 'thinking': '', 'toolRounds': [],
+            '_onlyFailUnboundAttempt': only_if_unbound}
     record_task_event(task, {'type': 'error', 'error': error})
 
 
@@ -1573,24 +1604,22 @@ def _task_projection(
     # the footer fell back to a client-side batch lookup whose async landing
     # was diffed away by the surface footer compare (2026-08-29,
     # mtd9ci53zq3xfm: no hover cost breakdown after reload).
-    if projection.get('usage'):
+    projection.pop('cost', None)
+    if projection.get('usage') or projection.get('apiRounds'):
         try:
             from lib.cost import compute_api_rounds_cost, compute_cost
-            _fallback_model = str(
-                projection.get('model') or task.get('model') or '')
-            _fallback_provider = task.get('provider_id') or None
-            _settled_cost = compute_api_rounds_cost(
-                projection.get('apiRounds'),
-                fallback_model_id=_fallback_model,
-                fallback_provider_id=_fallback_provider,
-                use_frozen_costs=task.get('_nativeFrozenCostProjection') is True,
-            )
-            if _settled_cost is None and task.get('_nativeFrozenCostProjection') is not True:
-                _settled_cost = compute_cost(
-                    projection['usage'],
-                    model_id=_fallback_model,
-                    provider_id=_fallback_provider,
-                )
+            from lib.request_quotes import fold_stored_quotes, has_receipt_evidence
+            rounds = projection.get('apiRounds') or []
+            model = str(projection.get('model') or task.get('model') or '')
+            provider = task.get('provider_id') or None
+            _settled_cost = fold_stored_quotes(rounds, usage=projection.get('usage'), model=model, provider=provider)
+            if (rounds and not has_receipt_evidence(rounds)
+                    and task.get('_nativeFrozenCostProjection') is not True):
+                # Old, unstamped live rows retain their display estimate.
+                _settled_cost = compute_api_rounds_cost(
+                    rounds, fallback_model_id=model, fallback_provider_id=provider)
+            if not rounds and task.get('_nativeFrozenCostProjection') is not True:
+                _settled_cost = compute_cost(projection['usage'], model_id=model, provider_id=provider)
             if _settled_cost:
                 projection['cost'] = _settled_cost
         except Exception as _cost_exc:
@@ -2315,6 +2344,11 @@ def _drain_queue_after_settlement(task: dict[str, Any], conversation_id: str,
                 if status == 'failed':
                     from lib.project_dispatch.recovery import recover_conversation_dispatch
                     recover_conversation_dispatch(conversation_id, user_id=owner_user_id, coordinator_only=True)
+                    # Project messages the failed Turn never read stay pending
+                    # for the lead's next Turn; a failure starts none, so wake
+                    # it once per pending frontier (docs/ROUTER.md R2).
+                    from lib.conversations.project_messages import wake_idle_lead
+                    wake_idle_lead(owner_user_id, conversation_id)
                     return
                 from lib.message_queue import (dispatch_next_queued,
                                                dispatch_completed_background_batch)
@@ -2328,6 +2362,11 @@ def _drain_queue_after_settlement(task: dict[str, Any], conversation_id: str,
                     logger.info('[Queue] turn-native settlement drain dispatched '
                                 'queued message → task %s for conv=%s',
                                 task_log_tag(new_task_id), conversation_id)
+                    # The successor owns this lane, not the settled result's
+                    # Coordinator lane. Preserve that independent notification.
+                    from lib.project_dispatch.recovery import recover_conversation_dispatch
+                    recover_conversation_dispatch(
+                        conversation_id, user_id=owner_user_id, coordinator_only=True)
                 else:
                     if recovered_interruption:
                         _resume_recovered_turn(task, conversation_id, owner_user_id)
@@ -2739,6 +2778,11 @@ def _record_task_event_locked(
             ),
         )
         status, settlement = _settlement(task, raw_event, projection)
+        reports = task.get('_coordinatorWorkerReports')
+        if status == 'completed' and reports:
+            with reports['lock']:
+                if reports.get('observed_results'):
+                    settlement['coordinatorWorkerObservations'] = dict(reports['observed_results'])
         error = settlement.get('error') or {}
         # Only a successfully completed Plan-mode executor may mint executable
         # plan authority. Never infer it from arbitrary assistant prose at the
@@ -2777,6 +2821,8 @@ def _record_task_event_locked(
     if terminal:
         event_payload = {'status': status, 'settlement': settlement,
                          'phase': None}
+        if task.get('_onlyFailUnboundAttempt'):
+            event_payload['_requireUnboundAttempt'] = True
     elif event_type == 'interaction_request':
         event_payload = {'phase': _live_phase, 'request': raw_event}
     else:
@@ -4512,23 +4558,32 @@ def build_api_messages(
         logger.info('[ModelReplay] conv=%s restore=%s turns=%d messages=%d',
                     conversation_id, config.get('_modelReplayStatus'),
                     covered, len(prefix_messages))
-        raw = []
-        for row in selected[covered:]:
-            projection = dict(row.get('projection') or {})
-            role = 'user' if row.get('actor') in {'human', 'virtual_user', 'critic'} else 'assistant'
-            projection['role'] = role
-            projection['_turnId'] = row['turnId']
-            projection['_turnKind'] = row.get('kind')
-            projection['_turnStatus'] = row.get('status')
-            raw.append(projection)
-        from lib.tasks_pkg.conv_message_builder._transform import _transform_messages
-        messages = _transform_messages(
-            raw, config, exclude_last=bool(config.get('excludeLast')),
+        messages = project_turn_context(
+            selected[covered:], config, turn_id=turn_id,
             user_id=owner_user_id, prefix_messages=prefix_messages)
     if isinstance(usage_recovery, dict):
         from lib.conversation_sync.usage_recovery import fresh_recovery_model_messages
         return fresh_recovery_model_messages(messages)
     return messages
+
+
+def project_turn_context(rows, config, *, turn_id, user_id, prefix_messages=None):
+    """Render the normal model projection of an already selected Turn suffix."""
+    from lib.conversations.coordinator_continuation import replay_wake_inputs
+    from lib.tasks_pkg.conv_message_builder._transform import _transform_messages
+
+    raw = []
+    for row in replay_wake_inputs(rows, target_turn_id=turn_id):
+        projection = dict(row.get('projection') or {})
+        projection['role'] = ('user' if row.get('actor') in {'human', 'virtual_user', 'critic'}
+                              else 'assistant')
+        projection['_turnId'] = row['turnId']
+        projection['_turnKind'] = row.get('kind')
+        projection['_turnStatus'] = row.get('status')
+        raw.append(projection)
+    return _transform_messages(
+        raw, config, exclude_last=bool(config.get('excludeLast')),
+        user_id=user_id, prefix_messages=prefix_messages)
 
 
 def backfill_turn_search_index(*, max_rounds: int = 100_000) -> dict[str, Any]:
@@ -4752,7 +4807,7 @@ __all__ = [
     'bind_task', 'mark_task_started', 'fail_start',
     'record_task_event', 'record_task_events', 'TaskEventBatchEntry',
     'sync_visible_run_turns', 'next_progress_projection_deadline',
-    'list_turns', 'lane_turns_newest_first', 'get_turn', 'get_attempt', 'list_dispatchable_attempts',
+    'list_turns', 'lane_turns_newest_first', 'turns_changed_since', 'get_turn', 'get_attempt', 'list_dispatchable_attempts',
     'update_turn_projection', 'accept_live_guidance_answer',
     'projection_with_committed_steer_authors',
     'create_branch_lane', 'delete_branch_lane',

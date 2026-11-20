@@ -36,7 +36,7 @@ export function mountPaperWorkbench(): void {
   overview = document.createElement('section'); overview.className = 'paper-tab-panel paper-workbench';
   overview.dataset.tab = 'overview';
   const names: Record<string, I18nKey> = { overview: 'paper.workbenchTab', qa: 'paper.tabQA',
-    report: 'paper.tabReport', review: 'paper.tabReview', translate: 'paper.tabBabel',
+    report: 'paper.tabReport', review: 'paper.tabReview', fulltext: 'paper.tabFullTranslation',
     podcast: 'paper.tabPodcast', video: 'paper.tabVideo' };
   let ready = false;
   tabs = createTabs({ tabs: [overview, ...panels].map(panel => ({
@@ -150,12 +150,12 @@ export function renderPaperWorkbench(failed = false): void {
   const modules: Array<[string, I18nKey, I18nKey]> = [
     ['podcast', 'paper.tabPodcast', 'paper.workbenchPodcastHint'],
     ['video', 'paper.tabVideo', 'paper.workbenchVideoHint'],
-    ['translate', 'paper.tabBabel', 'paper.workbenchTranslateHint'],
+    ['fulltext', 'paper.tabFullTranslation', 'paper.fullTranslationHint'],
     ['review', 'paper.tabReview', 'paper.workbenchReviewHint'],
   ];
   modules.forEach(([tab, title, hint]) => {
     const card = text('article', `paper-workbench-tool paper-workbench-tool-${tab}`, '');
-    card.append(text('span', 'paper-workbench-tool-mark', tab === 'podcast' ? '◖◗' : tab === 'video' ? '▷' : tab === 'translate' ? 'A文' : '✓'),
+    card.append(text('span', 'paper-workbench-tool-mark', tab === 'podcast' ? '◖◗' : tab === 'video' ? '▷' : tab === 'fulltext' ? '译' : '✓'),
       text('h3', 'paper-workbench-tool-title', tr(title)), text('p', 'paper-workbench-excerpt', tr(hint)));
     if (tab === 'podcast' || tab === 'video') card.append(text('p', 'paper-workbench-tool-status', mediaStatus(tab, String(shared._paperHash || ''))));
     card.append(createButton({ label: tr('paper.workbenchOpen'), size: 'sm', disabled: !hasSource,

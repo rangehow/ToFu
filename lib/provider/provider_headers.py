@@ -66,6 +66,17 @@ def split_header_secrecy(headers: Mapping[str, str]) -> tuple[dict[str, str], di
     return envelope, connection
 
 
+def merge_header_layers(*layers: Mapping[str, str]) -> dict[str, str]:
+    """Merge HTTP fields by ASCII-insensitive name; later layers win.
+
+    Keep the winning spelling. Unvalidated non-ASCII names remain distinct
+    so a malformed name cannot collapse onto a valid ASCII HTTP field.
+    """
+    effective = {(name.lower() if name.isascii() else name): (name, value)
+                 for layer in layers for name, value in layer.items()}
+    return dict(effective.values())
+
+
 def sanitise_extra_headers(raw: Any) -> tuple[dict[str, str], str | None]:
     """Return normalized scalar headers or an actionable validation error."""
     if raw is None or raw == {}:
@@ -99,6 +110,7 @@ def sanitise_extra_headers(raw: Any) -> tuple[dict[str, str], str | None]:
 
 __all__ = [
     "is_credential_header",
+    "merge_header_layers",
     "sanitise_extra_headers",
     "split_header_secrecy",
 ]

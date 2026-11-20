@@ -106,6 +106,59 @@ def _client() -> StorageV2Client:
         '127.0.0.1', 4000, _SECRET, owner_id=7, tenant_id=3)
 
 
+@pytest.mark.parametrize(('operation', 'selector'), [
+    ('swarm.session.save', {'save_mode': 'launch'}),
+    ('swarm.session.save', {'save_mode': 'update'}),
+    ('swarm.session.save', {'save_mode': 'roster'}),
+    ('swarm.session.save', {'save_mode': 'admit'}),
+    ('swarm.session.save', {'save_mode': 'continue_rebind'}),
+    ('swarm.session.terminate', {'run_id': 'stale'}),
+    ('swarm.agent.save', {'run_id': 'stale'}),
+    ('swarm.agent.append', {'run_id': 'stale'}),
+    ('swarm.agent.checkpoint.mark', {'run_id': 'stale'}),
+    ('swarm.agents.mark_delivered', {'task_id': 'stale'}),
+    ('swarm.session.delete_exact', {}),
+    ('swarm.session.lifecycle.get', {}),
+])
+def test_native_adapter_refuses_sql_exact_swarm_lifecycle_before_transport(operation, selector):
+    payload = {'swarm_key': 'shared', **selector}
+    port = _client()
+    with pytest.raises(StorageError, match='Native exact swarm lifecycle is unsupported') as exc:
+        if operation == 'swarm.session.lifecycle.get':
+            port.query(operation, payload, deadline=5.0)
+        else:
+            port.command(operation, payload, command_id='swarm', deadline=5.0)
+    assert exc.value.code == 'database_protocol_error'
+    assert not exc.value.retryable
+    assert _FakeSession.constructed == _FakeSession.calls == 0
+
+
+@pytest.mark.parametrize('continuation', [{}, {'after_agent_id': 'a', 'snapshot_cut': 'a' * 64}])
+def test_native_adapter_preserves_swarm_checkpoint_cut_selectors(continuation):
+    payload = {'swarm_key': 'shared', 'expected_task_id': 'run', 'expected_updated_at': 1,
+               'user_id': 7, **continuation}
+    result = {'agents': [], 'next_after_agent_id': None, 'snapshot_cut': 'a' * 64}
+    _FakeSession.responses = [_FakeResponse(0, json.dumps(result).encode())]
+    assert _client().query('swarm.agents.page', payload, deadline=5.0) == result
+    assert _FakeSession.seen == [{'operation': 'swarm.agents.page', 'payload': payload, 'command_id': None}]
+
+
+@pytest.mark.parametrize(('operation', 'payload', 'result'), [
+    ('swarm.session.save', {'task_id': 'legacy', 'specs': [], 'config': {}, 'now_ms': 1},
+     {'saved': True}),
+    ('swarm.agents.mark_delivered', {'agent_ids': ['worker']}, {'changed': 1}),
+    ('swarm.agents.acknowledge_results', {'task_id': 'legacy', 'agent_ids': ['worker']},
+     {'acknowledged': True, 'changed': 1}),
+])
+def test_native_adapter_preserves_legacy_swarm_writes(operation, payload, result):
+    _FakeSession.responses = [_FakeResponse(0, json.dumps(result).encode())]
+    payload = {'swarm_key': 'shared', **payload}
+    assert _client().command(operation, payload, command_id='legacy', deadline=5.0) == result
+    assert _FakeSession.seen == [
+        {'operation': operation, 'payload': {**payload, 'user_id': 7}, 'command_id': 'legacy'},
+    ]
+
+
 def test_constructor_validation() -> None:
     with pytest.raises(ValueError):
         StorageV2Client('8.8.8.8', 4000, _SECRET, owner_id=1, tenant_id=1)
@@ -121,6 +174,73 @@ def test_query_returns_result_and_injects_owner() -> None:
     assert result == {'count': 4}
     assert _FakeSession.seen[0]['payload']['user_id'] == 7
     assert _FakeSession.seen[0]['command_id'] is None
+
+
+def test_point_read_request_work_receipt(monkeypatch) -> None:
+    from collections import Counter
+    from types import MappingProxyType
+
+    from lib.storage import v2_semantics
+    from tofu_db.wire import _payload_bytes
+
+    work = Counter()
+    for module, name in ((v2_module, 'validate_operation'),
+                         (v2_module, 'request_payload'),
+                         (v2_semantics, 'validate_finite_json_numbers'),
+                         (_FakeResponse, 'json')):
+        original = getattr(module, name)
+
+        def counted(*args, _name=name, _original=original, **kwargs):
+            work[_name] += 1
+            return _original(*args, **kwargs)
+
+        monkeypatch.setattr(module, name, counted)
+
+    payload = MappingProxyType({'namespace': 'synthetic.point', 'key': '点-read'})
+    expected = {'version': 41, 'value': {'text': 'synthetic value'}}
+    _FakeSession.responses = [_FakeResponse(0, json.dumps(expected).encode())]
+    client = _client()
+    try:
+        assert client.query('record.get', payload, deadline=5.0) == expected
+        assert _FakeSession.calls == 1
+        assert _FakeSession.seen == [{
+            'operation': 'record.get',
+            'payload': {'namespace': 'synthetic.point', 'key': '点-read', 'user_id': 7},
+            'command_id': None,
+        }]
+        assert _payload_bytes(_FakeSession.seen[0]['payload']) == (
+            '{"namespace":"synthetic.point","key":"点-read","user_id":7}'.encode())
+        assert dict(payload) == {'namespace': 'synthetic.point', 'key': '点-read'}
+        assert work == {'validate_operation': 1, 'request_payload': 1,
+                        'validate_finite_json_numbers': 1, 'json': 1}
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize('replacement', ['second', float('nan')])
+def test_point_read_retry_reprepares_mutable_selector(monkeypatch, replacement) -> None:
+    payload = {'namespace': 'synthetic.point', 'key': 'first'}
+    _FakeSession.responses = [TimeoutError('synthetic lost response'),
+                              _FakeResponse(0, b'{"version":42,"value":"second"}')]
+    monkeypatch.setattr(v2_module.time, 'sleep', lambda _: payload.update(key=replacement))
+    client = _client()
+    try:
+        if isinstance(replacement, float):
+            with pytest.raises(StorageError, match='non-finite JSON number') as exc:
+                client.query('record.get', payload, deadline=5.0)
+            assert exc.value.code == 'database_protocol_error'
+            assert not exc.value.retryable
+            assert _FakeSession.calls == 1
+        else:
+            assert client.query('record.get', payload, deadline=5.0) == {
+                'version': 42, 'value': 'second'}
+            assert _FakeSession.calls == 2
+            assert _FakeSession.seen[1]['payload'] == {
+                'namespace': 'synthetic.point', 'key': 'second', 'user_id': 7}
+        assert _FakeSession.seen[0]['payload'] == {
+            'namespace': 'synthetic.point', 'key': 'first', 'user_id': 7}
+    finally:
+        client.close()
 
 
 def test_query_many_answers_each_read_in_one_exchange_with_the_owner_injected() -> None:

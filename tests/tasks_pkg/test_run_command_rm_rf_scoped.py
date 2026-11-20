@@ -114,7 +114,7 @@ class TestCatastrophicDeleteMatrix:
         f'{_RM} -rf /',
         f'{_RM} -rf /mnt',
         f'{_RM} -r /home',
-        f'{_RM} -rf /usr/',           # trailing slash; /usr exists on every host
+        f'{_RM} -rf /data/',
         f'{_RM} /mnt -r -f',          # flag order can't smuggle
         f'{_RM} -rf /mnt/*',          # wildcard tail stripped
         f'sudo {_RM} -rf /',

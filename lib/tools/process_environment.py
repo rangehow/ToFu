@@ -6,7 +6,8 @@ ambient credentials (docs/contracts/TOOL_EXECUTION_POLICY.md, "Children Tofu
 starts never inherit the running server's storage handles"), and each caller
 adds what its child needs. validate_environment, apply_tool_paths,
 resolve_executable and environment_report operate on explicit mappings, never
-process-global state. tool_cache_root names the persistent cache root commands
+process-global state. bind_runtime_base gives agent and MCP children this
+process's runtime base, so Tofu code they run reads this instance's data. tool_cache_root names the persistent cache root commands
 and MCP share: the process's TOFU_MCP_CACHE_DIR, else data/mcp-cache in the
 runtime base. Package caches and installed uv tools are persistent; no package
 is installed or deleted here. Credential selection stays with each execution
@@ -82,6 +83,18 @@ def tool_cache_root() -> str:
     # inventories only process-environment reads.
     return os.environ.get('TOFU_MCP_CACHE_DIR') or os.path.join(
         get_runtime_base(), 'data', 'mcp-cache')
+
+
+def bind_runtime_base(environment: dict[str, str]) -> None:
+    """Give an agent or MCP child this process's Tofu runtime base.
+
+    Such a child gets the tool cache's ``XDG_DATA_HOME`` and often starts in a
+    worktree that has no ``data/``. Left to ``resolve_runtime_base``, Tofu
+    code in that child then picks ``<cache>/share/Tofu`` and reads another
+    data root (router policy, config, integration locks). An explicit
+    ``TOFU_DATA_DIR`` already in the mapping is kept.
+    """
+    environment.setdefault('TOFU_DATA_DIR', os.path.join(get_runtime_base(), 'data'))
 
 
 def tool_cache_defaults(cache_root: str) -> dict[str, str]:

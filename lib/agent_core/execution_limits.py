@@ -31,6 +31,17 @@ def validate_execution_limits(limits) -> None:
         raise ValueError('executionLimits.deadline must be null or a finite nonnegative timestamp')
 
 
+def with_run_deadline(limits, deadline: float) -> dict:
+    """Intersect caller authorization with the run's original absolute expiry."""
+    validate_execution_limits(limits)
+    merged = dict(limits) if limits is not None else {
+        'max_tokens': None, 'max_tool_calls': None, 'deadline': None}
+    validate_execution_limits({**merged, 'deadline': deadline})
+    if merged['deadline'] is None or deadline < merged['deadline']:
+        merged['deadline'] = deadline
+    return merged
+
+
 def execution_limit_reason(task: dict, *, pending_tools: int = 0) -> str | None:
     budget = task.get('_executionBudget')
     if budget is not None:

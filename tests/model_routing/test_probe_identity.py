@@ -162,3 +162,26 @@ def test_probe_worker_publishes_completion_only_after_identity_commit(monkeypatc
     assert task['status'] == ('error' if aborted or conflict else 'done')
     if aborted or conflict:
         assert task['error']
+
+
+def test_codex_probe_confirms_identity_without_restoring_revoked_grant():
+    document, bundle = fixture()
+    access_id = document['offerings'][0]['provider_access_id']
+    access = next(row for row in document['provider_accesses']
+                  if row['provider_access_id'] == access_id)
+    access['provider_id'] = 'oauth_codex'
+    assert reconcile_probe_identities(document, bundle, [success()]) == 1
+    assert document['offerings'][0]['identity_state'] == 'confirmed'
+    assert document['credentials'][0]['authorization']['models'] == []
+
+
+def test_codex_catalog_binding_does_not_restore_revoked_grant():
+    from lib.model_routing.catalog_identity import reconcile_catalog_identities
+    document, _ = fixture()
+    access_id = document['offerings'][0]['provider_access_id']
+    access = next(row for row in document['provider_accesses']
+                  if row['provider_access_id'] == access_id)
+    access['provider_id'] = 'oauth_codex'
+    assert reconcile_catalog_identities(document, access_id=access_id) == 1
+    assert document['offerings'][0]['identity_state'] == 'confirmed'
+    assert document['credentials'][0]['authorization']['models'] == []

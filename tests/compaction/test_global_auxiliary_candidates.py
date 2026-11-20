@@ -30,6 +30,139 @@ def _alternate(native, model, kind='subscription'):
     return doc['offerings'][1]
 
 
+@pytest.fixture
+def missing_claude(native):
+    """A legacy continuation whose strict scope still has only Codex slots."""
+    native.task['model'] = 'claude-opus-5.5'
+    native.pool._initialized = True  # The strict picker's configured view is already loaded.
+    offering = _alternate(native, 'deepseek-v4-flash', 'api_key')
+    offering['actual_pricing'].update(input=.1, output=.5)
+    return native
+
+
+def test_missing_legacy_main_uses_owner_compiled_paid_route_then_codex(missing_claude):
+    native = missing_claude
+    before = deepcopy(native.task)
+    plan = select_summary_route(native.task, 1000, 2048, capacity_output_tokens=65536)
+    assert plan.get('requestOwned') and plan['modelId'] == 'deepseek-v4-flash', plan
+    assert plan['providerId'] == 'provider-b'
+    assert plan['routeIdentity']['credentialId'] == native.state.document['credentials'][1]['credential_id']
+    assert plan['projectedCostUsd'] == pytest.approx(.001124)
+    assert plan['maximumCostUsd'] >= plan['projectedCostUsd']
+    assert plan['_parentRouteIdentities'] == ()
+
+    next_plan = select_summary_route(native.task, 1000, 2048,
+        excluded_route_identities=(plan['routeIdentity'],))
+    assert next_plan.get('requestOwned') and next_plan['modelId'] == native.parent.logical_model
+    assert next_plan['selectionBasis']['resourceTier'] == 1
+    assert next_plan['projectedCostUsd'] is None
+    assert next_plan['routeIdentity']['revision'] == plan['routeIdentity']['revision']
+    assert native.task == before and not native.state.resolved
+    assert native.pool.slots == [native.parent]
+
+
+@pytest.mark.parametrize('fault', ['pending_parent', 'provider_hint_scope', 'picker_reload', 'optout',
+                                  'main', 'invalid_policy', 'provider_conflict', 'tenant_conflict',
+                                  'repository_unavailable', 'no_grants', 'request_authority'])
+def test_unresolved_main_does_not_broaden_other_authority(missing_claude, monkeypatch, fault):
+    from lib.model_routing import ModelRoutingRepository, OwnerBoundary, bind_request_routing_authority
+    from tests.compaction.test_summary_routing import _slot
+    native = missing_claude
+    if fault == 'pending_parent':
+        native.pool.slots.append(_slot(native.task['model'], route_offering_id='not-in-owner-table'))
+    elif fault == 'provider_hint_scope':
+        native.task['provider_id'] = native.task.pop('_pinned_provider_id')
+        native.pool.slots.append(_slot(native.task['model']))
+    elif fault == 'picker_reload':
+        get = ModelRoutingRepository.get
+        reads = 0
+
+        def reload_on_compiler_read(repository, boundary):
+            nonlocal reads
+            reads += 1
+            if reads == 2:
+                native.pool.slots.append(_slot(native.task['model']))
+            return get(repository, boundary)
+
+        monkeypatch.setattr(ModelRoutingRepository, 'get', reload_on_compiler_read)
+    elif fault == 'optout':
+        native.task['config']['disableModelFallback'] = True
+    elif fault == 'main':
+        native.task['config']['compaction']['summaryPolicy'] = 'main'
+    elif fault == 'invalid_policy':
+        native.task['config']['compaction']['summaryPolicy'] = 'other'
+    elif fault == 'provider_conflict':
+        native.task['provider_id'] = 'one'
+        native.task['config']['providerId'] = 'another'
+    elif fault == 'tenant_conflict':
+        native.task['_tenant_id'] = 'other-tenant'
+    elif fault == 'repository_unavailable':
+        def unavailable(*args):
+            raise RuntimeError('offline authority')
+        monkeypatch.setattr(ModelRoutingRepository, 'get', unavailable)
+    elif fault == 'no_grants':
+        for credential in native.state.document['credentials']:
+            credential['enabled'] = False
+    else:
+        bind_request_routing_authority(native.task, object(), OwnerBoundary.create(41, 'tenant-a'))
+    plan = select_summary_route(native.task, 1000, 2048)
+    assert not plan.get('requestOwned') and plan['modelId'] == native.task['model'], plan
+    assert not native.state.resolved
+
+
+def test_missing_main_can_recover_once_picker_supply_is_ready(missing_claude, monkeypatch):
+    native = missing_claude
+    monkeypatch.setattr(native.pool, 'initialize', lambda: pytest.fail('Selection must be secret-free'))
+    native.pool.invalidate_configuration()
+    cold = select_summary_route(native.task, 1000, 2048)
+    assert not cold.get('requestOwned') and cold['reason'] == 'main_route_unresolved'
+    native.pool._initialized = True
+    ready = select_summary_route(native.task, 1000, 2048)
+    assert ready.get('requestOwned') and ready['modelId'] == 'deepseek-v4-flash'
+    assert not native.state.resolved
+
+
+def test_missing_main_never_qualifies_a_billing_stopped_route(missing_claude, monkeypatch):
+    native = missing_claude
+    paid_credential = native.state.document['credentials'][1]['credential_id']
+    monkeypatch.setattr('lib.key_stats.is_key_refused_for_optional_work',
+                        lambda namespace, credential, model: credential == paid_credential)
+    plan = select_summary_route(native.task, 1000, 2048)
+    assert plan.get('requestOwned') and plan['modelId'] == native.parent.logical_model
+    assert plan['_requestRoute']['routeIdentity']['credentialId'] == paid_credential
+    assert not native.state.resolved
+
+
+def test_exact_exclusion_keeps_other_deployments_of_same_credential(missing_claude):
+    native = missing_claude
+    deployment = native.state.document['deployments'][1]
+    native.state.document['deployments'].append(dict(deployment,
+        deployment_id='other-deepseek', wire_model_id='other-deepseek-wire'))
+    first = select_summary_route(native.task, 1000, 2048)
+    second = select_summary_route(native.task, 1000, 2048,
+        excluded_route_identities=(first['routeIdentity'],))
+    assert first['modelId'] == second['modelId'] == 'deepseek-v4-flash'
+    assert first['routeIdentity']['credentialId'] == second['routeIdentity']['credentialId']
+    assert first['routeIdentity']['deploymentId'] != second['routeIdentity']['deploymentId']
+    assert not native.state.resolved
+
+
+def test_exact_exclusion_does_not_change_fitting_paid_main_policy(native):
+    native.parent.oauth = ''
+    native.state.document['offerings'][0]['actual_pricing'] = {
+        'input': 10, 'output': 10, 'currency': 'USD'}
+    native.state.document['offerings'][1]['actual_pricing'].update(input=.1, output=.5)
+    first = select_summary_route(native.task, 1000, 2048)
+    assert first.get('requestOwned') and first['providerId'] == 'provider-b', first
+    second = select_summary_route(native.task, 1000, 2048,
+        excluded_route_identities=(first['routeIdentity'],))
+    # The independent subscription for the same auxiliary model still exists,
+    # but this fitting paid main never spends the owner's subscription quota.
+    assert not second.get('requestOwned') and second['modelId'] == native.task['model']
+    assert second['reason'] == 'no_remaining_authorized_auxiliary_route'
+    assert not native.state.resolved
+
+
 @pytest.mark.parametrize('model', ['glm-5.3-flash', 'GEM5.3Flash', 'new-admitted-text-model'])
 @pytest.mark.parametrize('main_paid', [False, True])
 def test_all_admitted_families_participate_without_aa_or_name_allowlist(native, model, main_paid):

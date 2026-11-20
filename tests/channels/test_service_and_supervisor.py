@@ -109,6 +109,9 @@ def test_task_event_forwards_a_progress_board_summary_once(
     payload = {'type': 'tool_complete', '_ownerUserId': str(OWNER), 'conversationId': ROUTER,
                'turnId': 'out-1', 'toolName': 'update_task_progress',
                'toolContent': '{"revision": 3, "changed": true}'}
+    autoreply.on_task_event('chat', 'task-1', {**payload, 'toolContent': '{"revision": 3, "tasks": []}'})
+    autoreply.on_task_event('chat', 'task-1', {**payload, 'toolContent': '{"revision": 3, "changed": false}'})
+    assert not store.active_outbox()
     autoreply.on_task_event('chat', 'task-1', payload)
     autoreply.on_task_event('chat', 'task-1', payload)
     [item] = store.active_outbox()

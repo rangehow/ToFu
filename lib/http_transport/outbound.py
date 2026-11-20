@@ -33,6 +33,21 @@ class RequestNetworkPolicy:
 _request_policy: ContextVar[RequestNetworkPolicy | None] = ContextVar(
     'tofu_request_network_policy', default=None)
 _cancelled = ContextVar('tofu_network_cancelled', default=None)
+_wire_guard = ContextVar('tofu_network_wire_guard', default=None)
+
+
+@contextmanager
+def wire_send_authority(guard):
+    """Scope a request owner's revalidation to this request's physical sends."""
+    token = _wire_guard.set(guard)
+    try:
+        yield
+    finally:
+        _wire_guard.reset(token)
+
+
+def current_wire_send_authority():
+    return _wire_guard.get()
 
 
 class NetworkRequestCancelled(requests.exceptions.RequestException):
@@ -176,6 +191,9 @@ def send_routed_request(wire_send, request, *, policy, **kwargs):
         attempted.add(route.route_id)
         started = time.monotonic()
         options = {**kwargs, 'proxies': route.requests_proxies()}
+        guard = current_wire_send_authority()
+        if guard is not None:
+            guard()
         note_wire_send()
         try:
             response = wire_send(request, **options)

@@ -105,9 +105,13 @@ export function createChoiceInteractionPorts(dependencies: ChoiceInteractionDepe
       : metadata.find(meta => meta.guidanceId === interactionId && typeof meta.userResponse === 'string')?.userResponse;
     if (round.guidanceBlocking === false) {
       const replied = repliedInChat.get(interactionId);
+      // The owner settled it on its default from a card; nothing was sent to the lead.
+      const confirmed = replied === undefined && Boolean(round.guidanceDefaultAccepted);
       return { interactionId, mode, questions, question: String(round.guidanceQuestion ?? ''), options,
         descriptions: descriptions(round.guidanceOptions), ...defaultAnswer,
-        ...(replied === undefined
+        ...(confirmed ? { state: 'answered' as const,
+          response: defaultAnswer.defaultAnswer ?? text('toolHumanGuidance.statedDefault', 'the default the question states'),
+          note: text('toolHumanGuidance.defaultConfirmed', 'Default confirmed') } : replied === undefined
           ? { state: 'pending' as const, note: text('toolHumanGuidance.nonBlockingHint',
             'Work continues meanwhile; your reply is sent as a normal message.') }
           : { state: 'answered' as const, response: replied,

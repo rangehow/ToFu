@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::at_rest::AtRestKey;
@@ -56,6 +57,14 @@ pub struct BackupManifest {
     pub checkpoint_hash: [u8; 32],
     pub history_manifest_block_id: Option<BlockId>,
     pub authority_state_root: Option<Option<BlockId>>,
+}
+
+/// Identity from a published backup receipt. The digest covers the exact
+/// on-disk manifest bytes, not a re-encoding of the decoded manifest.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExactBackupManifest {
+    pub source_control_generation: u64,
+    pub sha256: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -821,6 +830,10 @@ fn open_backup(backup_dir: &Path, vfs: Arc<dyn Vfs>) -> io::Result<(BlockStore, 
 }
 
 fn read_manifest(path: &Path, vfs: &dyn Vfs) -> io::Result<BackupManifest> {
+    BackupManifest::decode(&read_manifest_bytes(path, vfs)?)
+}
+
+fn read_manifest_bytes(path: &Path, vfs: &dyn Vfs) -> io::Result<Vec<u8>> {
     if vfs.metadata(path)? != FileKind::File {
         return Err(invalid_data("backup manifest is not a regular file"));
     }
@@ -831,7 +844,7 @@ fn read_manifest(path: &Path, vfs: &dyn Vfs) -> io::Result<BackupManifest> {
             ..OpenRequest::default()
         },
     )?;
-    BackupManifest::decode(&file.read_all(MANIFEST_BYTES)?)
+    file.read_all(MANIFEST_BYTES)
 }
 
 fn read_optional_prune_plan(backup_dir: &Path, vfs: &dyn Vfs) -> io::Result<Option<PrunePlan>> {
@@ -899,6 +912,13 @@ pub(crate) fn existing_manifests(
     snapshots_path: &Path,
     vfs: &dyn Vfs,
 ) -> io::Result<Vec<BackupManifest>> {
+    manifest_paths(snapshots_path, vfs)?
+        .iter()
+        .map(|path| read_manifest(path, vfs))
+        .collect()
+}
+
+fn manifest_paths(snapshots_path: &Path, vfs: &dyn Vfs) -> io::Result<Vec<PathBuf>> {
     let entries = vfs.read_directory(snapshots_path)?;
     if entries.len() > MAX_BACKUP_GENERATIONS * 2 {
         return Err(invalid_data("backup directory entry bound exceeded"));
@@ -911,9 +931,37 @@ pub(crate) fn existing_manifests(
         if manifests.len() == MAX_BACKUP_GENERATIONS {
             return Err(invalid_data("backup generation bound exceeded"));
         }
-        manifests.push(read_manifest(&path, vfs)?);
+        manifests.push(path);
     }
     Ok(manifests)
+}
+
+fn exact_manifest(
+    snapshots_path: &Path,
+    vfs: &dyn Vfs,
+    exact: &ExactBackupManifest,
+) -> io::Result<BackupManifest> {
+    let mut selected = None;
+    for path in manifest_paths(snapshots_path, vfs)? {
+        let raw = read_manifest_bytes(&path, vfs)?;
+        if !format!("{:x}", Sha256::digest(&raw)).eq_ignore_ascii_case(&exact.sha256) {
+            continue;
+        }
+        let manifest = BackupManifest::decode(&raw)?;
+        if manifest.source_control_generation != exact.source_control_generation
+            || path != snapshots_path.join(manifest.file_name())
+            || selected.is_some()
+        {
+            return Err(invalid_data("exact backup manifest identity mismatch"));
+        }
+        selected = Some(manifest);
+    }
+    selected.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "requested exact backup manifest is not retained with that SHA-256",
+        )
+    })
 }
 
 /// One node of a backup generation's block graph, typed by the reference
@@ -2036,6 +2084,26 @@ pub fn restore_latest_backup_with_key(
     target_dir: &Path,
     at_rest_key: Option<AtRestKey>,
 ) -> io::Result<BackupManifest> {
+    restore_backup_with_key(backup_dir, target_dir, at_rest_key, None)
+}
+
+/// Restores only the exact retained manifest named by a publication receipt.
+/// A missing or changed manifest and a different target marker are errors.
+pub fn restore_exact_backup_with_key(
+    backup_dir: &Path,
+    target_dir: &Path,
+    at_rest_key: Option<AtRestKey>,
+    exact: &ExactBackupManifest,
+) -> io::Result<BackupManifest> {
+    restore_backup_with_key(backup_dir, target_dir, at_rest_key, Some(exact))
+}
+
+fn restore_backup_with_key(
+    backup_dir: &Path,
+    target_dir: &Path,
+    at_rest_key: Option<AtRestKey>,
+    exact: Option<&ExactBackupManifest>,
+) -> io::Result<BackupManifest> {
     if !backup_dir.is_absolute() || !target_dir.is_absolute() {
         return Err(invalid_input("backup and restore paths must be absolute"));
     }
@@ -2044,15 +2112,20 @@ pub fn restore_latest_backup_with_key(
         target_dir,
         "restore target must not contain or be contained by the backup",
     )?;
+    let (vfs, encrypting) = crate::at_rest::restore_vfs(backup_dir, target_dir, at_rest_key);
+    let exact_source = exact
+        .map(|selector| prepare_restore_source(backup_dir, Arc::clone(&vfs), Some(selector)))
+        .transpose()?;
     if !target_dir.exists() {
         fs::create_dir_all(target_dir)?;
     }
     preflight_restore_capacity(backup_dir, target_dir)?;
-    let (vfs, encrypting) = crate::at_rest::restore_vfs(backup_dir, target_dir, at_rest_key);
-    let source = prepare_restore_source(backup_dir, Arc::clone(&vfs))?;
+    let source = match exact_source {
+        Some(source) => source,
+        None => prepare_restore_source(backup_dir, Arc::clone(&vfs), None)?,
+    };
     let target_lease = crate::engine::acquire_lease(target_dir, vfs.as_ref())?;
-    let manifest =
-        restore_latest_backup_under_lease(target_dir, vfs, source, target_lease.as_ref())?;
+    let manifest = restore_backup_under_lease(target_dir, vfs, source, target_lease.as_ref())?;
     // Keep the target lease through the key witness publication as well.
     // The restored target is a complete authority: publish the key-identity
     // witness only after it exists so a subsequent `Engine::open_with_key`
@@ -2069,24 +2142,32 @@ pub(crate) fn restore_latest_backup_with_vfs(
     target_dir: &Path,
     vfs: Arc<dyn Vfs>,
 ) -> io::Result<BackupManifest> {
-    let source = prepare_restore_source(backup_dir, Arc::clone(&vfs))?;
+    let source = prepare_restore_source(backup_dir, Arc::clone(&vfs), None)?;
     let target_lease = crate::engine::acquire_lease(target_dir, vfs.as_ref())?;
-    restore_latest_backup_under_lease(target_dir, vfs, source, target_lease.as_ref())
+    restore_backup_under_lease(target_dir, vfs, source, target_lease.as_ref())
 }
 
 struct RestoreSource {
     source: BlockStore,
     manifests: Vec<BackupManifest>,
+    exact: bool,
     _backup_lease: Option<Box<dyn VfsFile>>,
 }
 
 // Validate and lease the source before creating even a LOCK in the target.
 // Nothing here creates or changes a file in the backup.
-fn prepare_restore_source(backup_dir: &Path, vfs: Arc<dyn Vfs>) -> io::Result<RestoreSource> {
-    let (source, snapshots_path) = open_backup(backup_dir, Arc::clone(&vfs))?;
+fn prepare_restore_source(
+    backup_dir: &Path,
+    vfs: Arc<dyn Vfs>,
+    exact: Option<&ExactBackupManifest>,
+) -> io::Result<RestoreSource> {
     let _backup_lease = acquire_backup_read_lease(backup_dir, vfs.as_ref())?;
     ensure_no_prune(backup_dir, vfs.as_ref())?;
-    let manifests = existing_manifests(&snapshots_path, vfs.as_ref())?;
+    let (source, snapshots_path) = open_backup(backup_dir, Arc::clone(&vfs))?;
+    let manifests = match exact {
+        Some(selector) => vec![exact_manifest(&snapshots_path, vfs.as_ref(), selector)?],
+        None => existing_manifests(&snapshots_path, vfs.as_ref())?,
+    };
     let authority_uuid = manifests
         .first()
         .map(|manifest| manifest.authority_uuid)
@@ -2100,6 +2181,7 @@ fn prepare_restore_source(backup_dir: &Path, vfs: Arc<dyn Vfs>) -> io::Result<Re
     Ok(RestoreSource {
         source,
         manifests,
+        exact: exact.is_some(),
         _backup_lease,
     })
 }
@@ -2111,9 +2193,10 @@ fn prepare_restore_source(backup_dir: &Path, vfs: Arc<dyn Vfs>) -> io::Result<Re
 // restore continues that generation while the backup still holds it; once the
 // backup has pruned it, the restore continues with the newest generation,
 // reusing every block already copied (content addressing makes them the same
-// blocks). The source is never written, so nothing in it can pin a
-// generation for an interrupted restore.
-fn restore_latest_backup_under_lease(
+// blocks). Exact restore instead refuses if the requested source manifest
+// is absent or the target marker names another generation. The source is
+// never written, so nothing in it pins an interrupted restore's generation.
+fn restore_backup_under_lease(
     target_dir: &Path,
     vfs: Arc<dyn Vfs>,
     source: RestoreSource,
@@ -2125,6 +2208,7 @@ fn restore_latest_backup_under_lease(
     let RestoreSource {
         source,
         manifests,
+        exact,
         _backup_lease,
     } = source;
     let newest = manifests
@@ -2139,14 +2223,33 @@ fn restore_latest_backup_under_lease(
         .clone();
     let existing_marker = read_optional_restore_marker(target_dir, vfs.as_ref())?;
     let existing_control = read_optional_restored_control(target_dir, Arc::clone(&vfs))?;
+    if exact
+        && existing_marker
+            .as_ref()
+            .is_some_and(|marker| marker != &newest)
+    {
+        return Err(invalid_data(
+            "restore target marker is not the exact backup manifest",
+        ));
+    }
+    if exact
+        && existing_control
+            .as_ref()
+            .is_some_and(|control| *control != restored_control_state(&newest))
+    {
+        return Err(invalid_data(
+            "existing target authority is not the exact backup",
+        ));
+    }
     let stop = AtomicBool::new(false);
     // A fresh target holds only what this run publishes, post-order and
     // history last, so presence proves a subgraph. A resumed target may hold
     // an earlier run's blocks (an older engine's, or another generation's
     // untyped copies): its present interior blocks are walked again.
     let (manifest, policy) = match (existing_marker, existing_control) {
-        (Some(marker), Some(control)) if control == restored_control_state(&marker) => {
+        (Some(marker), Some(control)) if !exact && control == restored_control_state(&marker) => {
             // The copy finished before CONTROL; only the marker's removal remains.
+            // Exact retries use the normal graph walk below before issuing a receipt.
             validate_resume_layout(target_dir, vfs.as_ref())?;
             let _wal = open_or_initialize_restore_wal(target_dir, Arc::clone(&vfs))?;
             sync_directory_barrier(vfs.as_ref(), target_dir)?;

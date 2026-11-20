@@ -21,7 +21,8 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from scripts.tofudb_perf_compare import TofuDbEngine, _percentile
+from scripts.tofudb_perf_compare import TofuDbEngine
+from scripts.tofudb_workloads.latency import _percentile
 
 
 def digest(path):

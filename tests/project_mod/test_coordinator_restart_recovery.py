@@ -331,7 +331,7 @@ def test_a_coordinator_turn_with_a_call_cut_off_mid_effect_continues_in_a_wake_t
     assert faults == []
 
 
-def _recovered_unknown_outcome(r, turn_id, attempt_id):
+def _recovered_unknown_outcome(r, turn_id, attempt_id, *, classified_safe=True):
     """What exit recovery leaves for an execution that ended with nothing to confirm
     but no restart cause (e.g. a carrier that exited before settling): failed,
     ``worker_effect_outcome_unknown``, manual retry policy, no cut call."""
@@ -339,14 +339,16 @@ def _recovered_unknown_outcome(r, turn_id, attempt_id):
     r.turns[turn_id].update(status='failed', currentAttemptId=attempt_id, settlement={
         'cause': 'generation_error', 'outcome': 'failed',
         'error': {'code': 'worker_effect_outcome_unknown',
-                  'retryPolicy': {'mode': 'manual', 'automatic': False}},
+                  'retryPolicy': {'mode': 'manual', 'automatic': False},
+                  **({'cutCallsClassifiedSafe': True} if classified_safe else {})},
         'resumeOptions': [{'operation': 'regenerate', 'anchor': {'type': 'turn_start'}}]})
     r.turns[turn_id].setdefault('ordinal', 1)
     r.turns[turn_id].setdefault('laneId', 'main')
 
 
-def test_a_lead_turn_failed_with_an_unknown_outcome_and_no_cut_call_is_continued_automatically(
-        run, monkeypatch, faults):
+@pytest.mark.parametrize('classified_safe', [True, False])
+def test_a_lead_turn_with_unknown_outcome_needs_affirmative_classification_for_a_retry(
+        run, monkeypatch, faults, classified_safe):
     """Audit 2026-11-18 #10 (P3): a lead's Turn that recovery settled failed with
     ``worker_effect_outcome_unknown`` and named no call cut off mid-effect never waits
     for the owner. Its request continues in a new wake (the manual retry policy
@@ -363,7 +365,12 @@ def test_a_lead_turn_failed_with_an_unknown_outcome_and_no_cut_call_is_continued
     assert r.wake() == ['accepted']
     [wake] = controls(r)
     assert wake['request']['coordinatorWake']['previousAttemptId'] == 'coordinator-attempt'
-    _recovered_unknown_outcome(r, wake['execution']['turnId'], wake['execution']['attemptId'])
+    _recovered_unknown_outcome(r, wake['execution']['turnId'], wake['execution']['attemptId'],
+                               classified_safe=classified_safe)
+    if not classified_safe:
+        assert r.wake() == ['stopped'] and not r.scheduled and controls(r) == [wake]
+        assert len(r.reports) == 1 and r.reports[0]['kind'] == 'blocked'
+        return
     assert r.wake() == [] and len(r.scheduled) == 1
     r.c.now[0] = r.scheduled[0] + 1
     assert r.wake() == ['accepted']

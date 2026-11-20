@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "contracts/hope_queue_policy_v1.schema.json",
   "title": "Owner off-limits Hope queues (Global Router publication)",
-  "description": "The Global Router publishes this JSON at <Tofu data root>/router/<owner>/HOPE_QUEUE_POLICY.json. No Tofu code writes it. Every submit path reads it again. A missing/unparsable file uses x-fail-safe-default; it never disables m17 or refuses all jobs.",
+  "description": "The Global Router publishes this JSON at <Tofu data root>/router/<owner>/HOPE_QUEUE_POLICY.json. Router-home creation seeds it write-once with x-fail-safe-default; afterwards only reviewed publication changes it. Every submit path reads it again. A missing/unparsable file uses x-fail-safe-default; it never disables m17 or refuses all jobs.",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "off_limits"],

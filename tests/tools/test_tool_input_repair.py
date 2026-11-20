@@ -2168,7 +2168,6 @@ def _ingest_with(documents, name, arguments):
         emit_audit=False)
 
 
-_BOARD_TASK = {'title': 'Fix the tool contract', 'status': 'in_progress'}
 _DISPLAY_CASES = [
     ('delegate_project_work', 'title', 160,
      {'brief': 'Verify the source and return evidence.',
@@ -2176,7 +2175,6 @@ _DISPLAY_CASES = [
     ('create_conversation', 'title', 160, {'idempotency_key': 'create-a'}),
     ('report_to_user', 'title', 120,
      {'message': 'Done.', 'kind': 'progress', 'idempotency_key': 'report-a'}),
-    ('update_task_progress', 'summary', 280, {'tasks': [_BOARD_TASK]}),
 ]
 
 
@@ -2221,7 +2219,7 @@ def test_display_text_shortening_is_deterministic_for_idempotent_retries():
     ('alpha beta gamma', 12, 'alpha beta…'),
     ('alpha betagamma delta', 12, 'alpha…'),
     ('修复工具调用设计问题', 6, '修复工具调…'),
-    ('Fix /mnt/clusterfs/ssd_pool now', 22, 'Fix /mnt/clusterfs/…'),
+    ('Fix /mnt/your-fs now', 22, 'Fix /mnt/your-fs'),
     ('cafe\u0301 au lait', 5, 'caf…'),
     ('family 👨\u200d👩\u200d👧 photos', 10, 'family…'),
     ('Abcdefghijklmnop', 8, 'Abcdefg…'),
@@ -2236,10 +2234,6 @@ def test_shorten_display_text_cuts_at_word_or_character_boundaries(
 
 
 @pytest.mark.parametrize(('name', 'arguments', 'path', 'got', 'allowed'), [
-    # Identity key: due commitments are keyed by task title + due.
-    ('update_task_progress',
-     {'summary': 'Board', 'tasks': [{'title': 't' * 121, 'status': 'pending'}]},
-     '$.tasks[0].title', 121, 120),
     ('delegate_project_work',
      {'title': 'Check', 'brief': 'Verify.', 'idempotency_key': 'k' * 201},
      '$.idempotency_key', 201, 200),
@@ -2276,14 +2270,25 @@ def test_content_overflow_is_rejected_with_the_way_to_send_it(
     assert error['nextAction'] in call.parse_error
 
 
-def test_too_many_items_states_the_counts():
-    tasks = [{'title': f'Task {index}', 'status': 'pending'}
-             for index in range(25)]
-    call = _ingest_with(_coordinator_documents(), 'update_task_progress',
-                        {'summary': 'Board', 'tasks': tasks})
-    assert call.contract_error['code'] == 'too_many_items'
-    assert 'got 25 items; allowed <= 24' in call.parse_error
-    assert 'at least 1' in call.contract_error['nextAction']
+@pytest.mark.parametrize('field', ['tasks', 'changes'])
+def test_board_tool_ingress_preserves_all_rows_and_exact_text(field):
+    tasks = [{'title': f'Task {index}: ' + '长' * 121, 'status': 'pending',
+              'progress': '完整进度' * 100} for index in range(25)]
+    arguments = {'summary': '完整摘要' * 100, field: tasks}
+    call = _ingest_with(_coordinator_documents(), 'update_task_progress', arguments)
+    assert call.contract_error is None and call.parse_error is None
+    assert call.fn_args == arguments and not call.warnings
+
+
+@pytest.mark.parametrize('arguments', [
+    {'summary': 'Board'},
+    {'summary': 'Board', 'tasks': [], 'changes': []},
+    {'read': {}, 'changes': []},
+    {'changes': [], 'expected_revision': -1},
+])
+def test_board_tool_refuses_ambiguous_forms_and_invalid_revision(arguments):
+    call = _ingest_with(_coordinator_documents(), 'update_task_progress', arguments)
+    assert call.contract_error is not None and call.fn_args == arguments
 
 
 def test_invalid_type_names_the_type_it_received():

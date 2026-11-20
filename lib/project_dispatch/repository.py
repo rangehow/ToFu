@@ -149,6 +149,21 @@ class PublicationAwaitsReview(ProjectDispatchError):
     """
 
 
+class PublicationClosed(ProjectDispatchError):
+    """This assignment can never publish its result: its grant was revoked, or its review
+    rejected or reworked it.
+
+    Each is final: a revoked grant never returns, and a reject or rework is
+    superseded only by a rework (``delegation._superseding_rework``). The
+    delivery owner closes such a hold instead of keeping it (``cause``:
+    ``cancelled``, ``rejected`` or ``reworked``).
+    """
+
+    def __init__(self, cause, assignment_id):
+        super().__init__(f'Publication closed: assignment {assignment_id} was {cause}')
+        self.cause = cause
+
+
 class CommandReused(ProjectDispatchError):
     """A command identity already authorized another request; ``assignment_id`` names it."""
 
@@ -820,13 +835,15 @@ class ProjectDispatchRepository:
             raise ProjectDispatchError('Dispatch assignment not found in owned project')
         return assignment
 
-    def _change(self, update, *, selected=None):
+    def _change(self, update, *, selected=None, fence_documents=(), turn_witnesses=None):
         """Commit ``update`` optimistically and return its result.
 
         An update that creates evidence, or decided from an index walk, commits
         through the project head CAS. Every other update is a document commit:
         only the documents it writes fence it, so writers of different rows
         never conflict and never invalidate a walk (``segmented.commit``).
+        A caller may additionally fence selected documents whose exact
+        version its decision depends on, without changing their evidence.
         """
         last_storage_error = None
         for _ in range(LIMITS['casAttempts']):
@@ -835,7 +852,10 @@ class ProjectDispatchRepository:
             if value == original:
                 return result
             try:
-                if self._commit_value(original, value, version):
+                fences = {'fence_documents': fence_documents}
+                if turn_witnesses is not None and self.storage_version == 2:
+                    fences['turn_witnesses'] = turn_witnesses
+                if self._commit_value(original, value, version, **fences):
                     return result
             except StorageError as exc:
                 if exc.code != 'database_conflict' and not exc.retryable:
@@ -852,7 +872,12 @@ class ProjectDispatchRepository:
         if value.get('batches', [])[:len(retained)] != retained:
             raise ProjectDispatchError('Batch manifest is immutable')
         receipts = original.get('coordinatorSettlements', [])
-        if value.get('coordinatorSettlements', [])[:len(receipts)] != receipts:
+        updated = value.get('coordinatorSettlements', [])[:len(receipts)]
+        if len(updated) != len(receipts) or any(
+                new != old and (not old.get('stopReport') or 'reportTurnId' in old
+                                or 'reportTurnId' not in new
+                                or {k: v for k, v in new.items() if k != 'reportTurnId'} != old)
+                for old, new in zip(receipts, updated)):
             raise ProjectDispatchError('Coordinator settlement is immutable')
         for old in original.get('requestBudgets', []):
             current = next((row for row in value.get('requestBudgets', []) if row['id'] == old['id']), None)
@@ -866,7 +891,7 @@ class ProjectDispatchRepository:
         self._check_record(value, segmented=self.storage_version == 2)
         return value, copy.deepcopy(result)
 
-    def _commit_value(self, original, value, version):
+    def _commit_value(self, original, value, version, *, fence_documents=(), turn_witnesses=None):
         """Commit through the head CAS; False when a migration prefix completed instead."""
         from .segmented import SegmentedDispatch, Snapshot
         if self.storage_version == 2:
@@ -874,7 +899,8 @@ class ProjectDispatchRepository:
             if not isinstance(version, Snapshot) or version.head['phase'] != 'ready':
                 store.ensure_ready()
                 return False
-            store.commit(original, value, version)
+            store.commit(original, value, version, fence_documents=fence_documents,
+                         turn_witnesses=turn_witnesses)
             return True
         self.client(write=True).command('record.put', {
             'namespace': NAMESPACE, 'key': self.key, 'value': value,
@@ -885,6 +911,7 @@ class ProjectDispatchRepository:
         return True
 
     def _conversation(self, conversation_id):
+        """Settings of an available conversation in this owned project."""
         def read():
             snapshot = self.conversations.get(conversation_id, user_id=self.owner,
                                               include_messages=False)
@@ -902,6 +929,7 @@ class ProjectDispatchRepository:
         # Ownership is enforced by the owner-scoped getter; reject contradictory metadata too.
         if not evidence_owner_matches(metadata, self.owner):
             raise ProjectDispatchError('Conversation owner changed')
+        return settings
 
     def validate_binding(self, coordinator_id, expected_revision=None):
         """Return current typed binding epoch; retained authority must pin it."""
@@ -1160,6 +1188,10 @@ class ProjectDispatchRepository:
                 or principal.owner_user_id != self.owner):
             raise ProjectDispatchError('Dispatch requires matching owning user principal')
         principal.require_scope('chat')
+        if 'boardTaskKeys' in request:
+            original = self.find_command(command_id)
+            if original is None or original['request'] != request:
+                raise ProjectDispatchError('Board coverage is issued only by scoped Coordinator delegation')
         request = copy.deepcopy(request)
         assignment_id = self.command_identity(command_id)
         granter = {'subject': principal.subject_id, 'tenant': principal.tenant_id,
@@ -1184,8 +1216,10 @@ class ProjectDispatchRepository:
         # snapshot (open request, policy, replay) is fenced by the CAS itself.
         with one_decision():
             principal, source, attempt = source_for_task(self, task, issued=issued, delegated=True)
+            original = self.find_command(command_id)
+            recorded = original['request'] if original is not None else None
+            issued = issued_worker_policy(self, task, recorded=recorded)
             policy = policy_for_task(self, task, attempt)
-            issued = issued_worker_policy(self, task)
             expected = original_delegation(task, policy, repository=self)
             if (request.get('authorizationSource') != source or request.get('delegation') != expected
                     or request.get('model') != issued.model
@@ -1258,7 +1292,12 @@ class ProjectDispatchRepository:
                 selected['sources'].append(delegation['attemptId'])
         elif delegation:
             selected['sources'].append(delegation['attemptId'])
-        return self._change(add, selected=selected)
+        wake = request.get('coordinatorWake')
+        pin = (wake or {}).get('predecessor')
+        fences = [('assignments', pin['assignmentId'])] if pin else []
+        if wake and budget:
+            fences.append(('requestBudgets', budget))
+        return self._change(add, selected=selected, fence_documents=fences)
 
     def read(self, assignment_id):
         return copy.deepcopy(self._find(self._load(self._selection(assignments=[assignment_id]))[0], assignment_id))
@@ -1313,10 +1352,12 @@ class ProjectDispatchRepository:
     def list(self):
         return copy.deepcopy(self._load()[0]['assignments'])
 
-    def discover(self):
-        """Every assignment and every settled request id, for recovery passes only.
+    def discover(self, *, recipient_id=None):
+        """Discover assignments and settled request ids, for recovery passes only.
 
-        Recovery reads the whole project only to find lanes and requests to
+        Scoped discovery may omit indexed rows outside the recipient lane, but
+        still includes continuation candidates and older rows without metadata.
+        Recovery uses project evidence only to find lanes and requests to
         retry; every decision is then made from its own point snapshot, CAS or
         live admission. This read therefore has no snapshot witness: each
         document is read once and checked alone, so concurrent writers never
@@ -1325,10 +1366,11 @@ class ProjectDispatchRepository:
         """
         if self.storage_version == 2:
             from .segmented import SegmentedDispatch
-            return SegmentedDispatch(self).discover()
+            return SegmentedDispatch(self).discover(recipient_id=recipient_id)
         value, _ = self._load()
         return (copy.deepcopy(value['assignments']),
-                {row['sourceAttemptId'] for row in value.get('coordinatorSettlements', [])})
+                {row['sourceAttemptId'] for row in value.get('coordinatorSettlements', [])
+                 if not row.get('stopReport') or row.get('reportTurnId')})
 
     def request_rows(self, source_attempt_id):
         """Passive evidence of one Coordinator request: its rows and whether it is settled.
@@ -1401,7 +1443,47 @@ class ProjectDispatchRepository:
         self.validate_grant_binding(assignment)
         self._check_stops(assignment)
         self._live_request(assignment['request'], value=value, admitted=True)
+        if assignment['execution'] is None:
+            self.validate_wake_predecessor(assignment)
         return copy.deepcopy(assignment)
+
+    def validate_wake_predecessor(self, assignment, *, value=None):
+        """Check an unborn wake's predecessor; return its document ID to fence at birth."""
+        request = assignment['request']
+        wake = request.get('coordinatorWake')
+        if wake is None:
+            return None
+        pin = wake.get('predecessor')
+        if pin:
+            prior = (self.read_point(pin['assignmentId']) if value is None
+                     else self._find(value, pin['assignmentId']))
+        else:
+            # A legacy pending wake has the Attempt pin but no document id.
+            # Recover the prior wake from this request's immutable admission order.
+            source = request['delegation']['attemptId']
+            if value is None:
+                value = self._load(self._selection(sources=[source]))[0]
+            prior = None
+            for row in value['assignments']:
+                if row['id'] == assignment['id']:
+                    break
+                if (row['request'].get('coordinatorWake')
+                        and row['request']['delegation']['attemptId'] == source):
+                    prior = row
+            if prior is None:
+                # The original request Turn is not itself a dispatch document.
+                # Its durable current Attempt is the source pin when present.
+                turn = self.read_turn(request['coordinatorId'], request['delegation']['turnId'], projection=False)
+                current = (turn or {}).get('currentAttemptId')
+                if current and current != wake['previousAttemptId']:
+                    raise ProjectDispatchError('Coordinator wake source Attempt advanced')
+                return None
+        if (prior['grant']['revoked'] or pin and prior['grant']['revision'] != pin['grantRevision']
+                or (prior['execution'] or {}).get('attemptId') != wake['previousAttemptId']
+                or prior['request']['coordinatorId'] != request['coordinatorId']
+                or prior['request'].get('delegation') != request.get('delegation')):
+            raise ProjectDispatchError('Coordinator wake predecessor was withdrawn or advanced')
+        return prior['id']
 
     def validate(self, admission, *, value=None):
         """Own authority, plus prerequisite readiness while the Worker is unborn.
@@ -1484,6 +1566,7 @@ class ProjectDispatchRepository:
             return copy.deepcopy(existing(row))
         admission = admission or self._admission(row)
         self.validate(admission, value=value)
+        predecessor = self.validate_wake_predecessor(row)
         def bind(value):
             assignment = self._find(value, assignment_id)
             if assignment['execution'] is not None:
@@ -1494,8 +1577,24 @@ class ProjectDispatchRepository:
                     f'{assignment["request"]["coordinatorId"]})')
             if self._admission(assignment) != admission:
                 raise ProjectDispatchError('Admission tenant/recipient/revision mismatch')
+            if source is not None:
+                from .continuation import ensure_open
+                ensure_open(value, source)
+                newer = next((candidate for candidate in reversed(value['assignments'])
+                              if candidate['request'].get('coordinatorWake')
+                              and candidate['request']['delegation']['attemptId'] == source), None)
+                if newer is None or newer['id'] != assignment_id:
+                    raise ProjectDispatchError('Coordinator wake was superseded before birth')
+            if predecessor is not None:
+                self.validate_wake_predecessor(assignment, value=value)
             assignment['execution'] = association
             return assignment
+        request = row['request']
+        source = request['delegation']['attemptId'] if request.get('coordinatorWake') else None
+        if source is not None:
+            selected = self._selection(sources=[source])
+            fences = [('assignments', predecessor)] if predecessor else []
+            return self._change(bind, selected=selected, fence_documents=fences)
         return self._change(bind, selected=self._point_selection(assignment_id))
 
     def workspace_task_id(self, assignment):
@@ -1621,7 +1720,17 @@ class ProjectDispatchRepository:
 
     def validate_publication(self, binding, task_id):
         """Publication reuses live grant/source checks without model/tool spending."""
-        row = self.validate(binding)
+        try:
+            row = self.validate(binding)
+        except DispatchGrantRevoked:
+            # Also raised for a Stop or a lapsed owner delegation; only the
+            # recorded revocation is final.
+            if self.read_point(binding['assignmentId'])['grant']['revoked']:
+                raise PublicationClosed('cancelled', binding['assignmentId']) from None
+            raise
+        decision = (row.get('review') or {}).get('decision')
+        if decision in ('reject', 'rework'):
+            raise PublicationClosed(decision + 'ed', row['id'])
         publication = row.get('publication')
         if (row['request'].get('profile', {}).get('mode') not in ('files', 'project') or publication is None
                 or publication['grantRevision'] != binding['revision'] or row['review'] is None

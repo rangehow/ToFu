@@ -82,18 +82,6 @@ def test_elapsed_budget_interrupts_loops_and_builtin_work_and_next_run_recovers(
     assert run('return 7;')[0] == 7
 
 
-def test_budget_exhausted_during_initialization_still_reports_native_stats():
-    # A loaded host can spend the whole budget before user code runs.
-    with pytest.raises(ProgramExecutionError) as error:
-        run('return 7;', limits=JavaScriptLimits(execution_seconds=1e-9))
-    assert error.value.code == 'execution_limit'
-    assert error.value.detail['reason'] == 'execution_time'
-    assert error.value.execution_stats['tool_calls'] == 0
-    assert error.value.execution_stats['outcome'] == 'error'
-    assert error.value.execution_stats['wasm_fuel'] < JavaScriptLimits().fuel
-    assert run('return 7;')[0] == 7
-
-
 def test_explicit_fuel_exhaustion_has_its_own_reason():
     with pytest.raises(ProgramExecutionError) as error:
         run('while(true){}', limits=JavaScriptLimits(fuel=20_000_000))

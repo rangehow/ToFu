@@ -11,6 +11,7 @@ from copy import deepcopy
 from pathlib import Path, PurePosixPath
 import re
 
+from benchmarks.conversation_receipts import authority_path, linux_pid, sqlite_library_role
 from scripts.certify_storage_backends import ROOT, fingerprint, verification_sources
 from serverctl_pkg.native_engine import build_identity, source_fingerprint
 
@@ -25,6 +26,7 @@ BENCHMARK_SOURCES = (
     'benchmarks/conversation_concurrency.py',
     'benchmarks/conversation_concurrency_contract.json',
     'benchmarks/conversation_provenance.py',
+    'benchmarks/conversation_receipts.py',
     'benchmarks/storage_write_pipeline.py',
     'scripts/tofudb_bench.py',
     'scripts/tofudb_charter_assess.py',
@@ -235,3 +237,38 @@ def qualify_provenance(receipt, *, backend, binary_sha256=None, authority=None,
     return {'current_source_qualified': not failures,
             'frozen_build_comparable': not frozen_failures,
             'failures': failures, 'frozen_failures': frozen_failures}
+
+
+def sqlite_identity_failure(report, boundaries):
+    """Require stable loaded hashes and bind each witness to its daemon phase."""
+    witnesses = report.get('sqlite_loaded_artifacts')
+    receipts = report.get('crash_recovery_receipts')
+    if not isinstance(witnesses, dict) or not isinstance(receipts, dict):
+        return 'SQLite loaded-library boundary evidence missing'
+    if set(witnesses) != set(boundaries):
+        return 'SQLite loaded-library boundaries missing or unexpected'
+    running = receipts.get('all_running_before_stream_release')
+    final = receipts.get('after_settlement')
+    if not isinstance(running, dict) or not isinstance(final, dict):
+        return 'SQLite loaded-library incarnations missing'
+    pids = (running.get('killed_pid'), running.get('killed_pid'),
+            running.get('reopened_pid'), running.get('reopened_pid'), running.get('reopened_pid'),
+            final.get('reopened_pid'), final.get('reopened_pid'))
+    baseline = None
+    for boundary, pid in zip(boundaries, pids, strict=True):
+        row = witnesses.get(boundary)
+        if not linux_pid(pid) or not isinstance(row, dict) or not linux_pid(row.get('pid')) or row['pid'] != pid:
+            return f'SQLite loaded-library witness missing or wrong child at {boundary}'
+        if set(row) != {'pid', 'sqlite', 'vfs', 'writer_configuration_at_open'}:
+            return f'SQLite loaded-library witness is not a success receipt at {boundary}'
+        identities = tuple(row.get(kind) for kind in ('sqlite', 'vfs'))
+        if any(not isinstance(item, dict) or not isinstance(item.get('path'), str)
+               or authority_path(item['path']) in (None, '/')
+               or sqlite_library_role(PurePosixPath(item['path']).name) != role
+               or not is_sha256(item.get('sha256'))
+               for role, item in zip(('sqlite', 'vfs'), identities, strict=True)):
+            return f'SQLite loaded-library witness malformed at {boundary}'
+        if baseline is not None and identities != baseline:
+            return f'SQLite loaded-library build changed at {boundary}'
+        baseline = identities
+    return None

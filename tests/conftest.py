@@ -21,7 +21,6 @@ import sys
 import tempfile
 import threading
 import time
-from urllib.parse import urlsplit
 
 import pytest
 
@@ -124,6 +123,14 @@ def _clear_inherited_lifecycle_environment(environment) -> tuple[str, ...]:
 production_guard.guard_this_process(os.environ)
 _CLEARED_INHERITED_LIFECYCLE_ENV_NAMES = (
     _clear_inherited_lifecycle_environment(os.environ))
+
+# The application's boot loads this checkout's .env after the scrub above, and
+# that file names the running server's PORT; without this the scrub's whole
+# purpose is undone and the guard refuses every child the booted server starts.
+import tofu_dotenv  # noqa: E402  (stdlib-only; loaded after the scrub by design)
+
+tofu_dotenv.load_dotenv_file = production_guard.dotenv_without_lifecycle_authority(
+    tofu_dotenv.load_dotenv_file, _INHERITED_LIFECYCLE_ENV_NAMES)
 
 
 # Git also selects its repository and configuration from the environment. Every
@@ -1287,8 +1294,11 @@ def pytest_runtest_setup(item):
 
     item._modules_before_test = imported_module_names()
     # A browser on the live app needs the built graph, with or without the
-    # shared ``page`` fixture; check before the server and browser start.
-    if {'browser', 'live_server'} <= set(getattr(item, 'fixturenames', ())):
+    # shared ``page`` fixture; check before the server and browser start. An
+    # external target serves its own graph, so the checkout's build is
+    # irrelevant to it.
+    if ({'browser', 'live_server'} <= set(getattr(item, 'fixturenames', ()))
+            and _external_target_url() is None):
         from tests._jsdom import require_shipped_graph
         require_shipped_graph()
     with inherited_engine_refusal_skips():
@@ -1320,9 +1330,73 @@ def pytest_runtest_teardown(item, nextitem):
     return result
 
 
+# ─── External target retargeting seam (TOFU_BLACKBOX_URL) ──────────────
+#
+# TOFU_BLACKBOX_URL names an already-running server under test; the black-box
+# harness already selects its target this way. When it is set, the live-server
+# fixtures yield that URL instead of booting the local app, so HTTP-level suites
+# can run unchanged against another front door (for example a Rust one). The
+# local app must not be constructed: importing ``server`` and starting storage
+# would measure this checkout's app instead of the target, and a proxy in front
+# of it would leave module-level monkeypatches in another process.
+_EXTERNAL_TARGET_ENV = 'TOFU_BLACKBOX_URL'
+
+
+def _external_target_url() -> str | None:
+    """Return the configured external server URL, or None for a local boot."""
+    explicit = os.environ.get(_EXTERNAL_TARGET_ENV, '').strip()
+    return explicit.rstrip('/') if explicit else None
+
+
+def _is_loopback_origin(origin: str) -> bool:
+    """True when the URL's host is a literal loopback address or localhost."""
+    import ipaddress
+    from urllib.parse import urlsplit
+
+    host = urlsplit(origin).hostname
+    if not host:
+        return False
+    if host.lower() == 'localhost':
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+class _ExternalTargetApp:
+    """``flask_app`` stand-in while ``TOFU_BLACKBOX_URL`` names another server.
+
+    Suites may request ``flask_app`` only to satisfy a shared fixture signature
+    while their assertions travel over HTTP through ``live_server``. The stub
+    keeps those runnable without constructing the local app; a test that really
+    reads in-process app state fails on first attribute access, naming the
+    reason, instead of silently asserting against this checkout.
+    """
+
+    def __init__(self, target: str) -> None:
+        self._target = target
+
+    def __getattr__(self, name: str):
+        raise RuntimeError(
+            f'flask_app is not available: {_EXTERNAL_TARGET_ENV}={self._target} '
+            'retargets live_server to an external server, so no in-process app '
+            f'was constructed (accessed .{name})')
+
+    def __repr__(self) -> str:
+        return f'<external-target flask_app stub: {self._target}>'
+
+
 @pytest.fixture(scope="session")
 def flask_app(_configure_test_env):
-    """Return the native Quart app over the supervised test Sidecar."""
+    """Return the native Quart app over the supervised test Sidecar.
+
+    With ``TOFU_BLACKBOX_URL`` set, return a raising stub instead: the seam
+    must not construct the local app, import ``server`` or start storage.
+    """
+    external_target = _external_target_url()
+    if external_target is not None:
+        return _ExternalTargetApp(external_target)
     _assert_isolated_storage('flask_app fixture')
     import server
 
@@ -1442,38 +1516,7 @@ def pytest_xdist_auto_num_workers(config):
 # from CI.
 _TIER_MARKERS = frozenset({'unit', 'api', 'visual', 'slow', 'live_llm'})
 
-def pytest_addoption(parser):
-    # A command-line option, not an environment variable: the pytest sessions
-    # that tests themselves spawn inherit the environment and would deselect
-    # their own items.
-    parser.addoption('--tofu-shard', default='', metavar='K/N',
-                     help='keep only shard K (1-based) of N whole test files (CI tier split)')
-
-
-def _shard_selection(config, items):
-    """``--tofu-shard=k/n`` keeps only shard k (1-based) of n: CI splits a tier
-    across runners so each completes on its own machine. A file stays whole
-    (module fixtures) and a stable hash of its path places it, so every file
-    lands in exactly one shard and every xdist node selects the same items."""
-    import zlib
-    spec = str(config.getoption('--tofu-shard', default='') or '').strip()
-    if not spec:
-        return
-    index, _, count = spec.partition('/')
-    if not (index.isdigit() and count.isdigit() and 1 <= int(index) <= int(count)):
-        raise pytest.UsageError(f'--tofu-shard must be k/n with 1 <= k <= n, got {spec!r}')
-    index, count = int(index), int(count)
-    kept, dropped = [], []
-    for item in items:
-        path = item.nodeid.split('::', 1)[0]
-        (kept if zlib.crc32(path.encode()) % count == index - 1 else dropped).append(item)
-    if dropped:
-        config.hook.pytest_deselected(items=dropped)
-        items[:] = kept
-
-
 def pytest_collection_modifyitems(config, items):
-    _shard_selection(config, items)
     auto_marked_files = set()
     for item in items:
         own = {m.name for m in item.iter_markers()}
@@ -1732,20 +1775,11 @@ def _close_coro_loop(loop, drive):
 def _run_coro_on_private_loop(coro):
     import asyncio
 
-    from lib.agent_core.push import hub
-
     loop = asyncio.new_event_loop()
-    # Synchronous views resolve request bodies on the serving loop
-    # (lib.quart_sync.resolve). Bind this request's loop the way production
-    # binds its serving loop; otherwise a body still streaming in is awaited
-    # from a foreign loop whose selector is never woken, and the view hangs.
-    previous_loop = hub._loop
-    hub._loop = loop
     try:
         task = asyncio.ensure_future(coro, loop=loop)
         return _run_coro_with_alarm(loop, task)
     finally:
-        hub._loop = previous_loop
         if not loop.is_closed():
             loop.close()
 
@@ -1936,10 +1970,21 @@ def screenshot_dir():
 
 
 @pytest.fixture(scope='session')
-def live_server(flask_app):
-    """Boot ``server.app`` on an ephemeral port via Hypercorn in a daemon
-    thread; yield the base URL ``http://127.0.0.1:<port>``.
+def live_server(request):
+    """Yield the base URL the HTTP suites talk to.
+
+    With ``TOFU_BLACKBOX_URL`` set this is that server and nothing local runs:
+    no ``flask_app`` resolution (a module may override it), no ``server``
+    import and no storage. Otherwise boot ``server.app`` on an ephemeral port
+    via Hypercorn in a daemon thread; yield ``http://127.0.0.1:<port>``.
     """
+    external_target = _external_target_url()
+    if external_target is not None:
+        yield external_target
+        return
+
+    flask_app = request.getfixturevalue('flask_app')
+
     import asyncio
     import socket
     import time
@@ -2116,6 +2161,20 @@ def browser():
             pw.stop()
 
 
+def _require_loopback_cleanup_target(origin: str) -> None:
+    """Refuse the page teardown's destructive conversation DELETE off loopback.
+
+    The teardown deletes every conversation the test created. The local
+    fixture always binds 127.0.0.1; an external target is cleaned up only when
+    it is a loopback scratch server. Anything else belongs to another machine.
+    """
+    if _is_loopback_origin(origin):
+        return
+    raise RuntimeError(
+        f'page cleanup refused: {origin} is not loopback, so deleting its '
+        'conversations would destroy a remote server\'s state')
+
+
 def _server_conversation_ids(pg, origin):
     """Every conversation id the live server holds, or None when unreadable.
 
@@ -2161,43 +2220,6 @@ _BENIGN_CONSOLE_ERRORS = (
 )
 
 
-#: Each engine's exact ``Request.failure`` text for a request the browser itself
-#: cancelled (navigation, reload, page close) — the same
-#: event in three dialects. Any other failure text, including every DNS,
-#: connection, TLS or HTTP-level failure, stays a hard finding.
-#: Firefox names a cancelled channel ``NS_BINDING_ABORTED`` or, for a
-#: streaming read torn down mid-body, ``NS_ERROR_ABORT`` (both observed on CI
-#: for navigation-cancelled SSE and fetches); WebKit uses
-#: ``Load request cancelled``.
-_CANCELLED_REQUEST_FAILURES = {
-    'chromium': frozenset({'net::ERR_ABORTED'}),
-    'firefox': frozenset({'NS_BINDING_ABORTED', 'NS_ERROR_ABORT'}),
-    'webkit': frozenset({'Load request cancelled'}),
-}
-
-
-def _is_cancelled_request_failure(browser_name, failure):
-    """Whether ``failure`` is ``browser_name``'s own cancellation of a request."""
-    return failure in _CANCELLED_REQUEST_FAILURES[browser_name]
-
-
-#: WebKit also raises a load it cancelled (navigation, reload, close) as a page
-#: error worded ``<url> due to access control checks.`` (observed on CI for an
-#: in-flight same-origin ``/api/v4`` read). A same-origin request never runs
-#: CORS, so for the page's own host that text can only be the cancellation;
-#: a cross-origin access-control failure stays a hard finding.
-_WEBKIT_ACCESS_CONTROL_REPORT = re.compile(
-    r'^(?:Fetch API cannot load )?(?:https?:)?/{1,2}(?P<host>[^/\s]+)/\S* '
-    r'due to access control checks\.$')
-
-
-def _is_webkit_same_origin_cancel(browser_name, page_url, message):
-    if browser_name != 'webkit':
-        return False
-    match = _WEBKIT_ACCESS_CONTROL_REPORT.match(message)
-    return bool(match) and match.group('host') == urlsplit(page_url or '').netloc
-
-
 def _attach_js_error_capture(pg):
     """Record uncaught JS exceptions + unexpected console errors on ``pg``.
 
@@ -2218,9 +2240,8 @@ def _attach_js_error_capture(pg):
 
       * ``pageerror``   → ALWAYS hard. An uncaught exception is never fine.
       * ``console.error`` → hard UNLESS it matches :data:`_BENIGN_CONSOLE_ERRORS`.
-      * ``requestfailed`` → hard unless it is the engine's own cancellation of
-        an in-flight request (:data:`_CANCELLED_REQUEST_FAILURES`; Chromium's
-        ``net::ERR_ABORTED``), not a missing asset.
+      * ``requestfailed`` → hard unless ``ERR_ABORTED``, which is the browser
+        cancelling an in-flight preload/navigation, not a missing asset.
         (Verified: the ERR_ABORTED seen at boot is a pet sprite preload, and
         that file EXISTS on disk — treating it as a 404 would be a false
         accusation of the kind the charter warns about.)
@@ -2231,11 +2252,8 @@ def _attach_js_error_capture(pg):
     """
     hard = []
     pg._tofu_js_errors = hard
-    browser_name = pg.context.browser.browser_type.name
 
     def _on_pageerror(exc):
-        if _is_webkit_same_origin_cancel(browser_name, getattr(pg, 'url', ''), str(exc)):
-            return
         hard.append(f'uncaught exception: {str(exc)[:300]}')
 
     def _on_console(msg):
@@ -2248,7 +2266,7 @@ def _attach_js_error_capture(pg):
 
     def _on_requestfailed(req):
         failure = req.failure or ''
-        if _is_cancelled_request_failure(browser_name, failure):
+        if 'ERR_ABORTED' in failure:
             return
         hard.append(f'request failed: {req.url[:200]} ({failure})')
 
@@ -2327,11 +2345,19 @@ def page(browser, live_server):
     """
     from urllib.parse import quote
 
-    from tests._jsdom import require_shipped_graph
+    external_target = _external_target_url()
+    if external_target is not None and not _is_loopback_origin(external_target):
+        pytest.skip(
+            'the page fixture is unsupported against a non-loopback '
+            f'{_EXTERNAL_TARGET_ENV} target ({external_target}): its teardown '
+            'DELETEs every conversation the test created on that server')
+    if external_target is None:
+        from tests._jsdom import require_shipped_graph
 
-    # Without the built graph the index answers 503 and each test would only
-    # report its own selector timeout.
-    require_shipped_graph()
+        # Without the built graph the index answers 503 and each test would
+        # only report its own selector timeout. An external target serves its
+        # own graph, so the checkout's build is irrelevant to it.
+        require_shipped_graph()
     ctx = browser.new_context()
     pg = ctx.new_page()
     _attach_js_error_capture(pg)
@@ -2352,16 +2378,19 @@ def page(browser, live_server):
     try:
         yield pg
     finally:
-        created = set()
-        if ids_before is not None:
-            created = (_server_conversation_ids(pg, origin) or set()) - ids_before
-        for cid in created:
-            # The server DELETE also aborts the conversation's running tasks and waits.
-            try:
-                pg.request.delete(f'{origin}/api/v4/conversations/{quote(cid, safe="")}')
-            except Exception as e:
-                _conftest_logger.debug('page cleanup DELETE %s failed: %s', cid, e)
         try:
-            pg.close()
+            created = set()
+            if ids_before is not None:
+                created = (_server_conversation_ids(pg, origin) or set()) - ids_before
+            _require_loopback_cleanup_target(origin)
+            for cid in created:
+                # The server DELETE also aborts the conversation's running tasks and waits.
+                try:
+                    pg.request.delete(f'{origin}/api/v4/conversations/{quote(cid, safe="")}')
+                except Exception as e:
+                    _conftest_logger.debug('page cleanup DELETE %s failed: %s', cid, e)
         finally:
-            ctx.close()
+            try:
+                pg.close()
+            finally:
+                ctx.close()

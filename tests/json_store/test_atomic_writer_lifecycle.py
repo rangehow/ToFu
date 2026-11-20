@@ -136,3 +136,39 @@ def test_cancellation_after_stream_creation_cannot_close_a_reused_descriptor(
         if unrelated is not None:
             with suppress(OSError):
                 os.close(unrelated)
+
+
+@pytest.mark.parametrize('publish', [
+    lambda path: json_store.write_json_atomic(path, {'rewritten': True}),
+    lambda path: json_store.write_bytes_atomic(path, b'rewritten'),
+    lambda path: json_store.update_json_atomic(path, lambda current: {'rewritten': True}, default={}),
+])
+def test_a_rewrite_never_widens_an_existing_files_access(tmp_path, publish):
+    destination = tmp_path / 'secret.json'
+    destination.write_text('{}')
+    os.chmod(destination, 0o600)
+    publish(str(destination))
+    assert destination.stat().st_mode & 0o777 == 0o600
+
+
+def test_atomic_output_path_never_widens_an_existing_files_access(tmp_path):
+    destination = tmp_path / 'secret.bin'
+    destination.write_bytes(b'old')
+    os.chmod(destination, 0o640)
+    with json_store.atomic_output_path(str(destination), mode=0o644) as staging:
+        with open(staging, 'wb') as handle:
+            handle.write(b'new')
+    assert destination.read_bytes() == b'new'
+    assert destination.stat().st_mode & 0o777 == 0o640
+
+
+def test_a_new_file_and_a_narrowing_rewrite_take_the_callers_mode(tmp_path):
+    destination = tmp_path / 'published.json'
+    previous = os.umask(0o022)
+    try:
+        json_store.write_json_atomic(str(destination), {})
+        assert destination.stat().st_mode & 0o777 == 0o644
+        json_store.write_json_atomic(str(destination), {}, mode=0o600)
+        assert destination.stat().st_mode & 0o777 == 0o600
+    finally:
+        os.umask(previous)

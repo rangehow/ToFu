@@ -1,0 +1,183 @@
+/* Subscription directory and provider detail share the Settings paper palette. */
+#settingsTab_oauth {
+  --text-primary: var(--s-ink);
+  --text-secondary: var(--s-ink-soft);
+  --bg-tertiary: var(--s-white);
+  --bg-hover: color-mix(in srgb, var(--s-gold) 10%, var(--s-white));
+  --bg-active: var(--s-cream);
+  --border: var(--s-line-strong);
+  --focus-ring: 0 0 0 2px var(--s-gold-dim);
+  --accent: var(--s-ink);
+  --accent-hover: var(--s-board);
+  --text-on-accent: var(--s-white);
+}
+
+.oauth-subscription-intro { margin-block-end: var(--space-6); }
+.oauth-subscription-intro h2 {
+  margin: 0 0 var(--space-1);
+  font-size: var(--font-size-2xl);
+  font-weight: var(--weight-bold);
+  line-height: var(--leading-title);
+  color: var(--s-ink);
+}
+.oauth-subscription-intro p,
+.oauth-subscription-group > p {
+  margin: 0;
+  color: var(--s-ink-soft);
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-body);
+}
+.oauth-subscription-group + .oauth-subscription-group {
+  margin-block-start: var(--space-6);
+  padding-block-start: var(--space-4);
+  border-block-start: var(--s-border-sm);
+}
+.oauth-subscription-group h3 {
+  margin: 0 0 var(--space-2);
+  color: var(--s-ink);
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-semibold);
+}
+.oauth-subscription-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin-block-start: var(--space-3);
+}
+.oauth-subscription-grid:empty { margin: 0; }
+@media (max-width: 600px) {
+  .oauth-subscription-grid { grid-template-columns: minmax(0, 1fr); }
+}
+.oauth-subscription-grid > .oauth-subscription-tile {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: 'icon name arrow' 'icon status arrow';
+  align-content: center;
+  column-gap: var(--space-3);
+  row-gap: var(--space-1);
+  min-height: var(--space-16);
+  height: auto;
+  min-width: 0;
+  padding: var(--space-3);
+  border: var(--s-border);
+  border-radius: var(--s-radius-lg);
+  background: color-mix(in srgb, var(--s-white) 70%, white);
+  box-shadow: var(--s-shadow-xs);
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+.oauth-subscription-grid > .oauth-subscription-tile:hover {
+  border-color: var(--s-gold-dim);
+  background: var(--bg-hover);
+  box-shadow: var(--s-shadow-sm);
+}
+.oauth-subscription-grid > .oauth-subscription-tile:focus-visible {
+  outline: 2px solid var(--s-gold-dim);
+  outline-offset: 2px;
+}
+.oauth-subscription-icon {
+  grid-area: icon;
+  align-self: center;
+  display: grid;
+  place-items: center;
+  width: var(--space-10);
+  height: var(--space-10);
+  background: color-mix(in srgb, var(--s-cream) 65%, var(--s-white));
+  border: var(--s-border-sm);
+  border-radius: var(--s-radius);
+}
+.oauth-subscription-name {
+  grid-area: name;
+  color: var(--s-ink);
+  font-weight: var(--weight-bold);
+  line-height: var(--leading-title);
+}
+.oauth-subscription-tile .oauth-status-badge {
+  grid-area: status;
+  justify-self: start;
+}
+.oauth-subscription-arrow {
+  grid-area: arrow;
+  align-self: center;
+  width: var(--space-2);
+  height: var(--space-2);
+  border-block-start: 2px solid currentColor;
+  border-inline-end: 2px solid currentColor;
+  transform: rotate(45deg);
+  color: var(--s-ink-soft);
+}
+.oauth-subscription-tile .oauth-status-badge,
+#oauthSubscriptionDetail .oauth-status-badge {
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--s-radius-lg);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+}
+
+.oauth-subscription-back { margin-block-end: var(--space-3); }
+#oauthSubscriptionDetail [data-subscription-brand][hidden] { display: none; }
+#oauthSubscriptionDetail .oauth-provider-card {
+  padding: var(--space-4);
+  margin-block-end: var(--space-3);
+  border-radius: var(--s-radius-lg);
+  box-shadow: var(--s-shadow-xs);
+}
+#oauthSubscriptionDetail .oauth-provider-name {
+  margin: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--font-size-2xl);
+  line-height: var(--leading-title);
+  overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
+  #oauthSubscriptionDetail .oauth-provider-actions { flex-basis: 100%; }
+  #oauthSubscriptionDetail .oauth-provider-actions:not(:has(> :not([hidden]))) { display: none; }
+}
+#oauthSubscriptionDetail .oauth-provider-name:focus { outline: none; }
+#oauthSubscriptionDetail .oauth-provider-info,
+#oauthSubscriptionDetail .oauth-egress-line { min-width: 0; overflow-wrap: anywhere; }
+#oauthSubscriptionDetail .oauth-egress-line { flex-basis: 0; }
+#oauthSubscriptionDetail .oauth-quota {
+  padding: var(--space-3);
+  border-radius: var(--s-radius);
+  box-shadow: none;
+}
+#oauthSubscriptionDetail .oauth-quota-track {
+  border-radius: var(--s-radius-sm);
+}
+#oauthSubscriptionDetail .oauth-quota-reset { white-space: normal; }
+#oauthSubscriptionDetail .oauth-quota-track > span { transition-duration: var(--motion-base); }
+#oauthPlanFeedback:empty { position: absolute; }
+
+.oauth-account-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.oauth-account-inventory .oauth-account-toolbar h4 {
+  font-size: var(--font-size-lg);
+  color: var(--s-ink);
+}
+.oauth-account-inventory .oauth-account-list .oauth-account-row {
+  background: color-mix(in srgb, var(--s-white) 45%, white);
+  border: var(--s-border-sm);
+}
+.oauth-account-row > .oauth-account-actions { gap: var(--space-1); }
+.oauth-account-empty {
+  margin: 0;
+  padding: var(--space-4);
+  border: var(--s-border-sm);
+  border-radius: var(--s-radius);
+  color: var(--s-ink-soft);
+  font-size: var(--font-size-sm);
+}
+.oauth-account-empty[hidden] { display: none; }
+.oauth-account-help {
+  margin: var(--space-3) 0 0;
+  color: var(--s-ink-soft);
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-title);
+}

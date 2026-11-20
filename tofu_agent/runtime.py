@@ -574,6 +574,8 @@ class AgentRuntime:
             request_id=request_id,
             timeout_s=timeout_s,
         )
+        run_deadline = (None if request.timeout_s is None
+                        else time.time() + request.timeout_s)
         with self._lock:
             if self._closed:
                 raise AgentClosedError('AgentRuntime is closed')
@@ -612,6 +614,10 @@ class AgentRuntime:
 
         cfg = apply_storage_free_runtime_policy(build_agent_config(
             selected_model, request.config, request.capabilities))
+        if run_deadline is not None:
+            from lib.agent_core.execution_limits import with_run_deadline
+            cfg['executionLimits'] = with_run_deadline(
+                cfg.get('executionLimits'), run_deadline)
 
         from tofu_agent.harness_profile import apply_harness_profile
         cfg = apply_harness_profile(cfg, self.harness_profile)

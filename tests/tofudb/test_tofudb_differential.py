@@ -406,6 +406,258 @@ class TofuDbDriver:
         return Outcome(ok=True, value=_normalize(response.value()))
 
 
+@pytest.fixture(params=['sqlite', 'postgres', 'native'])
+def swarm_oracle(request, tmp_path, monkeypatch):
+    from lib.storage import StorageSupervisor
+    from tests.support.postgres_cluster import owned_postgres_cluster
+
+    backend = request.param
+    if backend == 'native':
+        yield backend, request.getfixturevalue('tofudb_daemon')
+    elif backend == 'sqlite':
+        yield backend, request.getfixturevalue('legacy_driver')
+    else:
+        with owned_postgres_cluster() as dsn:
+            dsn_file = tmp_path / 'private-postgres.dsn'
+            with open(dsn_file, 'x', opener=lambda path, flags: os.open(path, flags, 0o600)) as out:
+                out.write(dsn)
+            monkeypatch.setenv('TOFU_STORAGE_TEST_POSTGRES_DSN_FILE', str(dsn_file))
+            supervisor = StorageSupervisor(project_root=tmp_path, backend='postgres', startup_timeout=60)
+            supervisor.start()
+            try:
+                yield backend, LegacyDriver(supervisor.client)
+            finally:
+                supervisor.stop()
+
+
+def test_swarm_delivery_writer_epoch(swarm_oracle):
+    _, driver = swarm_oracle
+    _assert_swarm_delivery_writer_epoch(driver)
+
+
+def _assert_swarm_delivery_writer_epoch(driver):
+    key = {'swarm_key': 'epoch-swarm'}
+    ack = 'swarm.agents.acknowledge_results'
+    address = {**key, 'task_id': 'current-run', 'agent_ids': ['child']}
+    assert driver.execute('swarm.session.save', {**key, 'task_id': 'current-run',
+        'specs': [], 'config': {}, 'now_ms': 1}, _cid()).value == {'saved': True}
+    assert driver.execute('swarm.agent.save', {**key, 'agent_id': 'child',
+        'status': 'completed', 'messages': [], 'result': {}, 'now_ms': 2}, _cid()).ok
+    assert driver.execute(ack, {**address, 'task_id': 'old-run'}, _cid()).value == {
+        'acknowledged': False, 'changed': 0}
+    assert driver.execute(ack, {**address, 'checkpoint_writer_epoch': 1}, _cid()).value == {
+        'acknowledged': False, 'changed': 0}
+    for invalid in (None, True, -1, '0'):
+        result = driver.execute(ack, {**address, 'checkpoint_writer_epoch': invalid}, _cid())
+        assert not result.ok and result.error_code == 'database_protocol_error'
+    state = {**key, 'agent_id': 'child'}
+    assert driver.execute('swarm.agent.state.get', state, None).value['agent']['delivered'] is False
+    payload = {**address, 'checkpoint_writer_epoch': 0}
+    command = _cid()
+    driver.execute(ack, payload, command)  # Discard the first acknowledgement.
+    assert driver.execute('swarm.agent.state.get', state, None).value['agent']['delivered'] is True
+    assert driver.execute('swarm.agent.save', {**state, 'status': 'completed',
+        'messages': [], 'result': {}, 'delivered': False, 'now_ms': 3}, _cid()).ok
+    assert driver.execute(ack, payload, command).value == {'acknowledged': True, 'changed': 1}
+    assert driver.execute('swarm.agent.state.get', state, None).value['agent']['delivered'] is False
+
+
+_SWARM_PAGE = 'swarm.agents.page'
+
+
+def _swarm_oracle_value(driver, operation, payload, *, command=False):
+    outcome = driver.execute(operation, payload, _cid() if command else None)
+    assert outcome.ok, outcome
+    return outcome.value
+
+
+def _swarm_oracle_refusal(driver, operation, payload, code, *, command=False):
+    outcome = driver.execute(operation, payload, _cid() if command else None)
+    assert not outcome.ok and outcome.error_code == code, (operation, outcome.error_code)
+
+
+def _swarm_cut(driver, selectors):
+    page = _swarm_oracle_value(driver, _SWARM_PAGE, selectors)
+    token = page['snapshot_cut']
+    assert isinstance(token, str) and re.fullmatch('[0-9a-fA-F]+', token)
+    return page
+
+
+def test_swarm_checkpoint_cut(swarm_oracle):
+    backend, driver = swarm_oracle
+    key = {'swarm_key': 'cut-swarm'}
+    session = {**key, 'task_id': 'cut-run', 'conv_id': 'cut-conv',
+               'specs': [], 'config': {'user_id': _OWNER_ID}, 'now_ms': 100}
+    assert _swarm_oracle_value(driver, 'swarm.session.save', session, command=True) == {'saved': True}
+    checkpoint = {**key, 'agent_id': 'a', 'status': 'running', 'checkpoint_id': 'c0',
+                  'messages': [{'role': 'assistant', 'content': 'old'}], 'result': {}, 'now_ms': 200}
+    for agent_id in ('b', 'a'):
+        _swarm_oracle_value(driver, 'swarm.agent.save', {**checkpoint, 'agent_id': agent_id}, command=True)
+    selectors = {**key, 'expected_task_id': 'cut-run', 'expected_updated_at': 100, 'user_id': _OWNER_ID}
+    first = _swarm_cut(driver, selectors)
+    assert [agent['agent_id'] for agent in first['agents']] == ['a', 'b']
+    legacy = {name: value for name, value in first.items() if name != 'snapshot_cut'}
+    assert _swarm_oracle_value(driver, _SWARM_PAGE, key) == legacy
+    continuation = {**selectors, 'after_agent_id': 'a', 'snapshot_cut': first['snapshot_cut']}
+    tail = _swarm_oracle_value(driver, _SWARM_PAGE, continuation)
+    assert tail['agents'] == first['agents'][1:]
+    assert tail['next_after_agent_id'] is None
+    assert _swarm_oracle_value(driver, _SWARM_PAGE, {**key, 'after_agent_id': 'a'}) == {
+        'agents': tail['agents'], 'next_after_agent_id': None,
+    }
+    _assert_swarm_cut_refusals(driver, key, selectors, continuation)
+    if backend == 'native':
+        _assert_native_exact_swarm_mutations_unchanged(driver, session, checkpoint)
+        assert _swarm_cut(driver, selectors)['snapshot_cut'] == first['snapshot_cut']
+
+    # Rewrite an already-read agent, keeping its ID, checkpoint ID and clocks.
+    # Neither the roster nor the header revision is a sufficient cut witness.
+    updated = [{'role': 'assistant', 'content': 'new'}]
+    _swarm_oracle_value(driver, 'swarm.agent.save', {**checkpoint, 'messages': updated}, command=True)
+    _swarm_oracle_refusal(driver, _SWARM_PAGE, continuation, 'database_conflict')
+    current = _swarm_cut(driver, selectors)
+    assert current['agents'][0]['messages'] == updated
+    assert current['snapshot_cut'] != first['snapshot_cut']
+    fresh = _assert_swarm_cut_append(driver, selectors, current, checkpoint)
+    _assert_swarm_cut_removal(backend, driver, key, selectors, fresh)
+    _assert_swarm_cut_wire_pagination(driver)
+
+
+@pytest.mark.parametrize('field', ['swarm_key', 'expected_task_id', 'after_agent_id'])
+def test_swarm_checkpoint_cut_rejects_nul_text(swarm_oracle, field):
+    backend, driver = swarm_oracle
+    if backend == 'native':
+        pytest.skip('SQL follow-up; the original native daemon receipt is unchanged')
+    request = {'swarm_key': 'absent', 'expected_task_id': 'run',
+               'expected_updated_at': 1, 'user_id': _OWNER_ID}
+    if field == 'after_agent_id':
+        request.update(after_agent_id='a', snapshot_cut='a' * 64)
+    request[field] += '\0'
+    _swarm_oracle_refusal(driver, _SWARM_PAGE, request, 'database_protocol_error')
+
+
+def _assert_swarm_cut_refusals(driver, key, selectors, continuation):
+    for bad in (
+        {**key, 'expected_task_id': 'cut-run', 'user_id': _OWNER_ID},
+        {**key, 'expected_updated_at': 100, 'user_id': _OWNER_ID},
+        {**selectors, 'expected_task_id': None},
+        {**selectors, 'expected_updated_at': None},
+        {name: value for name, value in selectors.items() if name != 'user_id'},
+        {**selectors, 'user_id': None},
+        {**selectors, 'after_agent_id': None},
+        {**selectors, 'after_agent_id': 'a'},
+        {**selectors, 'snapshot_cut': continuation['snapshot_cut']},
+        {**continuation, 'snapshot_cut': None},
+        {**continuation, 'snapshot_cut': 'not-hex'},
+        {**key, 'snapshot_cut': continuation['snapshot_cut']},
+    ):
+        _swarm_oracle_refusal(driver, _SWARM_PAGE, bad, 'database_protocol_error')
+    for bad in (
+        {**selectors, 'user_id': _OWNER_ID + 1},
+        {**selectors, 'expected_task_id': 'wrong-run'},
+        {**selectors, 'expected_updated_at': 99},
+        {**continuation, 'swarm_key': 'missing-swarm'},
+        {**continuation, 'snapshot_cut': ('1' if continuation['snapshot_cut'][0] == '0' else '0')
+         + continuation['snapshot_cut'][1:]},
+    ):
+        _swarm_oracle_refusal(driver, _SWARM_PAGE, bad, 'database_conflict')
+
+
+def _assert_native_exact_swarm_mutations_unchanged(driver, session, checkpoint):
+    key = {'swarm_key': session['swarm_key']}
+    for operation, payload in (
+        ('swarm.session.save', {**session, 'save_mode': 'launch'}),
+        ('swarm.session.terminate', {**key, 'run_id': 'cut-run', 'now_ms': 101}),
+        ('swarm.agent.save', {**checkpoint, 'run_id': 'cut-run', 'result': {'changed': True}}),
+        ('swarm.agents.mark_delivered', {**key, 'task_id': 'cut-run', 'agent_ids': ['a']}),
+    ):
+        _swarm_oracle_refusal(driver, operation, payload, 'database_protocol_error', command=True)
+
+
+def _assert_swarm_cut_append(driver, selectors, current, checkpoint):
+    tail_message = {'role': 'assistant', 'content': 'appended'}
+    _swarm_oracle_value(driver, 'swarm.agent.append', {
+        **checkpoint, 'agent_id': 'b', 'base_checkpoint_id': 'c0', 'base_message_count': 1,
+        'checkpoint_id': 'c1', 'messages': [tail_message], 'rounds_used': 1,
+    }, command=True)
+    continuation = {**selectors, 'after_agent_id': 'a', 'snapshot_cut': current['snapshot_cut']}
+    _swarm_oracle_refusal(driver, _SWARM_PAGE, continuation, 'database_conflict')
+    fresh = _swarm_cut(driver, selectors)
+    assert fresh['agents'][1]['messages'][-1] == tail_message
+    assert fresh['snapshot_cut'] != current['snapshot_cut']
+
+    # Adding a checkpoint also invalidates the cut without moving the header.
+    _swarm_oracle_value(driver, 'swarm.agent.save', {**checkpoint, 'agent_id': 'c'}, command=True)
+    _swarm_oracle_refusal(driver, _SWARM_PAGE, {**continuation, 'snapshot_cut': fresh['snapshot_cut']},
+                         'database_conflict')
+    expanded = _swarm_cut(driver, selectors)
+    assert [agent['agent_id'] for agent in expanded['agents']] == ['a', 'b', 'c']
+    return expanded
+
+
+def _assert_swarm_cut_removal(backend, driver, key, selectors, page):
+    if backend == 'native':
+        # Native still admits only the legacy deletion command.
+        assert _swarm_oracle_value(driver, 'swarm.session.delete', key, command=True) == {'deleted': True}
+    else:
+        from lib.swarm.persistence_contract import (
+            SWARM_RUN_RESULT_FORMAT, SWARM_RUN_RESULT_NAMESPACE, swarm_archive_result, swarm_run_result_key,
+        )
+
+        for agent in page['agents']:
+            agent_id = agent['agent_id']
+            _swarm_oracle_value(driver, 'record.put', {
+                'namespace': SWARM_RUN_RESULT_NAMESPACE,
+                'key': swarm_run_result_key(_OWNER_ID, 'cut-run', agent_id),
+                'value': {'format': SWARM_RUN_RESULT_FORMAT, 'ownerId': _OWNER_ID,
+                          'tenantId': '', 'conversationId': 'cut-conv', 'swarmKey': key['swarm_key'],
+                          'swarmRunId': 'cut-run', 'agentId': agent_id,
+                          'role': agent['role'], 'objective': agent['objective'], 'status': agent['status'],
+                          'result': swarm_archive_result(agent['result'], rounds_used=agent['rounds_used'])},
+            }, command=True)
+        result = _swarm_oracle_value(driver, 'swarm.session.delete_exact', {
+            **key, 'run_id': 'cut-run', 'owner_id': _OWNER_ID, 'tenant_id': '',
+            'conversation_id': 'cut-conv', 'project_path': '', 'disposition': 'stop',
+        }, command=True)
+        assert result['deleted'] is True
+    _swarm_oracle_refusal(driver, _SWARM_PAGE, {
+        **selectors, 'after_agent_id': 'a', 'snapshot_cut': page['snapshot_cut'],
+    }, 'database_conflict')
+    assert _swarm_oracle_value(driver, _SWARM_PAGE, key) == {'agents': [], 'next_after_agent_id': None}
+
+
+def _assert_swarm_cut_wire_pagination(driver):
+    from lib.storage.protocol import MAX_FRAME_BYTES
+
+    key = {'swarm_key': 'paged-cut-swarm'}
+    _swarm_oracle_value(driver, 'swarm.session.save', {
+        **key, 'task_id': 'paged-cut-run', 'specs': [], 'config': {'user_id': _OWNER_ID}, 'now_ms': 300,
+    }, command=True)
+    # Three individually admissible checkpoints exceed a complete response.
+    body = 'x' * (MAX_FRAME_BYTES // 3 + 1)
+    for agent_id in ('c', 'b', 'a'):
+        _swarm_oracle_value(driver, 'swarm.agent.save', {
+            **key, 'agent_id': agent_id, 'status': 'running', 'now_ms': 400,
+            'messages': [{'role': 'assistant', 'content': body}], 'result': {},
+        }, command=True)
+    selectors = {**key, 'expected_task_id': 'paged-cut-run', 'expected_updated_at': 300, 'user_id': _OWNER_ID}
+    first = _swarm_cut(driver, selectors)
+    assert [agent['agent_id'] for agent in first['agents']] == ['a', 'b']
+    assert first['next_after_agent_id'] == 'b'
+    continuation = {
+        **selectors, 'after_agent_id': first['next_after_agent_id'], 'snapshot_cut': first['snapshot_cut'],
+    }
+    tail = _swarm_oracle_value(driver, _SWARM_PAGE, continuation)
+    assert [agent['agent_id'] for agent in tail['agents']] == ['c']
+    assert tail['agents'][0]['messages'][0]['content'] == body
+    assert tail['next_after_agent_id'] is None
+    _swarm_oracle_value(driver, 'swarm.agent.save', {
+        **key, 'agent_id': 'a', 'status': 'running', 'now_ms': 400,
+        'messages': [{'role': 'assistant', 'content': body}], 'result': {'changed': True},
+    }, command=True)
+    _swarm_oracle_refusal(driver, _SWARM_PAGE, continuation, 'database_conflict')
+
+
 # ── Fixtures ─────────────────────────────────────────────────────────────
 @pytest.fixture(scope='module')
 def tofudb_binary() -> Path:
@@ -490,6 +742,11 @@ def _running_tofudb_owner(
         if not readiness_line:
             raise RuntimeError('tofu-db serve exited before readiness')
         port = int(json.loads(readiness_line)['port'])
+        if (expected := os.environ.get('TOFU_REMOTE_BINARY_SHA256')) is not None:
+            import hashlib
+
+            with Path(f'/proc/{process.pid}/exe').open('rb') as executable:
+                assert hashlib.file_digest(executable, 'sha256').hexdigest() == expected
         session = StorageV2Session(
             '127.0.0.1', port, _TEST_SECRET,
             owner_id=owner_id, tenant_id=_TENANT_ID, timeout=15.0,
@@ -10767,6 +11024,32 @@ def test_native_rpc_connection_enables_tcp_nodelay(tofudb_daemon):
     result = tofudb_daemon.execute('system.schema_version', {}, None)
     assert result.ok
 
+
+
+def test_skewed_filtered_event_pages_match_sqlite(legacy_driver, tofudb_daemon):
+    task = 'skewed-event-page-' + uuid.uuid4().hex
+    types = {1: 'round_end', 2: 'round_end', 3: 'round_end',
+             4: 'toolXprogress', 10: 'tool_progress', 11: 'tool_progress'}
+    for driver in (legacy_driver, tofudb_daemon):
+        for seq, kind in types.items():
+            result = driver.execute('event.append', {
+                'task_id': task, 'sequence': seq,
+                'event': {'type': kind, 'roundNum': seq},
+            }, _cid())
+            assert result.ok, result
+        request = {'task_id': task, 'types': ['round_end'], 'type_prefixes': ['tool_'],
+                   'payload_types': ['round_end'], 'limit': 2}
+        for expected in ([1, 2], [3, 10], [11], []):
+            page = driver.execute('event.list', request, None)
+            assert page.ok, page
+            assert [row['sequence'] for row in page.value] == expected
+            assert [row['event'] for row in page.value] == [
+                {'type': types[seq], **({'roundNum': seq, 'v': 1} if seq < 4 else {})}
+                for seq in expected
+            ]
+            assert all(row['created_at_ms'] > 0 for row in page.value)
+            if expected:
+                request['after_sequence'] = expected[-1]
 
 
 def test_scoped_event_guard_fences_dependencies_without_restart_for_noise(legacy_driver, tofudb_daemon):

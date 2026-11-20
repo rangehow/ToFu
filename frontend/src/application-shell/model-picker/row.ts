@@ -24,7 +24,14 @@ export function renderModelRow(model: PickerModel, section: string, options: { s
   choose.classList.add('ps-dd-model-choice'); choose.removeAttribute('role'); choose.tabIndex = 0;
   const icon = document.createElement('span'); icon.className = 'ps-dd-icon'; icon.innerHTML = ports.icon(ports.brand(model), 14) || '✦';
   const name = document.createElement('span'); name.className = 'ps-dd-label'; name.textContent = label; name.title = model.model_id;
-  choose.append(icon, name); row.append(choose); row.onclick = () => select(model);
+  choose.append(icon, name);
+  if (model.availability === 'no_route') {
+    const notice = document.createElement('span'); notice.className = 'ps-dd-provider-tag';
+    notice.textContent = ports.text('mobile.depthUnavailable');
+    choose.title = ports.text('mobile.depthNoRoute');
+    choose.append(notice);
+  }
+  row.append(choose); row.onclick = () => select(model);
   const haystack = [label, model.model_id, model.creator_name || '',
     ...(model.provider_options || []).map(option => option.provider_name), options.extraSearch || ''].join(' ').toLowerCase();
   row.dataset.search = haystack;

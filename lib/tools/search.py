@@ -18,21 +18,17 @@ WEB_SEARCH_MAX_QUERY_CHARS = 400
 def _vertical_domains() -> list[dict]:
     """Capability metadata for every currently-usable vertical domain.
 
-    Sourced from tofu_search rather than restated here: a domain whose
-    credential is missing must not appear in the enum. Before the optional
-    runtime's first real use, return a conservative ``auto``/``off`` schema
-    instead of importing the whole search/fetch stack merely to build a prompt.
-    Auto-detection remains available; later turns gain the runtime-derived
-    explicit domain enum once the library is resident.
+    Sourced from tofu-search's public registry, not whether another operation
+    happened to import it first. This reads local capability metadata only:
+    there is no bridge install, credential probe, or provider request.
     """
-    from lib.search.search_runtime import search_library_is_loaded
-    if not search_library_is_loaded():
-        return []
     try:
-        from tofu_search.search.vertical import describe_domains
+        from lib.search.search_runtime import prepare_search_dependency_import
+        prepare_search_dependency_import()
+        from tofu_search import describe_domains
         return describe_domains()
     except Exception as e:
-        logger.warning('[Tools] vertical capability lookup failed: %s', e)
+        logger.warning('[Tools] vertical capability lookup failed: %s', type(e).__name__)
         return []
 
 
@@ -78,13 +74,16 @@ def _render_vertical_section(domains: list[dict]) -> str:
 
 
 def build_search_tool() -> dict:
-    """Build the web_search tool schema.
+    """Dependency-free baseline for schema inspection and static repair indexing."""
+    return _search_tool_schema([])
 
-    Built per call, NOT cached at import: the set of available vertical domains
-    depends on runtime credentials, so a module-level constant would freeze
-    whatever was configured when the process started.
-    """
-    domains = _vertical_domains()
+
+def search_tool_for_request() -> dict:
+    """Compile the live schema using current vertical capability, never import state."""
+    return _search_tool_schema(_vertical_domains())
+
+
+def _search_tool_schema(domains: list[dict]) -> dict:
     vertical_enum = _vertical_enum(domains)
     vertical_section = _render_vertical_section(domains)
     return {
@@ -319,7 +318,7 @@ def build_update_search_settings_tool() -> dict:
 
 
 __all__ = [
-    'build_search_tool', 'build_fetch_url_tool',
+    'build_search_tool', 'search_tool_for_request', 'build_fetch_url_tool',
     'build_browser_download_url_to_server_tool',
     'build_download_url_to_server_tool', 'FETCH_URL_TOOL',
     'BROWSER_DOWNLOAD_URL_TO_SERVER_TOOL', 'DOWNLOAD_URL_TO_SERVER_TOOL',

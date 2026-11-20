@@ -88,10 +88,11 @@ def _current_secret_references(session: Session, owner_user_id: int, tenant_id: 
     if document is None:
         raise StorageError("database_integrity", "Stored model-routing document is empty")
     credentials = document.get("credentials", [])
-    if not isinstance(credentials, list):
+    accounts = document.get("subscription_accounts", [])
+    if not isinstance(credentials, list) or not isinstance(accounts, list):
         raise StorageError("database_integrity", "Stored model-routing credentials are invalid")
     references = set()
-    for credential in credentials:
+    for credential in (*credentials, *accounts):
         if not isinstance(credential, dict):
             raise StorageError("database_integrity", "Stored model-routing credential is invalid")
         reference = credential.get("secret_reference")
@@ -147,6 +148,19 @@ def _model_routing_commit(session: Session, payload: Mapping[str, Any]) -> Any:
             "database_conflict",
             f"Model-routing revision changed from {expected_revision} to {current_revision}",
         )
+
+    accounts = document.get('subscription_accounts', [])
+    if not isinstance(accounts, list):
+        raise StorageError('database_protocol_error', 'Invalid subscription accounts')
+    for account in accounts:
+        if not isinstance(account, dict):
+            raise StorageError('database_protocol_error', 'Invalid subscription account')
+        reference = _required_text(account, 'secret_reference', 256)
+        if not reference.startswith('oauth_') or session.fetch_one(
+                'SELECT secret_reference FROM storage_model_routing_secrets '
+                'WHERE owner_user_id = ? AND tenant_id = ? AND secret_reference = ?',
+                (owner_user_id, tenant_id, reference)) is None:
+            raise StorageError('database_conflict', 'Subscription account secret unavailable')
 
     if current is None:
         session.execute(

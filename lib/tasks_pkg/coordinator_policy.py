@@ -44,7 +44,7 @@ COORDINATOR_TOOLS = frozenset({
     'create_memory',
     # Every lead restarts under the owner's full delegation (docs/ROUTER.md R9,
     # owner decision 2026-11-18); the gate refuses without it.
-    'restart_server',
+    'restart_server', 'repair_project',
     # A Project Router messages the owner's own command chat directly (R9, "Leads reach
     # the owner directly"); lib.channels.tools refuses every other thread.
     'channel_send',
@@ -296,6 +296,13 @@ def prepare_coordinator_tool_surface(task: dict, cfg: dict, tools: list[dict] | 
         catalog = tools or []
     admitted = [tool for tool in catalog
                 if (tool.get('function') or {}).get('name') in ceiling]
+    from lib.conversations.project_coordination import COORDINATOR_QUESTION_DISCIPLINE
+    admitted = [
+        {**tool, 'function': {**tool['function'], 'description':
+            tool['function'].get('description', '').removesuffix(
+                '\n' + COORDINATOR_QUESTION_DISCIPLINE) + '\n' + COORDINATOR_QUESTION_DISCIPLINE}}
+        if tool['function']['name'] == 'ask_human' else tool
+        for tool in admitted]
     allowed = {tool['function']['name'] for tool in admitted}
     cfg['_executableToolCatalog'] = admitted
     for key in ('_toolContractDocumentsByName', '_executableToolNamespaceByName',

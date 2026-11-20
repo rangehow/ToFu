@@ -53,7 +53,7 @@ class CacheState:
     """
     __slots__ = (
         'system_hash', 'tools_hash', 'model',
-        'message_count', 'last_cache_read_tokens',
+        'message_count', 'last_cache_read_tokens', 'last_cache_read_unobserved',
         'last_cache_write_tokens',
         'last_update_time', 'call_count',
         'compaction_pending',
@@ -81,6 +81,9 @@ class CacheState:
         self.model: str = ''
         self.message_count: int = 0
         self.last_cache_read_tokens: int = 0
+        # The last known read may precede a metering gap; it cannot be paired
+        # with the intervening round's wire as an immediate read baseline.
+        self.last_cache_read_unobserved = False
         self.last_cache_write_tokens: int = 0
         self.last_update_time: float = 0.0
         self.call_count: int = 0

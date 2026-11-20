@@ -166,11 +166,11 @@ class ReadShareTally:
         self._totals: dict[tuple[str, str, str], list[int]] = {}
 
     def add(self, rec: dict) -> None:
-        if int(rec.get('call') or 0) <= 1:
+        read = _int_field(rec, 'cache_read')
+        write = _int_field(rec, 'cache_write')
+        if read is None or write is None or int(rec.get('call') or 0) <= 1:
             return
         model = str(rec.get('model') or UNRECORDED_GROUP)
-        read = int(rec.get('cache_read') or 0)
-        write = int(rec.get('cache_write') or 0)
         for dimension, group_of in self._dimensions.items():
             total = self._totals.setdefault(
                 (dimension, model, group_of(rec)), [0, 0, 0])
@@ -230,11 +230,11 @@ class ReadShareMonitor:
         self._announced: set[str] = set()
 
     def observe(self, rec: dict) -> None:
-        if int(rec.get('call') or 0) <= 1:
+        read = _int_field(rec, 'cache_read')
+        write = _int_field(rec, 'cache_write')
+        if read is None or write is None or int(rec.get('call') or 0) <= 1:
             return
         model = str(rec.get('model') or UNRECORDED_GROUP)
-        read = int(rec.get('cache_read') or 0)
-        write = int(rec.get('cache_write') or 0)
         now = self._clock()
         minute = int(now // 60)
         oldest_kept = minute - self._window_minutes

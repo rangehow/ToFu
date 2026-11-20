@@ -26,10 +26,44 @@ impl std::fmt::Display for Unsupported {
 
 impl std::error::Error for Unsupported {}
 
-pub type Result<T> = std::result::Result<T, Unsupported>;
+/// Why a request produced no result: an input outside the port, or the
+/// exception the Python oracle raises for it (class name and `str()`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Error {
+    Unsupported(String),
+    Raised { class: String, message: String },
+}
+
+impl Error {
+    pub fn raised(class: &str, message: impl Into<String>) -> Self {
+        Self::Raised {
+            class: class.to_owned(),
+            message: message.into(),
+        }
+    }
+}
+
+impl From<Unsupported> for Error {
+    fn from(value: Unsupported) -> Self {
+        Self::Unsupported(value.0)
+    }
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unsupported(what) => write!(f, "unsupported by the prototype: {what}"),
+            Self::Raised { class, message } => write!(f, "{class}: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 fn unsupported<T>(what: &str) -> Result<T> {
-    Err(Unsupported(what.to_owned()))
+    Err(Unsupported(what.to_owned()).into())
 }
 
 const API_MESSAGE_FIELDS: [&str; 9] = [
@@ -71,6 +105,11 @@ pub struct BodySpec<'a> {
     pub max_tokens: u64,
     pub temperature: Option<f64>,
     pub tools: Option<&'a [Value]>,
+    /// The selected route's validated inference profile.
+    pub inference_profile: Option<&'a Value>,
+    /// `build_body`'s reasoning arguments as a JSON object:
+    /// `thinking_enabled`, `thinking_depth`, `effort`, `preset` and `extra`.
+    pub reasoning: Option<&'a Value>,
 }
 
 type Msg = Map<String, Value>;
@@ -666,18 +705,79 @@ fn canonicalize(message: &Msg) -> Msg {
     out
 }
 
-fn model_family_unported(model: &str) -> Option<&'static str> {
-    let lower = model.to_ascii_lowercase();
-    if lower.contains("claude") {
-        Some("Claude reasoning replay and cache markers")
-    } else if lower.contains("gemini") {
-        Some("Gemini thought signatures")
-    } else if lower.contains("kimi") || lower.contains("moonshot") {
-        Some("Kimi schema dialect")
-    } else if lower.contains("mistral") || lower.contains("codestral") {
-        Some("Mistral tool-call IDs")
-    } else {
-        None
+/// `_strip_trailing_assistant_for_claude`.
+fn strip_trailing_assistant_for_claude(mut messages: Vec<Msg>) -> Vec<Msg> {
+    while messages
+        .last()
+        .is_some_and(|last| last.get("role").and_then(Value::as_str) == Some("assistant"))
+    {
+        let last = messages.last().expect("checked above");
+        let text = match last.get("content") {
+            Some(Value::Array(parts)) => parts
+                .iter()
+                .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
+                .map(|part| part.get("text").and_then(Value::as_str).unwrap_or(""))
+                .collect::<String>(),
+            Some(Value::String(text)) => text.clone(),
+            _ => String::new(),
+        };
+        if truthy(last.get("tool_calls")) || py_blank(&text) {
+            messages.pop();
+            continue;
+        }
+        let index = messages.len() - 1;
+        let mut converted = Msg::new();
+        converted.insert("role".to_owned(), json!("user"));
+        converted.insert(
+            "content".to_owned(),
+            Value::String(format!("[Your previous response for context]:\n{text}")),
+        );
+        messages[index] = converted;
+        break;
+    }
+    messages
+}
+
+/// Gemini's documented sentinel for tool calls minted by another model.
+const GEMINI_SKIP_SIGNATURE: &str = "skip_thought_signature_validator";
+
+/// `_inject_gemini_thought_signatures`: the first call of every assistant
+/// tool step carries a thought signature.
+fn inject_gemini_thought_signatures(messages: &mut [Msg], model: &str) {
+    if !crate::family::is_gemini(model) {
+        return;
+    }
+    for message in messages.iter_mut() {
+        if message.get("role").and_then(Value::as_str) != Some("assistant")
+            || !truthy(message.get("tool_calls"))
+        {
+            continue;
+        }
+        let Some(Value::Array(calls)) = message.get_mut("tool_calls") else {
+            continue;
+        };
+        let Some(Value::Object(first)) = calls.first_mut() else {
+            continue;
+        };
+        let signed = first
+            .get("extra_content")
+            .and_then(|extra| extra.get("google"))
+            .and_then(|google| google.get("thought_signature"))
+            .is_some_and(|signature| truthy(Some(signature)));
+        if signed {
+            continue;
+        }
+        let mut extra = match first.get("extra_content") {
+            Some(Value::Object(extra)) => extra.clone(),
+            _ => Msg::new(),
+        };
+        let mut google = match extra.get("google") {
+            Some(Value::Object(google)) => google.clone(),
+            _ => Msg::new(),
+        };
+        google.insert("thought_signature".to_owned(), json!(GEMINI_SKIP_SIGNATURE));
+        extra.insert("google".to_owned(), Value::Object(google));
+        first.insert("extra_content".to_owned(), Value::Object(extra));
     }
 }
 
@@ -686,9 +786,10 @@ pub fn build_body(messages: &[Value], spec: &BodySpec<'_>) -> Result<Msg> {
     if messages.is_empty() {
         return unsupported("empty message list");
     }
-    if let Some(family) = model_family_unported(spec.model) {
-        return unsupported(family);
+    if !spec.model.is_ascii() {
+        return unsupported("non-ASCII model id (name-based model knowledge)");
     }
+    crate::route::check_profile(spec.inference_profile)?;
     let mut clean = strip_non_api_fields(messages)?;
     strip_empty_text_blocks(&mut clean);
     let clean = fix_tool_call_wire_shape(clean)?;
@@ -696,21 +797,29 @@ pub fn build_body(messages: &[Value], spec: &BodySpec<'_>) -> Result<Msg> {
     let clean = drop_empty_assistant_messages(clean);
     let mut clean = merge_consecutive_same_role(clean);
     fix_empty_user_messages(&mut clean);
-    let messages: Vec<Value> = clean
-        .iter()
-        .map(|message| Value::Object(canonicalize(message)))
-        .collect();
+    inject_gemini_thought_signatures(&mut clean, spec.model);
     let mut body = Msg::new();
     body.insert("model".to_owned(), json!(spec.model));
-    body.insert("messages".to_owned(), Value::Array(messages));
+    body.insert("messages".to_owned(), Value::Null);
     body.insert("max_tokens".to_owned(), json!(spec.max_tokens));
     body.insert("stream".to_owned(), json!(true));
     if let Some(tools) = spec.tools.filter(|tools| !tools.is_empty()) {
         body.insert("tools".to_owned(), Value::Array(tools.to_vec()));
     }
-    if let Some(temperature) = spec.temperature {
-        body.insert("temperature".to_owned(), json!(temperature));
+    // `extra` keys land in the body before compilation, which clears every
+    // ported one (wire spellings and sampling) again.
+    let temperature = spec.temperature.map_or(Value::Null, |t| json!(t));
+    let intent =
+        crate::reasoning::capture_intent(spec.reasoning.unwrap_or(&json!({})), &temperature)?;
+    crate::reasoning::compile(&mut body, spec.model, spec.inference_profile, &intent)?;
+    if crate::route::is_claude(spec.model) {
+        clean = strip_trailing_assistant_for_claude(clean);
     }
+    let messages: Vec<Value> = clean
+        .iter()
+        .map(|message| Value::Object(canonicalize(message)))
+        .collect();
+    body.insert("messages".to_owned(), Value::Array(messages));
     Ok(body)
 }
 
@@ -724,6 +833,8 @@ mod tests {
             max_tokens: 10,
             temperature: Some(1.0),
             tools: None,
+            inference_profile: None,
+            reasoning: None,
         }
     }
 

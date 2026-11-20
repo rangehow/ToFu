@@ -60,6 +60,13 @@ class NativeTaskCostPolicy:
             raise ValueError('native cost delivery debt precedes model admission')
         return await self.policy.reserve(request)
 
+    @staticmethod
+    def _receipt_id(producer, ordinal):
+        # The original producer and ordinal are invariant under clone and
+        # preserved separately from the presentation round on child transfer.
+        raw = json.dumps([producer, ordinal], separators=(',', ':')).encode()
+        return 'native:' + hashlib.sha256(raw).hexdigest()
+
     def _row(self,number,evidence,*,bound_route=None):
         if evidence.get('kind')!='returned' or not isinstance(evidence.get('usage'),dict):
             raise ValueError('native fee requires returned usage evidence')
@@ -73,7 +80,7 @@ class NativeTaskCostPolicy:
                 'currency':price['currency'],'selectedPromptTokens':price['prompt_tokens'],
                 'rates':{'input':price['input'],'output':price['output'],'cacheWriteMul':price['cache_write_multiplier'],'cacheReadMul':price['cache_read_multiplier']},
                 'usdToCny':price['usd_to_cny']})
-        return {'round':number+1,'taskId':self.task_id,'model':(bound_route or self._bound)[0],'provider_id':(bound_route or self._bound)[1],
+        return {'round':number+1,'usageReceiptId':self._receipt_id(self.task_id, number+1),'taskId':self.task_id,'model':(bound_route or self._bound)[0],'provider_id':(bound_route or self._bound)[1],
                 'usage':evidence['usage'],'cost':amounts,'nativeCredits':credits,'nativePrice':price}
 
     def _checkpoint_rows(self, request, state, projection):
@@ -120,6 +127,10 @@ class NativeTaskCostPolicy:
                 usage_observation={'complete': True}, cost=saved['cost']),
                 bound_route=(saved['route']['logical_model'],saved['route']['provider_id']) if 'route' in saved else None)
             row['taskId'] = saved.get('task_id', projection['task_id'])
+            if 'usage_receipt_id' in saved:
+                row['usageReceiptId'] = saved['usage_receipt_id']
+            else:
+                row.pop('usageReceiptId', None)
             actual, complete = observed_usage_totals(observed)
             amounts = saved['cost']['amounts']
             quoted = saved['cost']['price']['prompt_tokens'] + (amounts['outputTokens'] if amounts else 0)
@@ -194,6 +205,8 @@ class NativeTaskCostPolicy:
                 projection.setdefault('child_rounds', []).append(dict(round=row['round'],
                     task_id=row['taskId'], source_round=row['sourceRound'],
                     billable_task_id=row['billableTaskId'], usage=row['usage'], cost=quote))
+                if 'usageReceiptId' in row:
+                    projection['child_rounds'][-1]['usage_receipt_id'] = row['usageReceiptId']
                 if (row['model'],row['provider_id'])!=self._bound:
                     projection['child_rounds'][-1]['route']=dict(logical_model=row['model'],provider_id=row['provider_id'])
             else:
@@ -202,6 +215,8 @@ class NativeTaskCostPolicy:
                         != json.dumps(state['usage'][number], sort_keys=True, allow_nan=False)):
                     raise ValueError('native fee capture usage differs from native frontier')
                 saved = dict(round=number + 1, task_id=row.get('taskId', self.task_id), cost=quote)
+                if 'usageReceiptId' in row:
+                    saved['usage_receipt_id'] = row['usageReceiptId']
                 if actor:
                     saved['billable_task_id'] = row.get('billableTaskId', account['root_task_id'])
                 elif 'billableTaskId' in row:

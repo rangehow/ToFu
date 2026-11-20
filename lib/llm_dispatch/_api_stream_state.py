@@ -243,7 +243,7 @@ def _affinity_scope_for_settlement(usage) -> str:
 def _settle_stream_result(slot, usage, *, latency, ttft, state,
                           cache_conv_id, tag, dispatcher=None,
                           admitted_at=None, stream_result=None,
-                          route_trace=None):
+                          route_trace=None, attempt_started_ns=None):
     """Settle one provider stream result exactly once for both dispatch loops.
 
     The sync ``dispatch_stream`` and async ``async_dispatch_stream`` loops
@@ -316,7 +316,8 @@ def _settle_stream_result(slot, usage, *, latency, ttft, state,
         # including streams that closed before first content. Fall back to
         # the full latency as the conservative upper bound and stamp the
         # provenance so downstream analysis never reads it as measured.
-        ttft_measurement = 'measured'
+        ttft_measurement = ('dispatcher_attempt_to_first_output_callback'
+                            if ttft_ms is not None else 'unobserved_stream')
         if ttft_ms is None and not verified_complete:
             ttft_ms = latency_ms
             ttft_measurement = 'unobserved_stream_upper_bound'
@@ -327,14 +328,19 @@ def _settle_stream_result(slot, usage, *, latency, ttft, state,
             'key_hint': secret_hint(slot.api_key or '')[:64],
             'provider_id': (getattr(slot, 'routing_provider_id', '')
                             or slot.provider_id),
+            **slot.subscription_attribution(),
             'route_snapshot': (route_trace.snapshot() if route_trace is not None
                                else dict(getattr(slot, 'route_snapshot', {}) or {})),
+            **({'offering_actual_pricing': copy.deepcopy(slot.route_actual_pricing)}
+               if getattr(slot, 'route_actual_pricing', None) is not None else {}),
             'protocol': slot.protocol or 'openai',
             'responses_profile': getattr(
                 slot, 'responses_profile', '') or '',
             'latency_ms': round(latency_ms),
             'ttft_ms': round(ttft_ms, 3) if ttft_ms is not None else None,
             'ttft_measurement': ttft_measurement,
+            **({'attempt_started_at_unix_ns': attempt_started_ns}
+               if attempt_started_ns is not None else {}),
             'stream_started_at_unix_ns': (
                 completed_at_unix_ns - round(latency_ms * 1_000_000)),
             'first_content_at_unix_ns': (
@@ -353,9 +359,11 @@ def _settle_stream_result(slot, usage, *, latency, ttft, state,
             from lib.llm_dispatch.cache_settle import (
                 codex_cache_write_pending, generic_cache_write_pending,
                 is_cold_write, observe_codex_cache, record_stream_end,
+                uses_codex_cache_timing,
             )
-            _cache_profile = slot.oauth or ''
-            if _cache_profile == 'codex':
+            _cache_profile = slot.cache_profile
+            _codex_timing = uses_codex_cache_timing(_cache_profile)
+            if _codex_timing:
                 observe_codex_cache(cache_conv_id, usage)
             record_stream_end(
                 cache_conv_id,
@@ -363,7 +371,7 @@ def _settle_stream_result(slot, usage, *, latency, ttft, state,
                 cache_profile=_cache_profile,
                 pending_write=(
                     codex_cache_write_pending(usage)
-                    if _cache_profile == 'codex'
+                    if _codex_timing
                     else generic_cache_write_pending(usage)),
             )
         except ImportError as _cs_err:
@@ -377,7 +385,12 @@ def _first_output_callbacks(
     on_tool_call_ready,
     on_before_tool_call_ready=None,
 ):
-    """Wrap every output channel around one per-attempt TTFT latch."""
+    """Latch one offset from dispatcher attempt start to the first output callback.
+
+    This is not a physical send clock or a provider first-token timestamp.
+    Thinking, text and tool-ready callbacks compete; payload truthiness does
+    not participate in the latch.
+    """
     ttft_value = [None]
     recorded = False
 

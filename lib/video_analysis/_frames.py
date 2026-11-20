@@ -70,7 +70,7 @@ def _scene_cut_times(ffmpeg: str, video_path: str, duration_s: float) -> list[fl
     cmd = [
         ffmpeg, '-hide_banner', '-i', video_path,
         '-vf', f'select=gt(scene\\,{thr}),showinfo',
-        '-vsync', 'vfr', '-f', 'null', '-',
+        '-fps_mode', 'vfr', '-f', 'null', '-'
     ]
     try:
         proc = _run(cmd, timeout=max(180.0, duration_s * 2), what='scene scan')
@@ -93,7 +93,7 @@ def _extract_uniform(ffmpeg: str, video_path: str, duration_s: float,
     _run([
         ffmpeg, '-hide_banner', '-i', video_path,
         '-vf', f'fps={fps:.6f},{_SCALE_FILTER}',
-        '-q:v', str(FRAME_JPEG_Q), '-vsync', 'vfr', pattern,
+        '-q:v', str(FRAME_JPEG_Q), '-fps_mode', 'vfr', pattern,
     ], timeout=max(180.0, duration_s * 2), what='uniform extraction')
     files = sorted((name for name in os.listdir(out_dir) if name.startswith('u_')),
                    key=lambda name: int(name[2:].split('.', 1)[0]))

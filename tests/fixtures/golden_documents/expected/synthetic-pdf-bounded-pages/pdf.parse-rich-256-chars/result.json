@@ -1,0 +1,20 @@
+{
+ "extractor": "pymupdf4llm",
+ "images": [],
+ "isScanned": false,
+ "limits": {
+  "maxImageWidth": 1024,
+  "maxImages": null,
+  "maxPages": 0,
+  "maxTextChars": 256
+ },
+ "method": "pymupdf4llm",
+ "processedPages": 3,
+ "text": "page 1 label for bounded extraction\n\nlorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet\n\n\n\n---\n\npage 2 label for bounded extraction\n\nlorem ipsum dolor sit amet lore\n[PDF text truncated at 256 characters by the resource budget]",
+ "textLength": 256,
+ "totalPages": 5,
+ "truncated": true,
+ "warnings": [
+  "PDF extraction reached its page or text resource budget; the returned text is an explicit bounded prefix."
+ ]
+}

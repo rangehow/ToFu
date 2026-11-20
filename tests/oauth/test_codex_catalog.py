@@ -141,7 +141,7 @@ def test_successful_200_with_same_normalised_rows_is_not_a_catalog_change(
             rows, 'old-etag', codex_catalog._account_fingerprint(_token()))
         with mock.patch.object(
                 codex_catalog, '_fetch_catalog',
-                return_value=(rows, 'new-etag', False)), \
+                return_value=codex_catalog._CatalogFetch(rows, 'new-etag', False)), \
              mock.patch.object(codex_catalog,
                                '_provision_from_best_available',
                                return_value=False):
@@ -191,7 +191,7 @@ def test_catalog_admission_failure_preserves_last_good_and_retries(
     before = path.read_bytes()
     attempts = []
 
-    def provision():
+    def provision(**_kwargs):
         attempts.append([row['model_id'] for row in
                          codex_catalog.cached_codex_provider_models()])
         if len(attempts) == 1:
@@ -200,7 +200,7 @@ def test_catalog_admission_failure_preserves_last_good_and_retries(
 
     monkeypatch.setattr(codex_catalog, '_provision_from_best_available', provision)
     monkeypatch.setattr(codex_catalog, '_fetch_catalog',
-                        lambda *_a, **_kw: (changed, 'etag-new', False))
+                        lambda *_a, **_kw: codex_catalog._CatalogFetch(changed, 'etag-new', False))
     result = codex_catalog.refresh_codex_model_catalog(force=True)
     assert result['ok'] is False
     assert path.read_bytes() == before
@@ -236,7 +236,7 @@ def test_logout_during_catalog_fetch_cannot_publish_or_reprovision(
 
     def logout_during_fetch(*_args, **_kwargs):
         state['token'] = {}
-        return rows, 'new-etag', False
+        return codex_catalog._CatalogFetch(rows, 'new-etag', False)
 
     monkeypatch.setattr(codex_catalog, '_fetch_catalog', logout_during_fetch)
     result = codex_catalog.refresh_codex_model_catalog(force=True)
@@ -248,17 +248,19 @@ def test_logout_during_catalog_fetch_cannot_publish_or_reprovision(
 def test_fetch_revalidates_with_etag_and_accepts_304():
     rows = codex_catalog._normalise_models(_payload())
     cache = {'models': rows, 'etag': 'W/"old"',
-             'client_version': CODEX_CLIENT_VERSION}
+             'client_version': CODEX_CLIENT_VERSION,
+             'account_fingerprint': codex_catalog._account_fingerprint(_token())}
     with mock.patch('lib.oauth.outbound.resolve_oauth_request',
-                    return_value=('live-token', {}, {})), \
+                    return_value=('live-token', {'chatgpt-account-id': 'account-1'}, {})), \
          mock.patch('lib.desktop.egress.route_request', return_value='direct'), \
          mock.patch('lib.http_transport.client.http_get',
                     return_value=_NotModifiedResponse()) as get:
-        got, etag, not_modified = codex_catalog._fetch_catalog(cache)
+        got = codex_catalog._fetch_catalog(cache)
 
-    assert got == rows
-    assert etag == 'W/"old"'
-    assert not_modified is True
+    assert got.rows == rows
+    assert got.etag == 'W/"old"'
+    assert got.not_modified is True
+    assert got.evidence is None
     assert get.call_args.kwargs['headers']['If-None-Match'] == 'W/"old"'
 
 
@@ -343,7 +345,7 @@ def test_cached_catalog_poll_proactively_refreshes_codex_token(
     monkeypatch.setattr('lib.oauth.codex.codex_get_valid_token',
                         lambda **kw: refreshed.append(kw) or 'new')
     monkeypatch.setattr(codex_catalog, '_provision_from_best_available',
-                        lambda: False)
+                        lambda **_kwargs: False)
     monkeypatch.setattr(codex_catalog, '_fetch_catalog',
                         lambda *_a, **_kw: pytest.fail('fresh cache must skip HTTP'))
 
@@ -365,7 +367,7 @@ def test_idle_catalog_poll_never_retries_terminal_refresh(
     monkeypatch.setattr('lib.oauth.codex.codex_get_valid_token',
                         lambda **kw: pytest.fail('terminal refresh replayed'))
     monkeypatch.setattr(codex_catalog, '_provision_from_best_available',
-                        lambda: False)
+                        lambda **_kwargs: False)
     assert codex_catalog.refresh_codex_model_catalog()['ok'] is True
 
 
@@ -526,13 +528,13 @@ def test_client_upgrade_retains_capabilities_and_forces_revalidation(
     assert codex_catalog.codex_catalog_status()['catalog_stale'] is True
     observed = []
 
-    def provision():
+    def provision(**_kwargs):
         observed.extend(codex_catalog.cached_codex_provider_models())
         return False
 
     monkeypatch.setattr(codex_catalog, '_provision_from_best_available', provision)
     with mock.patch.object(codex_catalog, '_fetch_catalog',
-                           return_value=(rows, 'new-version-etag', False),
+                           return_value=codex_catalog._CatalogFetch(rows, 'new-version-etag', False),
                            side_effect=None if refresh_succeeds else RuntimeError('offline')) as fetch:
         result = codex_catalog.refresh_codex_model_catalog()
     fetch.assert_called_once()  # Version change bypasses a still-fresh TTL.
@@ -560,5 +562,50 @@ def test_client_upgrade_does_not_reuse_old_version_etag(status):
             with pytest.raises(RuntimeError, match='matching client-version cache'):
                 codex_catalog._fetch_catalog(cache)
         else:
-            assert codex_catalog._fetch_catalog(cache)[2] is False
+            assert codex_catalog._fetch_catalog(cache).not_modified is False
     assert 'If-None-Match' not in get.call_args.kwargs['headers']
+
+
+@pytest.mark.parametrize('admission_fails_once', [False, True])
+def test_version_advancing_during_fetch_does_not_mislabel_catalog(
+        tmp_path, monkeypatch, admission_fails_once):
+    path = tmp_path / 'catalog.json'
+    monkeypatch.setattr(codex_catalog, '_cache_path', lambda: str(path))
+    monkeypatch.setattr('lib.oauth.token_store.load_token', lambda _name: _token())
+    version = ['1.0.0']
+    monkeypatch.setattr(codex_catalog, 'codex_client_version', lambda: version[0])
+    monkeypatch.setattr('lib.oauth.outbound.resolve_oauth_request',
+                        lambda *a, **kw: ('token', {}, {}))
+    monkeypatch.setattr('lib.desktop.egress.route_request', lambda *a, **kw: 'direct')
+    requests = []
+
+    def get(url, **kwargs):
+        requests.append((url, dict(kwargs['headers'])))
+        version[0] = '1.1.0'
+        return _Response(_payload())
+
+    monkeypatch.setattr('lib.http_transport.client.http_get', get)
+    attempts = []
+
+    def provision(**_kwargs):
+        attempts.append(True)
+        if admission_fails_once and len(attempts) == 1:
+            raise RuntimeError('temporary admission failure')
+        return False
+
+    monkeypatch.setattr(codex_catalog, '_provision_from_best_available', provision)
+    first = codex_catalog.refresh_codex_model_catalog(force=True)
+    if admission_fails_once:
+        assert first['ok'] is False
+        first = codex_catalog.refresh_codex_model_catalog()
+    assert first['ok'] is True
+    assert first['catalog_stale'] is True
+    assert json.loads(path.read_text())['client_version'] == '1.0.0'
+    assert requests[0][0].endswith('client_version=1.0.0')
+
+    result = codex_catalog.refresh_codex_model_catalog()
+    assert result['ok'] is True
+    assert result['catalog_stale'] is False
+    assert requests[1][0].endswith('client_version=1.1.0')
+    assert 'If-None-Match' not in requests[1][1]
+    assert json.loads(path.read_text())['client_version'] == '1.1.0'

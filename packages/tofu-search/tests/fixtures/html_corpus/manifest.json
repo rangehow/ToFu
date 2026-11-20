@@ -1,0 +1,581 @@
+{
+ "captured_at": "2026-11-18T08:53:49Z",
+ "capture": "scripts/capture_search_html_corpus.py via lib.http_transport.client",
+ "pages": [
+  {
+   "name": "000-en-wikipedia-org-f76ec833",
+   "url": "https://en.wikipedia.org/wiki/Rust_(programming_language)",
+   "final_url": "https://en.wikipedia.org/wiki/Rust_(programming_language)",
+   "content_type": "text/html; charset=UTF-8",
+   "received_chars": 1062425,
+   "fixture_chars": 159849
+  },
+  {
+   "name": "001-en-wikipedia-org-eb8c89a5",
+   "url": "https://en.wikipedia.org/wiki/Python_(programming_language)#History",
+   "final_url": "https://en.wikipedia.org/wiki/Python_(programming_language)#History",
+   "content_type": "text/html; charset=UTF-8",
+   "received_chars": 1027634,
+   "fixture_chars": 159996
+  },
+  {
+   "name": "002-en-wikipedia-org-8a559491",
+   "url": "https://en.wikipedia.org/wiki/List_of_countries_by_population_(United_Nations)",
+   "final_url": "https://en.wikipedia.org/wiki/List_of_countries_by_population_(United_Nations)",
+   "content_type": "text/html; charset=UTF-8",
+   "received_chars": 772924,
+   "fixture_chars": 159970
+  },
+  {
+   "name": "003-docs-python-org-02d619bb",
+   "url": "https://docs.python.org/3/library/re.html",
+   "final_url": "https://docs.python.org/3/library/re.html",
+   "content_type": "text/html",
+   "received_chars": 257337,
+   "fixture_chars": 159978
+  },
+  {
+   "name": "004-docs-python-org-8a32e337",
+   "url": "https://docs.python.org/3/library/functions.html#zip",
+   "final_url": "https://docs.python.org/3/builtins/functions.html#zip",
+   "content_type": "text/html",
+   "received_chars": 330100,
+   "fixture_chars": 159987
+  },
+  {
+   "name": "005-developer-mozilla-org-e6e6537e",
+   "url": "https://developer.mozilla.org/en-US/docs/Web/HTML/Element/table",
+   "final_url": "https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/table",
+   "content_type": "text/html",
+   "received_chars": 247673,
+   "fixture_chars": 159936
+  },
+  {
+   "name": "006-doc-rust-lang-org-0c97c6f1",
+   "url": "https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html",
+   "final_url": "https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html",
+   "content_type": "text/html",
+   "received_chars": 55826,
+   "fixture_chars": 43320
+  },
+  {
+   "name": "007-doc-rust-lang-org-fe7ff636",
+   "url": "https://doc.rust-lang.org/std/vec/struct.Vec.html#method.push",
+   "final_url": "https://doc.rust-lang.org/std/vec/struct.Vec.html#method.push",
+   "content_type": "text/html",
+   "received_chars": 947161,
+   "fixture_chars": 159937
+  },
+  {
+   "name": "008-www-rust-lang-org-0a6e6cc2",
+   "url": "https://www.rust-lang.org/",
+   "final_url": "https://rust-lang.org/",
+   "content_type": "text/html; charset=utf-8",
+   "received_chars": 18453,
+   "fixture_chars": 18260
+  },
+  {
+   "name": "009-www-sqlite-org-a1ebb4cb",
+   "url": "https://www.sqlite.org/lang_select.html",
+   "final_url": "https://www.sqlite.org/lang_select.html",
+   "content_type": "text/html; charset=utf-8",
+   "received_chars": 2033807,
+   "fixture_chars": 159935
+  },
+  {
+   "name": "010-www-postgresql-org-b53c0844",
+   "url": "https://www.postgresql.org/docs/current/sql-select.html",
+   "final_url": "https://www.postgresql.org/docs/current/sql-select.html",
+   "content_type": "text/html; charset=utf-8",
+   "received_chars": 118083,
+   "fixture_chars": 117991
+  },
+  {
+   "name": "011-kubernetes-io-eceb9608",
+   "url": "https://kubernetes.io/docs/concepts/overview/",
+   "final_url": "https://kubernetes.io/docs/concepts/overview/",
+   "content_type": "text/html; charset=UTF-8",
+   "received_chars": 508460,
+   "fixture_chars": 159873
+  },
+  {
+   "name": "012-www-rfc-editor-org-e9fee425",
+   "url": "https://www.rfc-editor.org/rfc/rfc3986.html",
+   "final_url": "https://www.rfc-editor.org/rfc/rfc3986.html",
+   "content_type": "text/html",
+   "received_chars": 171264,
+   "fixture_chars": 159619
+  },
+  {
+   "name": "013-datatracker-ietf-org-204d096c",
+   "url": "https://datatracker.ietf.org/doc/html/rfc9110",
+   "final_url": "https://datatracker.ietf.org/doc/html/rfc9110",
+   "content_type": "text/html; charset=utf-8",
+   "received_chars": 1229494,
+   "fixture_chars": 159806
+  },
+  {
+   "name": "015-docs-rs-96dead7f",
+   "url": "https://docs.rs/serde/latest/serde/",
+   "final_url": "https://docs.rs/serde/latest/serde/",
+   "content_type": "text/html; charset=utf-8",
+   "received_chars": 25633,
+   "fixture_chars": 24640
+  },
+  {
+   "name": "016-pypi-org-dc3b28ef",
+   "url": "https://pypi.org/project/requests/",
+   "final_url": "https://pypi.org/project/requests/",
+   "content_type": "text/html; charset=UTF-8",
+   "received_chars": 334122,
+   "fixture_chars": 159976
+  },
+  {
+   "name": "018-github-com-3dbf9e15",
+   "url": "https://github.com/rust-lang/rust",
+   "final_url": "https://github.com/rust-lang/rust",
+   "content_type": "text/html; charset=utf-8",
+   "received_chars": 319961,
+   "fixture_chars": 159950
+  },
+  {
+   "name": "019-github-com-cdf251d1",
+   "url": "https://github.com/psf/requests/blob/main/README.md",
+   "final_url": "https://github.com/psf/requests/blob/main/README.md",
+   "content_type": "text/html; charset=utf-8",
+   "received_chars": 209666,
+   "fixture_chars": 159847
+  },
+  {
+   "name": "020-arxiv-org-a7468c68",
+   "url": "https://arxiv.org/abs/1706.03762",
+   "final_url": "https://arxiv.org/abs/1706.03762",
+   "content_type": "text/html; charset=utf-8",
+   "received_chars": 43644,
+   "fixture_chars": 40532
+  },
+  {
+   "name": "022-news-ycombinator-com-0f63a2a5",
+   "url": "https://news.ycombinator.com/",
+   "final_url": "https://news.ycombinator.com/",
+   "content_type": "text/html; charset=utf-8",
+   "received_chars": 33873,
+   "fixture_chars": 33883
+  },
+  {
+   "name": "023-www-kernel-org-46ba6ee5",
+   "url": "https://www.kernel.org/",
+   "final_url": "https://www.kernel.org/",
+   "content_type": "text/html; charset=utf-8",
+   "received_chars": 20436,
+   "fixture_chars": 19981
+  },
+  {
+   "name": "025-www-paulgraham-com-59f85e6c",
+   "url": "https://www.paulgraham.com/avg.html",
+   "final_url": "https://www.paulgraham.com/avg.html",
+   "content_type": "text/html",
+   "received_chars": 38778,
+   "fixture_chars": 35772
+  },
+  {
+   "name": "026-martinfowler-com-87183b91",
+   "url": "https://martinfowler.com/articles/microservices.html",
+   "final_url": "https://martinfowler.com/articles/microservices.html",
+   "content_type": "text/html",
+   "received_chars": 85952,
+   "fixture_chars": 83328
+  },
+  {
+   "name": "027-danluu-com-84468ea4",
+   "url": "https://danluu.com/",
+   "final_url": "https://danluu.com/",
+   "content_type": "text/html; charset=utf-8",
+   "received_chars": 22917,
+   "fixture_chars": 22767
+  },
+  {
+   "name": "028-simonwillison-net-8b0eaafe",
+   "url": "https://simonwillison.net/",
+   "final_url": "https://simonwillison.net/",
+   "content_type": "text/html; charset=utf-8",
+   "received_chars": 117809,
+   "fixture_chars": 110782
+  },
+  {
+   "name": "030-www-who-int-f9f35efe",
+   "url": "https://www.who.int/news-room/fact-sheets/detail/malaria",
+   "final_url": "https://www.who.int/news-room/fact-sheets/detail/malaria",
+   "content_type": "text/html; charset=utf-8",
+   "received_chars": 130350,
+   "fixture_chars": 109509
+  },
+  {
+   "name": "032-www-nasa-gov-1c0e60a2",
+   "url": "https://www.nasa.gov/",
+   "final_url": "https://www.nasa.gov/",
+   "content_type": "text/html; charset=UTF-8",
+   "received_chars": 356315,
+   "fixture_chars": 159910
+  },
+  {
+   "name": "033-www-theguardian-com-e49959ea",
+   "url": "https://www.theguardian.com/international",
+   "final_url": "https://www.theguardian.com/international",
+   "content_type": "text/html; charset=UTF-8",
+   "received_chars": 1389335,
+   "fixture_chars": 159966
+  },
+  {
+   "name": "035-www-npr-org-681ff292",
+   "url": "https://www.npr.org/",
+   "final_url": "https://www.npr.org/",
+   "content_type": "text/html; charset=UTF-8",
+   "received_chars": 945839,
+   "fixture_chars": 159979
+  },
+  {
+   "name": "036-www-bbc-com-78e6c575",
+   "url": "https://www.bbc.com/news",
+   "final_url": "https://www.bbc.com/news",
+   "content_type": "text/html; charset=utf-8",
+   "received_chars": 372475,
+   "fixture_chars": 159877
+  },
+  {
+   "name": "037-huggingface-co-ceefe075",
+   "url": "https://huggingface.co/docs/transformers/index",
+   "final_url": "https://huggingface.co/docs/transformers/index",
+   "content_type": "text/html; charset=utf-8",
+   "received_chars": 238757,
+   "fixture_chars": 24873
+  },
+  {
+   "name": "038-fastapi-tiangolo-com-1d1f5505",
+   "url": "https://fastapi.tiangolo.com/tutorial/first-steps/",
+   "final_url": "https://fastapi.tiangolo.com/tutorial/first-steps/",
+   "content_type": "text/html; charset=utf-8",
+   "received_chars": 144419,
+   "fixture_chars": 135345
+  },
+  {
+   "name": "039-react-dev-82349621",
+   "url": "https://react.dev/learn",
+   "final_url": "https://react.dev/learn",
+   "content_type": "text/html; charset=utf-8",
+   "received_chars": 265372,
+   "fixture_chars": 159996
+  },
+  {
+   "name": "040-zh-wikipedia-org-08a2354e",
+   "url": "https://zh.wikipedia.org/wiki/Rust",
+   "final_url": "https://zh.wikipedia.org/wiki/Rust",
+   "content_type": "text/html; charset=UTF-8",
+   "received_chars": 70289,
+   "fixture_chars": 61116
+  },
+  {
+   "name": "043-docs-python-org-802332d2",
+   "url": "https://docs.python.org/zh-cn/3/tutorial/index.html",
+   "final_url": "https://docs.python.org/zh-cn/3/tutorial/index.html",
+   "content_type": "text/html",
+   "received_chars": 33516,
+   "fixture_chars": 31997
+  },
+  {
+   "name": "045-www-cnblogs-com-f3a62a06",
+   "url": "https://www.cnblogs.com/",
+   "final_url": "https://www.cnblogs.com/",
+   "content_type": "text/html; charset=utf-8",
+   "received_chars": 75186,
+   "fixture_chars": 70923
+  },
+  {
+   "name": "046-www-oschina-net-72ca3942",
+   "url": "https://www.oschina.net/",
+   "final_url": "https://www.oschina.net/",
+   "content_type": "text/html; charset=utf-8",
+   "received_chars": 3316,
+   "fixture_chars": 1912
+  },
+  {
+   "name": "047-news-sina-com-cn-cc2553d1",
+   "url": "https://news.sina.com.cn/",
+   "final_url": "https://news.sina.com.cn/",
+   "content_type": "text/html",
+   "received_chars": 324444,
+   "fixture_chars": 159988
+  },
+  {
+   "name": "048-www-gov-cn-4e94555e",
+   "url": "https://www.gov.cn/",
+   "final_url": "https://www.gov.cn/",
+   "content_type": "text/html",
+   "received_chars": 65232,
+   "fixture_chars": 44525
+  },
+  {
+   "name": "050-www-36kr-com-d8c3aa90",
+   "url": "https://www.36kr.com/",
+   "final_url": "https://www.36kr.com/",
+   "content_type": "text/html",
+   "received_chars": 25258,
+   "fixture_chars": 1125
+  },
+  {
+   "name": "051-www-163-com-25a878bb",
+   "url": "https://www.163.com/",
+   "final_url": "https://www.163.com/",
+   "content_type": "text/html; charset=utf-8",
+   "received_chars": 245422,
+   "fixture_chars": 159991
+  },
+  {
+   "name": "053-juejin-cn-0d1a2cb1",
+   "url": "https://juejin.cn/",
+   "final_url": "https://juejin.cn/",
+   "content_type": "text/html",
+   "received_chars": 2397,
+   "fixture_chars": 298
+  },
+  {
+   "name": "054-ja-wikipedia-org-6a3585f8",
+   "url": "https://ja.wikipedia.org/wiki/Rust_(%E3%83%97%E3%83%AD%E3%82%B0%E3%83%A9%E3%83%9F%E3%83%B3%E3%82%B0%E8%A8%80%E8%AA%9E)",
+   "final_url": "https://ja.wikipedia.org/wiki/Rust_(%E3%83%97%E3%83%AD%E3%82%B0%E3%83%A9%E3%83%9F%E3%83%B3%E3%82%B0%E8%A8%80%E8%AA%9E)",
+   "content_type": "text/html; charset=UTF-8",
+   "received_chars": 501008,
+   "fixture_chars": 159997
+  },
+  {
+   "name": "055-docs-python-org-e5f37396",
+   "url": "https://docs.python.org/ja/3/tutorial/index.html",
+   "final_url": "https://docs.python.org/ja/3/tutorial/index.html",
+   "content_type": "text/html",
+   "received_chars": 34675,
+   "fixture_chars": 33156
+  },
+  {
+   "name": "056-qiita-com-d9a4cef5",
+   "url": "https://qiita.com/",
+   "final_url": "https://qiita.com/",
+   "content_type": "text/html; charset=utf-8",
+   "received_chars": 378282,
+   "fixture_chars": 135975
+  },
+  {
+   "name": "057-zenn-dev-cd61dc88",
+   "url": "https://zenn.dev/",
+   "final_url": "https://zenn.dev/",
+   "content_type": "text/html; charset=utf-8",
+   "received_chars": 219535,
+   "fixture_chars": 37620
+  },
+  {
+   "name": "058-www3-nhk-or-jp-c1161f86",
+   "url": "https://www3.nhk.or.jp/news/",
+   "final_url": "https://news.web.nhk/newsweb",
+   "content_type": "text/html; charset=utf-8",
+   "received_chars": 1068527,
+   "fixture_chars": 159858
+  },
+  {
+   "name": "059-ko-wikipedia-org-c376e7ea",
+   "url": "https://ko.wikipedia.org/wiki/%EB%9F%AC%EC%8A%A4%ED%8A%B8_(%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4)",
+   "final_url": "https://ko.wikipedia.org/wiki/%EB%9F%AC%EC%8A%A4%ED%8A%B8_(%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4)",
+   "content_type": "text/html; charset=UTF-8",
+   "received_chars": 1000696,
+   "fixture_chars": 159954
+  },
+  {
+   "name": "060-de-wikipedia-org-5714710c",
+   "url": "https://de.wikipedia.org/wiki/Rust_(Programmiersprache)",
+   "final_url": "https://de.wikipedia.org/wiki/Rust_(Programmiersprache)",
+   "content_type": "text/html; charset=UTF-8",
+   "received_chars": 448611,
+   "fixture_chars": 159889
+  },
+  {
+   "name": "061-www-heise-de-cea9803f",
+   "url": "https://www.heise.de/",
+   "final_url": "https://www.heise.de/",
+   "content_type": "text/html; charset=utf-8",
+   "received_chars": 910289,
+   "fixture_chars": 159973
+  },
+  {
+   "name": "062-www-spiegel-de-1cc441d4",
+   "url": "https://www.spiegel.de/",
+   "final_url": "https://www.spiegel.de/",
+   "content_type": "text/html; charset=utf-8",
+   "received_chars": 2042426,
+   "fixture_chars": 159865
+  },
+  {
+   "name": "063-fr-wikipedia-org-ff3fc43a",
+   "url": "https://fr.wikipedia.org/wiki/Rust_(langage)",
+   "final_url": "https://fr.wikipedia.org/wiki/Rust_(langage)",
+   "content_type": "text/html; charset=UTF-8",
+   "received_chars": 552771,
+   "fixture_chars": 159440
+  },
+  {
+   "name": "064-www-lemonde-fr-1c86e53d",
+   "url": "https://www.lemonde.fr/",
+   "final_url": "https://www.lemonde.fr/en/",
+   "content_type": "text/html;charset=UTF-8",
+   "received_chars": 373092,
+   "fixture_chars": 159959
+  },
+  {
+   "name": "065-es-wikipedia-org-5d9bc179",
+   "url": "https://es.wikipedia.org/wiki/Rust_(lenguaje_de_programaci%C3%B3n)",
+   "final_url": "https://es.wikipedia.org/wiki/Rust_(lenguaje_de_programaci%C3%B3n)",
+   "content_type": "text/html; charset=UTF-8",
+   "received_chars": 276312,
+   "fixture_chars": 159988
+  },
+  {
+   "name": "067-pt-wikipedia-org-eb5f547f",
+   "url": "https://pt.wikipedia.org/wiki/Rust_(linguagem_de_programa%C3%A7%C3%A3o)",
+   "final_url": "https://pt.wikipedia.org/wiki/Rust_(linguagem_de_programa%C3%A7%C3%A3o)",
+   "content_type": "text/html; charset=UTF-8",
+   "received_chars": 910680,
+   "fixture_chars": 159976
+  },
+  {
+   "name": "068-it-wikipedia-org-14eaef76",
+   "url": "https://it.wikipedia.org/wiki/Rust_(linguaggio_di_programmazione)",
+   "final_url": "https://it.wikipedia.org/wiki/Rust_(linguaggio_di_programmazione)",
+   "content_type": "text/html; charset=UTF-8",
+   "received_chars": 219819,
+   "fixture_chars": 159959
+  },
+  {
+   "name": "069-ru-wikipedia-org-db695e1b",
+   "url": "https://ru.wikipedia.org/wiki/Rust_(%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)",
+   "final_url": "https://ru.wikipedia.org/wiki/Rust_(%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)",
+   "content_type": "text/html; charset=UTF-8",
+   "received_chars": 381830,
+   "fixture_chars": 159891
+  },
+  {
+   "name": "070-habr-com-bdfa45aa",
+   "url": "https://habr.com/ru/articles/",
+   "final_url": "https://habr.com/ru/articles/",
+   "content_type": "text/html; charset=utf-8",
+   "received_chars": 294498,
+   "fixture_chars": 159997
+  },
+  {
+   "name": "071-ar-wikipedia-org-ef1b5bfc",
+   "url": "https://ar.wikipedia.org/wiki/%D8%A8%D8%A7%D9%8A%D8%AB%D9%88%D9%86_(%D9%84%D8%BA%D8%A9_%D8%A8%D8%B1%D9%85%D8%AC%D8%A9)",
+   "final_url": "https://ar.wikipedia.org/wiki/%D8%A8%D8%A7%D9%8A%D8%AB%D9%88%D9%86_(%D9%84%D8%BA%D8%A9_%D8%A8%D8%B1%D9%85%D8%AC%D8%A9)",
+   "content_type": "text/html; charset=UTF-8",
+   "received_chars": 1183792,
+   "fixture_chars": 159926
+  },
+  {
+   "name": "072-hi-wikipedia-org-9f0ea212",
+   "url": "https://hi.wikipedia.org/wiki/%E0%A4%AA%E0%A4%BE%E0%A4%87%E0%A4%A5%E0%A4%A8",
+   "final_url": "https://hi.wikipedia.org/wiki/%E0%A4%AA%E0%A4%BE%E0%A4%87%E0%A4%A5%E0%A4%A8",
+   "content_type": "text/html; charset=UTF-8",
+   "received_chars": 206066,
+   "fixture_chars": 159958
+  },
+  {
+   "name": "073-he-wikipedia-org-1eb8d615",
+   "url": "https://he.wikipedia.org/wiki/Python",
+   "final_url": "https://he.wikipedia.org/wiki/Python",
+   "content_type": "text/html; charset=UTF-8",
+   "received_chars": 304550,
+   "fixture_chars": 159994
+  },
+  {
+   "name": "074-th-wikipedia-org-097c50a1",
+   "url": "https://th.wikipedia.org/wiki/%E0%B8%A0%E0%B8%B2%E0%B8%A9%E0%B8%B2%E0%B9%84%E0%B8%9E%E0%B8%97%E0%B8%AD%E0%B8%99",
+   "final_url": "https://th.wikipedia.org/wiki/%E0%B8%A0%E0%B8%B2%E0%B8%A9%E0%B8%B2%E0%B9%84%E0%B8%9E%E0%B8%97%E0%B8%AD%E0%B8%99",
+   "content_type": "text/html; charset=UTF-8",
+   "received_chars": 296148,
+   "fixture_chars": 159858
+  },
+  {
+   "name": "075-vi-wikipedia-org-d10158c1",
+   "url": "https://vi.wikipedia.org/wiki/Python_(ng%C3%B4n_ng%E1%BB%AF_l%E1%BA%ADp_tr%C3%ACnh)",
+   "final_url": "https://vi.wikipedia.org/wiki/Python_(ng%C3%B4n_ng%E1%BB%AF_l%E1%BA%ADp_tr%C3%ACnh)",
+   "content_type": "text/html; charset=UTF-8",
+   "received_chars": 911119,
+   "fixture_chars": 159991
+  },
+  {
+   "name": "076-tr-wikipedia-org-dde6c670",
+   "url": "https://tr.wikipedia.org/wiki/Python",
+   "final_url": "https://tr.wikipedia.org/wiki/Python",
+   "content_type": "text/html; charset=UTF-8",
+   "received_chars": 367058,
+   "fixture_chars": 159951
+  }
+ ],
+ "failures": [
+  {
+   "url": "https://www.w3.org/TR/WCAG21/",
+   "status": 403,
+   "content_type": "text/html; charset=UTF-8"
+  },
+  {
+   "url": "https://www.npmjs.com/package/express",
+   "status": 403,
+   "content_type": "text/html; charset=UTF-8"
+  },
+  {
+   "url": "https://stackoverflow.com/questions/231767/what-does-the-yield-keyword-do-in-python",
+   "status": 403,
+   "content_type": "text/html; charset=UTF-8"
+  },
+  {
+   "url": "https://www.gnu.org/software/make/manual/html_node/Rule-Syntax.html",
+   "error": "NetworkRoutesExhausted: No configured network route connected"
+  },
+  {
+   "url": "https://www.gutenberg.org/ebooks/1342",
+   "status": 503,
+   "content_type": "text/html; charset=utf-8"
+  },
+  {
+   "url": "https://www.cdc.gov/flu/about/index.html",
+   "status": 403,
+   "content_type": "text/html"
+  },
+  {
+   "url": "https://apnews.com/",
+   "status": 403,
+   "content_type": "text/html; charset=UTF-8"
+  },
+  {
+   "url": "https://www.runoob.com/python3/python3-tutorial.html",
+   "error": "NetworkRoutesExhausted: No configured network route connected"
+  },
+  {
+   "url": "https://www.liaoxuefeng.com/wiki/1016959663602400",
+   "error": "NetworkRoutesExhausted: No configured network route connected"
+  },
+  {
+   "url": "https://www.ruanyifeng.com/blog/2019/10/tail-command.html",
+   "status": 404,
+   "content_type": "text/html; charset=iso-8859-1"
+  },
+  {
+   "url": "https://sspai.com/",
+   "error": "NetworkRoutesExhausted: No configured network route connected"
+  },
+  {
+   "url": "https://baike.baidu.com/item/Python/407313",
+   "status": 403,
+   "content_type": "text/html; charset=utf-8"
+  },
+  {
+   "url": "https://elpais.com/",
+   "status": 403,
+   "content_type": "text/html;charset=utf-8"
+  }
+ ]
+}

@@ -666,6 +666,32 @@ def test_resumed_root_emits_one_continuous_logical_round_stream(monkeypatch):
     assert task['_firstDispatchRound'] == 15
 
 
+def test_usage_free_provider_return_does_not_reuse_paid_cache_evidence(monkeypatch):
+    from lib.llm.stream_result import ProviderStreamResult
+
+    task = {'id': 'responses-fixture', 'aborted': False, 'error': None}
+    state = _state()
+    previous_usage = {'prompt_tokens': 9000, 'cache_read_tokens': 8000,
+                      '_dispatch': {'protocol': 'responses'}}
+    state.last_usage = previous_usage
+    _install_common(monkeypatch, [])
+    observed = []
+    monkeypatch.setattr(root_loop, 'stamp_round_cache_accounting',
+                        lambda *a, **k: observed.append(k['usage']))
+
+    def return_without_usage(_task, current_state, *args, **kwargs):
+        current_state.assistant_msg = {'role': 'assistant', 'content': 'answer'}
+        current_state.last_stream_result = ProviderStreamResult.from_legacy(
+            current_state.assistant_msg, 'stop', None)
+        kwargs['on_request_usage'](None)
+        return 'proceed'
+
+    monkeypatch.setattr(root_loop, 'run_llm_call_with_fallback', return_without_usage)
+    root_loop._RootLoopHooks(_request(task, state)).dispatch(0, [])
+    assert observed == [None]
+    assert state.last_usage is previous_usage  # paid accounting is preserved
+
+
 def test_resume_retains_paid_accounting_when_next_provider_dispatch_raises(monkeypatch):
     from lib.tasks_pkg import round_costs
     task = {'id': 'resume-task', 'aborted': False, 'error': None,

@@ -1,6 +1,6 @@
 /**
  * The one authority for the Tofu server address the extension talks to.
- * Entry: normalizeTofuServerUrl(input) — pure, lexical; resolveTofuServerUrl
+ * Entry: normalizeTofuServerUrl(input, {baseUrl}) — pure, lexical; resolveTofuServerUrl
  * (input, {fetch, timeoutMs}) — normalizes, then confirms the real base by
  * probing GET <candidate>/api/health on the address and each path ancestor.
  *
@@ -8,7 +8,9 @@
  * (…/proxy/15000/#/chat), the server serves the app at <base>/ and
  * <base>/index.html, and every API/asset lives under <base>/api/ or
  * <base>/static/. A reverse-proxy prefix (/proxy/15000) is part of the base
- * and must survive. Every consumer — popup save, stored value, download
+ * and must survive. A selected base disambiguates route-like proxy segments;
+ * without that context /api/ and /static/ paths are refused, not truncated.
+ * Every consumer — popup save, stored value, download
  * preseed, open-tab detection, repair-tab reaping — goes through here.
  * Loaded synchronously by the worker; no Chrome dependency.
  */
@@ -25,7 +27,7 @@ function _tofuDefaultScheme(hostPort) {
   return (isLocal || /:\d+$/.test(hostPort)) ? 'http' : 'https';
 }
 
-function normalizeTofuServerUrl(input) {
+function normalizeTofuServerUrl(input, {baseUrl = ''} = {}) {
   let text = String(input == null ? '' : input).trim().replace(/^<(.*)>$/, '$1').trim();
   if (!text) {
     return {ok: false, error: 'Enter your Tofu server address, e.g. http://localhost:15000.'};
@@ -34,19 +36,20 @@ function normalizeTofuServerUrl(input) {
   const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(text);
   if (!scheme) {
     if (/^[a-z][a-z0-9+.-]*:(?!\d)/i.test(text)) {
-      return {ok: false, error: `"${text.split(':')[0]}:" is not a web address — use http:// or https://.`};
+      return {ok: false, error: 'This is not a web address — use http:// or https://.'};
     }
     text = text.replace(/^\/\//, '');
     text = `${_tofuDefaultScheme(text.split(/[/?#]/)[0])}://${text}`;
     schemeDefaulted = true;
   } else if (!['http', 'https'].includes(scheme[1].toLowerCase())) {
-    return {ok: false, error: `Unsupported scheme "${scheme[1]}://" — the Tofu server address must start with http:// or https://.`};
+    return {ok: false, error: 'Unsupported scheme — the Tofu server address must start with http:// or https://.'};
   }
   let parsed;
   try {
     parsed = new URL(text);
   } catch (_) {
-    return {ok: false, error: `"${String(input).trim()}" is not a valid web address (expected something like https://host/proxy/15000).`};
+    // Rejection messages also go to the worker log; never echo pasted input.
+    return {ok: false, error: 'This is not a valid web address (expected something like https://host/proxy/15000).'};
   }
   if (!parsed.hostname) {
     return {ok: false, error: 'The address has no host name (expected something like https://host/proxy/15000).'};
@@ -54,12 +57,24 @@ function normalizeTofuServerUrl(input) {
   if (parsed.username || parsed.password) {
     return {ok: false, error: 'Remove the "user:password@" part — the bridge authenticates with its bridge key, not URL credentials.'};
   }
-  let path = parsed.pathname;
-  for (const root of TOFU_SERVER_ROUTE_ROOTS) {
-    const at = (path + '/').indexOf(root);
-    if (at >= 0) path = path.slice(0, at);
+  let path = parsed.pathname.replace(/\/index\.html?$/i, '').replace(/\/+$/, '');
+  let selected = null;
+  try { selected = new URL(baseUrl); } catch (_) {}
+  if (selected && ['http:', 'https:'].includes(selected.protocol)
+      && !selected.username && !selected.password && !selected.search && !selected.hash
+      && selected.origin === parsed.origin) {
+    const mount = selected.pathname.replace(/\/+$/, '');
+    if (path === mount || TOFU_SERVER_ROUTE_ROOTS.some(root => (path + '/').startsWith(mount + root))) {
+      path = mount;
+    } else {
+      selected = null;
+    }
+  } else {
+    selected = null;
   }
-  path = path.replace(/\/index\.html?$/i, '').replace(/\/+$/, '');
+  if (!selected && TOFU_SERVER_ROUTE_ROOTS.some(root => (path + '/').includes(root))) {
+    return {ok: false, error: 'Cannot determine the Tofu base safely: /api/ or /static/ may be a proxy prefix or an application route. Restore the explicitly configured base, or use an unambiguous app address; no shortened address was saved.'};
+  }
   const url = parsed.origin + path;
   return {ok: true, url, schemeDefaulted, changed: url !== String(input).trim()};
 }
@@ -69,7 +84,14 @@ function normalizeTofuServerUrl(input) {
  * then — only when the user typed no scheme — the same list on the other one. */
 function tofuServerUrlCandidates(normalized) {
   const parsed = new URL(normalized.url);
-  const segments = parsed.pathname.split('/').filter(Boolean);
+  // Do not rebuild path segments: interior slashes can be significant to
+  // the proxy, even though trailing slashes are not part of a Tofu base.
+  const paths = [];
+  for (let path = parsed.pathname.replace(/\/+$/, ''); path; ) {
+    paths.push(path);
+    path = path.slice(0, path.lastIndexOf('/')).replace(/\/+$/, '');
+  }
+  paths.push('');
   const origins = [parsed.origin];
   if (normalized.schemeDefaulted) {
     const other = new URL(parsed.origin);
@@ -78,9 +100,7 @@ function tofuServerUrlCandidates(normalized) {
   }
   const out = [];
   for (const origin of origins) {
-    for (let n = segments.length; n >= 0; n -= 1) {
-      out.push(origin + (n ? '/' + segments.slice(0, n).join('/') : ''));
-    }
+    for (const path of paths) out.push(origin + path);
   }
   return out;
 }
@@ -105,10 +125,12 @@ async function _probeTofuBase(base, fetchPort, timeoutMs) {
   }
 }
 
-async function resolveTofuServerUrl(input, {fetch: fetchPort, timeoutMs}) {
-  const normalized = normalizeTofuServerUrl(input);
+async function resolveTofuServerUrl(input, {fetch: fetchPort, timeoutMs, baseUrl = ''}) {
+  const normalized = normalizeTofuServerUrl(input, {baseUrl});
   if (!normalized.ok) return normalized;
-  const candidates = tofuServerUrlCandidates(normalized);
+  const selected = normalizeTofuServerUrl(baseUrl, {baseUrl});
+  const candidates = selected.ok && selected.url === normalized.url
+    ? [normalized.url] : tofuServerUrlCandidates(normalized);
   // Probe all at once: an unreachable host costs one deadline, not one per
   // candidate. The most specific confirmed base wins.
   const probes = await Promise.all(candidates.map(c => _probeTofuBase(c, fetchPort, timeoutMs)));

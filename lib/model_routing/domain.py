@@ -378,13 +378,102 @@ def _merge_trained_model_alias_rows(
     return alias
 
 
+def _normalize_codex_account_grants(raw: Any, *, field: str) -> dict[str, list[dict[str, str]]]:
+    """Keep scoped grants exact; alias normalization must not transfer them."""
+    if not isinstance(raw, Mapping):
+        raise ModelRoutingError(f"{field} must be an object", field=field)
+    result = {}
+    for account, grants in raw.items():
+        if (not isinstance(account, str) or len(account) != 64
+                or any(c not in '0123456789abcdef' for c in account)):
+            raise ModelRoutingError(f"{field} contains an invalid account fingerprint", field=field)
+        if not isinstance(grants, list):
+            raise ModelRoutingError(f"{field} grants must be arrays", field=field)
+        by_wire = {}
+        for grant in grants:
+            if (not isinstance(grant, Mapping) or set(grant) != {"creator_id", "model_id", "wire_model_id"}
+                    or grant["creator_id"] != "openai"):
+                raise ModelRoutingError(f"{field} requires exact OpenAI wire grants", field=field)
+            model_id = _identifier(grant["model_id"], field)
+            wire_id = _identifier(grant["wire_model_id"], field)
+            if model_id != grant["model_id"] or wire_id != grant["wire_model_id"] or wire_id in by_wire:
+                raise ModelRoutingError(f"{field} contains invalid or duplicate wire grants", field=field)
+            by_wire[wire_id] = {"creator_id": "openai", "model_id": model_id, "wire_model_id": wire_id}
+        if by_wire:
+            result[account] = [by_wire[wire] for wire in sorted(by_wire)]
+    return dict(sorted(result.items()))
+
+
+def _normalize_revocation_history(document: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Normalize retained identity keys without requiring live entities."""
+    entries = _rows(document, "revocation_history")
+    keys = {"credential_id", "creator_id", "model_id", "model_revoked", "excluded_wire_model_ids"}
+    seen: set[tuple[str, str, str]] = set()
+    normalized = []
+    for index, entry in enumerate(entries):
+        field = f"revocation_history[{index}]"
+        if set(entry) != keys:
+            raise ModelRoutingError(f"{field} has missing or unknown fields", field=field)
+        identity = tuple(_identifier(entry[key], f"{field}.{key}") for key in ("credential_id", "creator_id", "model_id"))
+        if identity in seen:
+            raise ModelRoutingError(f"{field} duplicates a revocation identity", field=field)
+        seen.add(identity)
+        if not isinstance(entry["model_revoked"], bool):
+            raise ModelRoutingError(f"{field}.model_revoked must be boolean", field=field)
+        normalized.append({
+            "credential_id": identity[0], "creator_id": identity[1], "model_id": identity[2],
+            "model_revoked": entry["model_revoked"],
+            "excluded_wire_model_ids": _string_set(entry["excluded_wire_model_ids"], f"{field}.excluded_wire_model_ids"),
+        })
+    return sorted(normalized, key=lambda row: (row["credential_id"], row["creator_id"], row["model_id"]))
+
+
+def _normalize_codex_seen_history(document: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Retain observations even when their credential or access is removed."""
+    rows = []
+    seen = set()
+    keys = {"provider_access_id", "credential_id", "account_fingerprint", "complete",
+            "wire_model_ids", "models", "pending_wire_model_ids"}
+    for index, entry in enumerate(_rows(document, "codex_seen_history")):
+        field = f"codex_seen_history[{index}]"
+        if set(entry) != keys:
+            raise ModelRoutingError(f"{field} has missing or unknown fields", field=field)
+        access = _identifier(entry["provider_access_id"], f"{field}.provider_access_id")
+        credential = _identifier(entry["credential_id"], f"{field}.credential_id")
+        account = entry["account_fingerprint"]
+        if not isinstance(account, str) or len(account) != 64 or any(c not in '0123456789abcdef' for c in account):
+            raise ModelRoutingError(f"{field}.account_fingerprint is invalid", field=field)
+        identity = (access, credential, account)
+        if identity in seen or not isinstance(entry["complete"], bool):
+            raise ModelRoutingError(f"{field} has duplicate identity or invalid completeness", field=field)
+        seen.add(identity)
+        wires = _string_set(entry["wire_model_ids"], f"{field}.wire_model_ids")
+        pending = _string_set(entry["pending_wire_model_ids"], f"{field}.pending_wire_model_ids")
+        if not set(pending) <= set(wires) or (pending and not entry["complete"]):
+            raise ModelRoutingError(f"{field} has invalid pending reservations", field=field)
+        models = []
+        model_keys = set()
+        for model in _rows(entry, "models"):
+            if set(model) != {"creator_id", "model_id"}:
+                raise ModelRoutingError(f"{field}.models has invalid identity", field=field)
+            ref = tuple(_identifier(model[k], f"{field}.models.{k}") for k in ("creator_id", "model_id"))
+            if ref in model_keys:
+                raise ModelRoutingError(f"{field}.models has duplicate identity", field=field)
+            model_keys.add(ref)
+            models.append(dict(zip(("creator_id", "model_id"), ref)))
+        rows.append({"provider_access_id": access, "credential_id": credential, "account_fingerprint": account,
+                     "complete": entry["complete"], "wire_model_ids": wires, "models": sorted(models, key=lambda r: (r['creator_id'], r['model_id'])),
+                     "pending_wire_model_ids": pending})
+    return sorted(rows, key=lambda r: (r['provider_access_id'], r['credential_id'], r['account_fingerprint']))
+
+
 def normalize_document(
     raw: Mapping[str, Any], *, revision: int | None = None,
 ) -> dict[str, Any]:
     """Return a canonical, deeply copied v2 aggregate or fail closed."""
     if not isinstance(raw, Mapping):
         raise ModelRoutingError("model routing document must be an object")
-    allowed = {"contract_version", "revision", "migration", *ENTITY_COLLECTIONS}
+    allowed = {"contract_version", "revision", "migration", "revocation_history", "codex_seen_history", "subscription_accounts", *ENTITY_COLLECTIONS}
     unknown = set(raw) - allowed
     if unknown:
         raise ModelRoutingError(
@@ -395,6 +484,9 @@ def normalize_document(
     normalized_revision = raw.get("revision") if revision is None else revision
     normalized_revision = _non_negative_int(normalized_revision, "revision")
     _scan_for_forbidden_fields(raw)
+
+    raw = dict(raw)
+    raw['credentials'] = _rows(raw, 'credentials')
 
     creators = _rows(raw, "creators")
     models = _rows(raw, "models")
@@ -623,6 +715,9 @@ def normalize_document(
                 field=f"credentials[{index}].provider_access_id",
             )
         credential["provider_access_id"] = access_id
+        # Retired experiment-reservation metadata is not part of the aggregate;
+        # drop it from older stored rows when they next pass normalization.
+        credential.pop('experiment_reserved_for', None)
         if credential.get("kind") not in {
             "api_key", "oauth", "local_identity", "subscription",
         }:
@@ -637,6 +732,8 @@ def normalize_document(
                 f"credentials[{index}].secret_reference is invalid",
                 field=f"credentials[{index}].secret_reference",
             )
+        if secret_reference.strip().startswith('oauth_'):
+            raise ModelRoutingError('Private subscription reference is not a generic route credential')
         if credential.get("kind") != "local_identity" and not secret_reference:
             raise ModelRoutingError(
                 f"credentials[{index}] requires a secret_reference",
@@ -721,6 +818,13 @@ def normalize_document(
             "connection_ids": connection_ids,
             "models": sorted(authorized_models, key=lambda item: (item["creator_id"], item["model_id"])),
         }
+        if "codex_account_grants" in authorization:
+            field = f"credentials[{index}].authorization.codex_account_grants"
+            if access_by_id[access_id]["provider_id"] != "oauth_codex" or credential["kind"] != "oauth":
+                raise ModelRoutingError(f"{field} requires the managed Codex OAuth credential", field=field)
+            scoped = _normalize_codex_account_grants(authorization["codex_account_grants"], field=field)
+            if scoped:
+                credential["authorization"]["codex_account_grants"] = scoped
         if not isinstance(credential.get("quota_policy"), Mapping):
             raise ModelRoutingError(
                 f"credentials[{index}].quota_policy must be an object",
@@ -938,6 +1042,13 @@ def normalize_document(
         "offerings": sorted(offerings, key=lambda row: row["offering_id"]),
         "deployments": sorted(deployments, key=lambda row: row["deployment_id"]),
     }
+    if "subscription_accounts" in raw:
+        from .subscription_accounts import normalize_accounts
+        result['subscription_accounts'] = normalize_accounts(raw['subscription_accounts'])
+    if "revocation_history" in raw:
+        result["revocation_history"] = _normalize_revocation_history(raw)
+    if "codex_seen_history" in raw:
+        result["codex_seen_history"] = _normalize_codex_seen_history(raw)
     if "migration" in raw:
         if not isinstance(raw["migration"], Mapping):
             raise ModelRoutingError("migration must be an object", field="migration")
@@ -1011,6 +1122,7 @@ def public_projection(document: Mapping[str, Any]) -> dict[str, Any]:
     always wins; the projection is stripped on write like ``release_date``.
     """
     projected = normalize_document(document)
+    projected.pop('subscription_accounts', None)
     for model in projected["models"]:
         date = (model.get("registration_metadata", {}).get("release_date")
                 or _release_date(model["model_id"]))

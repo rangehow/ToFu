@@ -11,6 +11,9 @@ from __future__ import annotations
 import hashlib
 import time
 
+import orjson
+
+from lib.storage.errors import StorageError
 from lib.storage.model_continuation import encode_projection, settled_witness
 from lib.storage_authority_sql.operations_pkg._common import _integer, _required_text, _load
 from lib.storage_authority_sql.operations_pkg._turns_core import _turn_public
@@ -36,17 +39,33 @@ def _identity(session, payload, *, lock=False):
     return user_id, conversation_id, lane_id, key, owned is not None
 
 
-def continuation_get(session, payload):
+def continuation_observe(session, payload, *, selection=False):
+    """Distinguish an empty owned slot from an unusable record."""
     _, _, _, key, owned = _identity(session, payload)
     if not owned:
-        return None
+        return False, None
     row = session.fetch_one(
         'SELECT value_json FROM storage_records WHERE namespace=? AND record_key=?',
         (_NAMESPACE, key))
     if row is None:
-        return None
-    projection = _load(row['value_json'])
-    return projection if encode_projection(projection) is not None else None
+        return False, None
+    # Keep the SQL reads outside the decode boundary: an operational failure
+    # is not evidence that a persisted checkpoint was corrupt.
+    try:
+        projection = _load(row['value_json'])
+    except StorageError as exc:
+        if not selection or exc.code != 'database_integrity':
+            raise
+        return True, None
+    except orjson.JSONDecodeError:
+        if not selection:
+            raise
+        return True, None
+    return True, projection if encode_projection(projection) is not None else None
+
+
+def continuation_get(session, payload):
+    return continuation_observe(session, payload)[1]
 
 
 def continuation_put(session, payload):

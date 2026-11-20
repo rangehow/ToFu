@@ -933,6 +933,155 @@ mod tests {
         assert_eq!(acknowledgement.status, 0);
     }
 
+    fn raw_swarm_request(
+        client: &mut TcpStream,
+        operation: &str,
+        mut payload: serde_json::Value,
+        command_id: Option<&str>,
+    ) -> crate::protocol::Response {
+        payload["user_id"] = json!(11);
+        write_frame(
+            client,
+            &Message::Request(Request {
+                correlation_id: [2; 16],
+                deadline_unix_ms: current_unix_milliseconds() + 5_000,
+                owner_id: 11,
+                tenant_id: Some(7),
+                command_id: command_id.map(str::to_owned),
+                schema_id: STORAGE_SCHEMA_VERSION,
+                operation: operation.to_owned(),
+                payload: serde_json::to_vec(&payload).unwrap(),
+            }),
+        )
+        .unwrap();
+        let Message::Response(response) = read_frame(client).unwrap() else {
+            panic!("missing response for {operation}");
+        };
+        assert_eq!(response.correlation_id, [2; 16]);
+        response
+    }
+
+    #[test]
+    fn raw_swarm_wire_refuses_sql_exact_lifecycle_without_legacy_mutations() {
+        let directory = tempfile::tempdir().unwrap();
+        let (address, parent_alive, worker) = start_server(config(), &directory);
+        let mut client = TcpStream::connect(address).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        hello_acknowledged(&mut client);
+        let mut send =
+            |operation, payload, id| raw_swarm_request(&mut client, operation, payload, id);
+        let ok = |response: crate::protocol::Response| -> serde_json::Value {
+            assert_eq!(response.status, 0, "{response:?}");
+            serde_json::from_slice(&response.payload).unwrap()
+        };
+        let seed = json!({"swarm_key":"shared", "task_id":"current", "specs":[],
+                          "config":{"user_id":11}, "now_ms":100});
+        let checkpoint = json!({"swarm_key":"shared", "agent_id":"worker", "status":"completed",
+                               "messages":[], "result":{"final_answer":"original"}, "now_ms":200});
+        let key = json!({"swarm_key":"shared"});
+        let delivery = json!({"swarm_key":"shared", "agent_ids":["worker"]});
+        assert_eq!(
+            ok(send("swarm.session.save", seed.clone(), Some("seed"))),
+            json!({"saved":true})
+        );
+        ok(send(
+            "swarm.agent.save",
+            checkpoint.clone(),
+            Some("checkpoint"),
+        ));
+        let before = ok(send("swarm.session.get", key.clone(), None));
+        assert_eq!(before["task_id"], "current");
+        assert_eq!(before["agents"][0]["delivered"], false);
+
+        let refuse = |response: crate::protocol::Response| {
+            assert_eq!(
+                response.error_code.as_deref(),
+                Some("database_protocol_error"),
+                "{response:?}"
+            );
+            assert_eq!(
+                response.error_message.as_deref(),
+                Some("Native exact swarm lifecycle is unsupported")
+            );
+            assert!(!response.retryable);
+        };
+        for mode in ["launch", "update", "roster"] {
+            let mut exact = seed.clone();
+            exact["save_mode"] = json!(mode);
+            exact["task_id"] = json!("replacement");
+            exact["now_ms"] = json!(300);
+            refuse(send("swarm.session.save", exact, Some(mode)));
+        }
+        for (operation, mut payload) in [
+            ("swarm.session.terminate", key.clone()),
+            ("swarm.agent.save", checkpoint),
+            (
+                "swarm.agent.append",
+                json!({"swarm_key":"shared", "agent_id":"worker"}),
+            ),
+            (
+                "swarm.agent.checkpoint.mark",
+                json!({"swarm_key":"shared", "agent_id":"worker"}),
+            ),
+        ] {
+            payload["run_id"] = json!("stale");
+            refuse(send(operation, payload, Some(operation)));
+        }
+        let mut exact_delivery = delivery.clone();
+        exact_delivery["task_id"] = json!("stale");
+        refuse(send(
+            "swarm.agents.mark_delivered",
+            exact_delivery,
+            Some("delivery"),
+        ));
+        for (operation, command) in [
+            ("swarm.session.delete_exact", Some("delete-exact")),
+            ("swarm.session.lifecycle.get", None),
+        ] {
+            let response = send(operation, key.clone(), command);
+            // Before the SQL catalog is integrated this is unknown; after it
+            // is registered, native executable admission still refuses it.
+            assert!(
+                matches!(
+                    response.error_code.as_deref(),
+                    Some("unknown_operation" | "operation_not_implemented")
+                ),
+                "{response:?}"
+            );
+            assert!(!response.retryable);
+        }
+        assert_eq!(ok(send("swarm.session.get", key.clone(), None)), before);
+
+        let mut acknowledge = delivery.clone();
+        acknowledge["task_id"] = json!("stale");
+        assert_eq!(
+            ok(send(
+                "swarm.agents.acknowledge_results",
+                acknowledge,
+                Some("old-ack")
+            )),
+            json!({"acknowledged":false,"changed":0})
+        );
+        // Reuse the refused command's ID: it must not have left a receipt.
+        assert_eq!(
+            ok(send(
+                "swarm.agents.mark_delivered",
+                delivery,
+                Some("delivery")
+            )),
+            json!({"changed":1})
+        );
+        assert_eq!(
+            ok(send("swarm.session.get", key, None))["agents"][0]["delivered"],
+            true
+        );
+        drop(client);
+        parent_alive.store(false, Ordering::Release);
+        worker.join().unwrap().unwrap();
+    }
+
     fn hello() -> Message {
         Message::Hello(Hello {
             correlation_id: [1; 16],

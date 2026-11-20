@@ -26,7 +26,8 @@ sys.path.insert(0, str(ROOT))
 
 from lib.storage.model_continuation import settled_witness
 from scripts.tofudb_bench import _mount_type
-from scripts.tofudb_perf_compare import LegacyEngine, TofuDbEngine, _percentile
+from scripts.tofudb_perf_compare import LegacyEngine, TofuDbEngine
+from scripts.tofudb_workloads.latency import _percentile
 
 
 def history_proof(rows):

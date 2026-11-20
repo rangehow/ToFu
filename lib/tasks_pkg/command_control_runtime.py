@@ -55,6 +55,11 @@ class CommandControls:
         remote = call(self._endpoint(), 'background_activity', '', user_id=user_id, params={})
         return merge_background_activity(local, remote)
 
+    def execution_retained_source_fingerprint(self, *, user_id):
+        if self._service is None:
+            return None
+        return call(self._endpoint(), 'retained_source_fingerprint', '', user_id=user_id, params={})
+
     def execution_storage_rpc_metrics(self, *, user_id):
         if self._service is None:
             return None
@@ -70,6 +75,21 @@ class CommandControls:
         if self._service is None:
             return None
         return call(self._endpoint(), 'device_policy_reconcile', '', user_id=user_id, params={})
+
+
+def call_primary_manual_detect(project, task_id, *, user_id, caller_shutdown=None, **params):
+    """Address the verified resident primary only, never an executor shard."""
+    if not project:
+        raise CommandControlUnavailable('The scheduler owner is unavailable')
+    from serverctl_pkg.execution_service import ExecutionService
+
+    controls = CommandControls(service=ExecutionService(project, sys.executable))
+    endpoint = controls._endpoint()
+    if caller_shutdown is None:
+        return call(endpoint, 'manual_detect', task_id, user_id=user_id, params=params)
+    from lib.tasks_pkg.command_control_transport import call_until_shutdown
+    return call_until_shutdown(call, endpoint, task_id, user_id=user_id, params=params,
+                               shutdown=caller_shutdown)
 
 
 def configure(app, *, process_role, environ):
@@ -90,6 +110,14 @@ def execute(app, method, task_id, *, user_id, **params):
     if controls is None:
         return apply_command_control(method, task_id, user_id=user_id, **params)
     return controls.execute(method, task_id, user_id=user_id, **params)
+
+
+def execution_retained_source_fingerprint(app, *, user_id):
+    """Fingerprint of the resident's frozen source pins; None without a split."""
+    controls = app.extensions.get(_CLIENT_KEY)
+    if controls is None:
+        return None
+    return controls.execution_retained_source_fingerprint(user_id=user_id)
 
 
 def execution_storage_rpc_metrics(app, *, user_id):

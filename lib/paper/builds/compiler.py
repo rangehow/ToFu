@@ -19,6 +19,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from .badboxes import overfull_boxes
 from .contract import limit, validate
 from .errors import BuildError, check_cancelled
 from .sources import SourceSnapshot
@@ -149,6 +150,19 @@ def _diagnostics(text: str | Iterable[str], *, source_root: Path | None = None,
     return rows
 
 
+def overfull_diagnostics(text: str, *, source_root: Path | None = None,
+                         base_dir: Path | None = None) -> list[dict]:
+    """One warning per ``Overfull`` box of the final TeX log (``badboxes``)."""
+    rows = []
+    for box in overfull_boxes(text):
+        file = (_diagnostic_file(box['file'], source_root=source_root, base_dir=base_dir)
+                if box['file'] else '')
+        rows.append({'severity': 'warning', 'code': f'overfull_{box["box"]}',
+                     'message': box['record'][:2000], 'file': file,
+                     'line': box['lines'][0] if box['lines'] else None})
+    return rows
+
+
 def _tree_bytes(path: Path) -> int:
     try:
         return _output_bytes(path)
@@ -253,6 +267,10 @@ def compile_snapshot(snapshot: SourceSnapshot, directory: Path, *, owner_user_id
         with diagnostic_log.open('r', encoding='utf-8', errors='replace') as stream:
             diagnostics = _diagnostics(stream, source_root=snapshot.root,
                                        base_dir=main_path.parent)
+        if diagnostic_log == final_log:
+            diagnostics += overfull_diagnostics(
+                final_log.read_text(encoding='utf-8', errors='replace'),
+                source_root=snapshot.root, base_dir=main_path.parent)
         try:
             from .citation_audit import audit_citations
             diagnostics = (diagnostics + audit_citations(

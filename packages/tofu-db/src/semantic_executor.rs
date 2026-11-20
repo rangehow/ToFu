@@ -2570,6 +2570,13 @@ fn compile_turn(
                         require_parent_is_lane_tail: payload
                             .get("require_parent_is_lane_tail")
                             .is_some_and(|value| !is_python_falsy_json(value)),
+                        expected_conversation_revision: payload
+                            .get("expected_conversation_revision")
+                            .filter(|value| !value.is_null())
+                            .map(|value| {
+                                value.as_u64().ok_or(SemanticExecutionError::InvalidPayload)
+                            })
+                            .transpose()?,
                         expected_parent_projection_revision: payload
                             .get("expected_parent_projection_revision")
                             .filter(|value| !value.is_null())
@@ -2870,6 +2877,30 @@ fn compile_turn(
                     turn_id,
                     include_projection,
                     content_preview_chars,
+                    expected: None,
+                    slot: 0,
+                }],
+                TransactionIrResult::SlotOrLiteral {
+                    slot: 0,
+                    missing: b"null".to_vec(),
+                },
+                None,
+            )
+        }
+        "turn.resume.plan.read" => {
+            let turn_id = required_text(&payload, "turn_id", 128)?.to_owned();
+            let attempt_id = required_text(&payload, "attempt_id", 128)?.to_owned();
+            let projection_revision = payload
+                .get("projection_revision")
+                .and_then(Value::as_u64)
+                .filter(|value| *value <= i64::MAX as u64)
+                .ok_or(SemanticExecutionError::InvalidPayload)?;
+            (
+                vec![TransactionIrStep::TurnResumePlanRead {
+                    conversation_id,
+                    turn_id,
+                    attempt_id,
+                    projection_revision,
                     slot: 0,
                 }],
                 TransactionIrResult::SlotOrLiteral {
@@ -2946,18 +2977,27 @@ fn compile_turn(
                 _ => return Err(SemanticExecutionError::InvalidPayload),
             };
             let after_turn_id = match payload.get("after_turn_id") {
-                None => None,
+                None | Some(Value::Null) => None,
                 Some(Value::String(value)) if !value.is_empty() && value.chars().count() <= 128 => {
                     Some(value.clone())
                 }
                 _ => return Err(SemanticExecutionError::InvalidPayload),
             };
+            let continue_plan = payload
+                .get("continue_plan")
+                .map(crate::turn::model_context::ContinuePlanRequest::parse)
+                .transpose()
+                .map_err(|_| SemanticExecutionError::InvalidPayload)?;
+            if continue_plan.is_some() && (replay || after_turn_id.is_some()) {
+                return Err(SemanticExecutionError::InvalidPayload);
+            }
             (
                 vec![TransactionIrStep::TurnContextRead {
                     conversation_id,
                     turn_id,
                     replay,
                     after_turn_id,
+                    continue_plan,
                     slot: 0,
                 }],
                 TransactionIrResult::SlotOrLiteral {
@@ -3517,11 +3557,165 @@ fn record_key(
         .map_err(map_storage_error)
 }
 
+fn compile_device_policy_commit(
+    admitted: AdmittedRequest<'_>,
+    payload: &Map<String, Value>,
+    now_unix_ms: u64,
+) -> Result<TransactionIr, SemanticExecutionError> {
+    let invalid = SemanticExecutionError::InvalidPayload;
+    let tenant_id = admitted
+        .request
+        .tenant_id
+        .ok_or(SemanticExecutionError::AuthorityScopeMismatch)?;
+    let owner_user_id = admitted.request.owner_id;
+    let owner = payload
+        .get("owner")
+        .and_then(Value::as_u64)
+        .filter(|id| *id > 0)
+        .ok_or_else(|| invalid.clone())?;
+    let value = payload
+        .get("value")
+        .filter(|v| v["owner"].as_u64() == Some(owner))
+        .ok_or_else(|| invalid.clone())?;
+    let expected = optional_expected_version(payload)?.ok_or_else(|| invalid.clone())?;
+    let nodes = payload
+        .get("nodes")
+        .and_then(Value::as_array)
+        .filter(|v| (1..=2).contains(&v.len()))
+        .ok_or_else(|| invalid.clone())?;
+    let check_only = payload
+        .get("check_only")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| invalid.clone())?;
+    let mut steps = Vec::new();
+    let mut seen = Vec::new();
+    let namespace = "desktop.node.v1";
+    for node in nodes {
+        let node = node.as_object().ok_or_else(|| invalid.clone())?;
+        let id = required_text(node, "id", 128)?;
+        if seen.contains(&id) {
+            return Err(invalid);
+        }
+        seen.push(id);
+        let logical_key = format!("{owner}:{id}");
+        let key = record_key(tenant_id, owner_user_id, namespace, &logical_key)?;
+        let version = node
+            .get("version")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| invalid.clone())?;
+        let credential = match node.get("credential") {
+            Some(Value::String(value)) => Some(value.clone()),
+            Some(Value::Null) => None,
+            _ => return Err(invalid),
+        };
+        let active = node
+            .get("active")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| invalid.clone())?;
+        let next = node.get("next");
+        let metadata_state = if check_only {
+            if let Some(next) = next {
+                let state = if active { "active" } else { "pending" };
+                if version == 0
+                    || next["state"].as_str() != Some(state)
+                    || (active
+                        && (credential.is_none()
+                            || next["credentialId"].as_str() != credential.as_deref()))
+                {
+                    return Err(invalid);
+                }
+                Some(state)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        steps.push(TransactionIrStep::DeviceNodeWitness {
+            key: key.clone(),
+            logical_key: logical_key.clone(),
+            owner,
+            node_id: Some(id.to_owned()),
+            version,
+            credential,
+            state: metadata_state.or(active.then_some("active")),
+            slot: steps.len() + 1,
+        });
+        if let Some(next) = next {
+            if version == 0 && next.is_null() {
+                return Err(invalid);
+            }
+            steps.push(if next.is_null() {
+                TransactionIrStep::VersionedDocumentDelete {
+                    key,
+                    namespace: namespace.to_owned(),
+                    logical_key,
+                    expected_version: Some(version),
+                    slot: steps.len() + 1,
+                }
+            } else {
+                if next["owner"].as_u64() != Some(owner) || next["nodeId"].as_str() != Some(id) {
+                    return Err(invalid);
+                }
+                TransactionIrStep::VersionedDocumentPut {
+                    key,
+                    namespace: namespace.to_owned(),
+                    logical_key,
+                    value_json: canonical_json(next)?,
+                    expected_version: Some(version),
+                    updated_at_ms: now_unix_ms,
+                    slot: steps.len() + 1,
+                }
+            });
+        }
+    }
+    let namespace = "desktop.device_policy.v1";
+    let logical_key = owner.to_string();
+    let key = record_key(tenant_id, owner_user_id, namespace, &logical_key)?;
+    steps.push(if check_only {
+        TransactionIrStep::DeviceNodeWitness {
+            key,
+            logical_key,
+            owner,
+            node_id: None,
+            version: expected,
+            credential: None,
+            state: None,
+            slot: 0,
+        }
+    } else {
+        TransactionIrStep::VersionedDocumentPut {
+            key,
+            namespace: namespace.to_owned(),
+            logical_key,
+            value_json: canonical_json(value)?,
+            expected_version: Some(expected),
+            updated_at_ms: now_unix_ms,
+            slot: 0,
+        }
+    });
+    Ok(TransactionIr {
+        tenant_id,
+        owner_user_id,
+        operation: admitted.operation.name.to_owned(),
+        operation_kind: admitted.operation.kind,
+        steps,
+        result: TransactionIrResult::SlotOrLiteral {
+            slot: 0,
+            missing: Vec::new(),
+        },
+        command_effects: Some(command_effects(admitted, payload, now_unix_ms)?),
+    })
+}
+
 fn compile_record(
     admitted: AdmittedRequest<'_>,
     now_unix_ms: u64,
 ) -> Result<TransactionIr, SemanticExecutionError> {
     let payload = payload_object(&admitted.request.payload)?;
+    if admitted.operation.name == "record.device_policy_commit" {
+        return compile_device_policy_commit(admitted, &payload, now_unix_ms);
+    }
     let namespace = required_text(&payload, "namespace", 128)?.to_owned();
     let namespace_for_guard = namespace.clone();
     if matches!(
@@ -6378,6 +6572,23 @@ fn compile_swarm(
     now_unix_ms: u64,
 ) -> Result<TransactionIr, SemanticExecutionError> {
     let payload = payload_object(&admitted.request.payload)?;
+    // SQL exact lifecycle variants must not fall through to the native legacy
+    // handlers. Refuse before compiling any mutation, receipt, or outbox effects.
+    // task_id on session.save (without save_mode) and acknowledge_results is legacy.
+    let exact_field = match admitted.operation.name {
+        "swarm.session.save" => Some("save_mode"),
+        "swarm.session.terminate"
+        | "swarm.agent.save"
+        | "swarm.agent.append"
+        | "swarm.agent.checkpoint.mark" => Some("run_id"),
+        "swarm.agents.mark_delivered" => Some("task_id"),
+        _ => None,
+    };
+    if exact_field.is_some_and(|field| payload.contains_key(field)) {
+        return Err(SemanticExecutionError::InvalidPayloadFence(
+            "Native exact swarm lifecycle is unsupported",
+        ));
+    }
     let tenant_id = admitted
         .request
         .tenant_id
@@ -8110,6 +8321,18 @@ fn compile_conversation(
                 Some(command_effects(admitted, &payload, now_unix_ms)?),
             )
         }
+        "conversation.portable_import" => (
+            vec![TransactionIrStep::ConversationPortableImport {
+                payload: canonical_json(&Value::Object(payload.clone()))?,
+                committed_at_ms: now_unix_ms,
+                slot: 0,
+            }],
+            TransactionIrResult::SlotOrLiteral {
+                slot: 0,
+                missing: Vec::new(),
+            },
+            Some(command_effects(admitted, &payload, now_unix_ms)?),
+        ),
         "conversation.create" => {
             let conversation_id = required_text(&payload, "conv_id", 256)?.to_owned();
             let settings = match payload.get("settings") {
@@ -8224,21 +8447,12 @@ fn compile_compaction_archive(
                 }
             };
             let created_at_ms = number("created_at_ms", now_unix_ms)?;
-            // Refuse an oversized snapshot at admission, before the receipt
-            // and outbox digests hash it again and before rehearsal and the
-            // writer execute it: the document bound alone decides the outcome.
-            let messages_json = canonical_json(messages)?;
-            if messages_json.len()
-                > crate::generated_tofudb_ir::MAX_COMPACTION_ARCHIVE_DOCUMENT_BYTES
-            {
-                return Err(SemanticExecutionError::InvalidPayload);
-            }
             (
                 vec![TransactionIrStep::CompactionArchiveCreate {
                     archive_id,
                     conversation_id,
                     archive_scope,
-                    messages_json,
+                    messages_json: canonical_json(messages)?,
                     summary: optional_text("summary", 200_000)?,
                     receipt_json: canonical_json(&receipt)?,
                     trigger,
@@ -11220,8 +11434,10 @@ pub(crate) fn compile_parallel_transaction(
                 | TransactionIrStep::EntityDelete { .. }
                 | TransactionIrStep::VersionedDocumentGet { .. }
                 | TransactionIrStep::VersionedDocumentList { .. }
+                | TransactionIrStep::DeviceNodeWitness { .. }
                 | TransactionIrStep::VersionedDocumentPut { .. }
                 | TransactionIrStep::VersionedDocumentDelete { .. }
+                | TransactionIrStep::ConversationPortableImport { .. }
                 | TransactionIrStep::ConversationCreate { .. }
                 | TransactionIrStep::ConversationGet { .. }
                 | TransactionIrStep::ConversationSettingsUpdate { .. }

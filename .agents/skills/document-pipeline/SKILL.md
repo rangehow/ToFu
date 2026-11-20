@@ -38,7 +38,10 @@ short:
    `--draft main.tex`): the pipeline audits and revises that draft by
    targeted edits, keeps your figures, never invents results and A/Bs
    against it. Without a draft it writes from `dossier.json`
-   (example: `tests/longform/fixtures/sample_paper/`).
+   (example: `tests/longform/fixtures/sample_paper/`). A finished draft
+   takes `"role": "final"`: copy edits only, and render repair may fix only
+   references, floats and layout. Intake refuses fields outside the brief
+   schema ("Brief fields" in the authority) instead of ignoring them.
 3. Name the writer explicitly (`writer_model`, or `--writer-model`); keep
    `judge_model: gpt-5.5` (the calibrated reviewer). Claude writers refuse
    frontier-LLM research content (`content_filter`); pick another family.
@@ -51,4 +54,4 @@ short:
 
 Do not edit generated artifacts to pass a gate, and do not swap the judge to
 the writer model. Report the delivered path, the blind verdict with both
-orders' scores, the calibrated review verdict and any experiment requests.
+orders' scores ("no preference" means one win each, often position bias), the calibrated review verdict and any experiment requests.

@@ -154,10 +154,14 @@ def coordinator_poll_tool() -> dict:
         'canonical or was held (act on delivery.reason). Each settlement carries the Worker\'s whole final '
         'answer (result), its conversation/Turn links and the recorded error of a failed Worker; a delegation that could not start '
         'reports failed_to_start with its error and recovery. Without IDs it lists this request\'s '
-        'Workers that are running or starting. Worker settlement also resumes you automatically.')
+        'Workers that are running or starting. Worker settlement also resumes you automatically. '
+        'A review_loop_id (review-loop-..., from delegate_project_work with review) is polled on its own: each '
+        'poll advances the loop (starts the next reviewers or sends findings back to the author) and waits '
+        'until it passes or reports an impasse, new input arrives, another Worker settles or wait_s passes.')
     properties = function['parameters']['properties']
-    properties['id']['description'] = 'One Worker assignment ID.'
-    properties['ids']['description'] = 'Several Worker assignment IDs in one call.'
+    properties['id']['description'] = 'One Worker assignment ID or review loop ID.'
+    properties['ids']['description'] = ('Several Worker assignment IDs in one call, or review loop IDs '
+                                        '(never mixed with assignment IDs).')
     properties['mode']['description'] = ("'any' (default) returns as soon as one Worker "
                                          "settles; 'all' waits for every listed one.")
     return tool

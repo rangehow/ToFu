@@ -125,6 +125,34 @@ class TestVersioning:
         ids = [v['id'] for v in body['versions']]
         assert ids == [v1['id'], v2['id']]
 
+    def test_unchanged_selected_metadata_does_not_certify_chain(self, flask_app, flask_client, owned_artifact_conversations):
+        from lib.artifacts import create_artifact
+        cid = 'conv-chain-freshness-' + uuid.uuid4().hex[:8]
+        owners, owner = owned_artifact_conversations
+        owners[cid] = owner
+        with flask_app.app_context():
+            selected = create_artifact(conv_id=cid, content='original', format='markdown',
+                                       source='write_file', source_ref={'path': 'report.md'})
+        url = f'/api/v4/artifacts/{selected["id"]}'
+        before_response = flask_client.get(url)
+        assert before_response.status_code == 200
+        before = before_response.get_json()
+        assert before['id'] == selected['id']
+        assert before['version'] == selected['version'] == 1
+        assert flask_client.get(url + '/versions').get_json()['count'] == 1
+        with flask_app.app_context():
+            child = create_artifact(conv_id=cid, content='new revision', format='markdown',
+                                    source='write_file', source_ref={'path': 'report.md'})
+        after_response = flask_client.get(url)
+        assert after_response.status_code == 200
+        assert after_response.get_json() == before
+        chain = flask_client.get(url + '/versions').get_json()
+        assert chain['count'] == 2
+        assert [row['id'] for row in chain['versions']] == [selected['id'], child['id']]
+        owners.pop(cid)
+        assert flask_client.get(url).status_code == 404
+        assert flask_client.get(url + '/versions').status_code == 404
+
     def test_versions_route_404(self, flask_client):
         r = flask_client.get('/api/v4/artifacts/nope-xyz/versions')
         assert r.status_code == 404

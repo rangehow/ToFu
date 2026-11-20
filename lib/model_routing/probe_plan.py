@@ -102,20 +102,69 @@ def manual_probe_bundle(
     return result
 
 
+def _probe_credential_eligible(credential: Mapping[str, Any], *, allow_disabled: bool) -> bool:
+    return allow_disabled or credential.get('enabled', True)
+
+
+def validate_probe_scope(
+    bundle: Mapping[str, Any], *, manual: bool,
+    credential_indices: frozenset[int] | None = None,
+    model_ids: frozenset[str] | None = None,
+) -> None:
+    """Reject empty or stale explicit scopes before cache adoption or secret reads."""
+    def invalid() -> None:
+        raise ModelRoutingError(
+            'The selected request name or credential is no longer in this matrix. Refresh Settings and retry.',
+            kind='provider_probe_empty_scope', field='only')
+
+    if credential_indices is not None:
+        if (not credential_indices
+                or not credential_indices <= set(range(len(bundle['credentials'])))
+                or any(not _probe_credential_eligible(bundle['credentials'][index], allow_disabled=True)
+                       for index in credential_indices)):
+            invalid()
+    if model_ids is None:
+        return
+    connections = {row['connection_id'] for row in bundle['connections']
+                   if (manual or row.get('enabled', True))
+                   and str(row.get('base_url') or '').strip()}
+    request_names = set()
+    for offering in bundle['offerings']:
+        if not offering.get('enabled', True):
+            continue
+        root = str((offering.get('model') or {}).get('model_id')
+                   or offering.get('pending_model_id') or '')
+        if not root:
+            continue
+        deployments = [row for row in bundle['deployments']
+                       if row['offering_id'] == offering['offering_id']
+                       and str(row.get('wire_model_id') or '').strip()]
+        if deployments:
+            request_names.update(str(row['wire_model_id']).strip() for row in deployments
+                                 if row['connection_id'] in connections)
+        elif connections:
+            request_names.add(root)
+    if not model_ids or not model_ids <= request_names:
+        invalid()
+
+
 def matrix_probe_plan(
     repository: ModelRoutingRepository,
     boundary: OwnerBoundary,
     bundle: Mapping[str, Any],
-    *, manual: bool = False,
+    *, manual: bool = False, selected_credential_indices: frozenset[int] = frozenset(),
+    selected_model_ids: frozenset[str] | None = None,
 ) -> dict[str, Any]:
     """Resolve one ProviderAccess bundle into engine probe inputs.
 
     Returns engine inputs plus explicit request_contexts (per wire) and
     credential_contexts (per column); these private contexts carry secrets and
     never appear in public probe snapshots.
-    All callers skip disabled Offerings and Connections. Explicit manual
-    diagnostics retain draft request names without enabling, saving or granting
-    anything.
+    All callers skip disabled Offerings. Manual diagnostics retain disabled
+    Connections and draft request names without enabling, saving or granting
+    anything. Disabled credentials require an explicit selected column index;
+    bulk/manual mode alone never authorizes them. Reservations always exclude
+    a column, even under explicit selection.
     Every request name is independent of credential grants and historical probe
     evidence. Retired ``Deployment.enabled`` is ignored in both modes.
     ``api_keys[i]`` is the resolved plaintext key for column i (never leaves
@@ -124,6 +173,9 @@ def matrix_probe_plan(
     switches the task to the engine's oauth mode, which resolves the live
     token per cell instead of probing the stored sentinel.
     """
+    validate_probe_scope(
+        bundle, manual=manual, model_ids=selected_model_ids,
+        credential_indices=selected_credential_indices or None)
     connections = [
         row for row in bundle["connections"]
         if (manual or row.get("enabled", True)) and str(row.get("base_url") or "").strip()
@@ -137,7 +189,10 @@ def matrix_probe_plan(
     primary = connections[0]
     connections_by_id = {row["connection_id"]: row for row in connections}
     credentials = list(bundle["credentials"])
-    if not credentials:
+    eligible_indices = {index for index, row in enumerate(credentials)
+                        if _probe_credential_eligible(
+                            row, allow_disabled=manual and index in selected_credential_indices)}
+    if not eligible_indices:
         raise ModelRoutingError(
             "provider access has no credentials to probe",
             kind="provider_probe_no_credentials",
@@ -145,7 +200,15 @@ def matrix_probe_plan(
     api_keys: list[str] = []
     oauth_names: list[str] = []
     credential_contexts: list[dict[str, Any]] = []
-    for credential in credentials:
+    for index, credential in enumerate(credentials):
+        if index not in eligible_indices:
+            # Keep saved credential/UI column indices without reading a secret.
+            api_keys.append('')
+            oauth_names.append('')
+            credential_contexts.append({
+                'enabled': False, 'oauth': '', 'extra_headers': {},
+            })
+            continue
         reference = str(credential.get("secret_reference") or "")
         plaintext = ""
         if reference:
@@ -159,10 +222,10 @@ def matrix_probe_plan(
         api_keys.append("oauth-managed" if oauth else api_key)
         oauth_names.append(oauth)
         credential_contexts.append({"oauth": oauth, "extra_headers": secret_headers})
-    oauth_mode = (
-        bool(credentials)
-        and all(name and name == oauth_names[0] for name in oauth_names)
-    )
+    eligible_oauth_names = [name for index, name in enumerate(oauth_names)
+                            if index in eligible_indices]
+    oauth_mode = all(name and name == eligible_oauth_names[0]
+                     for name in eligible_oauth_names)
     wires_by_offering: dict[str, list[str]] = {}
     request_contexts: dict[str, dict[str, Any]] = {}
     for deployment in bundle["deployments"]:
@@ -226,8 +289,8 @@ def matrix_probe_plan(
             "faces": {},
         },
         "models": models,
-        "api_keys": (["oauth-managed"] * len(credentials)) if oauth_mode else api_keys,
-        "oauth": oauth_names[0] if oauth_mode else "",
+        "api_keys": api_keys,
+        "oauth": eligible_oauth_names[0] if oauth_mode else "",
         "request_contexts": request_contexts,
         "credential_contexts": credential_contexts,
         "adapter": dict(primary.get("adapter") or {}),

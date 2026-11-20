@@ -17,7 +17,7 @@ accept every fixture through the SAME authorities production uses.
 If this fails
 -------------
 The frontend contract surface drifted from the corpus. Regenerate the
-mirror (``scripts/gen_event_contract.py``) or the corpus
+mirror (``tofu-xtask contracts``, packages/tofu-xtask/src/events.rs) or the corpus
 (``scripts/gen_wire_fixtures.py``) — never edit either artifact by hand.
 """
 
@@ -56,12 +56,12 @@ def _generated_interfaces() -> dict[str, set[str]]:
 
 
 def _event_interface_name(event_type: str) -> str:
-    # Mirrors scripts/gen_event_contract.py:_interface_name.
+    # Mirrors packages/tofu-xtask/src/events.rs interface_name.
     return "".join(part.capitalize() or "_" for part in event_type.split("_")) + "Event"
 
 
 def _push_interface_name(frame_type: str) -> str:
-    # Mirrors scripts/gen_event_contract.py:_push_interface_name.
+    # Mirrors packages/tofu-xtask/src/events.rs push_interface_name.
     return (
         "".join(part.capitalize() or "_" for part in re.split(r"[_\.]", frame_type))
         + "PushFrame"
@@ -104,7 +104,7 @@ def _bundle_harness(tmp_path: Path) -> str:
     entry.write_text(
         "export { createTurnState, reduceTurnState } from "
         f"{(ROOT / 'frontend/src/core/turn-state.ts').as_posix()!r};\n"
-        "export { decodeConversationSyncSnapshot } from "
+        "export { assertConversationSyncSchema, decodeConversationSyncSnapshot } from "
         f"{(ROOT / 'frontend/src/api/conversation-sync.generated.ts').as_posix()!r};\n"
         "export { isContractedPushFrame } from "
         f"{(ROOT / 'frontend/src/core/frame-identity.ts').as_posix()!r};\n",
@@ -166,6 +166,18 @@ let state = createTurnState(snapshot.conversationId);
 state = reduceTurnState(state, { type: 'snapshot', snapshot: decoded });
 const firstTurn = decoded.turns[0];
 const projected = state.turnsById[firstTurn.turnId];
+const observed = snapshot.turns[0].settlement.coordinatorWorkerObservations;
+out.workerObservationsPreserved = !!Object.keys(observed).length &&
+  JSON.stringify(projected.settlement.coordinatorWorkerObservations) === JSON.stringify(observed);
+const invalid = read(process.argv[2]);
+const [receipt] = Object.values(invalid.turns[0].settlement.coordinatorWorkerObservations);
+receipt.extra = true;
+try {
+  decodeConversationSyncSnapshot(invalid);
+  out.unknownReceiptFieldRejected = false;
+} catch (_error) {
+  out.unknownReceiptFieldRejected = true;
+}
 out.turnsProjected =
   Object.keys(state.turnsById).length === decoded.turns.length;
 out.projectionContentPreserved =
@@ -181,7 +193,9 @@ out.queueItemsAccepted =
   state.queueItems.length === decoded.queueItems.length;
 
 // History-page reduction lands on the same store.
-state = reduceTurnState(state, { type: 'snapshot', snapshot: page });
+state = reduceTurnState(state, {
+  type: 'snapshot', snapshot: assertConversationSyncSchema('ConversationTurnPage', page),
+});
 out.pageTurnsProjected = page.turns.every(
   (turn) => !!state.turnsById[turn.turnId]);
 out.pageHistoryRecorded =
@@ -204,6 +218,8 @@ console.log(JSON.stringify(out));
         "decoderReturnsFixtureConversation": True,
         "legacyRejected": True,
         "turnsProjected": True,
+        "workerObservationsPreserved": True,
+        "unknownReceiptFieldRejected": True,
         "projectionContentPreserved": True,
         "laneOrderTracksTurn": True,
         "turnWindowRecorded": True,

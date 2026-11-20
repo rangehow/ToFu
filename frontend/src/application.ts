@@ -314,10 +314,10 @@ export function startApplication(): Promise<void> {
       showWorkspace(page);
     }, error => console.warn('[workspace] navigation failed', error), page => {
       // HTTP/1 browser sockets are shared with scene assets and API requests.
-      // The office reads its own sources unless the chat is docked (body
-      // data-conversation-dock); chat resumes from durable cursors.
+      // The office reads its own sources and shows no transcript; chat resumes
+      // from durable cursors.
       const turns = getRuntimeService('ConversationTurnStore') as TurnRuntime | undefined;
-      turns?.setTransportSuspended(page === 'world' && document.body.dataset.conversationDock !== 'chat');
+      turns?.setTransportSuspended(page === 'world');
     });
     window.dispatchEvent(new CustomEvent('tofu:app-ready', {
       detail: { version: window.TofuModules?.version },

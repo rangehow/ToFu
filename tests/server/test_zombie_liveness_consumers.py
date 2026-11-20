@@ -82,13 +82,13 @@ def test_fault_dump_of_an_exited_unreaped_writer_is_pruned_as_dead(
     assert f'tofu_faulthandler_{live}.log' not in removed
 
 
-def test_sidecar_crash_cycle_observes_the_killed_child_without_its_reaper(
+def test_sidecar_reopen_observes_the_exited_child_without_its_reaper(
         monkeypatch, zombie):
     from scripts import tofudb_perf_compare as bench
 
     engine = bench.LegacyEngine('sqlite')
-    engine._runtime = SimpleNamespace(
-        status=lambda: {'pid': zombie}, stop=lambda: None)
+    engine._runtime = SimpleNamespace(stop=lambda: None)
+    engine._child_pid = zombie
     monkeypatch.setattr(engine, '_launch_runtime', lambda: None)
     clock = [0.0]
     sleeps = []
@@ -100,5 +100,40 @@ def test_sidecar_crash_cycle_observes_the_killed_child_without_its_reaper(
     monkeypatch.setattr(bench, 'time', SimpleNamespace(
         perf_counter_ns=time.perf_counter_ns,
         monotonic=lambda: clock[0], sleep=sleep))
-    engine.crash_cycle()
+    engine.reopen_after_sigkill()
     assert sleeps == []
+
+
+@pytest.mark.parametrize('case', ['missing', 'already-exited', 'signal-error', 'wrong-exit'])
+def test_benchmark_crash_refuses_to_relaunch_without_verified_signal_exit(monkeypatch, case):
+    from scripts import tofudb_perf_compare as bench
+
+    def kill():
+        if case == 'signal-error':
+            raise ProcessLookupError('gone before signal')
+
+    child = (None if case == 'missing' else SimpleNamespace(
+        poll=lambda: 0 if case == 'already-exited' else None,
+        kill=kill, wait=lambda **_: 0))
+    engine = bench.LegacyEngine('sqlite')
+    engine._runtime = SimpleNamespace(_supervisor=SimpleNamespace(_process=child))
+    monkeypatch.setattr(engine, '_relaunch_after_kill', lambda _: pytest.fail('reopened without SIGKILL'))
+    with pytest.raises((bench.BenchError, ProcessLookupError)):
+        engine.crash_cycle()
+    assert engine.last_crash_receipt is None
+
+
+def test_verified_kill_survives_failed_reopen(tmp_path, monkeypatch):
+    from scripts import tofudb_perf_compare as bench
+
+    with subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']) as child:
+        engine = bench.LegacyEngine('sqlite')
+        engine._project_root = tmp_path
+        engine._runtime = SimpleNamespace(_supervisor=SimpleNamespace(_process=child))
+        def fail_reopen(_):
+            raise RuntimeError('fixture reopen failed')
+        monkeypatch.setattr(engine, '_relaunch_after_kill', fail_reopen)
+        with pytest.raises(RuntimeError, match='fixture reopen failed'):
+            engine.crash_cycle()
+        assert engine.last_crash_receipt == {
+            'killed_pid': child.pid, 'exit_code': -9, 'authority_directory': str(tmp_path)}

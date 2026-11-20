@@ -1,0 +1,383 @@
+{
+ "description": "Result, document, catalog-annotation, provider-name and tool-toggle shapes: `bundle` answers the recorded case named by `case`, else the CallToolResult in its `result` argument.",
+ "serverInfo": {
+  "name": "results-replay",
+  "version": "1.0.0"
+ },
+ "tools": [
+  {
+   "name": "bundle",
+   "description": "An application document (documents, structured content)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "hang",
+   "description": "Never answers",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "crash_write",
+   "description": "Exits mid-call",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "sheet.get_range_data",
+   "description": "A dotted Kingsoft-style tool name",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "read_file",
+   "description": "A plain name beside the dotted one",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "a_b",
+   "description": "Collides with a.b once sanitized",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "a.b",
+   "description": "Collides with a_b once sanitized",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.a",
+   "description": "An over-long dotted name",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.b",
+   "description": "Its sibling",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "keep_tool",
+   "description": "keep_tool (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "drop_tool",
+   "description": "drop_tool (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "search",
+   "description": "search (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "one",
+   "description": "one (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "two",
+   "description": "two (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "ann_camel",
+   "description": "ann_camel (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   },
+   "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "ann_partial",
+   "description": "ann_partial (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   },
+   "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": true
+   }
+  },
+  {
+   "name": "ann_false",
+   "description": "ann_false (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   },
+   "annotations": {
+    "readOnlyHint": false
+   }
+  },
+  {
+   "name": "ann_absent",
+   "description": "ann_absent (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   }
+  },
+  {
+   "name": "ann_title_only",
+   "description": "ann_title_only (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   },
+   "annotations": {
+    "title": "Only a title"
+   }
+  },
+  {
+   "name": "out_schema",
+   "description": "out_schema (recorded display shape)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   },
+   "outputSchema": {
+    "type": "object",
+    "properties": {
+     "a": {
+      "type": "string"
+     }
+    }
+   }
+  }
+ ],
+ "calls": {
+  "bundle": {
+   "by": "case",
+   "reflect": "result",
+   "cases": {
+    "nan_structured": {
+     "raw_result": "{\"content\": [{\"type\": \"text\", \"text\": \"{\\\"ok\\\":true}\"}], \"structuredContent\": {\"invalid\": NaN}}"
+    },
+    "surrogate_structured": {
+     "raw_result": "{\"content\": [{\"type\": \"text\", \"text\": \"{\\\"ok\\\":true}\"}], \"structuredContent\": {\"invalid\": \"\\ud800\"}}"
+    }
+   }
+  },
+  "hang": {
+   "hang": true
+  },
+  "crash_write": {
+   "exit": true
+  },
+  "sheet.get_range_data": {
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ]
+   }
+  },
+  "read_file": {
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "ok"
+     }
+    ]
+   }
+  },
+  "a_b": {
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "called a_b"
+     }
+    ]
+   }
+  },
+  "a.b": {
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "called a.b"
+     }
+    ]
+   }
+  },
+  "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.a": {
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "called xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.a"
+     }
+    ]
+   }
+  },
+  "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.b": {
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "called xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.b"
+     }
+    ]
+   }
+  },
+  "keep_tool": {
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "called keep_tool"
+     }
+    ]
+   }
+  },
+  "drop_tool": {
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "called drop_tool"
+     }
+    ]
+   }
+  },
+  "search": {
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "called search"
+     }
+    ]
+   }
+  },
+  "one": {
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "called one"
+     }
+    ]
+   }
+  },
+  "two": {
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "called two"
+     }
+    ]
+   }
+  },
+  "ann_camel": {
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "called ann_camel"
+     }
+    ]
+   }
+  },
+  "ann_partial": {
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "called ann_partial"
+     }
+    ]
+   }
+  },
+  "ann_false": {
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "called ann_false"
+     }
+    ]
+   }
+  },
+  "ann_absent": {
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "called ann_absent"
+     }
+    ]
+   }
+  },
+  "ann_title_only": {
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "called ann_title_only"
+     }
+    ]
+   }
+  },
+  "out_schema": {
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "called out_schema"
+     }
+    ]
+   }
+  }
+ }
+}

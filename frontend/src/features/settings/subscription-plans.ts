@@ -71,12 +71,17 @@ function card(template: PlanTemplate): HTMLElement {
   const root = document.createElement('div');
   root.className = 'oauth-provider-card';
   root.dataset.planKey = template.key;
+  root.dataset.subscriptionBrand = template.brand || 'generic';
+  root.id = `oauthPlanDetail-${template.key}`;
+  root.hidden = true;
   const header = document.createElement('div');
   header.className = 'oauth-provider-header';
   const icon = document.createElement('span');
+  icon.setAttribute('aria-hidden', 'true');
   icon.innerHTML = brandIconHtml(template.brand || 'generic', 20);
-  const name = document.createElement('span');
+  const name = document.createElement('h3');
   name.className = 'oauth-provider-name';
+  name.tabIndex = -1;
   name.textContent = template.name || template.key;
   const badge = document.createElement('span');
   badge.className = 'oauth-status-badge' + (models === null ? '' : ' authenticated');
@@ -127,6 +132,8 @@ async function refresh(next: SubscriptionPlanPorts): Promise<void> {
   ports = next;
   const epoch = ++generation;
   if (!container()) return;
+  const feedback = document.getElementById('oauthPlanFeedback');
+  if (feedback && !templates.length) feedback.textContent = t('settings.loadingConfig');
   try {
     const response = await globals().Api.providers.templates();
     const rows = (Array.isArray(response) ? response : (response as {items?: unknown})?.items) as PlanTemplate[] | undefined;
@@ -134,7 +141,9 @@ async function refresh(next: SubscriptionPlanPorts): Promise<void> {
     if (epoch !== generation) return;
     templates = (rows || []).filter(row => row.category === 'subscription');
     render();
+    if (feedback) feedback.textContent = '';
   } catch (error) {
+    if (epoch === generation && feedback) feedback.textContent = t('settings.loadingFailed');
     console.warn('[Settings] subscription plan cards unavailable', error);
   }
 }

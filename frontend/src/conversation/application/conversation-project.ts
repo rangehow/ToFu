@@ -84,14 +84,24 @@ interface ProjectPorts {
 }
 export function createConversationProjectController(ports: ProjectPorts) {
   let generation = 0;
+  let enrichmentRevision = 0;
 
   let draftWorkspace = captureConversationProject(null);
   let draftFolderId: string | null = null;
   // Transient provenance only: an empty explicit choice is not an unset default.
   let draftExplicit = false;
-  function begin() {
-    const token = ++generation;
+  function capture() {
+    const token = generation;
     return () => token === generation;
+  }
+  function begin() {
+    ++generation;
+    return capture();
+  }
+  function beginEnrichment() {
+    const current = capture();
+    const revision = ++enrichmentRevision;
+    return () => current() && revision === enrichmentRevision;
   }
   function restore(conv: ProjectConversation | null, eligible = begin()) {
     const id = conv?.id ?? null;
@@ -132,7 +142,7 @@ export function createConversationProjectController(ports: ProjectPorts) {
     ports.apply(projectConversationWorkspace(draftWorkspace));
   }
   return {
-    begin, beginMutation, restore, startDraft, chooseDraft, captureDraftIdentity,
+    begin, capture, beginEnrichment, beginMutation, restore, startDraft, chooseDraft, captureDraftIdentity,
     captureDraft: () => captureConversationProject(draftWorkspace),
   };
 }

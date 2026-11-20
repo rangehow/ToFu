@@ -25,6 +25,7 @@ from lib.llm._sse_core import (
     prepare_request,
 )
 from lib.llm.request import transport_body_arguments, transport_payload
+from lib.llm.sent_frame import transport_send
 from lib.llm._sse_stream import SSEByteStream
 from lib.llm._transport import (
     CONNECT_TIMEOUT,
@@ -131,7 +132,7 @@ def stream_chat(body, *, on_thinking=None, on_content=None,
                 on_tool_call_ready=None,
                 abort_check=None, log_prefix='', api_key=None, base_url=None,
                 extra_headers=None, api_protocol='openai', oauth='',
-                adapter=None, on_attempt_restart=None,
+                adapter=None, codex_account_fingerprints=(), on_attempt_restart=None,
                 on_first_byte_wait=None,
                 on_stream_wait=None,
                 owner_user_id=None,
@@ -200,6 +201,7 @@ def stream_chat(body, *, on_thinking=None, on_content=None,
                 attempt=attempt, api_key=api_key, base_url=base_url,
                 extra_headers=extra_headers, api_protocol=api_protocol,
                 oauth=oauth, adapter=adapter,
+                codex_account_fingerprints=codex_account_fingerprints,
                 on_first_byte_wait=on_first_byte_wait,
                 on_stream_wait=on_stream_wait,
                 owner_user_id=owner_user_id,
@@ -380,6 +382,7 @@ def _stream_chat_once_impl(body, *, on_thinking=None, on_content=None,
                       abort_check=None, log_prefix='', attempt=0,
                       api_key=None, base_url=None, extra_headers=None,
                       api_protocol='openai', oauth='', adapter=None,
+                      codex_account_fingerprints=(),
                       on_first_byte_wait=None, on_stream_wait=None,
                       owner_user_id=None, attempt_timeout=None,
                       first_byte_timeout=None):
@@ -392,6 +395,7 @@ def _stream_chat_once_impl(body, *, on_thinking=None, on_content=None,
             body, attempt=attempt, log_prefix=log_prefix,
             api_key=api_key, base_url=base_url, extra_headers=extra_headers,
             api_protocol=api_protocol, oauth=oauth,
+            codex_account_fingerprints=codex_account_fingerprints,
             owner_user_id=_owner_scope)
 
     _network_route = {
@@ -522,6 +526,11 @@ def _stream_chat_once_impl(body, *, on_thinking=None, on_content=None,
     _first_byte_deadline = (
         time.monotonic() + min(_header_bounds) if _header_bounds else None)
     try:
+        # The exact bytes this attempt hands to the transport and the frame
+        # naming them: a content-encoded body is compressed once here, and
+        # these bytes are passed unchanged to every send branch below.
+        _wire_payload, _sent_frame = transport_send(
+            plan.body, transport='sse', frame=getattr(plan, 'sent_frame', None))
         _conn_t0 = time.monotonic()
         try:
             # ── Desktop-egress branch (S3): when the server's own egress to
@@ -535,7 +544,9 @@ def _stream_chat_once_impl(body, *, on_thinking=None, on_content=None,
                 # Without it no desktop relay can exist, so every route
                 # resolves to direct.
                 _eg = None
+            from lib.llm.request import refuse_unfenced_model_relay
             if adapter and _eg is not None:
+                refuse_unfenced_model_relay(getattr(plan, 'physical_model_dispatch_guard', None))
                 _start_watchdog_before_send()
                 # ── Subscription-adapter branch (E4): the provider IS a
                 # CLIProxyAPI sidecar on the user's desktop agent; its
@@ -559,7 +570,7 @@ def _stream_chat_once_impl(body, *, on_thinking=None, on_content=None,
                         adapter.get('agent_id', ''),
                         int(adapter.get('port') or 0),
                         _relay_path, headers=plan.hdrs,
-                        body=transport_payload(plan.body),
+                        body=transport_payload(plan.body, payload=_wire_payload),
                         user_id=_owner_scope, log_prefix=log_prefix)
                 except _eg.EgressUnavailable as e:
                     _report_network_outcome(False, 'connect')
@@ -591,6 +602,7 @@ def _stream_chat_once_impl(body, *, on_thinking=None, on_content=None,
                 # Header latency counts from the send, not route admission.
                 _conn_t0 = time.monotonic()
                 if _egress_route != 'direct':
+                    refuse_unfenced_model_relay(getattr(plan, 'physical_model_dispatch_guard', None))
                     _set_network_route({
                         'routeId': 'desktop:egress',
                         'routeMode': 'desktop',
@@ -601,7 +613,7 @@ def _stream_chat_once_impl(body, *, on_thinking=None, on_content=None,
                             {'trace_id': plan.trace_id, 'transport': 'desktop_egress'},
                             dispatch_model_request, plan, _eg.open_stream,
                             plan.url, method='POST', headers=plan.hdrs,
-                            body=transport_payload(plan.body),
+                            body=transport_payload(plan.body, payload=_wire_payload),
                             agent_id=_egress_route, user_id=_owner_scope,
                             log_prefix=log_prefix, abort_check=abort_check)
                     except _eg.EgressUnavailable as e:
@@ -623,7 +635,9 @@ def _stream_chat_once_impl(body, *, on_thinking=None, on_content=None,
                         _tp.post_headers_abortable, lambda: dispatch_model_request(
                             plan, get_sync_session().post, plan.url,
                             headers=plan.hdrs,
-                            **transport_body_arguments(plan.body, transport='requests'),
+                            **transport_body_arguments(
+                                plan.body, transport='requests',
+                                payload=_wire_payload),
                             stream=True, timeout=(CONNECT_TIMEOUT, None),
                             network_scope=getattr(plan, 'network_scope', None),
                             allow_redirects=False),
@@ -689,7 +703,7 @@ def _stream_chat_once_impl(body, *, on_thinking=None, on_content=None,
             on_tool_call_ready=on_tool_call_ready,
             route_output_limit_key=plan.route_output_limit_key,
             credential_present=getattr(plan, 'credential_present', False),
-            progress=_progress)
+            progress=_progress, sent_frame=_sent_frame)
 
         byte_stream = SSEByteStream(acc)
         _dbg_sse_fp = None

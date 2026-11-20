@@ -95,8 +95,13 @@ def reconcile_probe_identities(document, bundle, cells):
         if group is not None:
             group['wires'].update(row['wire_model_id'] for row in
                                   deployments_by_offering.get(offering['offering_id'], []))
+    codex_accesses = {row['provider_access_id'] for row in document.get('provider_accesses', [])
+                      if row.get('provider_id') == 'oauth_codex'}
     for group in groups.values():
         offering, passed, all_wires = group['offering'], group['passed'], group['wires']
+        # A successful probe proves reachability, not consent to restore a grant.
+        if offering['provider_access_id'] in codex_accesses:
+            continue
         ref = (offering['model']['creator_id'], offering['model']['model_id'])
         # Preserve owner grants/exclusions. A new grant reaches only successful
         # names on connections already authorized for that credential.

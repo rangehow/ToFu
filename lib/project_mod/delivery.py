@@ -249,12 +249,26 @@ def _publication_hold(row: dict, receipt: dict) -> dict | None:
     if receipt.get('taskOutcome') == 'completed' and (
             checkpoint_has_no_delta(row) or checkpoint_contained(row)):
         return None
-    from lib.project_dispatch.publication import publication_reason
+    from lib.project_dispatch.publication import CLOSED, closed_cause, publication_reason
     reason = publication_reason(row, receipt)
+    if reason == CLOSED and receipt.get('state') != 'delivered':
+        return _close(row, receipt, closed_cause(row, receipt, afresh=False))
     if reason:
         return _save(row, receipt, state='blocked', phase='workspace_adoption',
                      reason=reason, retry=None)
     return None
+
+
+def _close(row: dict, receipt: dict, cause: str) -> dict:
+    """Settle a delivery its assignment can never publish: nothing is left to act on.
+
+    ``closed`` is terminal and asks the receiver for nothing; the checkpoint and
+    its refs stay, so a successor may still merge it.
+    """
+    from lib.project_dispatch.publication import CLOSED
+    return _save(row, receipt, state='closed', phase=receipt.get('phase') or 'workspace_adoption',
+                 reason=f'{CLOSED}: assignment {cause}; checkpoint retained without publication',
+                 retry=None)
 
 
 def release_publication_hold(project_path: str, task_id: str, *, user_id: int) -> dict:
@@ -266,11 +280,24 @@ def release_publication_hold(project_path: str, task_id: str, *, user_id: int) -
     """
     ic = _control()
     row = state.get_workspace(str(ic._repo_root(project_path)), str(task_id), user_id=user_id)
+    if not row:
+        return {}
     from lib.project_dispatch.publication import forget_assignment_decision, publication_reason
     # A release follows a commit of the row's assignment: decide it afresh,
     # here and on the receiver's next pass, even when this attempt fails.
     forget_assignment_decision(row)
     receipt = _receipt(row)
+    if receipt.get('state') == 'preserved' or (
+            receipt.get('state') == 'blocked' and receipt.get('taskOutcome') == 'completed'):
+        # A cancel or a reject/rework review also commits to the assignment: a
+        # hold it made final closes now, whatever kept it before.
+        from lib.project_dispatch.publication import closed_cause
+        from lib.project_mod.task_delta_delivery import checkpoint_contained, checkpoint_has_no_delta
+        landed = receipt.get('taskOutcome') == 'completed' and (
+            checkpoint_has_no_delta(row) or checkpoint_contained(row))
+        cause = '' if landed else closed_cause(row, receipt)
+        if cause:
+            return _close(row, receipt, cause)
     if (receipt.get('state') != 'blocked' or receipt.get('taskOutcome') != 'completed'
             or not str(receipt.get('reason') or '').startswith('project_publication_')):
         return receipt
@@ -283,6 +310,9 @@ def release_publication_hold(project_path: str, task_id: str, *, user_id: int) -
 # Receipts that settle a publication without delivering it: news to the
 # Worker's Coordinator only (lib.project_dispatch.continuation.HELD_DELIVERY).
 _HELD_STATES = frozenset({'blocked', 'failed', 'preserved'})
+# Receipts no later pass changes: delivered, preserved (an attempt that did not
+# complete) and closed (an assignment that can never publish, ``_close``).
+_FINAL_STATES = frozenset({'delivered', 'preserved', 'closed'})
 
 
 def _wake_delivered_dependents(row: dict, receipt: dict | None) -> None:
@@ -448,7 +478,7 @@ def _settle_task_workspace(project_path: str, task_id: str, *, user_id: int,
                     'attempt %s owns the receipt', executor_task_id, task_id,
                     _generation(_receipt(existing)))
         return _receipt(existing)
-    if existing and _receipt(existing).get('state') in {'delivered', 'preserved'}:
+    if existing and _receipt(existing).get('state') in _FINAL_STATES:
         if _receipt(existing).get('state') == 'delivered':
             held = _publication_hold(existing, _receipt(existing))
             if held is not None:
@@ -482,7 +512,7 @@ def _settle_task_workspace(project_path: str, task_id: str, *, user_id: int,
         return receipt
     if deliver and (row.get('origin') or {}).get('executionMode') == 'isolated-task':
         result = _settle_registered(row, receipt)
-        if result.get('state') not in {'delivered', 'preserved'}:
+        if result.get('state') not in _FINAL_STATES:
             ic._start_or_wake_worker()
         return result
     ic._start_or_wake_worker()
@@ -500,7 +530,7 @@ def _record_terminal_intent(row: dict, outcome: str,
     receipt = _receipt(row)
     if _superseded(receipt, executor_task_id):
         return receipt, False, True
-    if receipt.get('state') in {'delivered', 'preserved'}:
+    if receipt.get('state') in _FINAL_STATES:
         if receipt.get('state') == 'delivered':
             held = _publication_hold(row, receipt)
             if held is not None:
@@ -544,7 +574,7 @@ def retry_task_delivery(project_path: str, task_id: str, *, user_id: int) -> dic
     def admitted(row, receipt):
         return ((row.get('origin') or {}).get('executionMode') == 'isolated-task'
                 and receipt.get('taskOutcome') == 'completed'
-                and receipt.get('state') not in {'delivered', 'preserved'}
+                and receipt.get('state') not in _FINAL_STATES
                 and row['state'] != 'discarded' and bool(row.get('checkpoint_sha')))
 
     with ic._repo_lock(root):
@@ -850,7 +880,7 @@ def _settle_registered_delivery(row: dict, receipt: dict) -> dict:
                 # A later attempt reopened the receipt and is executing in the
                 # checkout; its own settlement captures and delivers it.
                 return receipt
-            if receipt.get('state') in {'delivered', 'preserved'}:
+            if receipt.get('state') in _FINAL_STATES:
                 held = _publication_hold(row, receipt) if receipt.get('state') == 'delivered' else None
                 return held if held is not None else receipt
             if row['state'] == 'discarded':
@@ -889,6 +919,10 @@ def _settle_registered_delivery(row: dict, receipt: dict) -> dict:
                             return receipt
                         receipt = _save(row, receipt, checkpointSha=row['checkpoint_sha'])
             if receipt.get('taskOutcome') != 'completed':
+                from lib.project_dispatch.publication import closed_cause
+                cause = closed_cause(row, receipt)
+                if cause:
+                    return _close(row, receipt, cause)
                 return _save(row, receipt, state='preserved', phase='checkpoint',
                              reason='Task did not complete; checkpoint retained without publication')
             held = _publication_hold(row, receipt)
@@ -910,7 +944,7 @@ def _settle_registered_delivery(row: dict, receipt: dict) -> dict:
                 held = _publication_hold(row, receipt)
                 if held is not None:
                     return held
-            if receipt.get('state') in {'delivered', 'preserved'} or receipt.get('taskOutcome') != 'completed':
+            if receipt.get('state') in _FINAL_STATES or receipt.get('taskOutcome') != 'completed':
                 return receipt
             if row['state'] == 'discarded':
                 return _save(row, receipt, state='preserved', phase='checkpoint',
@@ -924,7 +958,7 @@ def _settle_registered_delivery(row: dict, receipt: dict) -> dict:
             held = _publication_hold(row, receipt)
             if held is not None:
                 return held
-        if receipt.get('state') in {'delivered', 'preserved', 'working'}:
+        if receipt.get('state') in _FINAL_STATES | {'working'}:
             return receipt
         if _transient_git_spawn_error(exc):
             return _save(row, receipt, state='pending', phase=_RETRYABLE_CAPTURE_PHASE,
@@ -1013,7 +1047,7 @@ def _deliver_registered_workspace(project_path: str, task_id: str, *, user_id: i
         held = _publication_hold(row, receipt)
         if held is not None:
             return held
-    if receipt.get('taskOutcome') != 'completed' or receipt.get('state') in {'preserved', 'delivered', 'failed'}:
+    if receipt.get('taskOutcome') != 'completed' or receipt.get('state') in _FINAL_STATES | {'failed'}:
         return receipt
     if row['state'] != 'merged':
         if row['state'] in {'quarantined', 'failed', 'discarded'}:
@@ -1031,7 +1065,7 @@ def _deliver_registered_workspace(project_path: str, task_id: str, *, user_id: i
                 held = _publication_hold(row, receipt)
                 if held is not None:
                     return held
-            if receipt.get('taskOutcome') != 'completed' or receipt.get('state') in {'preserved', 'delivered', 'failed'}:
+            if receipt.get('taskOutcome') != 'completed' or receipt.get('state') in _FINAL_STATES | {'failed'}:
                 return receipt
             if _checkpoint_identity(row) != captured:
                 return _save(row, receipt, state='blocked', phase='adoption', reason='checkpoint_changed_during_validation')
@@ -1068,7 +1102,7 @@ def _deliver_registered_workspace(project_path: str, task_id: str, *, user_id: i
                 held = _publication_hold(row, receipt)
                 if held is not None:
                     return held
-            if receipt.get('taskOutcome') != 'completed' or receipt.get('state') in {'preserved', 'delivered', 'failed'}:
+            if receipt.get('taskOutcome') != 'completed' or receipt.get('state') in _FINAL_STATES | {'failed'}:
                 return receipt
             if _checkpoint_identity(row) != captured:
                 return _save(row, receipt, state='blocked', phase='adoption', reason='checkpoint_changed_during_validation')
@@ -1111,7 +1145,7 @@ def _deliver_registered_workspace(project_path: str, task_id: str, *, user_id: i
                 held = _publication_hold(row, receipt)
                 if held is not None:
                     return held
-            if receipt.get('taskOutcome') != 'completed' or receipt.get('state') in {'preserved', 'delivered', 'failed'}:
+            if receipt.get('taskOutcome') != 'completed' or receipt.get('state') in _FINAL_STATES | {'failed'}:
                 return receipt
             return _save(row, receipt, state='blocked', phase='adoption', reason='workspace_busy')
 
@@ -1367,33 +1401,46 @@ def _resume_row(row: dict) -> bool:
 
 
 class _ProjectLane:
-    """One project's receiver lane: queued rows and the thread draining them.
+    """One project's receiver lane: queued rows and the threads running them.
 
-    ``backlog`` holds delivered sources retained under an earlier reclamation
-    rule. Reconsidering one walks and removes a whole checkout, so the lane
-    takes the next backlog row only while no delivery row waits: a delivery
-    waits behind at most the one reconsideration already running.
+    Pending delivery rows overlap: each runs on its own lane worker, because
+    the repository lock still orders their delta-sized publication and the
+    receipt CAS rejects a superseded generation. ``backlog`` holds delivered
+    sources retained under an earlier reclamation rule. Reconsidering one
+    walks and removes a whole checkout, so the driver takes the next backlog
+    row only while no delivery row waits or runs: a delivery waits behind at
+    most the one reconsideration already running.
     """
 
-    __slots__ = ('pending', 'backlog', 'current', 'thread')
+    __slots__ = ('pending', 'backlog', 'inflight', 'driver')
 
     def __init__(self) -> None:
         # Row ID -> newest page snapshot; insertion order is the lane's order.
         self.pending: dict[int, dict] = {}
         self.backlog: dict[int, dict] = {}
-        self.current: int | None = None
-        self.thread: threading.Thread | None = None
+        # Row ID -> its thread; a None value covers the window between the
+        # driver's claim and the thread's start.
+        self.inflight: dict[int, threading.Thread | None] = {}
+        self.driver: threading.Thread | None = None
+
+
+def _start_lane_driver_locked(root: str, lane: _ProjectLane) -> None:
+    thread = threading.Thread(
+        target=_drain_project_lane, args=(root, lane),
+        name=f'tofu-delivery-lane:{Path(root).name}', daemon=True)
+    lane.driver = thread
+    thread.start()
 
 
 def _queue_on_project_lanes(rows: list[dict]) -> None:
-    """Queue rows on their project's lane and start each idle lane's thread.
+    """Queue rows on their project's lane and start each idle lane's driver.
 
-    Lanes are keyed by canonical project root, the domain of the repository
-    lock that already orders a project's Git work, so one project's capture
-    or publication never waits for another project's. A queued row keeps its
-    place and takes the newer snapshot. A row in flight is not queued again:
-    its own receipt write makes the next pass due, which reads it afresh.
-    Lane threads are daemons, like the loop: a capture never holds up exit.
+    Lanes are keyed by canonical project root. Pending delivery rows overlap:
+    each runs on its own lane worker while the repository lock orders the
+    publication. A queued row keeps its place and takes the newer snapshot; a
+    row in flight is not queued again (its own receipt write makes the next
+    pass due, which reads it afresh). Lane threads are daemons, like the loop:
+    a capture never holds up exit.
     """
     with _LANES_LOCK:
         for row in rows:
@@ -1401,19 +1448,16 @@ def _queue_on_project_lanes(rows: list[dict]) -> None:
             lane = _LANES.get(root)
             if lane is None:
                 lane = _LANES[root] = _ProjectLane()
-            if row['id'] != lane.current:
-                if _retained_under_earlier_rule(row):
-                    if row['id'] not in lane.pending:
-                        lane.backlog[row['id']] = row
-                else:
-                    lane.backlog.pop(row['id'], None)
-                    lane.pending[row['id']] = row
-            if lane.thread is None and (lane.pending or lane.backlog):
-                thread = threading.Thread(
-                    target=_drain_project_lane, args=(root, lane),
-                    name=f'tofu-delivery-lane:{Path(root).name}', daemon=True)
-                thread.start()
-                lane.thread = thread
+            if row['id'] in lane.inflight:
+                continue
+            if _retained_under_earlier_rule(row):
+                if row['id'] not in lane.pending:
+                    lane.backlog[row['id']] = row
+            else:
+                lane.backlog.pop(row['id'], None)
+                lane.pending[row['id']] = row
+            if lane.driver is None and (lane.pending or (lane.backlog and not lane.inflight)):
+                _start_lane_driver_locked(root, lane)
 
 
 def is_delivery_lane_thread() -> bool:
@@ -1421,30 +1465,72 @@ def is_delivery_lane_thread() -> bool:
     return getattr(_LANE_THREAD, 'active', False)
 
 
+def _start_delivery_row(root: str, lane: _ProjectLane, row_id: int, row: dict) -> None:
+    def run() -> None:
+        _LANE_THREAD.active = True
+        try:
+            _resume_row(row)
+        finally:
+            _row_finished(root, lane, row_id)
+
+    thread = threading.Thread(
+        target=run,
+        name='tofu-delivery-row:{}:{}'.format(
+            Path(root).name, str(row.get('task_id') or '')[:16]),
+        daemon=True)
+    with _LANES_LOCK:
+        lane.inflight[row_id] = thread
+    thread.start()
+
+
+def _row_finished(root: str, lane: _ProjectLane, row_id: int) -> None:
+    with _LANES_LOCK:
+        lane.inflight.pop(row_id, None)
+        if _LANES.get(root) is not lane:
+            return
+        if lane.driver is None and (lane.pending or (lane.backlog and not lane.inflight)):
+            _start_lane_driver_locked(root, lane)
+        elif not lane.pending and not lane.backlog and not lane.inflight:
+            del _LANES[root]
+
+
 def _drain_project_lane(root: str, lane: _ProjectLane) -> None:
+    """Start every pending row; reconsider backlog only while none runs."""
     _LANE_THREAD.active = True
     try:
         while True:
             with _LANES_LOCK:
-                queue = lane.pending or lane.backlog
-                if not queue:
-                    lane.current = lane.thread = None
-                    if _LANES.get(root) is lane:
+                if lane.pending:
+                    row_id, row = next(iter(lane.pending.items()))
+                    del lane.pending[row_id]
+                    lane.inflight[row_id] = None
+                    backlog_row = None
+                elif lane.backlog and not lane.inflight:
+                    row_id, row = next(iter(lane.backlog.items()))
+                    del lane.backlog[row_id]
+                    backlog_row = row
+                else:
+                    lane.driver = None
+                    if (not lane.pending and not lane.backlog and not lane.inflight
+                            and _LANES.get(root) is lane):
                         del _LANES[root]
                     return
-                row_id = next(iter(queue))
-                row = queue.pop(row_id)
-                lane.current = row_id
-            if queue is lane.backlog:
-                _reconsider_retained_source(row)
-            else:
-                _resume_row(row)
+            if backlog_row is not None:
+                _reconsider_retained_source(backlog_row)
+                continue
+            try:
+                _start_delivery_row(root, lane, row_id, row)
+            except BaseException:
+                with _LANES_LOCK:
+                    lane.inflight.pop(row_id, None)
+                raise
     except BaseException:
         # _resume_row keeps each row's debt; only interpreter-level exits reach
-        # here. A later dispatch restarts the lane for any rows still queued.
+        # here. A later dispatch restarts the driver for any rows still queued.
         with _LANES_LOCK:
-            lane.current = lane.thread = None
-            if not (lane.pending or lane.backlog) and _LANES.get(root) is lane:
+            lane.driver = None
+            if (not lane.pending and not lane.backlog and not lane.inflight
+                    and _LANES.get(root) is lane):
                 del _LANES[root]
         raise
 
@@ -1464,11 +1550,15 @@ def stop_project_lanes(timeout: float) -> bool:
     pass reads them again. True when no lane thread is still running.
     """
     with _LANES_LOCK:
-        threads = [lane.thread for lane in _LANES.values() if lane.thread is not None]
+        threads = []
+        for lane in _LANES.values():
+            if lane.driver is not None:
+                threads.append(lane.driver)
+            threads.extend(thread for thread in lane.inflight.values() if thread is not None)
         for root, lane in list(_LANES.items()):
             lane.pending.clear()
             lane.backlog.clear()
-            if lane.thread is None:
+            if lane.driver is None and not lane.inflight:
                 del _LANES[root]
     deadline = time.monotonic() + max(0.0, float(timeout))
     for thread in threads:

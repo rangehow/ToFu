@@ -86,7 +86,8 @@ Env knobs
                                    4096). Smaller tails reuse the older cached
                                    prefix instead of paying a 1.5s hold.
 
-Codex subscription overrides (only when ``cache_profile='codex'``):
+Codex subscription overrides (only when the cache profile is
+``CACHE_PROFILE_CODEX``):
 ``TOFU_CACHE_SETTLE_CODEX_VISIBILITY_MS`` — inferred unmetered-write visibility
                                    window (default 5000, live-tested on Luna).
 ``TOFU_CACHE_SETTLE_CODEX_SEND_INTERVAL_MS`` — minimum start-to-start spacing
@@ -108,7 +109,7 @@ import os
 import threading
 import time
 
-from lib.cost import normalize_usage, split_input_tokens
+from lib.cost import normalize_usage, reported_responses_input_usage, split_input_tokens
 from lib.log import get_logger
 from lib.token_counter.evidence import (
     ADMITTED_INPUT_TOKENS_KEY,
@@ -118,6 +119,8 @@ from lib.token_counter.evidence import (
 logger = get_logger(__name__)
 
 __all__ = [
+    'CACHE_PROFILE_CODEX',
+    'uses_codex_cache_timing',
     'settle_enabled',
     'settle_window_ms',
     'settle_max_wait_ms',
@@ -135,6 +138,17 @@ __all__ = [
     'observe_codex_cache',
     '_reset_settle_for_tests',
 ]
+
+
+#: Cache-timing profile of the Codex subscription wire (the ``oauth`` provider
+#: name that ``Slot.cache_profile`` projects). A future profile is added here
+#: with its own predicate — never as a bare string at a call site.
+CACHE_PROFILE_CODEX = 'codex'
+
+
+def uses_codex_cache_timing(cache_profile: str) -> bool:
+    """True when ``cache_profile`` selects Codex's unmetered-write timing."""
+    return cache_profile == CACHE_PROFILE_CODEX
 
 
 def settle_enabled() -> bool:
@@ -561,7 +575,7 @@ def record_stream_end(conv_id: str, *, now: float | None = None,
             _last_end.pop(conv_id, None)
         else:
             _last_end[conv_id] = (ts, bool(cold_write))
-        if cache_profile == 'codex':
+        if uses_codex_cache_timing(cache_profile):
             state = _codex_timing.setdefault(conv_id, {})
             state['last_end'] = ts
             state['pending_write'] = bool(pending_write)
@@ -670,8 +684,8 @@ def settle_before_send(conv_id: str, est_tokens: int, *,
     The wait is the REMAINDER of the settle window since the prior stream end,
     hard-capped by :func:`settle_max_wait_ms`, and is abort-aware."""
     started_at = now if now is not None else time.time()
-    if (cache_profile == 'codex' and settle_enabled() and conv_id
-            and est_tokens >= _codex_threshold_tokens()):
+    if (uses_codex_cache_timing(cache_profile) and settle_enabled()
+            and conv_id and est_tokens >= _codex_threshold_tokens()):
         wait_s, reason = _codex_compute_wait_s(
             conv_id, est_tokens, started_at)
         if wait_s > 0:
@@ -710,8 +724,8 @@ async def async_settle_before_send(conv_id: str, est_tokens: int, *,
     path. Same timing rules (shared :func:`_compute_wait_s`); uses
     ``async_abortable_sleep`` so it never blocks the event loop."""
     started_at = now if now is not None else time.time()
-    if (cache_profile == 'codex' and settle_enabled() and conv_id
-            and est_tokens >= _codex_threshold_tokens()):
+    if (uses_codex_cache_timing(cache_profile) and settle_enabled()
+            and conv_id and est_tokens >= _codex_threshold_tokens()):
         wait_s, reason = _codex_compute_wait_s(
             conv_id, est_tokens, started_at)
         if wait_s > 0:
@@ -815,14 +829,9 @@ def observe_codex_cache(conv_id: str, usage) -> dict:
     """
     if not conv_id or not isinstance(usage, dict):
         return {}
-    normalized = normalize_usage(usage)
-    cache_read = max(0, int(normalized['cache_read']))
-    try:
-        input_tokens = int(usage.get('prompt_tokens') or
-                           usage.get('input_tokens') or 0)
-    except (TypeError, ValueError) as exc:
-        logger.debug('[CacheSettle] invalid observed input-token count: %s', exc)
-        input_tokens = 0
+    exact = reported_responses_input_usage(usage) or {}
+    cache_read = exact.get('cache_read')
+    input_tokens = exact.get('input_tokens')
     now = time.time()
     current_wire_hashes = _wire_hash_values(usage.get('_wire_bytes'))
     with _lock:
@@ -833,20 +842,29 @@ def observe_codex_cache(conv_id: str, usage) -> dict:
                 previous, usage, current_wire_hashes=current_wire_hashes)
             if previous else False
         )
-        previous_read = int(previous.get('cache_read') or 0)
-        max_read = max(int(previous.get('max_read') or 0), cache_read)
+        previous_read = previous.get('cache_read')
+        max_read = previous.get('max_read')
+        if cache_read is not None:
+            max_read = max(max_read or 0, cache_read)
 
-        if input_tokens < _CODEX_AUTO_CACHE_MIN_TOKENS:
+        # Still keep the immediately preceding wire, but an unknown read may
+        # neither be called a miss nor anchor a subsequent read-drop verdict.
+        if cache_read is None:
+            status = 'usage_unknown'
+        elif input_tokens < _CODEX_AUTO_CACHE_MIN_TOKENS:
             status = 'not_cacheable'
+        elif previous and previous_read is None:
+            status = 'observed_without_baseline'
         elif call == 1 and cache_read == 0:
             status = 'cold'
         elif cache_read == 0 and previous_read == 0:
             status = 'write_visibility_miss'
         elif cache_read == 0 and previous_read > 0 and append_only:
             status = 'upstream_cache_miss'
-        elif (0 < cache_read < previous_read and append_only):
+        elif (previous_read is not None and 0 < cache_read < previous_read
+              and append_only):
             status = 'implicit_breakpoint_fallback'
-        elif cache_read > previous_read:
+        elif cache_read > (previous_read or 0):
             status = 'prefix_extended'
         elif cache_read > 0:
             status = 'warm'
@@ -860,7 +878,9 @@ def observe_codex_cache(conv_id: str, usage) -> dict:
             'cached_tokens': cache_read,
             'previous_cached_tokens': previous_read,
             'max_cached_tokens': max_read,
-            'drop_tokens': max(0, previous_read - cache_read),
+            'drop_tokens': (max(0, previous_read - cache_read)
+                            if previous_read is not None and cache_read is not None
+                            else None),
             'wire_append_only': append_only,
         }
         _codex_health[conv_id] = {
@@ -884,14 +904,14 @@ def observe_codex_cache(conv_id: str, usage) -> dict:
     if status in ('implicit_breakpoint_fallback', 'upstream_cache_miss'):
         logger.warning(
             '[CodexCache] conv=%s call=%d status=%s cached=%d->%d '
-            'drop=%d input=%d append_only=%s. The client wire and routing '
-            'prefix are unchanged; this is an upstream implicit-breakpoint '
-            'fallback/miss, not a Tofu prefix rewrite.',
+            'drop=%d input=%d append_only=%s. No change in the captured '
+            'client prefix or routing; the provider read drop alone does '
+            'not establish its upstream cause.',
             conv_id, call, status, previous_read, cache_read,
             result['drop_tokens'], input_tokens, append_only)
     elif status == 'write_visibility_miss':
-        logger.info('[CodexCache] conv=%s call=%d second cold read; unmetered '
-                    'write was not visible yet (input=%d)',
+        logger.info('[CodexCache] conv=%s call=%d consecutive observed '
+                    'zero reads; write visibility is unverified (input=%d)',
                     conv_id, call, input_tokens)
     return result
 

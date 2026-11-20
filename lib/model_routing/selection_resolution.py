@@ -56,6 +56,10 @@ def _canonical_indexes(normalized: Mapping[str, Any]) -> dict[str, Any]:
         "offerings_by_model": offerings_by_model,
         "deployments_by_offering": deployments_by_offering,
         "credentials_by_access": credentials_by_access,
+        "revoked_grants": {
+            (row["credential_id"], row["creator_id"], row["model_id"]): row
+            for row in normalized.get("revocation_history", ())
+        },
         "models_by_canonical": _models_by_canonical(normalized),
     }
 

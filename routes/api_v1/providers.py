@@ -330,6 +330,13 @@ def _refresh_legacy_key_hints(repository, boundary, authority):
         return authority
 
 
+def _model_routing_authority_response(authority):
+    from lib.model_routing.controls import reasoning_controls
+    return api_ok(model_routing=authority.public_document(), revision=authority.revision,
+                  metadata_inheritance_supported=True,
+                  reasoning_controls=reasoning_controls(authority.document))
+
+
 @api_v1_providers_bp.route("/api/v1/model-routing", methods=["GET"])
 @require_scope("providers")
 @api_meta(summary="Get the owner model-routing v2 authority", tags=["providers"], scope="providers")
@@ -340,10 +347,7 @@ def get_model_routing():
     repository = _repository()
     authority = repository.get(boundary)
     authority = _refresh_legacy_key_hints(repository, boundary, authority)
-    from lib.model_routing.controls import reasoning_controls
-    return api_ok(model_routing=authority.public_document(), revision=authority.revision,
-                  metadata_inheritance_supported=True,
-                  reasoning_controls=reasoning_controls(authority.document))
+    return _model_routing_authority_response(authority)
 
 
 @api_v1_providers_bp.route("/api/v1/model-routing", methods=["PUT"])
@@ -359,6 +363,14 @@ def put_model_routing():
         return rejection
     try:
         expected = _expected_revision(body)
+        if "codex_registration_enabled" in body:
+            from lib.oauth.codex_baseline import (
+                disable_owner_codex_registration, establish_owner_codex_baseline,
+            )
+            command = (establish_owner_codex_baseline if body["codex_registration_enabled"]
+                       else disable_owner_codex_registration)
+            committed = command(_repository(), boundary, expected_revision=expected)
+            return _model_routing_authority_response(committed)
         document = body.get("model_routing")
         if not isinstance(document, Mapping):
             raise ModelRoutingError("model_routing must be an object")
@@ -367,12 +379,17 @@ def put_model_routing():
         authority = repository.get(boundary)
         if authority.revision != expected:
             raise ModelRoutingError("model-routing revision changed", kind="model_routing_revision_conflict")
+        # History is server-owned; never validate or admit the client's copy.
+        document = dict(document)
+        document.pop('revocation_history', None)
+        document.pop('codex_seen_history', None)
         document = prepare_registration_document(document, previous=authority.document)
+        from lib.model_routing.revocation_history import record_explicit_revocations
+        record_explicit_revocations(authority.document, document)
         committed = repository.compare_and_swap(
             boundary, document, expected_revision=expected)
         _hot_reload_dispatcher_slots()
-        return api_ok(
-            model_routing=committed.public_document(), revision=committed.revision)
+        return _model_routing_authority_response(committed)
     except ModelRoutingError as exc:
         return _error(exc)
     except Exception as exc:
@@ -560,6 +577,7 @@ def _read_persisted_probe_snapshot(
 from lib.model_routing.probe_plan import (
     matrix_probe_plan as _matrix_probe_plan,
     manual_probe_bundle,
+    validate_probe_scope,
 )
 
 
@@ -616,10 +634,16 @@ def probe_provider_cells_start(provider_id: str):
     only = body.get("only") if isinstance(body.get("only"), Mapping) else {}
     _ok = only.get("key_idxs")
     _om = only.get("model_ids")
-    only_key_idxs = ({i for i in _ok if isinstance(i, int) and not isinstance(i, bool)}
-                     if isinstance(_ok, list) else None)
-    only_model_ids = ({x.strip() for x in _om if isinstance(x, str) and x.strip()}
-                      if isinstance(_om, list) else None)
+    if ('only' in body and not only
+            or 'key_idxs' in only and (not isinstance(_ok, list) or not _ok
+                or any(not isinstance(i, int) or isinstance(i, bool) for i in _ok))
+            or 'model_ids' in only and (not isinstance(_om, list) or not _om
+                or any(not isinstance(x, str) or not x.strip() for x in _om))):
+        return _error(ModelRoutingError(
+            'Select at least one matching model or credential column.',
+            kind='provider_probe_empty_scope', field='only'))
+    only_key_idxs = set(_ok) if isinstance(_ok, list) else None
+    only_model_ids = {x.strip() for x in _om} if isinstance(_om, list) else None
     scoped = bool(only_key_idxs) or bool(only_model_ids)
 
     # Explicit draft targets mean new work, never a cached completed run.
@@ -655,6 +679,10 @@ def probe_provider_cells_start(provider_id: str):
         if explicit_targets:
             bundle = manual_probe_bundle(bundle, body["targets"])
         credential_ids = [str(row["credential_id"]) for row in bundle["credentials"]]
+        validate_probe_scope(
+            bundle, manual=True,
+            credential_indices=frozenset(only_key_idxs) if only_key_idxs is not None else None,
+            model_ids=frozenset(only_model_ids) if only_model_ids is not None else None)
         with CELL_PROBE_LOCK:
             existing = CELL_PROBE_TASKS.get(cache_key)
             if existing and existing["status"] == "running":
@@ -678,7 +706,10 @@ def probe_provider_cells_start(provider_id: str):
                 )
                 return api_ok(cached)
 
-        plan = _matrix_probe_plan(repository, boundary, bundle, manual=True)
+        plan = _matrix_probe_plan(
+            repository, boundary, bundle, manual=True,
+            selected_credential_indices=frozenset(only_key_idxs or ()),
+            selected_model_ids=frozenset(only_model_ids) if only_model_ids is not None else None)
 
         work = build_probe_work(
             plan["provider"], plan["models"], plan["api_keys"],
@@ -1025,7 +1056,9 @@ def create_provider_route():
             uncommitted_secret_references=uncommitted_secret_references,
         )
         from lib.model_routing.registration import prepare_registration_document
+        from lib.model_routing.revocation_history import record_explicit_revocations
         document = prepare_registration_document(document, previous=authority.document)
+        record_explicit_revocations(authority.document, document)
         committed = repository.compare_and_swap(
             boundary, document, expected_revision=expected)
         uncommitted_secret_references.clear()
@@ -1097,6 +1130,8 @@ def update_provider_route(provider_id: str):
             raise ModelRoutingError("provider_id cannot change", field="provider.provider_id")
         from lib.model_routing.registration import prepare_registration_document
         document = prepare_registration_document(document, previous=authority.document)
+        from lib.model_routing.revocation_history import record_explicit_revocations
+        record_explicit_revocations(authority.document, document)
         committed = repository.compare_and_swap(
             boundary, document, expected_revision=expected)
         uncommitted_secret_references.clear()
@@ -1140,7 +1175,9 @@ def delete_provider_route(provider_id: str):
             return api_not_found("Provider not found")
         secrets_to_delete = remove_provider_resources_in_place(document, provider_id)
         from lib.model_routing.registration import prepare_registration_document
+        from lib.model_routing.revocation_history import preserve_seen_history
         document = prepare_registration_document(document, previous=authority.document)
+        preserve_seen_history(authority.document, document)
         committed = repository.compare_and_swap(
             boundary, document, expected_revision=expected)
         _reclaim_secret_references(

@@ -23,11 +23,10 @@ from pathlib import Path
 _AUDIT_SYNTHETIC_REPO_PATHS = {'docs/x.md', 'lib/x.py'}
 
 import pytest
-from tests.support.export_toolchain import require_export_toolchain
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-export = require_export_toolchain()
+export = pytest.importorskip('export', reason='export.py is not shipped in opensource builds')
 
 import export_pkg._history as history  # noqa: E402
 import export_pkg._internal as internal  # noqa: E402
@@ -172,3 +171,19 @@ def test_the_open_gate_refuses_the_packaged_file_whatever_it_holds(project, tmp_
         publish._verify_publish_tree(tree)
     assert PACKAGED in str(refused.value)
     assert not history._public_path(PACKAGED)
+
+
+def test_from_a_linked_worktree_the_open_gate_reads_the_main_checkout_values(tmp_path, monkeypatch):
+    """A worktree has no data/; the gate must not silently lose the Internal-only patterns there."""
+    main = tmp_path / 'main'
+    (main / 'data' / 'config').mkdir(parents=True)
+    subprocess.run(['git', 'init', '-q', '-b', 'main', str(main)], check=True)
+    subprocess.run(['git', '-C', str(main), '-c', 'user.name=x', '-c', 'user.email=x@example.org',
+                    'commit', '-q', '--allow-empty', '-m', 'root'], check=True)
+    write_values(main)
+    worktree = tmp_path / 'worktree'
+    subprocess.run(['git', '-C', str(main), 'worktree', 'add', '-q', '--detach', str(worktree)], check=True)
+    assert not (worktree / 'data').exists()
+    monkeypatch.setattr(publish, 'ROOT', worktree)
+    with pytest.raises(publish.ExportPublishSafetyError):
+        publish._verify_opensource_blob(f'secret: {SECRET}\n'.encode(), 'docs/x.md')

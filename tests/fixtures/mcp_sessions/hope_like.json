@@ -1,0 +1,49 @@
+{
+  "description": "Recorded-shape MCP session for Python/Rust client parity: a hope-mcp-like catalog plus result shapes the bridge must project identically.",
+  "serverInfo": {"name": "tofu-replay", "version": "1.2.3"},
+  "catalogVersion": "cat-7",
+  "tools": [
+    {"name": "submit_job", "description": "Submit a Hope job", "inputSchema": {"type": "object", "properties": {"workdir": {"type": "string"}, "usergroup": {"type": "string"}, "queue": {"type": "string"}, "extra": {"type": "object"}}}, "_meta": {"tofu/queue-policy": {"version": 1}}},
+    {"name": "confirm_rerun", "description": "Rerun", "inputSchema": {"type": "object", "properties": {"hope_conf": {"type": "string"}}}},
+    {"name": "catalog_write", "inputSchema": {"type": "object", "properties": {"operation": {"type": "string"}, "body": {"type": "object"}}}},
+    {"name": "get_job", "description": "Read one job", "inputSchema": {"type": "object", "properties": {"hope_run_id": {"type": "string"}, "limit": {"type": "integer"}, "verbose": {"type": "boolean"}, "ids": {"type": "array", "items": {"type": "integer"}}}}, "annotations": {"readOnlyHint": true, "title": "Get job"}},
+    {"name": "hope_watch_job", "description": "Wait for a job", "inputSchema": {"type": "object", "properties": {"timeout_sec": {"type": "integer", "maximum": 600}}}, "annotations": {"readOnlyHint": true}},
+    {"name": "structured", "description": "Structured echo", "inputSchema": {"type": "object"}, "outputSchema": {"type": "object"}},
+    {"name": "duplicate_json", "inputSchema": {"type": "object"}},
+    {"name": "media", "inputSchema": {"type": "object"}},
+    {"name": "tool_error", "inputSchema": {"type": "object"}},
+    {"name": "peer_error", "inputSchema": {"type": "object"}},
+    {"name": "large", "inputSchema": {"type": "object"}},
+    {"name": "echo", "inputSchema": {"type": "object", "properties": {"n": {"type": "integer"}, "f": {"type": "number"}, "flag": {"type": "boolean"}, "tags": {"type": "array", "items": {"type": "string"}}}}},
+    {"name": "hang", "inputSchema": {"type": "object"}},
+    {"name": "crash", "inputSchema": {"type": "object"}, "annotations": {"readOnlyHint": true}},
+    {"name": "crash_write", "inputSchema": {"type": "object"}},
+    {"name": "sheet.get_range_data", "description": "Provider-unsafe name", "inputSchema": {"type": "object"}}
+  ],
+  "calls": {
+    "submit_job": {"result": {"content": [{"type": "text", "text": "submitted job 42"}]}},
+    "confirm_rerun": {"result": {"content": [{"type": "text", "text": "rerun queued"}]}},
+    "catalog_write": {"result": {"content": [{"type": "text", "text": "{\"ok\": true}"}], "structuredContent": {"ok": true}}},
+    "get_job": {"result": {"content": [{"type": "text", "text": "state: RUNNING\nqueue: root.h800_elastic"}]}},
+    "hope_watch_job": {"result": {"content": [{"type": "text", "text": "SUCCEEDED"}]}},
+    "structured": {"result": {"content": [{"type": "text", "text": "summary line"}], "structuredContent": {"rows": [1, 2.5, "三"], "next": null, "ok": true}}},
+    "duplicate_json": {"result": {"content": [{"type": "text", "text": "{\"b\":1,\"a\":[1,2]}"}], "structuredContent": {"a": [1, 2], "b": 1}}},
+    "media": {"result": {"content": [
+      {"type": "text", "text": "chart follows"},
+      {"type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png"},
+      {"type": "image", "data": "AAAA", "mimeType": "image/tiff"},
+      {"type": "resource", "resource": {"uri": "file:///tmp/a.txt", "text": "file body"}},
+      {"type": "resource", "resource": {"uri": "file:///tmp/b.bin", "blob": "QUJD"}},
+      {"type": "resource_link", "uri": "https://example.invalid/doc", "name": "doc"},
+      {"type": "audio", "data": "UklGRg==", "mimeType": "audio/wav"}
+    ]}},
+    "tool_error": {"result": {"content": [{"type": "text", "text": "job not found"}], "isError": true}},
+    "peer_error": {"error": {"code": -32602, "message": "Invalid params: hope_run_id is required"}},
+    "large": {"text_of_length": 250000},
+    "echo": {"echo": true},
+    "hang": {"hang": true},
+    "crash": {"exit_once": true, "result": {"content": [{"type": "text", "text": "after restart"}]}},
+    "crash_write": {"exit": true},
+    "sheet.get_range_data": {"result": {"content": [{"type": "text", "text": "A1=1"}]}}
+  }
+}

@@ -3,9 +3,9 @@
 Responsibility: the one reviewer prompt the pipeline's critique stage and the
 calibration evaluation (``evaluations/paper_review_calibration/``) both use,
 and the reading of that evaluation's committed result. The review gate's
-accept/reject threshold is the calibrated one; when no calibration matches the
-current prompt and judge model, the verdict says ``calibrated: false`` and no
-threshold is applied.
+accept/reject threshold applies only to an admitted time-separated,
+license-verified calibration for the current prompt and judge model. Older
+same-year hash-split summaries remain diagnostic and cannot trigger a verdict.
 
 Entry points: ``review_messages``, ``parse_review``, ``prompt_digest``,
 ``review_verdict``.
@@ -27,7 +27,7 @@ _JSON_RE = re.compile(r'\{.*\}', re.DOTALL)
 def review_messages(doc_type, *, venue: str, text: str,
                     checklist: tuple = (), section_ids: tuple = ()) -> list[dict]:
     rubric = '\n'.join(f'- {name}: {meaning}' for name, meaning in doc_type.rubric)
-    items = '\n'.join(f'- {rule.id}: {rule.text}' for rule in checklist)
+    items = '\n'.join(f'- {rule.id}: {rule.text} (origin: {rule.origin})' for rule in checklist)
     sections = ', '.join(section_ids) or 'any'
     instruction = (
         f'{doc_type.reviewer} Venue: {venue}.\n'
@@ -91,7 +91,7 @@ def load_calibration() -> dict | None:
 
 
 def review_verdict(overall: int, *, judge_model: str, digest: str) -> dict:
-    """Accept/reject prediction at the calibrated threshold, or why none applies."""
+    """Accept/reject prediction only when the historical calibration is admissible."""
     calibration = load_calibration()
     if calibration is None:
         return {'calibrated': False, 'reason': 'no calibration has been run'}
@@ -102,6 +102,9 @@ def review_verdict(overall: int, *, judge_model: str, digest: str) -> dict:
     if calibration.get('prompt_digest') != digest:
         return {'calibrated': False,
                 'reason': 'the review prompt changed since calibration'}
+    if calibration.get('heldout_partition') != 'conference_year' or not calibration.get('license_verified'):
+        return {'calibrated': False,
+                'reason': 'time-separated holdout or source license is unverified; historical AUC is diagnostic only'}
     threshold = calibration['threshold']
     return {'calibrated': True, 'threshold': threshold,
             'predicted': 'accept' if overall >= threshold else 'reject',

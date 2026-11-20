@@ -32,6 +32,11 @@ pub fn py_blank(text: &str) -> bool {
     text.chars().all(py_space)
 }
 
+/// `text.lstrip()`.
+pub fn py_lstrip(text: &str) -> &str {
+    text.trim_start_matches(py_space)
+}
+
 /// Python's `str` slicing of the first `n` characters.
 pub fn py_prefix(text: &str, n: usize) -> &str {
     match text.char_indices().nth(n) {

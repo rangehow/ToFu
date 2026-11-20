@@ -7,7 +7,7 @@ import pytest
 pytestmark = pytest.mark.visual
 
 
-@pytest.mark.parametrize('scenario', ['normal', 'required-selector', 'disabled-face', 'disabled-model-face', 'picker-lifetime', 'credential-lifetime', 'credential-editor', 'credential-replacement', 'credential-replacement-metadata'])
+@pytest.mark.parametrize('scenario', ['normal', 'required-selector', 'disabled-face', 'disabled-model-face', 'picker-lifetime', 'credential-lifetime', 'credential-editor', 'credential-replacement', 'credential-replacement-metadata', 'credential-combined'])
 def test_model_header_wire_edit_delete_and_template_add(browser, live_server, tmp_path, scenario):
     from playwright.sync_api import expect
     from tests.model_routing.test_model_routing_contract import _full_document
@@ -47,6 +47,19 @@ def test_model_header_wire_edit_delete_and_template_add(browser, live_server, tm
             state['credential_writes'].append(body)
             state['pending_credential'] = route
             return
+        if scenario == 'credential-combined' and url.path == '/api/v4/providers/provider-a' and route.request.method == 'PATCH':
+            body = route.request.post_data_json
+            assert body['expected_revision'] == state['revision']
+            state['credential_writes'].append(body)
+            bundle = {key: body[key] for key in ('provider', 'provider_access', 'connections', 'credentials', 'offerings', 'deployments')}
+            for row in bundle['credentials']:
+                if row['credential_id'] in body['credential_secrets']:
+                    row.update(secret_reference='synthetic-stored-reference', key_hint='synt****tail')
+            state['document']['credentials'] = [row for row in state['document']['credentials']
+                if row['provider_access_id'] != bundle['provider_access']['provider_access_id']] + bundle['credentials']
+            state['revision'] += 1
+            state['document']['revision'] = state['revision']
+            return route.fulfill(json={'ok': True, 'provider': bundle, 'revision': state['revision']})
         if scenario == 'credential-editor' and url.path == '/api/v4/providers/provider-a' and route.request.method == 'PATCH':
             body = route.request.post_data_json
             assert body['expected_revision'] == state['revision']
@@ -102,6 +115,34 @@ def test_model_header_wire_edit_delete_and_template_add(browser, live_server, tm
         expect(provider.locator('.stg-mx-row[data-id="alpha"]')).to_have_count(2)
         wire = provider.locator('.is-alias[data-id="alpha"]')
 
+        if scenario == 'credential-combined':
+            initial_count = provider.locator('.stg-key-card[data-credential-id]').count()
+            add = provider.locator('[data-tofu-action*="_startNewV2ApiKey"]')
+            add.click()
+            pending = provider.locator('.stg-key-card--new input')
+            pending.fill('synthetic-A')
+            pending.press('Enter')
+            expect(provider.locator('.stg-key-card[data-credential-id]')).to_have_count(initial_count + 1)
+            a = provider.locator('.stg-key-card[data-credential-id]').last
+            toggle = a.locator('.stg-key-toggle input')
+            expect(toggle).not_to_be_checked()
+            a.locator('.stg-key-toggle .stg-toggle-track').click()
+            expect(toggle).to_be_checked()
+            a.locator('.stg-key-toggle .stg-toggle-track').click()
+            expect(toggle).not_to_be_checked()
+            a.locator('.stg-key-toggle .stg-toggle-track').click()
+            add.click()
+            pending.fill('synthetic-B')
+            pending.press('Enter')
+            expect(page.locator('.app-dialog-overlay')).to_be_visible()
+            assert len(state['credential_writes']) == 2
+            committed = state['credential_writes'][-1]['credentials'][-2:]
+            assert [row['enabled'] for row in committed] == [False, False]
+            assert state['writes'] == []
+            expect(toggle).to_be_checked()
+            assert not errors
+            return
+
         if scenario.startswith('credential-replacement'):
             if scenario == 'credential-replacement-metadata':
                 name = provider.locator('input[data-tofu-action-change*="display_name"]')
@@ -135,6 +176,7 @@ def test_model_header_wire_edit_delete_and_template_add(browser, live_server, tm
             page.locator('#settingsModal .settings-close-btn').click()
             expect(page.locator('#settingsModal')).not_to_be_visible()
             body = state['credential_writes'][-1]
+            assert body['credentials'][-1]['enabled'] is False, 'new key must stay disabled until policy Save'
             bundle = {key: body[key] for key in ('provider', 'provider_access', 'connections', 'credentials', 'offerings', 'deployments')}
             for row in bundle['credentials']:
                 if row['credential_id'] in body['credential_secrets']:

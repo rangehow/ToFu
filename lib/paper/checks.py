@@ -403,8 +403,138 @@ def _check_todo_markers(sources: list[TexSource],
     return rows
 
 
+# ── TeX length specs (width arguments a formatter or typo can corrupt) ────
+# Units from The TeXbook ch. 10 plus pdfTeX's px and LuaTeX's nd/nc.
+_TEX_UNITS = 'pt|pc|in|bp|cm|mm|dd|cc|sp|em|ex|px|nd|nc'
+_LENGTH = re.compile(
+    r'^\s*[+-]?\s*(?P<factor>\d+(?:[.,]\d*)?|[.,]\d+)?\s*'
+    r'(?:(?:true\s*)?(?P<unit>' + _TEX_UNITS + r')|(?P<register>\\[A-Za-z@]+))\s*$')
+# Factor-and-unit vocabulary only: anything richer (calc arithmetic,
+# \dimexpr, macro parameters) is left to TeX and the compile log.
+_LENGTH_VOCABULARY = re.compile(r'^[\s\d.,+\-]*(?:[A-Za-z]+|\\[A-Za-z@]+)?\s*$')
+# Registers whose value is the current line width: one box wider than the
+# line it sits in cannot fit, so a factor above 1 overflows by construction.
+_LINE_WIDTH_REGISTERS = frozenset({'\\textwidth', '\\linewidth', '\\columnwidth', '\\hsize'})
+_TABULAR_BEGIN = re.compile(
+    r'\\begin\s*\{(tabular\*|tabularx|tabulary|tabular|longtable\*?|array)\}')
+_MINIPAGE_BEGIN = re.compile(r'\\begin\s*\{minipage\}|\\parbox(?![A-Za-z])')
+_INCLUDEGRAPHICS_OPTIONS = re.compile(r'\\includegraphics\s*\*?\s*\[([^\]]{0,400})\]')
+_SCALING = re.compile(r'\\(?:resizebox|scalebox|rotatebox|adjustbox)\b'
+                      r'|\\begin\s*\{(?:adjustbox|sideways\w*|landscape)\}')
+
+
+def _skip_optional(text: str, pos: int) -> int:
+    """Position after any ``[...]`` optional arguments and spaces."""
+    while True:
+        while pos < len(text) and text[pos].isspace():
+            pos += 1
+        if pos >= len(text) or text[pos] != '[':
+            return pos
+        close = text.find(']', pos)
+        if close < 0:
+            return len(text)
+        pos = close + 1
+
+
+def _brace_argument(text: str, pos: int) -> tuple[str, int, int] | None:
+    """(content, content_start, end) of the ``{...}`` argument at pos."""
+    pos = _skip_optional(text, pos)
+    if pos >= len(text) or text[pos] != '{':
+        return None
+    content, end = _balanced_braces(text, pos)
+    return content, pos + 1, end
+
+
+def _column_widths(spec: str, offset: int) -> list[tuple[str, str, int]]:
+    """(``p{...}`` text, width, position) for p/m/b columns of a spec."""
+    found, pos = [], 0
+    while pos < len(spec):
+        char = spec[pos]
+        if char in '><@!':
+            argument = _brace_argument(spec, pos + 1)
+            pos = argument[2] if argument else pos + 1
+            continue
+        if char in 'pmb':
+            argument = _brace_argument(spec, pos + 1)
+            if argument:
+                found.append((f'{char}{{{argument[0]}}}', argument[0], offset + pos))
+                pos = argument[2]
+                continue
+        pos += 1
+    return found
+
+
+def _width_sites(text: str) -> list[tuple[str, str, int]]:
+    """Every (shown text, width argument, position) this rule judges."""
+    sites = []
+    for match in _TABULAR_BEGIN.finditer(text):
+        pos = match.end()
+        if match.group(1) in ('tabular*', 'tabularx', 'tabulary'):
+            width = _brace_argument(text, pos)
+            if not width:
+                continue
+            sites.append((f'{match.group(0)}{{{width[0]}}}', width[0], match.start()))
+            pos = width[2]
+        spec = _brace_argument(text, pos)
+        if spec:
+            sites.extend(_column_widths(spec[0], spec[1]))
+    for match in _MINIPAGE_BEGIN.finditer(text):
+        width = _brace_argument(text, match.end())
+        if width:
+            sites.append((f'{match.group(0)}{{{width[0]}}}', width[0], match.start()))
+    for match in _INCLUDEGRAPHICS_OPTIONS.finditer(text):
+        for option in match.group(1).split(','):
+            key, _, value = option.partition('=')
+            if key.strip() == 'width' and value:
+                sites.append((f'width={value.strip()}', value, match.start()))
+    return sites
+
+
+def _scaled_at(text: str, pos: int) -> bool:
+    return any(block.start() <= pos < block.end() and _SCALING.search(block.group(0))
+               for block in _FLOAT_BLOCK.finditer(text))
+
+
+def _length_row(source: TexSource, shown: str, width: str, pos: int) -> dict | None:
+    parsed = _LENGTH.match(width)
+    line = _line(source.text, pos)
+    if parsed is None or (parsed.group('unit') and parsed.group('factor') is None):
+        if parsed is None and not _LENGTH_VOCABULARY.match(width):
+            return None
+        return _row('error', 'length_malformed',
+                    '%s is not a TeX dimension (a number followed by a unit such as pt/cm/em '
+                    'or a length register such as \\linewidth); TeX either stops or inserts '
+                    'pt, and a corrupted width usually means a formatter rewrote the number'
+                    % shown, source.path, line)
+    factor = float((parsed.group('factor') or '1').replace(',', '.'))
+    if parsed.group('register') not in _LINE_WIDTH_REGISTERS or factor <= 1:
+        return None
+    if _scaled_at(source.text, pos):
+        return _row('info', 'length_exceeds_line',
+                    '%s is %g times the line width inside a scaled or rotated float; '
+                    'the compile log\'s Overfull records decide whether it fits'
+                    % (shown, factor), source.path, line)
+    return _row('warning', 'length_exceeds_line',
+                '%s is %g times the line width: a single box wider than its line '
+                'overflows it. Usually a corrupted spec (e.g. 0.05 rewritten as 5); '
+                'if the table is scaled or rotated elsewhere this is a false positive, '
+                'and the compile log\'s Overfull records are authoritative'
+                % (shown, factor), source.path, line)
+
+
+def _check_length_specs(sources: list[TexSource], _aggregate: dict) -> list[dict]:
+    rows = []
+    for source in sources:
+        for shown, width, pos in _width_sites(source.text):
+            row = _length_row(source, shown, width, pos)
+            if row:
+                rows.append(row)
+    return rows
+
+
 # (code-owner function, severity-independent; order = report order)
 _SOURCE_RULES = (
+    _check_length_specs,
     _check_duplicate_label,
     _check_includegraphics_missing_file,
     _check_undefined_crossrefs,
@@ -451,6 +581,32 @@ def run_source_checks(root: Path, main_file: str, *,
     rows.sort(key=lambda row: (_SEVERITY_RANK.get(row['severity'], 3),
                                row['file'], row['line'] or 0))
     return rows[:_MAX_ROWS]
+
+
+def run_tex_checks(root: Path, main_file: str, *, log: Path) -> list[dict]:
+    """Layout gate for a built paper: length-spec rows from the live source
+    plus one row per ``Overfull`` box of its final TeX log.
+
+    For papers built outside the paper build service (a project Makefile):
+    the log is the authority for overflow, the source rows explain likely
+    causes. A missing log is an ``error`` row (cannot verify), never a pass.
+    """
+    from lib.paper.builds.compiler import _diagnostics, overfull_diagnostics
+    root = Path(root).resolve()
+    rows = [row for row in run_source_checks(root, main_file)
+            if row['code'].startswith('length_')]
+    try:
+        text = Path(log).read_text(encoding='utf-8', errors='replace')
+    except OSError as exc:
+        return rows + [_row('error', 'tex_log_unavailable',
+                            'Cannot read the TeX log %s (%s); overfull boxes are unverified'
+                            % (log, exc.strerror or exc), '', None)]
+    base = (root / main_file).parent
+    # A log that stopped on a TeX error describes no finished layout; its
+    # missing Overfull records are not evidence that the layout fits.
+    errors = [row for row in _diagnostics(text, source_root=root, base_dir=base)
+              if row['severity'] == 'error']
+    return rows + errors + overfull_diagnostics(text, source_root=root, base_dir=base)
 
 
 # ── PDF-level checks on the latest retained build ─────────────────────────

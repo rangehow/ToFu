@@ -14,7 +14,8 @@ import uuid
 from datetime import datetime, timedelta
 from collections.abc import Callable
 
-from lib.identity import PrincipalContext
+from lib.conversation_sync.execution_identity import ManualDetectAdmission
+from lib.identity import PrincipalContext, require_user_id
 from lib.log import audit_log, get_logger, task_log_tag
 from lib.scheduler.contract import DUE_CLAIM_INTERVAL_SECONDS
 from lib.scheduler.cron import cron_matches, describe_cron, next_cron_run
@@ -58,19 +59,23 @@ def _task_owner_user_id(task: dict) -> int:
 
 
 def _task_process_principal(
-    task: dict, *, system_scope: str | None = None
+    task: dict, *, system_scope: str | None = None,
+    process_principal: PrincipalContext | None = None,
 ) -> PrincipalContext:
     """Build the explicit least-privilege identity for one child process."""
     owner_user_id = _task_owner_user_id(task)
+    tenant_id = process_principal.tenant_id if process_principal is not None else None
     if system_scope is not None:
         return PrincipalContext.system(
             subject_id=f'scheduler.{system_scope}',
             owner_user_id=owner_user_id,
+            tenant_id=tenant_id,
             scopes={system_scope},
         )
     return PrincipalContext.user(
         subject_id=f'scheduled-user:{owner_user_id}',
         owner_user_id=owner_user_id,
+        tenant_id=tenant_id,
         scopes={'agents:scheduler'},
     )
 
@@ -201,14 +206,16 @@ def _storage_backup_timeout_seconds() -> int:
     return storage_backup_timeout_seconds()
 
 
-def _run_daily_report_backfill(task: dict) -> tuple[bool, str]:
+def _run_daily_report_backfill(
+    task: dict, *, process_principal: PrincipalContext | None = None,
+) -> tuple[bool, str]:
     """Execute the typed report action with only its row owner's authority."""
     try:
         from lib.daily_report import _backfill_yesterday_if_missing
 
         summary = _backfill_yesterday_if_missing(
             principal=_task_process_principal(
-                task, system_scope='reports:maintain'),
+                task, system_scope='reports:maintain', process_principal=process_principal),
         )
         return bool(summary.get('ok')), json.dumps(
             summary, ensure_ascii=False, sort_keys=True)
@@ -694,13 +701,30 @@ class ScheduledTaskManager:
 
     # ── Task Execution ──
 
-    def _execute_task(self, task):
+    def _daily_probe_principal(
+        self, task: dict, *, caller: PrincipalContext | None = None,
+    ) -> PrincipalContext:
+        # Detect is installed for the composed owner. A legacy scheduler row
+        # has no tenant of its own, so only that worker can supply the binding.
+        worker = self._background_principal()
+        owner = worker.require_owner(context='scheduled provider probe')
+        if require_user_id(task.get('user_id'), context='provider probe row') != owner:
+            raise PermissionError('provider probe row does not belong to the scheduler owner')
+        if caller is not None:
+            if (caller.kind != 'user' or caller.owner_user_id != owner
+                    or caller.tenant_id != worker.tenant_id):
+                raise PermissionError('provider probe caller does not match the scheduler owner and tenant')
+        return _task_process_principal(task, system_scope='providers', process_principal=worker)
+
+    def _execute_task(self, task, *, detect_principal: PrincipalContext | None = None,
+                      detect_cancel_event=None):
         """Execute a single task. Returns (success, result_text)."""
         from lib.project_mod.command_log import command_identity, command_log_fields
 
         task_type = task["task_type"]
         command = task["command"]
         max_runtime = task.get("max_runtime", 300)
+        process_principal = getattr(self, '_process_principal', None)
 
         logger.info(
             "[Scheduler] Executing task id=%s type=%s %s", task.get("id", "?"),
@@ -769,7 +793,7 @@ class ScheduledTaskManager:
                     max_runtime=max_runtime,
                     job_id=str(task.get('id') or ''),
                     job_type=task_type,
-                    principal=_task_process_principal(task),
+                    principal=_task_process_principal(task, process_principal=process_principal),
                     cwd=cwd,
                     cancel_event=getattr(self, '_stop_event', None),
                 )
@@ -799,7 +823,7 @@ class ScheduledTaskManager:
                     max_runtime=max_runtime,
                     job_id=str(task.get('id') or ''),
                     job_type=task_type,
-                    principal=_task_process_principal(task),
+                    principal=_task_process_principal(task, process_principal=process_principal),
                     cwd=cwd,
                     cancel_event=getattr(self, '_stop_event', None),
                 )
@@ -902,11 +926,12 @@ class ScheduledTaskManager:
 
         elif task_type == 'provider_probe_daily':
             try:
+                principal = detect_principal or self._daily_probe_principal(task)
                 from lib.model_routing.probe_automation import run_daily_probe
                 summary = run_daily_probe(
-                    principal=_task_process_principal(task, system_scope='providers'),
+                    principal=principal,
                     max_runtime=max_runtime,
-                    cancel_event=getattr(self, '_stop_event', None),
+                    cancel_event=detect_cancel_event or getattr(self, '_stop_event', None),
                 )
                 return True, json.dumps(summary, sort_keys=True)
             except Exception:
@@ -917,7 +942,8 @@ class ScheduledTaskManager:
             try:
                 from lib.model_catalog.auto_update import run_model_intelligence_update
                 summary = run_model_intelligence_update(
-                    principal=_task_process_principal(task, system_scope='providers'),
+                    principal=_task_process_principal(
+                        task, system_scope='providers', process_principal=process_principal),
                     max_runtime=max_runtime,
                 )
                 return True, json.dumps(summary, sort_keys=True)
@@ -929,7 +955,7 @@ class ScheduledTaskManager:
             # Daily reports are owner-scoped durable state. The command is
             # informational; execution rebuilds only reports:maintain for the
             # owner recorded on this exact Sidecar task row.
-            return _run_daily_report_backfill(task)
+            return _run_daily_report_backfill(task, process_principal=process_principal)
 
         elif task_type == "reserve_reclaim":
             # Billing janitor: release reservations orphaned by a crash/abort
@@ -1036,7 +1062,7 @@ class ScheduledTaskManager:
 
                 summary = run_once(
                     principal=_task_process_principal(
-                        task, system_scope='optimizer:maintain'),
+                        task, system_scope='optimizer:maintain', process_principal=process_principal),
                     dry_run=False,
                 )
                 text = _json.dumps(
@@ -1056,17 +1082,42 @@ class ScheduledTaskManager:
 
         return False, f"Unknown task type: {task_type}"
 
-    def run_task_now(self, task_id, *, user_id: int):
-        """Manually trigger a task immediately."""
+    def run_task_now(self, task_id, *, user_id: int, principal: PrincipalContext | None = None,
+                     manual_detect_admission: ManualDetectAdmission | None = None,
+                     detect_only=False, detect_cancel_event=None):
+        """Manually trigger a task; Detect also requires exact action admission."""
         task = self.get_task(task_id, user_id=user_id)
         if not task:
             return None, "Task not found"
 
+        detect = task['task_type'] == 'provider_probe_daily'
+        if detect_only and (not detect or task.get('system_key') != 'daily-provider-probe'):
+            return None, 'Task not found'
+        if detect:
+            if (not isinstance(principal, PrincipalContext)
+                    or not isinstance(manual_detect_admission, ManualDetectAdmission)
+                    or manual_detect_admission.principal != principal):
+                return None, "Task not found"
+            try:
+                manual_detect_admission.verify_current()
+                detect_principal = self._daily_probe_principal(task, caller=principal)
+            except (PermissionError, RuntimeError, ValueError):
+                return None, "Task not found"
+
         logger.info('▶️ Running task "%s" (manual trigger)', task["name"])
-        success, result = self._execute_task(task)
+        if detect:
+            if detect_cancel_event is not None and detect_cancel_event.is_set():
+                return None, 'Task not found'
+            kwargs = {'detect_cancel_event': detect_cancel_event} if detect_cancel_event is not None else {}
+            success, result = self._execute_task(task, detect_principal=detect_principal, **kwargs)
+        else:
+            success, result = self._execute_task(task)
 
         now = datetime.now().isoformat()
-        _scheduler_client(write=True).command(
+        client = _scheduler_client(write=True)
+        if detect_cancel_event is not None and detect_cancel_event.is_set():
+            return False, 'Detect relay authority ended; no scheduler result recorded.'
+        client.command(
             "scheduler.task.record_result",
             {
                 "task_id": task_id,

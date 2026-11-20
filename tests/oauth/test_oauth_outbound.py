@@ -7,6 +7,8 @@ model-routing v2 ProviderAccess provision/deprovision round-trip.
 
 from __future__ import annotations
 
+from lib.oauth.codex import CodexAccessTokenSnapshot
+
 import unittest
 from unittest import mock
 
@@ -104,10 +106,8 @@ class TestCodexResolve(unittest.TestCase):
 
     def test_identity_headers_and_account_id(self):
         body = {'messages': [], '_conv_id': 'private-conversation-id'}
-        with mock.patch('lib.oauth.codex.codex_get_valid_token',
-                        return_value='access-tok'), \
-             mock.patch('lib.oauth.token_store.load_token',
-                        return_value={'account_id': 'acc-xyz'}):
+        with mock.patch('lib.oauth.codex.codex_get_valid_token_snapshot',
+                        return_value=CodexAccessTokenSnapshot('access-tok', 'acc-xyz')):
             key, hdrs, _out = outbound.resolve_oauth_request(
                 'codex', body, None)
         self.assertEqual(key, 'access-tok')
@@ -135,10 +135,8 @@ class TestCodexResolve(unittest.TestCase):
 
     def test_cache_affinity_headers_are_stable_per_conversation(self):
         def resolve(conv_id):
-            with mock.patch('lib.oauth.codex.codex_get_valid_token',
-                            return_value='access-tok'), \
-                 mock.patch('lib.oauth.token_store.load_token',
-                            return_value={}):
+            with mock.patch('lib.oauth.codex.codex_get_valid_token_snapshot',
+                            return_value=CodexAccessTokenSnapshot('access-tok', '')):
                 return outbound.resolve_oauth_request(
                     'codex', {'messages': [], '_conv_id': conv_id}, None)[1]
 
@@ -154,10 +152,8 @@ class TestCodexResolve(unittest.TestCase):
             observe_turn_state, release_turn_state)
 
         def resolve(task_id):
-            with mock.patch('lib.oauth.codex.codex_get_valid_token',
-                            return_value='access-tok'), \
-                 mock.patch('lib.oauth.token_store.load_token',
-                            return_value={}):
+            with mock.patch('lib.oauth.codex.codex_get_valid_token_snapshot',
+                            return_value=CodexAccessTokenSnapshot('access-tok', '')):
                 return outbound.resolve_oauth_request('codex', {
                     'model': 'gpt-6-sol', 'messages': [],
                     '_conv_id': 'conv-a', '_task_id': task_id}, None)[1]
@@ -178,7 +174,7 @@ class TestCodexResolve(unittest.TestCase):
             release_turn_state('turn-1')
 
     def test_no_token_raises(self):
-        with mock.patch('lib.oauth.codex.codex_get_valid_token', return_value=None):
+        with mock.patch('lib.oauth.codex.codex_get_valid_token_snapshot', return_value=None):
             with self.assertRaises(RuntimeError):
                 outbound.resolve_oauth_request('codex', {'messages': []}, None)
 

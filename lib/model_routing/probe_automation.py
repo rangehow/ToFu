@@ -27,6 +27,7 @@ def apply_recommendations(document, bundle, snapshot):
     Transport failure, quota exhaustion and expired credentials are not owner
     revocation. Negative cells stay visible in probe diagnostics and manual
     review, but cannot remove a grant or add a persistent exclusion here.
+    Managed Codex observations do not carry account-scoped grant authority.
     """
     if (snapshot.get('status') != 'done'
             or snapshot.get('done_count') != snapshot.get('total')
@@ -40,6 +41,10 @@ def apply_recommendations(document, bundle, snapshot):
             models.setdefault(ref['model_id'], set()).add(
                 (ref['creator_id'], ref['model_id']))
     credentials = {r['credential_id']: r for r in document['credentials']}
+    codex_accesses = {row['provider_access_id'] for row in document.get('provider_accesses', [])
+                      if row['provider_id'] == 'oauth_codex'}
+    history = {(r['credential_id'], r['creator_id'], r['model_id']): r
+               for r in document.get('revocation_history', [])}
     cells = []
     for cell in snapshot['cells'].values():
         refs = models.get(cell.get('root_model_id'), set())
@@ -50,14 +55,23 @@ def apply_recommendations(document, bundle, snapshot):
         if type(index) is not int or not 0 <= index < len(bundle['credentials']):
             raise ValueError('invalid probe credential index')
         credential = credentials[bundle['credentials'][index]['credential_id']]
+        if credential.get('provider_access_id') in codex_accesses:
+            continue
         creator_id, model_id = next(iter(refs))
         evidence = {'state': 'ok' if cell.get('status') == 'ok' else 'pending'}
-        cells.append(derive_cell_state(
+        state = derive_cell_state(
             credential=credential,
             wire_model_id=str(cell.get('model_id') or ''),
             model_ref={'creator_id': creator_id, 'model_id': model_id},
             evidence=evidence,
-        ))
+        )
+        tombstone = history.get((credential['credential_id'], creator_id, model_id), {})
+        has_grant = any(g['creator_id'] == creator_id and g['model_id'] == model_id
+                        for g in credential['authorization']['models'])
+        if (state['wire_model_id'] in tombstone.get('excluded_wire_model_ids', ())
+                or (tombstone.get('model_revoked') and not has_grant)):
+            state['recommend_enable'] = False
+        cells.append(state)
     # Disabled Connections are omitted from fresh network work. Keep their
     # wires neutral: absence supplies no positive reachability evidence.
     # One representative per credential/model suffices, bounding added cells
@@ -117,7 +131,8 @@ def apply_recommendations(document, bundle, snapshot):
                 continue
             key = (cid, *model_key)
             all_wires = set(known_wires.get(model_key, ())) | observed_wires.get(key, set())
-            excluded = sorted(all_wires - successful_wires.get(key, set()))
+            historic_wires = set(history.get(key, {}).get('excluded_wire_model_ids', ()))
+            excluded = sorted((all_wires - successful_wires.get(key, set())) | historic_wires)
             if excluded:
                 grant['excluded_wire_model_ids'] = excluded
         after = {(_g['creator_id'], _g['model_id']): frozenset(
@@ -133,9 +148,12 @@ def run_daily_probe(*, principal, max_runtime=DAILY_PROBE_MAX_RUNTIME,
                     cancel_event=None, repository=None):
     if not isinstance(principal, PrincipalContext) or 'providers' not in principal.scopes:
         raise PermissionError('provider maintenance scope required')
-    boundary = OwnerBoundary.create(principal.require_owner(context='daily provider probe'))
+    boundary = OwnerBoundary.create(
+        principal.require_owner(context='daily provider probe'), principal.tenant_id)
     repository = repository or ModelRoutingRepository()
     deadline = time.monotonic() + min(DAILY_PROBE_MAX_RUNTIME, max(1, max_runtime))
+    if cancel_event and cancel_event.is_set():
+        raise TimeoutError('daily probe cancelled before entry')
     authority = repository.get(boundary)
     document = copy.deepcopy(authority.document)
     changed = completed = total_cells = identities = 0
@@ -145,7 +163,8 @@ def run_daily_probe(*, principal, max_runtime=DAILY_PROBE_MAX_RUNTIME,
         bundle = provider_bundle(document, provider['provider_id'])
         if not bundle['provider_access'] or not bundle['provider_access'].get('enabled', True):
             continue
-        if not bundle['credentials'] or not bundle['offerings']:
+        if (not any(row.get('enabled', True) for row in bundle['credentials'])
+                or not bundle['offerings']):
             continue
         try:
             plan = matrix_probe_plan(repository, boundary, bundle)
@@ -170,7 +189,13 @@ def run_daily_probe(*, principal, max_runtime=DAILY_PROBE_MAX_RUNTIME,
                     _protocol=plan['provider']['protocol'], _extra_headers=plan['extra_headers'],
                     _oauth=plan['oauth'], _adapter=plan['adapter'],
                     _owner_user_id=boundary.owner_user_id)
+        if cancel_event is not None:
+            if cancel_event.is_set():
+                raise TimeoutError('daily probe cancelled before submission')
+            task['_dispatch_cancelled'] = getattr(cancel_event, 'dispatch_cancelled', cancel_event.is_set)
         with probe.CELL_PROBE_LOCK:
+            if probe.probe_dispatch_cancelled(task):
+                raise TimeoutError('daily probe cancelled before submission')
             existing = probe.CELL_PROBE_TASKS.get(key)
             if existing and existing.get('status') == 'running':
                 raise RuntimeError('provider probe already running')
@@ -195,6 +220,10 @@ def run_daily_probe(*, principal, max_runtime=DAILY_PROBE_MAX_RUNTIME,
                         raise
         except BaseException:
             task['_abort'] = True
+            try:
+                future.result()  # Join the entered provider worker before returning.
+            except Exception:
+                pass
             raise
         changed += apply_recommendations(document, bundle, probe.public_probe_snapshot(task))
         identities += reconcile_probe_identities(document, bundle, task['cells'].values())
@@ -202,5 +231,6 @@ def run_daily_probe(*, principal, max_runtime=DAILY_PROBE_MAX_RUNTIME,
     if time.monotonic() >= deadline or (cancel_event and cancel_event.is_set()):
         raise TimeoutError('daily probe cancelled or timed out')
     if changed or identities:
-        repository.compare_and_swap(boundary, document, expected_revision=authority.revision)
+        options = {'cancel_event': cancel_event} if cancel_event is not None else {}
+        repository.compare_and_swap(boundary, document, expected_revision=authority.revision, **options)
     return {'ok': True, 'providers': completed, 'cells': total_cells, 'grant_changes': changed}

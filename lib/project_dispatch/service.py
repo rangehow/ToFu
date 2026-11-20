@@ -450,6 +450,10 @@ class ProjectDispatchService:
             '_projectAuthorizationSource': deepcopy(request['authorizationSource']),
         }, INITIATOR_BRAIN)
         _attach(projection, request.get('attachments'), owner=binding['owner'])
+        if coordinator:
+            from .continuation import results_wake_observed
+            if results_wake_observed(self.repository, assignment):
+                return {**self._view(assignment), 'dispatch': 'deferred'}
         try:
             outcome = self.commands.create_turn(request['recipientId'], binding['owner'], {
                 'commandId': 'project-dispatch:' + assignment_id,
@@ -458,7 +462,11 @@ class ProjectDispatchService:
             }, request_started_at=time.time(), principal=trusted.principal, trusted_dispatch=trusted)
         except Exception as error:
             from lib.turn_lifecycle import LifecycleConflict
-            if isinstance(error, LifecycleConflict) and error.code in ('lane_busy', 'superseded_by_human'):
+            if (coordinator and isinstance(error, LifecycleConflict) and error.code == 'lane_advanced'):
+                from .continuation import WakeEvidenceChanged
+                raise WakeEvidenceChanged('Coordinator Turn changed before wake birth') from error
+            if isinstance(error, LifecycleConflict) and error.code in (
+                    'lane_busy', 'superseded_by_human', 'coordinator_results_observed'):
                 # The authorized row stays; the lane's own settlement births it.
                 logger.info('[ProjectDispatch] assignment=%s birth deferred in conversation=%s: %s',
                             assignment_id, request['recipientId'], error.code)
@@ -512,11 +520,22 @@ class ProjectDispatchService:
                     from lib.integration_control import _start_or_wake_worker
                     wake = _start_or_wake_worker
                 wake()
+            elif arguments['decision'] in ('reject', 'rework'):
+                self._close_final_hold(assignment)
         # A receipt needs the decision, revisions and delivery, never the
         # Worker projection (MBs for a tool-heavy Turn).
         view = self.view_for_coordinator(assignment['id'], scope=scope, settlement_only=True)
         _settle_memory_verdicts(view, actor='coordinator', reviewer=scope.get('conversation_id', ''))
         return view
+
+    def _close_final_hold(self, assignment):
+        """A cancel or a reject/rework review made the result final: its held delivery closes now.
+
+        A remembered hold is otherwise revisited only by a recovery pass, and a
+        preserved receipt never (``delivery.release_publication_hold``).
+        """
+        if assignment.get('execution') is not None:
+            self._release_publication_hold(self.repository.workspace_task_id(assignment))
 
     def _release_publication_hold(self, task_id):
         """Retire the receipt's pre-pin hold under this publication lock.
@@ -556,10 +575,11 @@ class ProjectDispatchService:
         return self.turn_get(conversation_id, turn_id, user_id=owner), None
 
     def _view(self, assignment, *, settlement_only=False, previews=None, snapshot=None, evidence=None,
-              coordinator=False):
+              coordinator=False, diagnostic_receipts=False):
         """previews: a history page's (previous, current) maps of exact previews.
 
         coordinator: reduce request and execution.result to a lead's projections.
+        diagnostic_receipts: pure receipt projection without live publication validation.
 
         Only a history row passes them; that row also carries the contract's
         historyRequest projection of the request instead of the complete one.
@@ -577,9 +597,11 @@ class ProjectDispatchService:
             identity = (request['recipientId'], association['turnId'])
             owner = assignment['grant']['owner']
             if evidence is None:
+                # Terminal Attempt and final Turn commit together. Read status
+                # first so a later settlement cannot promote an older partial body.
+                attempt = self.attempt_get(association['attemptId'], user_id=owner)
                 turn, remembered = self._bound_turn(identity, owner,
                                                     settlement_only=settlement_only, previews=previews)
-                attempt = self.attempt_get(association['attemptId'], user_id=owner)
             else:
                 turn, remembered = evidence.bound_turn(owner, identity, previews)
                 attempt = evidence.attempt(owner, association['attemptId'])
@@ -623,9 +645,11 @@ class ProjectDispatchService:
         if assignment['request'].get('profile', {}).get('mode') in ('files', 'project'):
             from .publication import delivery_view
             delivery = (delivery_view(assignment, attempt,
-                                      self.workspace_get or self.repository.get_workspace)
+                                      self.workspace_get or self.repository.get_workspace,
+                                      diagnostic=diagnostic_receipts)
                         if evidence is None else
-                        delivery_view(assignment, attempt, evidence.workspace_get, resolve=evidence.resolve))
+                        delivery_view(assignment, attempt, evidence.workspace_get, resolve=evidence.resolve,
+                                      diagnostic=diagnostic_receipts))
         dependency_view = ({'dependencyStates': self.repository.dependency_states(assignment, value=snapshot)}
                            if 'dependencies' in assignment['request'] and not settlement_only else {})
         review = deepcopy(assignment['review'])
@@ -637,7 +661,10 @@ class ProjectDispatchService:
             request = {name: request[name] for name in HISTORY_REQUEST_FIELDS if name in request}
         elif coordinator:
             request = {name: request[name] for name in COORDINATOR_REQUEST_FIELDS if name in request}
-        return {**dependency_view, 'assignmentId': assignment['id'], 'request': deepcopy(request),
+        return {**dependency_view,
+            **({'bindingRevision': assignment['grant']['bindingRevision']}
+               if 'bindingRevision' in assignment['grant'] else {}),
+            'assignmentId': assignment['id'], 'request': deepcopy(request),
             'grantRevision': assignment['grant']['revision'], 'revoked': assignment['grant']['revoked'],
             'execution': execution, 'review': review,
             'publication': deepcopy(assignment.get('publication')), 'delivery': delivery,
@@ -705,6 +732,7 @@ class ProjectDispatchService:
                 f"Revoked by Coordinator conversation {task.get('convId') or '?'} "
                 f"(task {task.get('id') or '?'}) calling cancel_project_work "
                 f"on assignment {assignment['id']}."))
+            self._close_final_hold(assignment)
         return self.view_for_coordinator(assignment['id'], scope=scope, settlement_only=True)
 
     def withdraw_unadopted_birth(self, assignment_id, provenance):
@@ -720,6 +748,7 @@ class ProjectDispatchService:
                 return
             execution = self.repository.revoke(assignment_id, expected_revision=assignment['grant']['revision'])
             self._cancel_worker(assignment, execution, provenance)
+            self._close_final_hold(assignment)
 
     def _cancel_worker(self, assignment, execution, provenance):
         """Stop the bound attempt and every other live attempt in its Worker conversation.
@@ -761,6 +790,7 @@ class ProjectDispatchService:
                 assignment, execution,
                 f"Revoked through the project assignment revoke API by "
                 f"{getattr(principal, 'subject_id', None) or '?'} on assignment {assignment_id}.")
+            self._close_final_hold(assignment)
         return self.view(assignment_id, principal=principal)
 
     def publish(self, assignment_id, *, principal, expected_revision, result_revision, expected_checkpoint_sha):

@@ -233,6 +233,81 @@ def test_position_boundary_counts_previous_wire_messages():
     assert head_edit.mutation_inside_prior_prefix is True
 
 
+# ── Cache-namespace wording: byte identity is a PREFIX claim ──
+#
+# ``wire_proven_identical`` covers the shared prefix messages the wire diff
+# compared, NOT the whole request (max_tokens/metadata/tool_choice can differ).
+# The namespace branch must only call the body byte-identical when that prefix
+# proof holds; otherwise the namespace switch is one observed change among
+# others and cannot explain the miss by itself.
+
+def _namespace_cause(*, wire_proven_identical):
+    return _cause(
+        prefix_mutation_break=False,
+        prefix_culprits=None,
+        namespace_switch=['<ns>key'],
+        wire_proven_identical=wire_proven_identical,
+        elapsed=10,
+    )
+
+
+def test_namespace_switch_with_a_proven_prefix_keeps_the_confident_wording():
+    cause = _namespace_cause(wire_proven_identical=True)
+
+    assert 'same prefix bytes routed to a different cache namespace' in cause
+    assert 'byte-identical prefix landed on a COLD gateway cache' in cause
+    assert 'not proof' not in cause
+
+
+def test_namespace_switch_without_a_proven_prefix_is_hedged():
+    """The routing flip is proven; the shared prefix bytes are not. Never
+    describe that round as a byte-identical body."""
+    cause = _namespace_cause(wire_proven_identical=False)
+
+    assert 'different cache namespace' in cause
+    assert 'shared prefix bytes were not proven identical' in cause
+    assert 'they differed or the comparison was unavailable' in cause
+    assert 'not proof that the whole request was unchanged' in cause
+    assert 'byte-identical' not in cause.lower()
+    assert 'same prefix bytes' not in cause
+    assert 'COLD gateway cache' not in cause
+    # A no_cache_reuse verdict carrying this cause is a client body change,
+    # not the byte-identical upstream bucket.
+    assert classify_verdict({'no_cache_reuse': cause}) == BUCKET_BODY_CHANGE
+
+
+def _namespace_break_report(**overrides):
+    from lib.tasks_pkg.cache_tracking._report import BreakReport
+
+    fields = dict(
+        call_count=2, conv_id='ns-report', cache_read=0, cache_write=140000,
+        previous_read=90000, previous_write=50000, elapsed=5.0, usage=None,
+        client_changes={}, prefix_mutation_break=False,
+        turn_boundary_break=False, previous_turn_read=0, prefix_mutated=False,
+        prefix_culprits=[], wire_proven_identical=False,
+        namespace_switch=['<ns>key'], namespace_verified_same=False,
+        wire_culprits=[], no_reuse=True, api_break=False,
+        partial_no_reuse=False, previous_prefix_tokens=140000)
+    fields.update(overrides)
+    return BreakReport(**fields)
+
+
+def test_report_namespace_bucket_keeps_confident_wording_only_when_proven():
+    from lib.tasks_pkg.cache_tracking._report import report_confirmed_break
+
+    confident = report_confirmed_break(
+        _namespace_break_report(wire_proven_identical=True))
+    assert 'cache_namespace_switch' in confident
+    assert 'byte-identical prefix' in confident['cache_namespace_switch']
+
+    hedged = report_confirmed_break(
+        _namespace_break_report(wire_proven_identical=False))
+    assert 'no_cache_reuse' in hedged, hedged
+    cause = hedged['no_cache_reuse']
+    assert 'shared prefix bytes were not proven identical' in cause
+    assert 'byte-identical' not in cause.lower()
+
+
 @pytest.mark.parametrize('from_end,inside', [(1, False), (3, True)])
 def test_byte_only_position_uses_the_same_wire_boundary(from_end, inside):
     """A canonical-invisible edit falls back to the raw-byte index, which is

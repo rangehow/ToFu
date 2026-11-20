@@ -10,6 +10,80 @@ import json
 from concurrent.futures import Executor
 from lib.agent_core.execution_budget import ExecutionBudget, ModelBudgetExceeded
 from lib.agent_core.native_process import _joined
+from lib.log import get_logger
+
+logger = get_logger(__name__)
+
+_HEX_DIGITS = frozenset('0123456789abcdef')
+
+
+def _bounded_text(value, limit, *, empty=True):
+    """One log-safe scalar; malformed or oversized values become None."""
+    if not isinstance(value, str) or len(value) > limit or (not value and not empty):
+        return None
+    return value
+
+
+def _bounded_frame(receipt):
+    """Bounded exact-frame identity shared with Python cache receipts."""
+    from lib.llm.cache_exchange import FULL_REASONS
+    from lib.llm.sent_frame import FRAME_CONTENT_ENCODINGS, FRAME_KINDS
+    digest = receipt.get('frame_sha256')
+    size = receipt.get('frame_bytes')
+    kind = receipt.get('frame_kind')
+    reason = receipt.get('frame_reason')
+    encoding = receipt.get('frame_content_encoding')
+    return {
+        'frame_sha256': (digest if isinstance(digest, str) and len(digest) == 64
+                         and set(digest) <= _HEX_DIGITS else None),
+        'frame_bytes': (size if type(size) is int and 0 <= size < 2 ** 53 else None),
+        'frame_kind': kind if kind in FRAME_KINDS else None,
+        'frame_reason': reason if reason in FULL_REASONS else None,
+        'frame_content_encoding': (
+            encoding if encoding in FRAME_CONTENT_ENCODINGS else None),
+    }
+
+
+def log_cache_exchange(task, task_id, round_ordinal, usage):
+    """Emit one bounded, content-free native cache record, joinable by frame.
+
+    Carries task/conversation/round identity plus the provider-neutral
+    exchange counters and the exact request-frame hash; never prompts or
+    credentials. Malformed evidence degrades to null instead of raising.
+    """
+    if not isinstance(usage, dict):
+        return False
+    from lib.llm.cache_exchange import CACHE_EXCHANGE_KEY, loggable_cache_exchange
+    receipt = usage.get(CACHE_EXCHANGE_KEY)
+    exchange = loggable_cache_exchange(receipt)
+    if exchange is None:
+        return False
+    task = task if isinstance(task, dict) else {}
+    config = task.get('config') if isinstance(task.get('config'), dict) else {}
+    dispatch = usage.get('_dispatch') if isinstance(usage.get('_dispatch'), dict) else {}
+    record = {
+        'task': _bounded_text(task_id if isinstance(task_id, str) else task.get('id'), 160,
+                              empty=False),
+        'conversation': (_bounded_text(task.get('convId'), 128, empty=False)
+                         or _bounded_text(task.get('conversationId'), 128, empty=False)),
+        'round': (round_ordinal if type(round_ordinal) is int
+                  and 0 <= round_ordinal < 2 ** 53 else None),
+        'model': (_bounded_text(usage.get('model'), 160, empty=False)
+                  or _bounded_text(dispatch.get('model'), 160, empty=False)
+                  or _bounded_text(task.get('model'), 160, empty=False)
+                  or _bounded_text(config.get('model'), 160, empty=False)),
+        'provider': (_bounded_text(usage.get('provider_id'), 128, empty=False)
+                     or _bounded_text(dispatch.get('provider_id'), 128, empty=False)
+                     or _bounded_text(task.get('provider_id'), 128, empty=False)),
+        # ``loggable_cache_exchange`` already validates the frame block; keep
+        # its null verdicts and use the local bounds only for older producers
+        # that did not project these keys.
+        'exchange': {**exchange, **{
+            key: value for key, value in _bounded_frame(receipt).items()
+            if key not in exchange}},
+    }
+    logger.info('[CacheExchange] %s', json.dumps(record, sort_keys=True))
+    return True
 
 
 class NativeModelAccountPolicy:
@@ -192,6 +266,8 @@ class NativeModelAccountPolicy:
                 self.lease.settle(usage,unsent=result.unsent or not self.dispatch_entered)
                 self.lease = None
             self.settled = True
+            if not result.unsent and self.dispatch_entered:
+                log_cache_exchange(self.task, self.task_id, request.attempt_ordinal, usage)
             eligible=self.prepare_pricing is not None and not result.unsent and self.dispatch_entered
             if eligible:
                 from lib.cost import observed_usage_totals

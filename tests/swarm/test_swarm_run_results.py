@@ -41,8 +41,8 @@ OWNER = 7
 class _CheckpointingAgent:
     """A finished worker that persists its terminal checkpoint like SubAgent."""
 
-    def __init__(self, spec, answer, swarm_key):
-        self.spec, self.swarm_key = spec, swarm_key
+    def __init__(self, spec, answer, swarm_key, run_id):
+        self.spec, self.swarm_key, self.run_id = spec, swarm_key, run_id
         self.agent_id = f'agent-{spec.role}-{spec.id}'
         self.result = SubAgentResult(
             status=SubAgentStatus.COMPLETED.value, final_answer=answer,
@@ -52,11 +52,11 @@ class _CheckpointingAgent:
         persistence.save_agent(
             self.swarm_key, self.spec.id, role=self.spec.role,
             objective=self.spec.objective, status=self.result.status,
-            messages=[], result=self.result.to_dict(), rounds_used=1)
+            messages=[], result=self.result.to_dict(), rounds_used=1, run_id=self.run_id)
         return self.result
 
 
-@pytest.fixture(scope='module')
+@pytest.fixture
 def authority():
     from lib.storage import StorageSupervisor
     root = tempfile.TemporaryDirectory(prefix='tofu-swarm-run-results-')
@@ -92,7 +92,7 @@ def _task(conv, turn_id, owner=OWNER):
 
 def _launch(conv, turn_id, answers, monkeypatch):
     def build(spec, **kwargs):
-        return _CheckpointingAgent(spec, answers[spec.id], kwargs['swarm_key'])
+        return _CheckpointingAgent(spec, answers[spec.id], kwargs['swarm_key'], kwargs['swarm_run_id'])
 
     monkeypatch.setattr('lib.swarm.master._build_sub_agent', build)
     agents = [{'id': agent_id, 'role': 'researcher',
@@ -115,6 +115,10 @@ def _result(conv, turn_id, owner=OWNER, **args):
 
 def _expire(conv, monkeypatch):
     """Age the session past its TTL and run the production sweep to the end."""
+    # A terminal outcome can be visible while the driver still owns settlement.
+    session = integration.get_active_session(conv)
+    assert session is not None
+    assert _wait_until(lambda: not session.has_live_driver, timeout=10.0)
     with _state._sessions_lock:
         _state._session_timestamps[conv] = time.time() - 10 * _state.SESSION_TTL_SECONDS
     monkeypatch.setattr(integration, '_last_cleanup', 0.0)
@@ -265,9 +269,10 @@ def test_rows_without_an_orchestrator_are_archived_before_deletion(conversation)
     assert out['partial_output'] == 'partial evidence' and out['error'] == 'boom'
 
     # An owner that cannot be proven is never deleted on a guess.
-    persistence.save_session(conv, conv_id=conv, task_id='turn-11', specs=[], config={})
-    assert _state._record_results_then_delete(conv, None) is False
-    assert persistence.load_session(conv)['task_id'] == 'turn-11'
+    ownerless = conv + '-ownerless'
+    persistence.save_session(ownerless, conv_id=ownerless, task_id='turn-11', specs=[], config={})
+    assert _state._record_results_then_delete(ownerless, None) is False
+    assert persistence.load_session(ownerless)['task_id'] == 'turn-11'
 
 
 def test_rows_left_by_an_earlier_run_are_recorded_before_a_new_run_claims_the_key(

@@ -256,7 +256,7 @@ async def poll_qa_task():
 
 @api_v1_paper_bp.route("/api/v1/paper/translate/start", methods=["POST"])
 async def start_translate_task():
-    """Start (or join) a Babel-mode whole-paper translation task.
+    """Start (or join) a whole-paper text-translation task.
 
     Body JSON:
         paper_text: str

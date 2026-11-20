@@ -17,6 +17,7 @@
 import type { RouterWatchdogState } from '../api/router.generated';
 import { createButton, createDisclosureSummary } from '../ui';
 import { t } from '../i18n';
+import { apiFailure, type ApiFailure } from '../api/errors';
 import { setStableHidden } from '../conversation/ui/renderers/stable-dom';
 
 export interface RouterWatchdogPorts {
@@ -53,8 +54,13 @@ function localized<E extends HTMLElement>(element: E, key: StaticKey): E {
 const failure = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 export function createRouterWatchdogEntry(ports: RouterWatchdogPorts, hosts: RouterWatchdogHosts) {
-  let alive = true, pending = false;
+  let alive = true, generation = 0;
+  let pending: number | null = null;
+  // Grouping keeps the last known identity; only current evidence enables its Open shortcut.
   let state: RouterWatchdogState | null = null;
+  let availability: RouterWatchdogState['availability'] | null = null;
+  let actionWithdrawn = false;
+  let readError: ApiFailure | null = null;
   // The Watchdog path, known from any read (also while unbound).
   let location = '';
   let reading: AbortController | null = null;
@@ -67,7 +73,10 @@ export function createRouterWatchdogEntry(ports: RouterWatchdogPorts, hosts: Rou
   body.className = 'router-watchdog-body';
   const hint = localized(document.createElement('p'), 'routerWatchdog.hint');
   const open = localized(createButton({ label: '', size: 'sm', variant: 'ghost' }), 'routerWatchdog.open');
-  body.append(hint, open);
+  const error = document.createElement('p');
+  error.setAttribute('role', 'alert');
+  error.hidden = true;
+  body.append(hint, open, error);
   settings.append(summary, body);
 
   const header = document.createElement('header');
@@ -84,33 +93,69 @@ export function createRouterWatchdogEntry(ports: RouterWatchdogPorts, hosts: Rou
     const identityChanged = next.projectPath !== location
       || (next.availability === 'available' ? next.conversationId : '') !== (state?.conversationId ?? '');
     state = next.availability === 'available' ? next : null;
+    availability = next.availability;
+    reading = null;
+    actionWithdrawn = availability === 'unavailable';
+    readError = null;
     location = next.projectPath;
-    localized(summary, !state ? 'routerWatchdog.summaryOff'
-      : state.review.enabled ? 'routerWatchdog.summaryOn' : 'routerWatchdog.summaryFaultsOnly');
-    refresh();
+    render();
     if (identityChanged) ports.changed?.();
+  }
+
+  function render() {
+    if (!alive) return;
+    const denied = readError?.status === 403 || readError?.code === 'forbidden';
+    if (availability === null || availability === 'unavailable') {
+      delete summary.dataset.i18n;
+      summary.textContent = `${t('routerWatchdog.entry')} · ${t(reading ? 'common.loading'
+        : denied ? 'err.k.permission.chip' : 'rich.unknown')}`;
+    } else localized(summary, !state ? 'routerWatchdog.summaryOff'
+      : state.review.enabled ? 'routerWatchdog.summaryOn' : 'routerWatchdog.summaryFaultsOnly');
+    open.hidden = actionWithdrawn;
+    open.disabled = pending !== null || actionWithdrawn;
+    const evidence = readError ? [readError.status ? `HTTP ${readError.status}` : '', readError.code]
+      .filter(value => value !== null && value !== '').join(' · ') : '';
+    const detail = readError ? `${readError.message}${evidence ? ` (${evidence})` : ''}`
+      : availability === 'unavailable' ? 'unavailable' : '';
+    error.textContent = detail ? denied ? `${t('err.k.permission.chip')}: ${detail}`
+      : t('routerWatchdog.unavailable', { error: detail }) : '';
+    error.hidden = !detail;
+    refresh();
   }
 
   // Runs on every sidebar render: re-hiding still rewrites the attribute.
   function refresh() {
     if (!alive) return;
-    setStableHidden(header, !state || ports.activeConversationId() !== state.conversationId);
+    setStableHidden(header, availability !== 'available' || !state || ports.activeConversationId() !== state.conversationId);
   }
 
-  /** Ensures health checks and adopts their state; resolves the Watchdog
-   * conversation ID or rejects with the localized reason it is unavailable. */
+  function beginRequest() {
+    const own = ++generation;
+    reading?.abort(); reading = null;
+    pending = null;
+    open.removeAttribute('aria-busy');
+    return own;
+  }
+
+  /** Ensures health checks and adopts their state; a newer read or ensure
+   * supersedes the result and rejects with AbortError instead of a stale ID. */
   async function ensure(): Promise<string> {
+    const own = beginRequest();
+    render();
+    const assertCurrent = () => {
+      if (!alive || own !== generation) throw new DOMException('Superseded health-check request', 'AbortError');
+    };
+    assertCurrent();
     let ensured: RouterWatchdogState;
     try {
       ensured = await ports.ensure();
     } catch (error) {
+      assertCurrent();
       throw new Error(t('routerWatchdog.unavailable', { error: failure(error) }));
     }
-    if (alive) {
-      // The ensure's answer is newer than a read still in flight.
-      reading?.abort(); reading = null;
-      adopt(ensured);
-    }
+    assertCurrent();
+    adopt(ensured);
+    assertCurrent();
     if (ensured.availability !== 'available') throw new Error(t('routerWatchdog.unavailable', { error: ensured.availability }));
     return ensured.conversationId;
   }
@@ -118,28 +163,44 @@ export function createRouterWatchdogEntry(ports: RouterWatchdogPorts, hosts: Rou
   // A known Watchdog opens at once; an unknown one is ensured first, and its
   // answer opens it only if the owner is still where they clicked.
   open.addEventListener('click', () => {
+    if (!alive || open.disabled || open.hidden) return;
     if (state) { ports.open(state.conversationId); return; }
-    if (pending) return;
-    pending = true;
-    open.disabled = true; open.setAttribute('aria-busy', 'true');
+    if (pending !== null) return;
     const expected = ports.activeConversationId();
-    ensure().then((id) => {
-      if (alive && ports.activeConversationId() === expected) ports.open(id);
+    const own = generation + 1, request = ensure();
+    if (alive && own === generation) {
+      pending = own;
+      open.disabled = true; open.setAttribute('aria-busy', 'true');
+    }
+    request.then((id) => {
+      if (alive && own === generation && ports.activeConversationId() === expected) ports.open(id);
     }, (error) => {
-      if (alive) ports.notifyError(failure(error));
+      if (alive && own === generation) ports.notifyError(failure(error));
     }).finally(() => {
-      pending = false;
-      if (alive) { open.disabled = false; open.removeAttribute('aria-busy'); }
+      if (pending !== own) return;
+      pending = null;
+      if (alive) { open.removeAttribute('aria-busy'); render(); }
     });
   });
   back.addEventListener('click', () => ports.back());
 
-  // A passive read; a failure keeps the last known state until the owner acts.
   function read() {
-    reading?.abort();
+    if (!alive) return;
+    const own = beginRequest();
     const current = reading = new AbortController();
-    ports.read(current.signal).then((next) => { if (reading === current) adopt(next); }, () => undefined);
+    actionWithdrawn ||= state !== null;
+    availability = null; readError = null;
+    render();
+    ports.read(current.signal).then((next) => {
+      if (alive && own === generation && reading === current) adopt(next);
+    }, (reason) => {
+      if (!alive || own !== generation || reading !== current) return;
+      reading = null; readError = apiFailure(reason);
+      actionWithdrawn ||= readError.status === 403 || readError.code === 'forbidden';
+      render();
+    });
   }
+  window.addEventListener('tofu:language-change', render);
   read();
 
   return {
@@ -151,10 +212,12 @@ export function createRouterWatchdogEntry(ports: RouterWatchdogPorts, hosts: Rou
     reload: read,
     /** The Watchdog path ('' until a read answers); a coordinator there is the Watchdog. */
     location: () => location,
-    /** The bound Watchdog conversation the header marks ('' unless available). */
+    /** Last known bound identity for grouping, not the current Open availability. */
     conversationId: () => state?.conversationId ?? '',
     destroy() {
-      alive = false; reading?.abort(); settings.remove(); header.remove();
+      alive = false; generation++; reading?.abort();
+      window.removeEventListener('tofu:language-change', render);
+      settings.remove(); header.remove();
     },
   };
 }

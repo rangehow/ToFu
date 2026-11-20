@@ -533,6 +533,12 @@ def run_child_invocation(child: dict, *, before_dispatch=None) -> dict:
             # follows the same ingress, budget and registry cleanup as execution.
             from contextlib import nullcontext
             native = child.get('_nativePreparedInvocation')
+            if native is not None:
+                from lib.llm.request import current_physical_model_dispatch_guard
+                if current_physical_model_dispatch_guard() is not None:
+                    from lib.llm.llm_errors import ModelAdmissionRefused
+                    raise ModelAdmissionRefused('Recovered Swarm model dispatch requires a native send fence; '
+                                               'native child invocation is unsupported')
             admission = nullcontext()
             if before_dispatch is not None:
                 if native is not None:

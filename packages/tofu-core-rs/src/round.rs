@@ -32,6 +32,7 @@ use sha2::{Digest, Sha256};
 
 use crate::canonical::{build_body, BodySpec};
 use crate::provider::{decode_sse, Connection, ExchangeTiming};
+use crate::route::RouteSpec;
 use crate::store::{Client, ConnectionInfo};
 use crate::tools::dispatch;
 use crate::wire::{prepare, Protocol};
@@ -390,11 +391,17 @@ pub fn run_session(config: &SessionConfig) -> Result<SessionReport, Box<dyn std:
                 max_tokens: config.max_tokens,
                 temperature: config.temperature,
                 tools: Some(&config.tools),
+                inference_profile: None,
+                reasoning: None,
             },
         )?;
         profile.build_body_us = t.elapsed().as_micros() as u64;
         let t = Instant::now();
-        let sealed = prepare(body, config.protocol, &config.base_url, &config.api_key)?;
+        let sealed = prepare(
+            body,
+            config.protocol,
+            &RouteSpec::plain(&config.base_url, &config.api_key),
+        )?;
         profile.translate_seal_us = t.elapsed().as_micros() as u64;
         profile.request_bytes = sealed.payload.len();
         if config.events == EventMode::Parity {

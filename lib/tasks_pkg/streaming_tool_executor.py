@@ -806,7 +806,10 @@ class StreamingToolAccumulator:
         its response ends, and only when the ordinary dispatch would run it
         without a human gate: the call is in this request's contract catalog,
         the role policy admits it, no dispatch-grant fence applies, and the
-        conversation is not in attended Manual approval.
+        conversation is not in attended Manual approval. A dispatch-bound
+        Coordinator Turn (every lead continuation wake) starts after the same
+        dispatch admission its ordinary dispatch runs; a dispatched Worker's
+        call keeps its fence until its response ends.
         """
         from lib.tools.registry import stream_start_port
         port = stream_start_port(fn_name)
@@ -818,11 +821,15 @@ class StreamingToolAccumulator:
                 or (self._task.get('_attended') and cfg.get('autoApply') is False)):
             return None
         try:
-            from lib.project_dispatch.admission import is_dispatch_task
+            from lib.project_dispatch.admission import ROLE_KEY, is_dispatch_task
             from lib.tasks_pkg.coordinator_policy import coordinator_call_rejection
             from lib.tasks_pkg.delegate_mode import delegate_call_rejection
-            if (is_dispatch_task(self._task)
-                    or coordinator_call_rejection(self._task, fn_name, fn_args, self._project_path)
+            if is_dispatch_task(self._task):
+                if (self._task.get(ROLE_KEY) or {}).get('mode') != 'coordinator':
+                    return None
+                from lib.project_dispatch import scope
+                scope.admit_call(self._task, fn_name, fn_args, project_path=self._project_path)
+            if (coordinator_call_rejection(self._task, fn_name, fn_args, self._project_path)
                     or delegate_call_rejection(self._task, fn_name, fn_args)):
                 return None
         except Exception as error:

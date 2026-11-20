@@ -137,8 +137,10 @@ function _restoreConvProject(conv, eligible) {
  * else), and a response that lands after the user switched away is dropped. */
 function _enrichConvProjectContext(conv, eligible) {
   const id = conv && conv.id;
-  if (!id || (eligible && !eligible())) return;
-  const stillCurrent = () => activeConvId === id
+  if (!id || activeConvId !== id || !conversations.some(x => x && x.id === id)
+      || (eligible && !eligible())) return;
+  const current = _conversationProjectController.beginEnrichment();
+  const stillCurrent = () => current() && activeConvId === id
     && conversations.some(x => x && x.id === id)
     && (!eligible || eligible());
   Promise.resolve(Api.project.status(id))
@@ -352,5 +354,6 @@ async function loadProjectStatus() {
   // A status repaint is not a newer project choice: preserve the generation
   // that lets the pending authoritative hydration update this same view.
   const conv = getActiveConv();
-  return _restoreConvProject(conv, () => getActiveConv() === conv);
+  const current = _conversationProjectController.capture();
+  return _restoreConvProject(conv, () => current() && getActiveConv() === conv);
 }

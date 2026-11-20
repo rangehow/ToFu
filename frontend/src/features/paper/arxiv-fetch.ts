@@ -26,7 +26,6 @@ type ArxivFetchWindow = Window & {
   _paperReportCache?: string;
   _paperReviewCache?: string;
   _paperReviewVenue?: string;
-  _babelTranslatedPages?: JsonObject;
   _arxivFetchGeneration?: number;
   _renderArxivFetchProgress?: (event: JsonObject) => void;
   _newPaperEntryId?: () => string;
@@ -160,7 +159,6 @@ export async function fetchArxivPaper(
     state._paperReportCache = '';
     state._paperReviewCache = '';
     state._paperReviewVenue = '';
-    state._babelTranslatedPages = {};
     state._updatePaperTitles?.();
     state._renderPaperLibrary?.();
 

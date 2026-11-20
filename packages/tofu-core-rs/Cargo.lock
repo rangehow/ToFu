@@ -827,6 +827,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "tofu-contracts"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "tofu-core-rs"
 version = "0.1.0"
 dependencies = [
@@ -836,7 +844,9 @@ dependencies = [
  "serde_json",
  "sha1_smol",
  "sha2",
+ "tofu-contracts",
  "tofu-db",
+ "tofu-storage-client",
 ]
 
 [[package]]
@@ -867,6 +877,21 @@ dependencies = [
  "uuid",
  "zeroize",
  "zstd",
+]
+
+[[package]]
+name = "tofu-storage-client"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "base64",
+ "blake3",
+ "hmac",
+ "libc",
+ "serde_json",
+ "sha2",
+ "tofu-db",
+ "uuid",
 ]
 
 [[package]]

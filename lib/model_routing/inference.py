@@ -100,6 +100,11 @@ def validate_inference_profile(value, *, field='inference_profile') -> dict:
     if 'supported_efforts' in reasoning and 'default_effort' in reasoning and reasoning['default_effort'] not in reasoning['supported_efforts']:
         raise ModelRoutingError(f'{field}.reasoning.default_effort is not supported', field=field)
     efforts = reasoning.get('supported_efforts')
+    if reasoning.get('effort_knowledge') == 'undocumented':
+        if (reasoning.get('support') != 'supported' or reasoning.get('wire_format') != 'reasoning_effort'
+                or reasoning.get('can_disable') is not False
+                or any(key in reasoning for key in ('supported_efforts', 'default_effort', 'disabled_effort', 'effort_map'))):
+            raise ModelRoutingError(f'{field}.reasoning undocumented effort requires default-only controls', field=field)
     if efforts is not None:
         if 'disabled_effort' in reasoning and reasoning['disabled_effort'] not in efforts:
             raise ModelRoutingError(f'{field}.reasoning.disabled_effort is not supported', field=field)
@@ -138,7 +143,8 @@ def profile_from_metadata(row, *, source='configured') -> dict:
         for key, value in explicit.items():
             if key in {'reasoning', 'sampling', 'responses'}:
                 section = result.setdefault(key, {})
-                if key == 'reasoning' and value.get('support') in {'unsupported', 'unknown'}:
+                if key == 'reasoning' and (value.get('support') in {'unsupported', 'unknown'}
+                                           or value.get('effort_knowledge') == 'undocumented'):
                     section.clear()
                 section.update(value)
             else:
@@ -164,6 +170,16 @@ def resolve_inference_profile(*, model=None, offering=None, connection=None, dep
                 previous = result.setdefault(section, {})
                 if section == 'reasoning' and value.get('support') in {'unsupported', 'unknown'}:
                     previous.clear()
+                if section == 'reasoning' and value.get('effort_knowledge') == 'undocumented':
+                    for key in ('supported_efforts', 'default_effort', 'disabled_effort', 'effort_map'):
+                        previous.pop(key, None)
+                if (section == 'reasoning' and value.get('effort_knowledge') != 'undocumented'
+                        and ('supported_efforts' in value
+                             or ('wire_format' in value and value['wire_format'] != 'reasoning_effort')
+                             or value.get('can_disable') is True)):
+                    # These route-specific controls supersede the inherited
+                    # default-only assertion, even for ladderless toggles.
+                    previous.pop('effort_knowledge', None)
                 if section == 'reasoning' and 'supported_efforts' in value:
                     # A provider may narrow the ladder without repeating an
                     # inherited default that no longer exists on that route.

@@ -1,5 +1,7 @@
 """Metadata admission validates the public Turn schema and requested identity."""
+import json
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
@@ -56,7 +58,7 @@ def test_malformed_or_mismatched_metadata_fails_closed(monkeypatch, field, value
     assert caught.value.code == 'database_protocol_error'
 
 
-@pytest.mark.parametrize('field', ['turnId', 'conversationId', 'actor', 'settlement'])
+@pytest.mark.parametrize('field', ['turnId', 'presentationId', 'conversationId', 'actor', 'settlement'])
 def test_missing_public_metadata_is_not_synthesized(monkeypatch, field):
     response = metadata()
     del response[field]
@@ -74,6 +76,33 @@ def test_valid_metadata_remains_exact_and_absence_remains_not_found(monkeypatch)
     monkeypatch.setattr(turn_lifecycle, '_turn_client', lambda **kwargs: Client(None))
     with pytest.raises(turn_lifecycle.LifecycleNotFound):
         turn_lifecycle.get_turn('conversation', 'turn', user_id=7, include_projection=False)
+
+
+@pytest.fixture
+def native_metadata():
+    # The native semantic turn.get regression pins its complete response to
+    # this wire fixture (including the nested receipt), without a projection.
+    return json.loads((Path(__file__).parents[1] / 'fixtures/native_turn_metadata.json').read_text())
+
+
+@pytest.mark.parametrize('presentation_id', ['optimistic-turn', 'turn'], ids=['normal', 'legacy'])
+def test_native_turn_metadata_passes_strict_public_contract(native_metadata, presentation_id):
+    native_metadata['presentationId'] = presentation_id
+    turn = turn_lifecycle.get_turn('metadata', 'turn', user_id=11,
+                                   include_projection=False, reads=Client(native_metadata))
+    assert turn == native_metadata
+    assert 'projection' not in turn
+
+
+@pytest.mark.parametrize(('field', 'value'), [
+    ('attemptId', ''), ('resultRevision', True), ('ownerUserId', 11),
+])
+def test_native_turn_metadata_refuses_invalid_worker_receipts(native_metadata, field, value):
+    native_metadata['settlement']['coordinatorWorkerObservations']['assignment'][field] = value
+    with pytest.raises(StorageError) as caught:
+        turn_lifecycle.get_turn('metadata', 'turn', user_id=11,
+                                include_projection=False, reads=Client(native_metadata))
+    assert caught.value.code == 'database_protocol_error'
 
 
 def test_invalid_actor_cannot_bypass_required_execution_context(monkeypatch):

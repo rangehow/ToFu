@@ -2,6 +2,8 @@
 import uuid
 import pytest
 
+from tests.support.coordinator_authority import create_bound_coordinator, start_coordinator_turn
+
 pytest_plugins = ('tests.support.semantic_authorities',)
 pytestmark = pytest.mark.api
 
@@ -13,19 +15,17 @@ def test_report_replay_read_and_restart_keep_one_canonical_turn(semantic_authori
         assert engine._build_identity['source_sha256'] == engine._checkout_source_sha256
     from lib import storage
     monkeypatch.setattr(storage, 'get_storage_client', factory)
-    from lib.conversations.project_coordination import ProjectCoordinationRepository
     from lib.conversations.coordinator_reports import CoordinatorReports, POLICY
-    from lib.turn_lifecycle import get_turn, create_turn_pair, bind_task, mark_task_started, list_turns
+    from lib.turn_lifecycle import get_turn, list_turns
     project = '/report-authority/' + uuid.uuid4().hex
-    binding = ProjectCoordinationRepository(owner).create(project, folder_id='test', expected_revision=0, command_id='create')
+    binding = create_bound_coordinator(factory, owner, project,
+        folder_id='test', command_id='create').binding
     scope = {'owner': owner, 'projectPath': project, 'coordinatorId': binding['conversationId'], 'bindingRevision': binding['revision']}
     reports = CoordinatorReports(owner, project)
-    active = create_turn_pair(binding['conversationId'], user_id=owner,
-        command_id='active-coordinator-turn', input_projection={'content': 'Coordinate this project'}, config={})
-    attempt = active['attempt']['attemptId']
     task_id = 'active-report-tool-task'
-    bind_task(attempt, task_id, user_id=owner)
-    mark_task_started(attempt, task_id, user_id=owner)
+    active = start_coordinator_turn(binding['conversationId'], owner,
+        command_id='active-coordinator-turn', task_id=task_id, content='Coordinate this project')
+    attempt = active['attempt']['attemptId']
     request = {'title': 'Verified result', 'message': 'The acceptance checks passed.', 'kind': 'delivery', 'idempotency_key': 'delivery'}
     published = reports.publish(scope, request)
     # The report can arrive during its own Coordinator tool loop without
@@ -56,13 +56,13 @@ def test_deletion_during_publication_never_recreates_coordinator(semantic_author
     factory, owner, _ = semantic_authority
     from lib import storage
     from lib.turn_lifecycle import append_settled_turn, LifecycleNotFound
-    from lib.conversations.project_coordination import ProjectCoordinationRepository
     from lib.conversations.coordinator_reports import CoordinatorReports, recover_pending_reports, POLICY
     from lib.conversations.repository import ConversationRepository
     from tests._seed import delete_conversation
     monkeypatch.setattr(storage, 'get_storage_client', factory)
     project = '/report-delete/' + uuid.uuid4().hex
-    binding = ProjectCoordinationRepository(owner).create(project, folder_id='test', expected_revision=0, command_id='create')
+    binding = create_bound_coordinator(factory, owner, project,
+        folder_id='test', command_id='create').binding
     scope = {'owner': owner, 'projectPath': project, 'coordinatorId': binding['conversationId'], 'bindingRevision': binding['revision']}
 
     def race_delete(conversation_id, **kwargs):

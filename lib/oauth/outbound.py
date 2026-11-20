@@ -476,7 +476,11 @@ def is_oauth_provider(oauth: str) -> bool:
 
 
 def resolve_oauth_request(oauth: str, body: dict, extra_headers: dict | None,
-                          user_id: str = '', *, expected_account_id: str | None = None, cache_affinity_key: str | None = None):
+                          user_id: str = '', *, expected_account_id: str | None = None,
+                          codex_account_fingerprints: tuple[str, ...] = (),
+                          cache_affinity_key: str | None = None,
+                          require_codex_account_proof: bool = False,
+                          account_binding=None, account_repository=None):
     """Resolve the live token + identity headers for a slot.
 
     Args:
@@ -486,6 +490,11 @@ def resolve_oauth_request(oauth: str, body: dict, extra_headers: dict | None,
         user_id: caller's tenant — threaded through the token-refresh chain
             into desktop-agent egress routing. Request/task boundaries must
             provide a positive owner; ownerless desktop routing fails closed.
+        expected_account_id: exact Codex account; requires matching bearer proof.
+        codex_account_fingerprints: allowed accounts from the selected scoped
+            grant; an empty tuple is the existing manual-grant path.
+        require_codex_account_proof: require a bearer account even without a
+            preexisting scoped grant (fresh catalog entitlement evidence).
 
     Returns:
         ``(api_key, extra_headers, body)`` with the live token and merged
@@ -500,6 +509,12 @@ def resolve_oauth_request(oauth: str, body: dict, extra_headers: dict | None,
     """
     from lib.llm.llm_errors import SubscriptionLoginRequiredError
     hdrs = dict(extra_headers or {})
+
+    if account_binding is not None and (oauth != 'codex' or account_binding.provider != oauth
+            or str(account_binding.boundary.owner_user_id) != user_id):
+        from lib.llm.llm_errors import SubscriptionCredentialUnavailableError
+        raise SubscriptionCredentialUnavailableError(reason='credential_source_binding',
+                                                     credential_source='tofu_oauth', transient=False)
 
     if oauth == 'kimi':
         # Kimi Code: Bearer token on its OpenAI-compatible endpoint. The
@@ -516,17 +531,33 @@ def resolve_oauth_request(oauth: str, body: dict, extra_headers: dict | None,
         return token, hdrs, body
 
     if oauth == 'codex':
-        from lib.oauth.codex import codex_get_valid_token
-        from lib.oauth.token_store import load_token
-        token = codex_get_valid_token(user_id=user_id)
-        if not token:
+        from lib.oauth.codex import account_fingerprint, codex_get_valid_token_snapshot
+        if account_binding is None:
+            snapshot = codex_get_valid_token_snapshot(user_id=user_id)
+        else:
+            from lib.oauth.account_dispatch import resolve_codex_account_snapshot
+            snapshot = resolve_codex_account_snapshot(account_binding, repository=account_repository)
+            require_codex_account_proof = True
+        if not snapshot:
             raise SubscriptionLoginRequiredError('Codex subscription not logged in '
                                '(no valid OAuth token)')
-        stored = load_token('codex') or {}
-        account_id = stored.get('account_id', '')
-        if expected_account_id is not None and account_id != expected_account_id:
+        token, account_id = snapshot.access_token, snapshot.account_id
+        bearer_account = snapshot.bearer_account_id
+        require_codex_account_proof = require_codex_account_proof or expected_account_id is not None
+        if ((expected_account_id is not None and account_id != expected_account_id)
+                or ((require_codex_account_proof or codex_account_fingerprints)
+                    and bearer_account and account_id != bearer_account)
+                or (codex_account_fingerprints
+                    and account_fingerprint(bearer_account) not in codex_account_fingerprints)):
             from lib.llm.llm_errors import SubscriptionCredentialUnavailableError
             raise SubscriptionCredentialUnavailableError(reason='account_changed', credential_source='tofu_oauth', transient=False)
+        if require_codex_account_proof and not bearer_account:
+            from lib.llm.llm_errors import SubscriptionCredentialUnavailableError
+            raise SubscriptionCredentialUnavailableError(reason='credential_source_binding', credential_source='tofu_oauth', transient=False)
+        # Neither spelling nor case of a caller header can substitute a different
+        # bearer/account after the snapshot's authorization check.
+        hdrs = {name: value for name, value in hdrs.items()
+                if name.lower() not in {'authorization', 'chatgpt-account-id'}}
         # Codex CLI 0.165 sends no OpenAI-Beta on HTTP /responses; its only
         # beta value is the WebSocket handshake's, owned by that transport.
         hdrs['originator'] = _CODEX_ORIGINATOR
@@ -746,7 +777,7 @@ _MANAGED_SPECS = {
 _OAUTH_SENTINEL_KEY = 'oauth-managed'
 
 
-def _managed_oauth_entry(provider: str, plan_type: str = None) -> dict:
+def _managed_oauth_entry(provider: str, plan_type: str = None, *, observed_models=None) -> dict:
     """Build the authoritative server-owned provider projection."""
     spec = _MANAGED_SPECS.get(provider)
     if not spec:
@@ -758,7 +789,7 @@ def _managed_oauth_entry(provider: str, plan_type: str = None) -> dict:
             stored = load_token('codex') or {}
             plan_type = stored.get('plan_type', '')
         from lib.oauth.codex_catalog import cached_codex_provider_models
-        models = cached_codex_provider_models()
+        models = cached_codex_provider_models() if observed_models is None else observed_models
         catalog_source = 'remote_cache' if models else 'static_fallback'
         if not models:
             models = [{
@@ -788,6 +819,7 @@ def _managed_oauth_entry(provider: str, plan_type: str = None) -> dict:
         'oauth': provider,
         'api_keys': [_OAUTH_SENTINEL_KEY],
         'protocol': spec.get('protocol', ''),
+        **({'responses_profile': 'codex'} if provider == 'codex' and observed_models is not None else {}),
         'thinking_format': spec.get('thinking_format', ''),
         'catalog_source': catalog_source,
         'models': [dict(m, stream_only=spec.get('stream_only', False))
@@ -838,6 +870,47 @@ _UPSERT_TRANSIENT_KINDS = frozenset({
 _UPSERT_MAX_ATTEMPTS = 3
 
 
+def _admit_codex_registration(candidate, current, boundary):
+    from lib.model_routing.registration import prepare_registration_document
+    from lib.oauth.codex_catalog import staged_codex_registration_evidence
+    from lib.oauth.codex_history_runtime import apply_codex_history, has_complete_codex_history
+
+    evidence = staged_codex_registration_evidence()
+    if (evidence is None or evidence.boundary != boundary
+            or evidence.observed_revision != current.revision
+            or not has_complete_codex_history(current.document, evidence.account_fingerprint)):
+        return candidate
+    admitted = prepare_registration_document(candidate, previous=current.document)
+    apply_codex_history(current.document, admitted, evidence)
+    return admitted
+
+
+def _preserve_codex_offering_ids(previous, incoming):
+    """Keep owner policy and selections across verified pending -> confirmed binding."""
+    old_deployments = {row['deployment_id']: row for row in previous['deployments']}
+    old_offerings = {row['offering_id']: row for row in previous['offerings']}
+    new_offerings = {row['offering_id']: row for row in incoming['offerings']}
+    rewrites = {}
+    for deployment in incoming['deployments']:
+        prior = old_deployments.get(deployment['deployment_id'])
+        if not prior:
+            continue
+        old = old_offerings[prior['offering_id']]
+        new = new_offerings[deployment['offering_id']]
+        ref = new.get('model')
+        if (ref and old['provider_access_id'] == new['provider_access_id']
+                and (old.get('model') == ref
+                     or (old.get('pending_model_id') == ref['model_id'] == deployment['wire_model_id']
+                         and ref['creator_id'] == 'openai'))):
+            rewrites[new['offering_id']] = old['offering_id']
+    if not rewrites:
+        return
+    for offering in incoming['offerings']:
+        offering['offering_id'] = rewrites.get(offering['offering_id'], offering['offering_id'])
+    for deployment in incoming['deployments']:
+        deployment['offering_id'] = rewrites.get(deployment['offering_id'], deployment['offering_id'])
+
+
 def _upsert_oauth_provider(
     entry: dict,
     *,
@@ -845,6 +918,7 @@ def _upsert_oauth_provider(
     tenant_id: str | None,
     repository=None,
     current=None,
+    scoped_fingerprint=None,
 ) -> bool:
     """Replace one OAuth ProviderAccess inside the sole v2 authority.
 
@@ -870,6 +944,10 @@ def _upsert_oauth_provider(
         try:
             if current is None:
                 current = repo.get(boundary)
+            if (scoped_fingerprint is None and entry.get('id') == 'oauth_codex'
+                    and 'subscription_accounts' in current.document):
+                # Legacy catalog evidence cannot author scoped account grants.
+                return False
             if (entry.get('id') == 'oauth_codex'
                     and entry.get('catalog_source') == 'static_fallback'
                     and any(row['provider_id'] == 'oauth_codex'
@@ -910,6 +988,7 @@ def _upsert_oauth_provider(
             if entry.get('id') == 'oauth_codex' and entry.get('catalog_source') == 'remote_cache':
                 from lib.model_routing.catalog_merge import defer_incomplete_discovered_models
                 defer_incomplete_discovered_models(plan.document, existing_models=current.document['models'])
+                _preserve_codex_offering_ids(current.document, plan.document)
             candidate = copy.deepcopy(current.document)
             old_secret_references = remove_provider_resources_in_place(candidate, entry['id'])
             _merge_v2_catalog_entities(candidate, plan.document)
@@ -978,12 +1057,28 @@ def _upsert_oauth_provider(
                                 row['catalog_capabilities'] = copy.deepcopy(catalog_caps)
                             else:
                                 row.pop('catalog_capabilities', None)
+                    if (collection == 'offerings' and old.get('identity_state') == 'pending_identity'
+                            and row.get('model') and entry['id'] == 'oauth_codex'):
+                        from lib.llm_dispatch.config._pricing import MANAGED_TIER_TAGS
+                        # Incoming supply already bounds every new fact to the
+                        # official Model; cap any retained pending overrides.
+                        row['context_window'] = min(row['context_window'], incoming['context_window'])
+                        row['capabilities'] = sorted(set(row['capabilities']) & (
+                            set(incoming['capabilities']) | MANAGED_TIER_TAGS))
                     profile = old.get('inference_profile')
                     if isinstance(profile, dict) and profile.get('source') not in ('provider_catalog', 'catalog'):
                         row['inference_profile'] = copy.deepcopy(profile)
                     candidate[collection].append(row)
             candidate['revision'] = current.revision
+            if entry.get('id') == 'oauth_codex' and entry.get('catalog_source') == 'remote_cache':
+                candidate = _admit_codex_registration(candidate, current, boundary)
+            if scoped_fingerprint is not None:
+                from lib.oauth.scoped_catalog import restrict_to_observed_account
+                restrict_to_observed_account(candidate, plan.document, scoped_fingerprint)
             normalized = normalize_document(candidate)
+            if entry.get('id') == 'oauth_codex' and entry.get('oauth') == 'codex':
+                from lib.oauth.codex_recreated_grants import suppress_recreated_codex_grants
+                suppress_recreated_codex_grants(current.document, normalized)
             if normalized == current.document:
                 return False
 
@@ -1007,7 +1102,7 @@ def _upsert_oauth_provider(
                     )
             return True
         except ModelRoutingError as exc:
-            if exc.kind not in _UPSERT_TRANSIENT_KINDS:
+            if scoped_fingerprint is not None or exc.kind not in _UPSERT_TRANSIENT_KINDS:
                 raise
             last_error = exc
             current = None
@@ -1052,6 +1147,7 @@ def reconcile_oauth_providers(
     owner_user_id: int | None = None,
     tenant_id: str | None = None,
     repository=None,
+    stored_only: bool = False,
 ) -> dict:
     """Repair token-to-ProviderAccess drift for direct OAuth logins.
 
@@ -1061,14 +1157,15 @@ def reconcile_oauth_providers(
     from lib.model_routing import ModelRoutingRepository
     from lib.oauth.token_store import load_token, token_snapshot
 
-    from lib.oauth.codex_shared_login import reconcile_shared_login
-    reconcile_shared_login(owner_user_id=owner_user_id)
+    if not stored_only:
+        from lib.oauth.codex_shared_login import reconcile_shared_login
+        reconcile_shared_login(owner_user_id=owner_user_id)
 
     boundary = _oauth_owner_boundary(owner_user_id, tenant_id)
     repo = repository or ModelRoutingRepository()
     # The provisioning entry, catalog account check and status projection all
     # observe one credential read per provider.
-    with token_snapshot():
+    with token_snapshot(stored_only=stored_only):
         tokens = {provider: load_token(provider) or {}
                   for provider in OAUTH_PROVIDERS}
         desired = [provider for provider in OAUTH_PROVIDERS
@@ -1230,6 +1327,8 @@ def deprovision_oauth_provider(
     repo = repository or ModelRoutingRepository()
     if current is None:
         current = repo.get(boundary)
+    if provider == 'codex' and 'subscription_accounts' in current.document:
+        return False
     candidate = copy.deepcopy(current.document)
     secret_references = remove_provider_resources_in_place(candidate, spec['id'])
     if candidate == current.document:

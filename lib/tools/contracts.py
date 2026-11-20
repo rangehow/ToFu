@@ -80,6 +80,14 @@ def serialize_decoded_result_schema(value: Any) -> str:
     except (TypeError, RecursionError) as error:
         raise ValueError("decoded_result_schema must be finite JSON") from error
 
+
+def decoded_result_description(description: str, serialized_schema: str) -> str:
+    """Frame an already validated declaration identically on every tool surface."""
+    return (description +
+            '\nSuccessful decoded JSON value (producer declaration; '
+            'coverage/freshness unknown): ' + serialized_schema)
+
+
 _PROVIDER_SAFE_TOOL_NAME = re.compile(r"[A-Za-z0-9_-]+")
 _JSON_ATOMIC_TYPES = (str, int, float, bool, type(None))
 
@@ -590,6 +598,10 @@ class ArgumentAlternatives:
 
 
 ARGUMENT_ALTERNATIVES: dict[str, ArgumentAlternatives] = {
+    "update_task_progress": ArgumentAlternatives(
+        ("changes", "tasks", "read"), exactly_one=True,
+        next_action=("Pass changes for a patch, tasks with summary for replacement, "
+                     "or read={} to inspect without writing.")),
     "browser_preview_page": ArgumentAlternatives(
         ("path", "url"), exactly_one=True,
         next_action=(
@@ -756,6 +768,7 @@ def clamp_arguments_to_schema(
 # get_conversation.before=0 has its separate, non-destructive omission repair.
 NEVER_CLAMP_PARAMS: dict[str, frozenset[str]] = {
     "get_conversation": frozenset({"before"}),
+    "update_task_progress": frozenset({"expected_revision"}),
     "dispatch_project_assignment": frozenset({"expected_revision"}),
     "review_project_work": frozenset({"result_revision", "acceptance_results"}),
     "delegate_project_work": frozenset({
@@ -776,7 +789,6 @@ DISPLAY_TEXT_PARAMS: dict[str, frozenset[str]] = {
     "delegate_project_work": frozenset({"title"}),
     "edit_file": frozenset({"description"}),
     "report_to_user": frozenset({"title"}),
-    "update_task_progress": frozenset({"summary"}),
 }
 
 # Content whose limit comes from storage or delivery (the project-message
@@ -902,7 +914,7 @@ __all__ = [
     "clamp_tool_arguments_from_documents", "NEVER_CLAMP_PARAMS",
     "DISPLAY_TEXT_PARAMS", "LONG_CONTENT_PARAMS",
     "compile_execution_contract_documents",
-    "contract_json", "display_text_warning", "display_text_warnings",
+    "contract_json", "decoded_result_description", "display_text_warning", "display_text_warnings",
     "json_type_name", "shorten_display_text",
     "validate_tool_arguments_from_documents",
 ]

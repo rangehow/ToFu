@@ -39,6 +39,7 @@ from quart import Blueprint
 from lib.api_response import api_bad_request, api_error, api_not_found, api_ok
 import lib.daily_report as _daily_report
 from lib.log import get_logger
+from lib.openapi import api_meta, media_responses
 from lib.request_parser import async_parse_body
 from routes.common import _db_safe
 
@@ -234,8 +235,44 @@ async def backfill_report(date_str):
     return api_ok(result)
 
 
+def _calendar_responses():
+    responses = media_responses('application/json')
+    money = {'type': 'number', 'minimum': 0}
+    bucket = {'type': 'object', 'required': ['tokens', 'cost_cny'], 'properties': {
+        'tokens': {'type': 'integer', 'minimum': 0}, 'cost_cny': money,
+    }}
+    buckets = ['input', 'output', 'cache_read', 'cache_write']
+    fields = {
+        'date': {'type': 'string', 'format': 'date'},
+        'buckets': {'type': 'object', 'required': buckets,
+                    'properties': dict.fromkeys(buckets, bucket)},
+        'total_cny': money,
+        'models': {'type': 'array', 'items': {'type': 'object',
+                   'required': ['id', 'name', 'cost_cny'], 'properties': {
+                       'id': {'type': 'string'}, 'name': {'type': 'string'}, 'cost_cny': money,
+                   }}},
+        'partial': {'type': 'boolean'},
+        'used_fallback_rates': {'type': 'boolean'},
+    }
+    responses['200']['content']['application/json']['schema'] = {
+        'type': 'object', 'properties': {
+            'today_token_costs': {'type': 'object', 'description': (
+                "Recorded main-lane Turn usage for the server calendar's current date. "
+                'Omitted outside the current month or when the usage scan fails. Costs '
+                'are catalog estimates in CNY, not invoice amounts. Cache reads and writes '
+                'are input; cached output is not separately measured. Model estimates '
+                'apply standard catalog rates to the same observed token mix.'),
+                'required': list(fields), 'properties': fields},
+            'ok': {'type': 'boolean'},
+        },
+    }
+    return responses
+
+
 @api_v1_daily_report_bp.route('/api/v1/daily-report/calendar/<int:year>/<int:month>')
 @require_auth
+@api_meta(description='Calendar overview with an optional current-day token cost breakdown and model estimates.',
+          responses=_calendar_responses())
 async def get_calendar_month(year, month):
     """Month overview: which days have cached reports + task counts."""
     if month < 1 or month > 12:
@@ -245,9 +282,11 @@ async def get_calendar_month(year, month):
     # Concurrent GETs of one owner month share a single computation.
     overview = await _daily_report.calendar_overview.month_overview(
         year, month, owner_user_id=owner_user_id)
-    return api_ok({'year': year, 'month': month, 'days': overview['days'],
-                   'conv_days': overview['conv_days'],
-                   'cost_days': overview['cost_days']})
+    result = {'year': year, 'month': month, 'days': overview['days'],
+              'conv_days': overview['conv_days'], 'cost_days': overview['cost_days']}
+    if 'today_token_costs' in overview:
+        result['today_token_costs'] = overview['today_token_costs']
+    return api_ok(result)
 
 
 # Canonical task-status cycle order. The "click to advance" UI used to

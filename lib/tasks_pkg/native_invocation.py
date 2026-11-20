@@ -23,7 +23,7 @@ from lib.tasks_pkg.native_terminal import project_native_terminal
 
 class NativePreparedInvocation:
     __slots__=('host','loop','principal','budget','repository','selection','executor',
-               'working_directory','pending_calls','pending_bytes','_profile',
+               'working_directory','pending_calls','pending_bytes','_profile','_startup_context_notes',
                'pricing_resolver','checkpoint_policy','checkpoint_factory','checkpoint_preparation','goal_recovery','_dispatch_admission','route_policy','project_terminal','project_text','_transient','fee_transfer_target','flow_scheduler')
 
     def __init__(self,*,host,loop,principal,repository,selection,configuration,budget,
@@ -75,7 +75,34 @@ class NativePreparedInvocation:
                 raise NativeConfigurationError('native Goal recovery requires explicit root actor checkpoint composition')
         self.goal_recovery=goal_recovery
         self._dispatch_admission=None
+        self._startup_context_notes=[]
         self.project_terminal,self.project_text=project_terminal,project_text
+
+    def defer_startup_context_note(self, task, fields, *, session_signature=None):
+        if self._startup_context_notes is None:
+            return False
+        entry = (task, fields, session_signature)
+        if not any(previous[0] is task and previous[1:] == entry[1:]
+                   for previous in self._startup_context_notes):
+            self._startup_context_notes.append(entry)
+        return True
+
+    def record_startup_context_notes(self, task, round_num):
+        from lib.tasks_pkg.segments import record_injected_note
+        pending = self._startup_context_notes
+        if pending is None:
+            return
+        if any(owner is not task for owner, _, _ in pending):
+            raise NativeConfigurationError('native startup context note owner differs')
+        self._startup_context_notes = None
+        for owner, fields, signature in pending:
+            try:
+                note = record_injected_note(owner, llm_round=round_num, **fields)
+                if note is not None and signature is not None:
+                    owner['_sessionContextNoteSig'] = signature
+            except Exception:
+                from lib.log import get_logger
+                get_logger(__name__).exception('native startup context note emission failed (display-only)')
 
     @contextmanager
     def admission_scope(self, task, admit):

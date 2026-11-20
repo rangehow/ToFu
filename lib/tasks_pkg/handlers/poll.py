@@ -380,7 +380,7 @@ def _durable_command_section(handle_id: str, task: dict) -> str | None:
 
 
 def _await_swarm(swarm_ids: list[str], task: dict, mode: str,
-                 budget_s: float, cap_s: float, interrupted) -> str:
+                 budget_s: float, cap_s: float, interrupted, *, on_idle_timeout=None) -> str:
     from lib.swarm.integration._tools import _handle_await_agents
     # Stop ends this wait through the yield predicate, never as an abort_check:
     # the swarm session outlives this turn and keeps its own Stop control.
@@ -389,7 +389,7 @@ def _await_swarm(swarm_ids: list[str], task: dict, mode: str,
          'timeout_seconds': max(1, int(math.ceil(budget_s)))},
         task_id=task['id'], task=task,
         pending_input_check=lambda: bool(interrupted()),
-        max_wait_s=cap_s)
+        on_idle_timeout=on_idle_timeout, max_wait_s=cap_s)
     if interrupted() == 'aborted':
         return _wait_ended_text(task, 'aborted') + '\n' + result
     return result
@@ -516,10 +516,12 @@ def _handle_poll(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg,
             else:
                 unknown.append(handle_id)
 
+    idle_sources: list[str] = []
     if swarm_wait:
         budget = max(0.0, deadline - time.monotonic())
         sections.append(_await_swarm(swarm_wait, task, mode, budget,
-                                     _poll_wait_cap_s(), interrupted))
+                                     _poll_wait_cap_s(), interrupted,
+                                     on_idle_timeout=idle_sources.append if swarm_wait == ids else None))
 
     if unknown:
         sections.append(
@@ -534,6 +536,10 @@ def _handle_poll(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg,
         badge='done',
     )
     _finalize_tool_round(task, rn, round_entry, [meta])
+    if idle_sources and not interrupted():
+        # Internal receipt for the exact settled occurrence, never inferred
+        # from tool result text. The root still checks the whole tool batch.
+        task.setdefault('_swarmIdleWaits', []).append((rn, tc_id, idle_sources[0], tuple(ids)))
     return tc_id, tool_content, False
 
 

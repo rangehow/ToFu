@@ -270,6 +270,56 @@ the note into the command id (each re-forward with new evidence becomes another
 owner request, the duplicate work this identity prevents); refusing the repeat
 as an error (the forward did happen, and an error invites a retry).
 
+**A forward never stays pending.** Problem: on 2026-11-16 the owner's
+NiuTrans/ToFu decision and two other owner messages were forwarded at
+21:31–21:56 into the tofu Project Router while its Turn `617f2cb3` still read
+`running`: its Attempt had started at 16:02 on the host that stopped at 16:08,
+so each forward was accepted as `steered` and committed a pending user-steer
+record no executor would take. At 00:15 durable worker recovery
+(`conversation_sync/worker_recovery.recover_exited_attempt`) settled the Turn
+`failed` through `turns.record_task_event` without the task finalizer's steer
+salvage, and the records stayed `pending` for good; the Router saw only
+`disposition: steered`. Decision: whenever recovery settles a Turn without its
+executor and without a resume (failed, or a Stop reaching an ended execution),
+`committed_steers.requeue_orphaned_steers` queues every pending steer of that
+Turn as the conversation's next Turn, exactly as the finalizer's salvage does
+(`steer-requeue:<block>`, the committed author and its `forwardedFrom` kept, so
+the next Turn verifies the owner's words again), and marks the record `queued`.
+A restart interruption keeps its steers: the resumed Attempt takes them. A
+forward the recipient does not accept as its next Turn (busy, missing, start
+failed), on either path, is bounced to the sending Global Router
+(`forwarding.bounce_undelivered_forward`): one nonhuman `peer` notice per
+(recipient, steer block), headed `[Undelivered forward …]`, naming the reason and
+quoting the owner's words for it to forward again; the notice carries no
+authority. Project messages need no requeue (their originals stay pending and
+every round of the lead's next Turn offers them), but a failed lead settlement
+started no next Turn: its drain now wakes the lead once per pending frontier
+(`wake_idle_lead`), as a completed one does. Alternatives rejected: refusing a
+steer into an Attempt whose executor is gone (liveness across hosts is exactly
+what recovery decides later; the acceptance is not wrong, only its settlement
+was); a `bounced` delivery state (a contract and engine change for what a
+notice already says); re-sending the stuck 11-16 forwards from the fix (the
+Global Router re-sends the owner's words; recovery acts only on Turns it settles).
+
+**Routed outcomes are owned by their lead.** Problem: the Global Router's
+continuation brief (`coordinator_continuation`, PROJECT_COORDINATION.md "Open
+outcomes cannot disappear") counted only the router's own Workers, so every
+outcome it had routed to a project lead read `[unowned]` (2026-11-18: all ten
+open board rows). Decision: the routing record is the lead's own input, whose
+`origin.forwardedFrom` names the router Turn it came from; a lead assignment's
+authorization source is that input or the steer it rode in. For the Global
+Router only, `_routed_request_sources` reads every lead's running/queued
+assignments over its current binding and retains the exact router source
+messages they serve. Conversation, Turn and the message discriminator such as
+`steerId` must match: forwarding one steer cannot cover another steer sharing
+its reply. Request-only outcomes with that provenance are covered while the
+lead assignment remains active. Board outcomes require ordinary committed
+assignment coverage; temporal overlap proves nothing. Missing provenance or
+inactive work leaves ownership unknown, not permission to dispatch.
+Alternatives rejected: title matching, request-time spans, a second routed-to
+registry, and counting any live lead work as owning every outcome (all can
+hide independent work).
+
 **Steered owner messages.** Problem: a message the owner steers into the
 router's running reply has no Turn of its own, and
 the steer lane kept only a 1,200-character display preview, so it could not be
@@ -522,13 +572,17 @@ admitted with (`verify_forwarded_turn` checks the record's text, not its state).
 
 ### R5. Router and Worker models are chosen separately
 
-**Problem:** Workers inherit the Coordinator's model, so choosing a light,
-fast router model downgrades all execution.
+**Problem:** With no Worker override, the server default could silently keep
+new Workers on a different model after the owner changed the Coordinator's
+composer selection. A request already in flight still has its original model.
 
-**Decision:** the coordinator conversation setting `workerModel` (validated by
-the ordinary route compiler) selects the model for Workers it delegates;
-absent, Workers use the owner's default model, not the router's. Models never
-choose models.
+**Decision:** At new Worker grant admission, use the Coordinator conversation's
+explicit `workerModel`, else its `modelOverride`, else its current composer
+model selection, else the configured owner default. The setting is read from
+the owned conversation, not the active or original request config. Only the
+logical model is inherited, not the Coordinator's provider route, and models
+cannot choose models. A light Coordinator can still delegate to a different
+model by setting `workerModel` explicitly.
 
 **Current state.** `workerModel` is a server-authored key of
 `contracts/conversation_settings_v1.json`, written only by
@@ -540,8 +594,8 @@ sees and sets it in the browser (`frontend/src/features/router-worker-model.ts`)
 one compact labelled select on a single row (its closed value is the current
 model, its tooltip the explanation) whose choices are the composer model
 picker's catalog and visibility policy (hidden models, chat capability,
-display-name order and labels), never a second model list; its first option,
-the owner's default model, sends `null`, a refused choice keeps the stored
+display-name order and labels), never a second model list; clearing the
+explicit choice sends `null`, a refused choice keeps the stored
 value with the server's message, and a failed read shows its error beside a
 retry. The Global Router's control is in its header;
 every other Project Router's leads the footer of the task board on its
@@ -554,10 +608,11 @@ Global Router read last reported (the `_globalRouter` setting is a server-side
 presentation marker the settings contract does not project to the browser).
 `CoordinatorWorkerPolicy`
 separates `model` (Workers) from `coordinator_model` (the Coordinator's own
-continuations). Tool assembly never reads storage for it: the first delegation
-of a request resolves `resolve_worker_model` (setting, else the owner's default
-model, else an explicit refusal) and pins it; continuation controls record
-`workerModel` (grants issued earlier, without it, keep their single model). The
+continuations). Tool assembly does not resolve the live selection. Each fresh
+Worker grant, including reviewers and successors of final assignments, takes
+one admission-time snapshot. Exact command replay keeps the original grant.
+Continuation controls retain their recorded model fields; they do not set the
+model of newly dispatched Workers. The
 owner default is the server's configured default model today
 (TODO(enterprise): a per-owner default).
 
@@ -565,7 +620,7 @@ owner default is the server's configured default model today
 Problem: a provider refusal (for example an Anthropic content filter) froze a
 long Coordinator/Worker supervision session on its original model; the only
 answer was a clean replacement session, losing its context, grant and checkout.
-Decision: the owner, or the Global Router under the R9 delegation, changes the
+Decision: the owner, or a lead under the R9 delegation, changes the
 model of an existing session with `control_conversation action=set_model`
 (`lib/conversations/session_model.py`, `lib/conversations/session_control.py`)
 or over HTTP with `POST /api/v4/router/session-model`
@@ -588,14 +643,15 @@ widens: only the model changes. A Coordinator continuation inherits its human
 request's route fields only when they name its effective model
 (`request_selection`), so a changed model resolves its own route. Every change
 writes one `session_model_changed` audit record with the reason and the
-idempotency key. The Global Router acting under the owner's grant takes R9's
+idempotency key. A lead acting under the owner's grant takes R9's
 delegated session control (`delegated_conversation_control`, scope
 `conversation_control`): the grant, the owner trigger and one audit record whose
-target names the chosen model precede the same command. New Workers and
-Coordinator continuations resolve the owner's CURRENT `workerModel` at
-delegation instead of replaying the value the request's first grant pinned, so
-one owner setting change re-routes the request's later Workers too; a session
-override is deliberately per-session and never re-routes unrelated work.
+target names the chosen model precede the same command. An in-place Worker
+follow-up uses its own session override or its existing grant model. A
+follow-up on a final result creates a new grant using the current Worker
+selection, while still honoring the recipient session's override at attempt
+admission. Neither path rewrites an accepted predecessor. A Coordinator
+continuation's own grant model remains separate from the model of new Workers.
 Alternatives rejected: mutating the assignment request's model (immutable
 grant evidence, and it would rewrite in-flight attempts); a per-request model
 override (it would let a synthetic continuation route itself); a new
@@ -607,8 +663,9 @@ must always read); stamping
 the accepted model into the attempt config (the live carrier would vouch for
 itself, so rewriting both fields would pass the fence). This is
 legitimate provider/model routing, never filter evasion: no tool output or
-provider refusal is rewritten, and the owner can always return to the session's
-original model with `model=null`.
+provider refusal is rewritten. `model=null` clears the override: a Coordinator
+wake returns to the saved composer selection (or the grant's model if unset),
+and a Worker returns to the grant's model.
 
 **A Router without a model choice.** Problem: a Project Router made by `create`
 or `provision` stores no model until the owner sends from its composer. A turn
@@ -756,7 +813,7 @@ chat and the scheduler list already change it).
 | `recovery` | `project_dispatch/recovery.py` per assignment and per startup scope | project, assignment and grant revision, error class and code, startup episode; authority refusals (`PermissionError`/`ValueError`) are the pass's ordinary skips |
 | `outbox` | `channels/outbox.py` when a send settles | item and state (`failed`, `unknown`) |
 | `channel` | each channel supervisor's scheduler tick (`reconcile_channel_bridges` for 大象, `reconcile_github_sessions` for GitHub) | channel, unhealthy state and last connection time; detail text changes every restart and is not identity |
-| `quota` | the production quota watch (`lib/llm_dispatch/quota_watch.py`) of every process that runs conversation rounds, through `lib/router/watchdog/quota.py`, on its own delivery thread | one closed-to-open transition of one (AppId, wire model) lane's merged alert (`watchdogQuotaLane`): conversation rounds rejected by the provider's per-AppId minute limit and held by dispatcher backpressure in any process; an open while the alert is open joins its holders and wakes nothing, and it closes when every holding process's watch saw a full provider minute of accepted rounds without such a rejection (or the holder is proved dead) |
+| `quota` | the production quota watch (`lib/llm_dispatch/quota_watch.py`) of every process that runs conversation rounds, through `lib/router/watchdog/quota.py`, on its own delivery thread | one closed-to-open transition of one (AppId, wire model) lane's merged alert (`watchdogQuotaLane`): conversation rounds rejected by the provider's per-AppId minute limit and held by dispatcher backpressure in any process; an open while the alert is open joins its holders and wakes nothing, and it closes when every holding process's watch passed its evidence horizon (a provider minute, or the provider's named hold, after the last such rejection) as recovered or lapsed, when the holder is proved dead, or when the lane is superseded by policy ("Quota alerts close on evidence") |
 | `client` | browser crash capture (`lib/logging_pkg/client_crash.py`) after storing a crash record | browser page instance: the reloaded tab's unclean-exit report and Chrome's report of the same crash are one episode; typed facts only, never page content ([LOGGING.md](LOGGING.md)) |
 | `storage` | the request-services process's `StorageRuntime` when readiness returns after a fence, through `lib/router/watchdog/storage.py` on the runtime's announcement thread | one fence episode, by its start under a `fence` tag and in its own `fence` fault episode (never folded into the supervisor's `authority` storage episodes); recorded for every owner with a router home, since no storage-backed signal can be written while the fence holds. The detail carries since, until, duration, cause, last restart error and restart attempts. While the fence holds, the manager log, `serverctl status` and the browser show it ([STORAGE.md](STORAGE.md)) |
 | `patrol` | the periodic review, before its snapshot, through `lib/router/watchdog/compute_patrol.py`, from each `publication.json` under `<data>/compute_patrol/u<owner>/<patrol>/` | one published episode: (patrol, kind, job or condition, since) for a hung or stale-queued job (`compute_job_hung`, `compute_job_queued_stale`) or a degraded patrol (`compute_patrol_degraded`); one `compute_patrol_stale` per publication past its `staleAfter`. The intake closes an episode the patrol no longer publishes, and every one when the patrol was stopped on purpose; while the patrol is stale its job signals stay open. The patrol only notifies; the hint names the Global Router as the router to the owning lead ([COMPUTE_PATROL.md](COMPUTE_PATROL.md)) |
@@ -810,6 +867,45 @@ every round); keying the signal by lane alone (a resolved signal never
 reopens, so a later real episode would never wake); excluding throttled
 AppIds for every conversation (the routing change belongs to the dispatcher's
 own rotation and would drop a lone route).
+
+**Quota alerts close on evidence (2026-11-18).** Problem: on 2026-11-18 the
+Watchdog held 16 open `quota` signals for hours, 12 of them on one lane
+(…5409, kimi-k3.1-pro), from the 00:29-01:24 UTC burst and one at
+08:25 UTC. An episode closed only at the next accepted conversation round on
+its lane, and nothing routed there again: the Watchdog steps off throttled
+AppIds, …5409 was out of credit, and an idle model on a key gets no rounds.
+The 15 burst signals were worse: they predate the per-lane alert record (one
+signal per process episode) and their processes exited at the 13:54 CST
+restart, so no watch remained that could ever close them. Decision: every
+close names its evidence and none needs new traffic. (1) A process's episode
+closes at its horizon, one provider minute after the lane's last minute-limit
+rejection or the longer hold the provider named: `recovered` when
+conversation rounds were accepted meanwhile, `lapsed` when none used the lane,
+checked on every observation and AppId read and by one timer per episode at
+that horizon (`lib/llm_dispatch/quota_watch.py`). Rejections inside every
+window, including held rounds re-probed by the dispatcher's gate (at most 15 s
+apart), keep it open. (2) `settle_quota_alerts` (`lib/router/watchdog/quota.py`),
+run by the review and by `watchdog_snapshot` before they read signals, closes
+an alert whose every holder is proved dead; closes an alert as superseded by
+policy when the owner's model routing no longer offers the credential for
+that wire model to conversation rounds (disabled, reserved off its
+connection, ungranted, wire model excluded) or the dispatcher no longer admits
+the key (billing stop, daily auto-disable, owner toggle); and resolves any
+`quota` signal that no open alert names (the producer writes the alert before
+its signal, and the check rereads alerts after listing signals). An
+unreadable routing authority or a credential it does not know proves nothing.
+Each resolution says which rule closed it and that Tofu sent no probe.
+Alternatives rejected: probing a throttled or reserved key to observe
+recovery (spends the owner's quota and touches keys kept for experiments); a
+staleness timeout or maximum alert age (a tuning knob, constraint 5); leaving
+avoided lanes open until traffic returns (the defect); letting the Watchdog
+resolve them by hand (it judged them stale for hours and still could not tell
+which were safe). Cost accepted: bursty contention separated by more than a
+provider minute of no demand opens a new alert per burst, because the
+provider's limit has reset in between. Specs: `tests/llm_dispatch/test_quota_watch.py`
+(avoided lane, provider hold, recovered lane, ongoing quota),
+`tests/router/test_watchdog_quota.py` (reserved key, key admission, dead
+holder, orphaned signals, ongoing alert).
 
 Reporting never creates a Watchdog (owners without an available one record
 nothing) and never raises into the reporter. Open signals keep an index row
@@ -1153,12 +1249,12 @@ point. Scope:
   server keeps serving.
 - **Cross-project action (owner decision 2026-11-18).** **Problem.** A lead
   asked to help another project's work could only message that project's lead
-  (`send_project_message`) or, for the Global Router, `repair_project`: a
+  (`send_project_message`) or, for the Global Router, `repair_project` in its default mode: a
   Project Router could neither read nor continue/stop a session outside its
   project ("Conversation belongs to another project"), so help waited for the
-  other lead's next Turn. **Decision.** `control_conversation` with
-  `owner_delegation` is the one audited, delegation-checked cross-project
-  action of every lead (`owner_delegation.delegated_conversation_control`):
+  other lead's next Turn. **Decision.** The delegated branch of `control_conversation`
+  (`owner_delegation`, optional for `set_model`) is the one audited,
+  delegation-checked cross-project path (`owner_delegation.delegated_conversation_control`):
   continue, checkpoint_resume, stop, hold, resume and set_model of an exact Attempt in any of
   the owner's projects. A Project Router uses it only under the full grant
   (scope `conversation_control`, requester `project_lead`), with any owner
@@ -1312,15 +1408,20 @@ point. Scope:
   `tests/router/test_delegation_audit_history.py` and the history case in
   `tests/api/test_api_v4_router.py`. The owner reads them under "Act for me".
 - **Session model change (`set_model`, R5).** `conversation_control` also
-  covers `control_conversation(action=set_model, owner_delegation=…)`: the
-  grant, the owner trigger and one record precede `set_session_model`, exactly
-  as for a delegated Continue. The record's target (`kind: conversation`,
-  `action: set_model`) names the chosen `model`, null to restore the session's
-  original. It changes which model the session's next attempt runs, never a
-  permission. Its trigger obeys `ownerDelegationTrigger` like every scope: a
-  missing or malformed trigger is a recorded refusal before anything is
-  stored, and a model the owner's route resolver refuses settles the accepted
-  record `failed`; both read as failed tool calls.
+  covers `control_conversation(action=set_model)`. With no `owner_delegation`
+  argument, the server uses a current owner request within its scope, or the
+  existing standing delegation of a live bound lead. The standing path requires
+  the full grant, checks `conversation_control` at call time, and uses the
+  top-level `reason` for audit (at most 2000 characters on that path). Explicit
+  `owner_delegation` still uses the existing trigger checks; other actions do not
+  infer delegation. The grant, trigger and one record precede delegated
+  `set_session_model`, exactly as for a delegated Continue. The record's target
+  (`kind: conversation`, `action: set_model`) names the chosen `model`, null to
+  restore the session's original. It changes which model the session's next
+  attempt runs, never a permission. When an explicit object is supplied, its
+  trigger obeys `ownerDelegationTrigger`: a missing or malformed trigger is a
+  recorded refusal before anything is stored. A model the owner's route resolver
+  refuses settles the accepted record `failed`; both read as failed tool calls.
 - **Restart (`restart_server`).** Grant → trigger → restart protection →
   audit record → a detached thread, so the restart outlives the calling turn:
   `server_reexec.prepare_server_reexec_frontend()` (the Settings preparation)
@@ -1584,6 +1685,26 @@ or instruction that covers it, and resume the lead. A repair Turn resumed
 after a restart reports through the restart-complete notice instead: restart
 resume carries only the public config, not the repair marker.
 
+**Project-local binding replacement.** A running Project Lead that needs a fresh
+binding may call `repair_project(action="replace_own_binding", under_delegation=true,
+reason=…, idempotency_key=…)`. No target is accepted: the executing Attempt, owner,
+current lead conversation and binding revision determine it. The active human full
+grant must still name the owner's current Global Router and match the task tenant.
+The folder must still belong to that owner and include the exact project. The existing
+create-and-bind operation creates a fresh empty Coordinator and compares the old
+revision before it binds. It starts no Turn, transfers no history, and does not
+preserve dispatch authority pinned to the old epoch: use it only when a replacement
+is necessary, not to retry a transient failure. A stale lead cannot retry the effect;
+the owner can inspect the current binding and audit receipt.
+
+A lead that cannot run cannot use this action. The Global Router can instead use
+`repair_project` in its default mode with the owner's trigger and the failure
+evidence to start an in-project recovery conversation, or Continue an exact failed
+Attempt for a transient error. If the binding itself must be replaced while the
+lead is unavailable, the owner retains **Replace coordinator**. A Project Lead's
+full grant does not let it repair a peer, nominate a replacement conversation,
+or replace the Global Router or Watchdog.
+
 Alternatives rejected: Router-owned Worker rows in the project's dispatch
 record (six identity and lifecycle fences tie a row to the project's own
 binding, request account and Coordinator; relaxing them would route the
@@ -1765,7 +1886,9 @@ work.
 - Digest, at the owner's digest time and never when empty, most valuable
   first: open decisions (blocking first, then oldest), overdue commitments,
   open faults, verified deliveries, projects that were active but sent no
-  update since the last digest, then daily figures.
+  update since the last digest, then daily figures. Delivered to every
+  enabled command chat (大象, 微信, …); enabling or disabling a channel
+  account chooses it.
 - Silent: routine status changes, duplicate relays, acknowledgements
   (`[SILENT]`, R3).
 - Quiet hours: urgent items only. Report and question relays that arrive in
@@ -1777,8 +1900,9 @@ work.
   and the exact action needed from him. Related decisions go in one card.
 
 **Owner preferences** are settings he chooses (principle 5): digest times,
-quiet hours and push channel. Until he chooses: one digest at 21:00, quiet
-hours 00:00–08:00, 大象 falling back to in-app. There is no other knob: no
+quiet hours and push channels (the enabled command chats). Until he chooses:
+one digest at 21:00, quiet hours 00:00–08:00, every enabled command chat
+falling back to in-app. There is no other knob: no
 reminder interval (a reminder is the next digest), no wake budget and no
 debounce window. Batching comes from steering into a live turn, from quiet
 hours and from the digest.
@@ -2031,6 +2155,28 @@ answer when it happens, so no reader derives it from a lane.
 - `_proactive_view` reads only its own lead's questions (`coordinator_id`), so
   the page never reads the Global Router's questions, which it omits.
 
+**Question-status evidence boundary.** `answeredAt` is an index-settlement
+marker, not a substantive decision or authorization receipt. In
+`lib/router/proactive/questions.py`, `answer_lane_questions` checks only the
+same lane and a later human ordinal; it receives no answer text or selected
+choice. `_card` accepts either `guidanceResponse` or `guidanceSuperseded`.
+`confirm_default` can set `answeredAt` without a new Turn. Consequently neither
+`answeredAt`, `answeredOrdinal`, nor disappearance from `open_questions`
+establishes an explicit owner choice or approval.
+
+Keep the evidence distinct: an index-only settlement leaves substantive intent
+unknown until the exact source is inspected; a `guidanceResponse` is response
+evidence whose content and scope must be read (supersession alone is not a
+choice); `defaultAcceptedAt`/`defaultAcceptedBy` and the card's
+`guidanceDefaultAccepted` record confirmation of that question's stated default,
+not a generic grant for protected effects or an expansion of authorization.
+Withdrawal and default-confirmation refusal diagnostics describe index settlement
+or card response/supersession, rather than asserting an owner answer from the
+index flag. This wording changes no eligibility, index/card writes, answer
+semantics or effect policy. Synthetic specifications:
+`tests/router/test_owner_question_withdraw.py` and
+`tests/router/test_owner_question_confirm_default.py`.
+
 **A lead withdraws a settled question (2026-11-18).**
 
 *Problem.* A lead's question that the conversation later settled (the owner
@@ -2060,6 +2206,44 @@ owner never gave and stop recording a real one. A separate withdrawal store or
 tool: a second owner for the same question state (principle 4). Withdrawing by
 editing the settlement's resume offer: it would discard the owner's ability to
 answer anyway.
+
+**The owner confirms a default (2026-11-18).**
+
+*Problem.* A `blocking=false` question proceeds on its stated default, but its
+card stayed "等你决定" in the office (and every listing) until the owner wrote
+a chat reply, which reached the lead's model as a new Turn even when the owner
+only agreed with what it was already doing.
+
+*Decision.* The office question card offers "按默认确认" on a non-blocking
+question (`POST /api/v4/router/questions/confirm-default`, body
+`ownerQuestionConfirmRequest` in `contracts/router_v1.schema.json`;
+`confirm_default` in `lib/router/proactive/questions.py`). It settles the
+question in the owner-question index: the record gains `answeredAt`,
+`defaultAcceptedAt` and `defaultAcceptedBy` (the owner), so every listing
+(continuation context, digest, `/router/projects`, the office's decision
+facts) drops it; the card's round gains `guidanceDefaultAccepted: {at, by}` by
+the same CAS card edit as a withdrawal (`_mark_card`; a still-running question
+Turn is left to its attempt and only the record says so, `card: unmarked`). A
+`project` push hint makes the office re-read. Nothing is sent to the lead: no
+Turn, steer, attempt or model message. A repeat returns the first
+confirmation; a blocking, answered or withdrawn question is refused (409
+`owner_question_not_confirmable`). The free-text answer and chat reply are
+unchanged, and the browser shows a confirmed card as "已按默认确认" and leaves
+it out of the attention list and the open-question focus.
+
+*Alternatives considered.* Sending "OK, use the default" as a chat reply: the
+owner asked that nothing reach the model. A browser-only dismissal: the
+index, digest and other browsers would still list it. A blocking question's
+default: a blocking lead waits for an answer, so confirming there would be an
+answer and belongs to `answer_guidance`.
+
+**Owner attention is only what the owner can act on (2026-11-18).** The office
+never flags the Watchdog (故障巡检) for its open signals: they are the
+Watchdog's own queue (R7), it reviews them, and a fault that needs the owner
+reaches him as its `ask_human` decision. Before, every open `alarm` fact
+painted it "需要关注" while its brief listed nothing; on 2026-11-18 that
+was 15 quota signals the Watchdog had judged stale for hours; they now close
+on evidence (R7, "Quota alerts close on evidence").
 
 On production, the first listing after the deploy reads each lead's lane once
 (about what one cold office pass read before); from then on no listing, office
@@ -2140,6 +2324,7 @@ reversible.
 | "Act for me" grant | `POST /api/v4/router/owner-delegation` | never: the owner's UI only (R9) | 2 POST | (d) |
 | My Day goals; memory | `routes/api_v1/myday.py:81`–`:166`; `routes/api_v1/memory.py:120`, `:161`, `:230`; delete/clear `:180`, `:261` | gap (plan 9) | — | (a); delete/clear (b) |
 | Restart | `POST /api/v1/update/restart` (`routes/api_v1/update.py:420`) | `restart_server` (R9 `restart`) | — | (b), delegated |
+| Replace the running Project Lead’s own binding | Project workspace → Replace coordinator | `repair_project(action="replace_own_binding")` (R9 full grant only) | — | (a), delegated |
 | Open a repair conversation in a project whose Project Router cannot run | conversation create + turn command (the owner's own repair chat) | `repair_project` (R9 `project_repair`) | — | (a), delegated |
 | Update apply, shutdown, lifecycle approvals | `update.py:222`, `:613`, `:679` | never automatic; approvals need the human UI | — | (b), (d) |
 | Exports | `export.py` (protected step) | never automatic | — | (b)/(c) |
@@ -2450,16 +2635,47 @@ the project wrapper that happened to contain a check. `HOPE_QUEUE_POLICY.json`
 at `router_home_location(user_id)` is the machine-readable source, published by
 the Global Router through ordinary reviewed publication. The schema is
 `contracts/hope_queue_policy_v1.schema.json`; the v1 entry `m17` is global.
-No code writes the file or supplies a second queue allow-list.
+Creating or opening the router home seeds the file write-once with exactly
+the contract's `x-fail-safe-default` (beside the `RESOURCES.md` seed), so a
+home recreated on a new host never lacks its documented source; after that
+only reviewed publication changes it, and no code overwrites it or supplies a
+second queue allow-list. Specification: `tests/router/test_router_home.py`.
 
 **Decision.** The path is derived from owner identity and runtime paths, not a
-setting. The hope-mcp child receives it as `TOFU_HOPE_QUEUE_POLICY` beside
-`TOFU_MCP_OWNER_ID`; submission tools declare `_meta["tofu/queue-policy"]` and
-then receive the canonical project in `_meta["tofu/project"]`. Each submit,
-rerun, clone and background retry reads the file again. A missing, unreadable,
-or unparsable file enforces exactly the v1 `m17` fail-safe default and warns;
-it never disables m17 or refuses all jobs. The `run_command` environment also
-prepends generated `hope`/`mlp` launchers (after any project `.venv`) which
+setting. Tofu enforces it at two Tofu-owned boundaries, both reading the file
+with the same loader (`lib/tools/hope_queue_policy.py` `load_policy`/`refusal`):
+
+1. The MCP boundary. `MCPBridge.call_tool` (`lib/mcp/client/_bridge.py`) runs
+   `lib/mcp/queue_policy.py` `submission_refusal` before every call, so the
+   task tool handler, the execution-host relay (`bridge_relay.py`) and the
+   compute provider's `HopeMCPPort` all pass it. It applies to the server
+   named `hope` or launched through `hope-mcp`, and to its job-creating
+   tools: `submit_job` (the `queue` argument, `-Dqueue`/`-Dafo.app.queue` in
+   `arguments`, a queue key in `extra`, and every `.hope` body in `workdir` or
+   the named `conf_name`), `confirm_rerun` (`hope_conf`), `catalog_write`
+   operations `job_clone`/`job_rerun` (`body.hopeConf`) and `codelab_create`
+   (`body.queue`; without one the platform picks the queue). hope-mcp has no
+   queue-move tool; `change_priority`/`change_job_priority` keep the queue and
+   `plan_rerun`/`plan_pc_to_job`/`lint_hope_config` submit nothing. A refusal
+   returns before the server is contacted (or woken) as an error result whose
+   JSON is the typed refusal, and is logged and audited
+   (`mcp_queue_policy_refusal`) with the queue, owner and caller project; a
+   job submission whose queue cannot be read is refused as
+   `queue_policy_unresolved`. Specification:
+   `tests/mcp_protocol/test_hope_mcp_queue_policy_boundary.py`.
+2. The CLI guard (below).
+
+hope-mcp itself (0.7.0 and the owner's source checkout as of 2026-11-18) has
+no policy reader and does not enforce the ban. Tofu still passes the hope-mcp
+child `TOFU_HOPE_QUEUE_POLICY` beside `TOFU_MCP_OWNER_ID`, and a tool that
+declares `_meta["tofu/queue-policy"]` receives the canonical project in
+`_meta["tofu/project"]`, which the MCP boundary also uses to scope
+`projects`-limited entries (without it every entry applies). Each check reads
+the file again. A missing, unreadable, or unparsable file enforces exactly the
+v1 `m17` fail-safe default and warns; it never disables m17 or refuses all
+jobs. A hope-mcp background quota retry re-POSTs a submission already checked
+here. The `run_command` environment also prepends generated `hope`/`mlp`
+launchers (after any project `.venv`) which
 check the same file before executing the real CLI. Locating the real CLIs
 searches every PATH directory; a command reuses the previous command's answer
 while the PATH, working directory and every searched directory's identity and
@@ -2474,10 +2690,10 @@ unknown write.
 
 **Alternatives rejected.** A block in `RESOURCES.md`: parsing a large prose
 registry is fragile. A configurable policy path, project allow-list, or
-server-env override: a new knob or a bypass. Enforcing only in the bridge:
-the final queue may live in a `.hope` body or a resumed retry, so the
-submission boundary must read it too. A PATH shim alone: an absolute-path CLI
-call bypasses it, so it is a guard, not a sandbox.
+server-env override: a new knob or a bypass. Relying on hope-mcp to enforce
+it: it has no policy reader and its repository is the owner's, so Tofu's own
+MCP boundary reads the `.hope` bodies itself. A PATH shim alone: an
+absolute-path CLI call bypasses it, so it is a guard, not a sandbox.
 
 **Alternatives rejected.** Relaying every cross-project word through the
 Global Router, today's practice: it costs a router turn per message, loses the
@@ -2541,7 +2757,7 @@ PC: Project Coordinator):
 | `channel_send`, `channel_read`, `channel_threads`, `channel_outbox`, `channel_outbox_approve`, `channel_configure_thread`, `channel_subscribe`, `channel_unsubscribe` | GR | accident | `CHANNEL_TOOLS` joined `ROUTER_TOOLS` (CHANNELS.md C3) and were never listed |
 | `restart_server` | PC, GR | accident; every lead's since 2026-11-18 (R9, "The delegation reaches every lead") | R9 serves lead Turns without an owner message of their own (standing instructions, `under_delegation`); HARNESS-1A-2 diagnosis `91e7b05323` |
 | `route_to_project` | GR | accident | R2: a forward's authority is verified at execution |
-| `get_router_projects`, `router_instruction_create`, `router_instruction_list`, `router_instruction_cancel`, `router_portfolio`, `router_project`, `owner_settings`, `repair_project` | GR | accident | R4, R10, R11 and R12 added them to `ROUTER_ONLY_TOOLS`; each has its own execution gate |
+| `get_router_projects`, `router_instruction_create`, `router_instruction_list`, `router_instruction_cancel`, `router_portfolio`, `router_project`, `owner_settings` | GR | accident | R4, R10, R11 and R12 added them to `ROUTER_ONLY_TOOLS`; each has its own execution gate |
 
 Deliberate in every Turn of a role, and unchanged: its ceiling (no file, shell,
 browser, program or direct MCP work; `kill` outside), programmatic calling off, the
@@ -2722,6 +2938,17 @@ target execution authority. See
   `GET /api/v4/router/projects` (`get_router_projects` in camelCase through
   `projects.router_projects_wire`; `cursor` is the previous `nextCursor`);
   DTOs in `frontend/src/api/router.generated.ts`.
+  A binding can be `available` while the lead's last observed execution failed.
+  For available bindings the directory separately reports `execution_health`
+  (`executionHealth` on HTTP): the Turn ID, status and dispatch-authority
+  withdrawal flag of the newest current main-lane bound attempt observed in
+  the first durable timing-trace identity page. It reports `no_bound_attempt`
+  only when that catalogue page is exhausted without a match, and `unknown`
+  when the read fails or later pages could contain a match. Unbound attempts,
+  input Turns and appended reports are not execution evidence. This is a
+  bounded observation, not a liveness probe or a `repair_project` decision.
+  It uses owner-scoped attempt identities and Turn metadata only: no transcript,
+  error detail or live model settings, and no work is started or resumed.
 - Browser (R8): `frontend/src/features/global-router.ts` renders the main
   coordinator card (总负责人 / Main coordinator) with the project coordinator
   card's classes into `#globalRouterEntry`, the leader slot just above
@@ -2735,14 +2962,47 @@ target execution authority. See
   (`project-coordination-surface.ts`). `router-owner-delegation.ts` contributes
   "Act for me" (代我操作, R9) to that header: the grant switch, its state, an
   advisory note for an open-mode grant and the last audited use (read when
-  created and when opened, no polling). `router-watchdog.ts` contributes the
+  created and when opened, no polling). The opened disclosure shows the last
+  action's detail (or code when detail is absent) as selectable text, not only
+  a hover title, so keyboard and touch readers can read the refusal reason.
+  Pending reads show loading, not delegation-off or unused history. A failed
+  read shows unconfirmed state and the read error, withholding grant controls,
+  coverage and receipt evidence until a successful read; this also withdraws
+  previously displayed information on refresh rather than presenting it as
+  current. Reopening performs the same passive read, without automatic writes.
+  This is receipt evidence, not an approval queue: a delegated refusal creates
+  no pending approval. A retained refusal receipt can describe an accepted
+  restart revoked during preparation; a fresh request after revocation need
+  not enter this action history. Actual pending lifecycle requests retain their separate
+  approve/deny controls in Settings → Update. `router-watchdog.ts` contributes the
   health-check fold to that header (its state: on, on failures only once the
   owner stopped the periodic review, or off while no Watchdog is known; one
   sentence on what it does; a button that opens the Watchdog conversation,
   ensuring health checks first when no Watchdog is known) and, on the Watchdog
   conversation, a one-line header with a way back. It reads when created and
   again after each main coordinator ensure (`ensured()` of
-  `global-router.ts`), since that ensure turns health checks on; its
+  `global-router.ts`), since that ensure turns health checks on. A passive
+  refresh withdraws the previous positive health-check summary and cached Open
+  shortcut while pending; an unavailable read shows unconfirmed state, while
+  an explicit HTTP 403 or `forbidden` failure is labeled permission denied.
+  Typed read failures retain their message, HTTP status and code in selectable
+  text; identical messages do not erase that distinction. These labels describe
+  the read response, not a new permission decision. An explicitly unavailable
+  binding is likewise unconfirmed, not confirmed off. Once withdrawn, Open
+  remains withdrawn through subsequent pending or failed reads, independently
+  of whether a cached binding identity remains. None of these states dispatches
+  Open or an automatic ensure. A fresh authoritative read restores the summary
+  and action from that response. Reads and ensures share one request-generation
+  fence: a request started later supersedes earlier results regardless of reply
+  arrival order. A superseded ensure neither adopts its binding nor dispatches
+  its queued Open; external ensure callers receive `AbortError`, never its stale
+  navigation identity. Click-busy state belongs to that same generation, so
+  supersession releases it immediately and an old finalizer cannot release a
+  newer click. Interrupting a pending read repaints its loading state even when
+  the external ensure fails. The last known
+  identity remains available to conversation grouping during a failed read;
+  it does not make the presentation action available. The existing explicit
+  ensure for an initially unknown or confirmed unbound Watchdog is unchanged.
   `location()` lets presence omit the
   Worker model control and the task board there, since the Watchdog never
   delegates and authors no board. Both owners are created before the locale

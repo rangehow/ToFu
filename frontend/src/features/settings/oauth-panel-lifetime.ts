@@ -17,6 +17,9 @@ type Status = Record<string, ProviderStatus | undefined>;
 interface StatusPorts {
   read(options: {signal: AbortSignal}): Promise<Status | null>;
   publish(status: Status): void;
+  failed?(): void;
+  loading?(): void;
+  cancelled?(): void;
 }
 interface StatusRead { scope: LifecycleScope; promise: Promise<void>; }
 
@@ -37,8 +40,10 @@ export class OAuthPanelLifetime {
   isCurrent(): boolean { return this.session.isCurrent(); }
 
   invalidateStatus(): void {
-    this.pending?.scope.destroy();
+    if (!this.pending) return;
+    this.pending.scope.destroy();
     this.pending = null;
+    if (this.isCurrent()) this.ports?.cancelled?.();
   }
 
   loadStatus(ports: StatusPorts, fromRepoll = false): Promise<void> {
@@ -46,15 +51,17 @@ export class OAuthPanelLifetime {
     this.ports = ports;
     if (!fromRepoll) this.repollAttempts = 0;
     if (this.pending) return this.pending.promise;
+    if (!fromRepoll) ports.loading?.();
     const scope = createLifecycleScope(window);
     scope.listen(this.scope.signal, 'abort', () => scope.destroy(), {once: true});
     const read: StatusRead = {scope, promise: Promise.resolve().then(async () => {
       try {
         const status = await ports.read({signal: scope.signal});
-        if (!status || !this.isCurrent() || this.pending !== read || scope.signal.aborted) return;
-        this.publishStatus(status);
-      } catch (error) {
-        if (this.isCurrent() && !scope.signal.aborted) console.warn('[OAuth] Failed to load status:', error);
+        if (!this.isCurrent() || this.pending !== read || scope.signal.aborted) return;
+        if (status) this.publishStatus(status);
+        else ports.failed?.();
+      } catch {
+        if (this.isCurrent() && this.pending === read && !scope.signal.aborted) ports.failed?.();
       } finally {
         if (this.pending === read) this.pending = null;
         scope.destroy();

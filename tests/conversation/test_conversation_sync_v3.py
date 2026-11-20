@@ -150,6 +150,104 @@ def test_snapshot_restores_only_current_committed_bounded_attempt_phase(
     assert 'activeAttemptPhase' not in service.snapshot('conv-sync-a', 1)
 
 
+def test_coordinator_worker_observations_survive_snapshot_history_and_replay(
+    conversation_sync_db,
+):
+    from threading import Lock
+
+    from lib.conversation_sync.repository import SidecarConversationSyncRepository
+    from lib.conversation_sync.service import ConversationSyncService
+    from lib.conversation_sync.validation import decode
+    from lib.turn_lifecycle import (
+        bind_task, claim_attempt_start, create_turn_pair, mark_task_started,
+        record_task_event,
+    )
+
+    service = ConversationSyncService(SidecarConversationSyncRepository(
+        client_factory=lambda write=False: conversation_sync_db,
+    ))
+    for index in range(3):
+        created = create_turn_pair(
+            'conv-sync-a', command_id=f'coordinator-observation-{index}',
+            input_projection={'content': 'Check on Workers'}, config={'model': 'test'},
+            user_id=1,
+        )
+        attempt_id = created['attempt']['attemptId']
+        task_id = f'coordinator-observation-task-{index}'
+        assert claim_attempt_start(attempt_id, user_id=1)
+        bind_task(attempt_id, task_id, user_id=1)
+        mark_task_started(attempt_id, task_id, user_id=1)
+        task = {
+            '_attemptId': attempt_id, '_userId': 1, 'id': task_id,
+            'status': 'done', 'content': 'Worker status checked', 'thinking': '',
+            'toolRounds': [], 'segments': [], 'config': {'model': 'test'},
+        }
+        if index != 2:
+            assert record_task_event(task, {'type': 'done', 'finishReason': 'stop'})
+
+    before = service.snapshot('conv-sync-a', 1)
+    observations = {
+        'worker-with-delivery': {
+            'attemptId': 'worker-attempt-a', 'resultRevision': 17,
+            'deliveryStatus': 'delivered',
+        },
+        'worker-without-delivery': {
+            'attemptId': 'worker-attempt-b', 'resultRevision': 19,
+            'deliveryStatus': None,
+        },
+    }
+    # Seed only the poll's bookkeeping; produce and persist the actual terminal
+    # settlement through the same lifecycle path as the Coordinator.
+    task['_coordinatorWorkerReports'] = {
+        'lock': Lock(), 'observed_results': observations,
+        'reported': {key: ('needs_review', None, row['attemptId'], row['deliveryStatus'])
+                     for key, row in observations.items()},
+    }
+    assert record_task_event(task, {'type': 'done', 'finishReason': 'stop'})
+
+    turn_id = created['turn']['turnId']
+    snapshot = service.snapshot('conv-sync-a', 1, segment_payload='refs')
+    turn = snapshot['turns'][5]
+    assert turn['turnId'] == turn_id and turn['status'] == 'completed'
+    assert turn['settlement']['coordinatorWorkerObservations'] == observations
+    page = service.turn_page(
+        'conv-sync-a', 1, lane_id='main', expected_sync_sequence=snapshot['syncSeq'],
+        limit=6, segment_payload='refs',
+    )
+    assert page['turns'][5]['settlement'] == turn['settlement']
+    assert service.turn_read('conv-sync-a', turn_id, 1)['turn']['settlement'] == turn['settlement']
+    replay = service.changes(
+        'conv-sync-a', 1,
+        after=service.position_from_cursor('conv-sync-a', 1, before['cursor']),
+    )
+    assert replay['reset'] is None
+    terminal, = (
+        change['payload']['event'] for change in replay['events']
+        if change['type'] == 'attempt.event'
+        and change['payload']['event']['type'] == 'terminal_settlement'
+    )
+    assert decode('AttemptEvent', terminal)['payload']['settlement'] == turn['settlement']
+
+
+def test_append_settled_turn_cannot_mint_coordinator_worker_observations(
+    flask_client, conversation_sync_db,
+):
+    body = {
+        'commandId': 'external-settlement', 'actor': 'assistant',
+        'projection': {'content': 'External result'},
+        'settlement': {'outcome': 'completed', 'coordinatorWorkerObservations': {
+            'worker': {'attemptId': 'worker-attempt', 'resultRevision': 7, 'deliveryStatus': None},
+        }},
+    }
+    url = '/api/v4/conversations/conv-sync-a/turns/settled'
+    response = flask_client.post(url, json=body)
+    assert response.status_code == 400
+    assert '$.settlement.coordinatorWorkerObservations: undeclared field' in response.get_data(as_text=True)
+    assert flask_client.get('/api/v4/conversations/conv-sync-a/sync').get_json()['turns'] == []
+    del body['settlement']['coordinatorWorkerObservations']
+    assert flask_client.post(url, json=body).status_code == 200
+
+
 @pytest.mark.parametrize('thinking_first', [False, True])
 @pytest.mark.parametrize('evict_cache', [False, True])
 def test_live_snapshot_and_command_bases_replay_without_duplicate_narration(

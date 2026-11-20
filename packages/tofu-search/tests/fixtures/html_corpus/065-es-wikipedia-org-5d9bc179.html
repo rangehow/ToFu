@@ -1,0 +1,966 @@
+<!DOCTYPE html>
+<html class="client-nojs vector-feature-language-in-header-enabled vector-feature-language-in-main-menu-disabled vector-feature-language-in-main-page-header-disabled vector-feature-page-tools-pinned-disabled vector-feature-toc-pinned-clientpref-1 vector-feature-main-menu-pinned-disabled vector-feature-limited-width-clientpref-1 vector-feature-limited-width-content-enabled vector-feature-custom-font-size-clientpref-1 vector-feature-appearance-pinned-clientpref-1 skin-theme-clientpref-day vector-sticky-header-enabled vector-toc-available skin-thumbsize-clientpref-standard skin-underline-clientpref-browser" lang="es" dir="ltr">
+<head>
+<meta charset="UTF-8">
+<title>Rust (lenguaje de programación) - Wikipedia, la enciclopedia libre</title>
+<script>/* stub */</script>
+<script>/* stub */</script>
+<link rel="stylesheet" href="/w/load.php?lang=es&amp;modules=ext.cite.parsoid.styles%7Cext.cite.styles%7Cext.pygments%2CwikimediaBadges%7Cext.readingLists.bookmark.icons%2Cstyles%7Cext.uls.interlanguage%7Cext.visualEditor.desktopArticleTarget.noscript%7Cext.wikimediaBadges.ulsV2%7Cext.wikimediamessages.styles%7Cmediawiki.skins.legacy%7Cskins.vector.icons%2Cstyles%7Cskins.vector.search.codex.styles%7Cwikibase.client.init&amp;only=styles&amp;skin=vector-2022">
+<script async="" src="/w/load.php?lang=es&amp;modules=startup&amp;only=scripts&amp;raw=1&amp;skin=vector-2022">/* stub */</script>
+<meta name="ResourceLoaderDynamicStyles" content="">
+<link rel="stylesheet" href="/w/load.php?lang=es&amp;modules=ext.gadget.imagenesinfobox&amp;only=styles&amp;skin=vector-2022">
+<link rel="stylesheet" href="/w/load.php?lang=es&amp;modules=site.styles&amp;only=styles&amp;skin=vector-2022">
+<noscript><link rel="stylesheet" href="/w/load.php?lang=es&amp;modules=noscript&amp;only=styles&amp;skin=vector-2022"></noscript>
+<meta name="generator" content="MediaWiki 1.48.0-wmf.4">
+<meta name="referrer" content="origin">
+<meta name="referrer" content="origin-when-cross-origin">
+<meta name="robots" content="max-image-preview:standard">
+<meta name="format-detection" content="telephone=no">
+<meta property="og:image" content="https://thumb.wikimedia.org/wikipedia/commons/thumb/d/d5/Rust_programming_language_black_logo.svg/1280px-Rust_programming_language_black_logo.svg.png?utm_source=es.wikipedia.org&amp;utm_campaign=index&amp;utm_content=thumbnail">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="1200">
+<meta name="viewport" content="width=1120">
+<meta property="og:title" content="Rust (lenguaje de programación) - Wikipedia, la enciclopedia libre">
+<meta property="og:type" content="website">
+<link rel="preconnect" href="//thumb.wikimedia.org">
+<link rel="alternate" type="application/x-wiki" title="Editar" href="/w/index.php?title=Rust_(lenguaje_de_programaci%C3%B3n)&amp;action=edit">
+<link rel="apple-touch-icon" href="/static/apple-touch/wikipedia.png">
+<link rel="icon" href="/static/favicon/wikipedia.ico">
+<link rel="search" type="application/opensearchdescription+xml" href="/w/rest.php/v1/search" title="Wikipedia (es)">
+<link rel="EditURI" type="application/rsd+xml" href="//es.wikipedia.org/w/api.php?action=rsd">
+<link rel="canonical" href="https://es.wikipedia.org/wiki/Rust_(lenguaje_de_programaci%C3%B3n)">
+<link rel="license" href="https://creativecommons.org/licenses/by-sa/4.0/deed.es">
+<link rel="alternate" type="application/atom+xml" title="Canal Atom de Wikipedia" href="/w/index.php?title=Especial:CambiosRecientes&amp;feed=atom">
+<link rel="dns-prefetch" href="//meta.wikimedia.org" />
+<link rel="dns-prefetch" href="auth.wikimedia.org">
+</head>
+<body class="mediawiki ltr sitedir-ltr mw-hide-empty-elt action-view skin-vector-2022 ns-0 ns-subject mw-editable page-Rust_lenguaje_de_programación rootpage-Rust_lenguaje_de_programación skin--responsive skin-vector skin-vector-search-vue">
+<div id="mw-aria-live-region" class="mw-aria-live-region" aria-live="polite"></div><a class="mw-jump-link" href="#bodyContent">Ir al contenido</a>
+<div class="vector-header-container">
+	<header class="vector-header mw-header no-font-mode-scale">
+		<div class="vector-header-start">
+			<nav class="vector-main-menu-landmark" aria-label="Sitio">
+				
+<div id="vector-main-menu-dropdown" class="vector-dropdown vector-main-menu-dropdown vector-button-flush-left vector-button-flush-right"  title="Menú principal" >
+	<input type="checkbox" id="vector-main-menu-dropdown-checkbox" role="button" aria-haspopup="true" data-event-name="ui.dropdown-vector-main-menu-dropdown" class="vector-dropdown-checkbox "  aria-label="Menú principal"   >
+	<label id="vector-main-menu-dropdown-label" for="vector-main-menu-dropdown-checkbox" class="vector-dropdown-label cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--icon-only " aria-hidden="true"  ><span class="vector-icon mw-ui-icon-menu mw-ui-icon-wikimedia-menu cdx-button__icon"></span>
+
+<span class="vector-dropdown-label-text">Menú principal</span>
+	</label>
+	<div class="vector-dropdown-content">
+
+
+				<div id="vector-main-menu-unpinned-container" class="vector-unpinned-container">
+		
+<div id="vector-main-menu" class="vector-main-menu vector-pinnable-element">
+	<div
+	class="vector-pinnable-header vector-main-menu-pinnable-header vector-pinnable-header-unpinned"
+	data-feature-name="main-menu-pinned"
+	data-pinnable-element-id="vector-main-menu"
+	data-pinned-container-id="vector-main-menu-pinned-container"
+	data-unpinned-container-id="vector-main-menu-unpinned-container"
+>
+	<div class="vector-pinnable-header-label">Menú principal</div>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-pin-button" data-event-name="pinnable-header.vector-main-menu.pin" aria-label="Mover Menú principal a la barra lateral">mover a la barra lateral</button>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-unpin-button" data-event-name="pinnable-header.vector-main-menu.unpin" aria-label="Ocultar Menú principal">ocultar</button>
+</div>
+
+	
+<div id="p-navigation" class="vector-menu mw-portlet mw-portlet-navigation"  >
+	<div class="vector-menu-heading">
+		Navegación
+	</div>
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			<li id="n-mainpage-description" class="mw-list-item"><a href="/wiki/Wikipedia:Portada" title="Visitar la página principal [z]" accesskey="z"><span>Portada</span></a></li><li id="n-portal" class="mw-list-item"><a href="/wiki/Portal:Comunidad" title="Acerca del proyecto, lo que puedes hacer, dónde encontrar información"><span>Portal de la comunidad</span></a></li><li id="n-currentevents" class="mw-list-item"><a href="/wiki/Portal:Actualidad" title="Encuentra información de contexto sobre acontecimientos actuales"><span>Actualidad</span></a></li><li id="n-recentchanges" class="mw-list-item"><a href="/wiki/Especial:CambiosRecientes" title="Lista de cambios recientes en la wiki [r]" accesskey="r"><span>Cambios recientes</span></a></li><li id="n-newpages" class="mw-list-item"><a href="/wiki/Especial:P%C3%A1ginasNuevas"><span>Páginas nuevas</span></a></li><li id="n-randompage" class="mw-list-item"><a href="/wiki/Especial:Aleatoria" title="Cargar una página al azar [x]" accesskey="x"><span>Página aleatoria</span></a></li><li id="n-help" class="mw-list-item"><a href="/wiki/Ayuda:Contenidos" title="El lugar para aprender"><span>Ayuda</span></a></li><li id="n-bug_in_article" class="mw-list-item"><a href="/wiki/Wikipedia:Informes_de_error"><span>Notificar un error</span></a></li><li id="n-specialpages" class="mw-list-item"><a href="/wiki/Especial:P%C3%A1ginasEspeciales" title="Lista de todas las páginas especiales [q]" accesskey="q"><span>Páginas especiales</span></a></li>
+		</ul>
+		
+	</div>
+</div>
+
+	
+</div>
+
+				</div>
+
+	</div>
+</div>
+
+		</nav>
+			
+<a href="/wiki/Wikipedia:Portada" class="mw-logo">
+	<img class="mw-logo-icon" src="/static/images/icons/wikipedia.png" alt="" aria-hidden="true" height="50" width="50">
+	<span class="mw-logo-container skin-invert">
+		<img class="mw-logo-wordmark" alt="Wikipedia" src="/static/images/mobile/copyright/wikipedia-wordmark-en.svg" style="width: 7.5em; height: 1.125em;">
+		<img class="mw-logo-tagline" alt="La enciclopedia libre" src="/static/images/mobile/copyright/wikipedia-tagline-es.svg" width="120" height="13" style="width: 7.5em; height: 0.8125em;">
+	</span>
+</a>
+
+		</div>
+		<div class="vector-header-end">
+			
+<div id="p-search" role="search" class="vector-search-box-vue  vector-search-box-collapses vector-search-box-show-thumbnail vector-search-box-auto-expand-width vector-search-box">
+	<a href="/wiki/Especial:Buscar" class="cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--icon-only search-toggle" title="Buscar en este wiki [f]" accesskey="f"><span class="vector-icon mw-ui-icon-search mw-ui-icon-wikimedia-search cdx-button__icon"></span>
+
+<span>Buscar</span>
+	</a>
+	<div class="vector-typeahead-search-container">
+		<div class="cdx-typeahead-search cdx-typeahead-search--show-thumbnail cdx-typeahead-search--auto-expand-width">
+			<form action="/w/index.php" id="searchform" class="cdx-search-input cdx-search-input--has-end-button">
+				<div id="simpleSearch" class="cdx-search-input__input-wrapper"  data-search-loc="header-moved">
+					<div class="cdx-text-input cdx-text-input--has-start-icon">
+						<input
+							class="cdx-text-input__input mw-searchInput" autocomplete="off"
+							 type="search" name="search" placeholder="Buscar en Wikipedia" aria-label="Buscar en Wikipedia" autocapitalize="none" spellcheck="false" title="Buscar en este wiki [f]" accesskey="f" id="searchInput"
+							>
+						<span class="cdx-text-input__icon cdx-text-input__start-icon"></span>
+					</div>
+					<input type="hidden" name="title" value="Especial:Buscar">
+				</div>
+				<button class="cdx-button cdx-search-input__end-button">Buscar</button>
+			</form>
+		</div>
+	</div>
+</div>
+
+			<nav class="vector-user-links vector-user-links-wide" aria-label="Herramientas personales">
+	<div class="vector-user-links-main">
+	
+<div id="p-vector-user-menu-preferences" class="vector-menu mw-portlet emptyPortlet"  >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			
+		</ul>
+		
+	</div>
+</div>
+
+	
+<div id="p-vector-user-menu-userpage" class="vector-menu mw-portlet emptyPortlet"  >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			
+		</ul>
+		
+	</div>
+</div>
+
+	<nav class="vector-appearance-landmark" aria-label="Apariencia">
+		
+<div id="vector-appearance-dropdown" class="vector-dropdown "  title="Cambiar la apariencia del tamaño, ancho y color de la fuente de la página" >
+	<input type="checkbox" id="vector-appearance-dropdown-checkbox" role="button" aria-haspopup="true" data-event-name="ui.dropdown-vector-appearance-dropdown" class="vector-dropdown-checkbox "  aria-label="Apariencia"   >
+	<label id="vector-appearance-dropdown-label" for="vector-appearance-dropdown-checkbox" class="vector-dropdown-label cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--icon-only " aria-hidden="true"  ><span class="vector-icon mw-ui-icon-appearance mw-ui-icon-wikimedia-appearance cdx-button__icon"></span>
+
+<span class="vector-dropdown-label-text">Apariencia</span>
+	</label>
+	<div class="vector-dropdown-content">
+
+
+			<div id="vector-appearance-unpinned-container" class="vector-unpinned-container">
+				
+			</div>
+		
+	</div>
+</div>
+
+	</nav>
+	
+<div id="p-vector-user-menu-notifications" class="vector-menu mw-portlet emptyPortlet"  >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			
+		</ul>
+		
+	</div>
+</div>
+
+	
+<div id="p-vector-user-menu-overflow" class="vector-menu mw-portlet"  >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			<li id="pt-sitesupport-2" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="https://donate.wikimedia.org/?wmf_source=donate&amp;wmf_medium=sidebar&amp;wmf_campaign=es.wikipedia.org&amp;uselang=es" data-mw-donate-attempt="top_link" class=""><span>Donaciones</span></a>
+</li>
+<li id="pt-createaccount-2" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/w/index.php?title=Especial:Crear_una_cuenta&amp;returnto=Rust+%28lenguaje+de+programaci%C3%B3n%29" title="Te recomendamos crear una cuenta e iniciar sesión; sin embargo, no es obligatorio" class=""><span>Crear una cuenta</span></a>
+</li>
+<li id="pt-login-2" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/w/index.php?title=Especial:Entrar&amp;returnto=Rust+%28lenguaje+de+programaci%C3%B3n%29" title="Te recomendamos iniciar sesión, aunque no es obligatorio [o]" accesskey="o" class=""><span>Acceder</span></a>
+</li>
+
+			
+		</ul>
+		
+	</div>
+</div>
+
+	</div>
+	
+<div id="vector-user-links-dropdown" class="vector-dropdown vector-user-menu vector-button-flush-right vector-user-menu-logged-out vector-user-links-dropdown--collapsible"  title="Más opciones" >
+	<input type="checkbox" id="vector-user-links-dropdown-checkbox" role="button" aria-haspopup="true" data-event-name="ui.dropdown-vector-user-links-dropdown" class="vector-dropdown-checkbox "  aria-label="Herramientas personales"   >
+	<label id="vector-user-links-dropdown-label" for="vector-user-links-dropdown-checkbox" class="vector-dropdown-label cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--icon-only " aria-hidden="true"  ><span class="vector-icon mw-ui-icon-userAvatar mw-ui-icon-wikimedia-userAvatar cdx-button__icon"></span>
+
+<span class="vector-dropdown-label-text">Herramientas personales</span>
+	</label>
+	<div class="vector-dropdown-content">
+
+
+		
+<div id="p-personal" class="vector-menu mw-portlet mw-portlet-personal"  title="Menú de usuario" >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			<li id="pt-sitesupport" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="https://donate.wikimedia.org/?wmf_source=donate&amp;wmf_medium=sidebar&amp;wmf_campaign=es.wikipedia.org&amp;uselang=es" data-mw-donate-attempt="top_link" class=""><span class="vector-icon mw-ui-icon-heart mw-ui-icon-wikimedia-heart cdx-button__icon"></span>
+
+<span>Donaciones</span></a>
+</li>
+<li id="pt-createaccount" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/w/index.php?title=Especial:Crear_una_cuenta&amp;returnto=Rust+%28lenguaje+de+programaci%C3%B3n%29" title="Te recomendamos crear una cuenta e iniciar sesión; sin embargo, no es obligatorio" class=""><span class="vector-icon mw-ui-icon-userAvatar mw-ui-icon-wikimedia-userAvatar cdx-button__icon"></span>
+
+<span>Crear una cuenta</span></a>
+</li>
+<li id="pt-login" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/w/index.php?title=Especial:Entrar&amp;returnto=Rust+%28lenguaje+de+programaci%C3%B3n%29" title="Te recomendamos iniciar sesión, aunque no es obligatorio [o]" accesskey="o" class=""><span class="vector-icon mw-ui-icon-logIn mw-ui-icon-wikimedia-logIn cdx-button__icon"></span>
+
+<span>Acceder</span></a>
+</li>
+
+			
+		</ul>
+		
+	</div>
+</div>
+
+	
+	</div>
+</div>
+
+</nav>
+
+		</div>
+	</header>
+</div>
+<div class="mw-page-container">
+	<div class="mw-page-container-inner">
+		<div class="vector-sitenotice-container">
+			<div id="siteNotice"></div>
+		</div>
+		<div class="vector-column-start">
+			<div class="vector-main-menu-container">
+		<div id="mw-navigation">
+			<nav id="mw-panel" class="vector-main-menu-landmark" aria-label="Sitio">
+				<div id="vector-main-menu-pinned-container" class="vector-pinned-container">
+				
+				</div>
+		</nav>
+		</div>
+	</div>
+	<div class="vector-sticky-pinned-container">
+				<nav id="mw-panel-toc" aria-label="Contenidos" data-event-name="ui.sidebar-toc" class="mw-table-of-contents-container vector-toc-landmark">
+					<div id="vector-toc-pinned-container" class="vector-pinned-container">
+					<div id="vector-toc" class="vector-toc vector-pinnable-element">
+	<div
+	class="vector-pinnable-header vector-toc-pinnable-header vector-pinnable-header-pinned"
+	data-feature-name="toc-pinned"
+	data-pinnable-element-id="vector-toc"
+	data-pinned-container-id="vector-toc-pinned-container"
+	data-unpinned-container-id="vector-toc-unpinned-container"
+>
+	<h2 class="vector-pinnable-header-label">Contenidos</h2>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-pin-button" data-event-name="pinnable-header.vector-toc.pin" aria-label="Mover Contenidos a la barra lateral">mover a la barra lateral</button>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-unpin-button" data-event-name="pinnable-header.vector-toc.unpin" aria-label="Ocultar Contenidos">ocultar</button>
+</div>
+
+
+	<ul class="vector-toc-contents" id="mw-panel-toc-list">
+		<li id="toc-mw-content-text"
+			class="vector-toc-list-item vector-toc-level-1">
+			<a href="#" class="vector-toc-link">
+				<div class="vector-toc-text">Inicio</div>
+			</a>
+		</li>
+		<li id="toc-Descripción"
+		class="vector-toc-list-item vector-toc-level-1 vector-toc-list-item-expanded">
+		<a class="vector-toc-link" href="#Descripción">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">1</span>
+				<span>Descripción</span>
+			</div>
+		</a>
+		
+		<ul id="toc-Descripción-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+	<li id="toc-Historia"
+		class="vector-toc-list-item vector-toc-level-1 vector-toc-list-item-expanded">
+		<a class="vector-toc-link" href="#Historia">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">2</span>
+				<span>Historia</span>
+			</div>
+		</a>
+		
+			<button aria-controls="toc-Historia-sublist" class="cdx-button cdx-button--weight-quiet cdx-button--icon-only vector-toc-toggle">
+				<span class="vector-icon mw-ui-icon-wikimedia-expand"></span>
+				<span>Alternar subsección Historia</span>
+			</button>
+		
+		<ul id="toc-Historia-sublist" class="vector-toc-list">
+			<li id="toc-Creación_de_Fundación_Rust"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Creación_de_Fundación_Rust">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.1</span>
+					<span>Creación de Fundación Rust</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Creación_de_Fundación_Rust-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+	</ul>
+	</li>
+	<li id="toc-Ejemplos"
+		class="vector-toc-list-item vector-toc-level-1 vector-toc-list-item-expanded">
+		<a class="vector-toc-link" href="#Ejemplos">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">3</span>
+				<span>Ejemplos</span>
+			</div>
+		</a>
+		
+		<ul id="toc-Ejemplos-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+	<li id="toc-Evolución_del_lenguaje"
+		class="vector-toc-list-item vector-toc-level-1 vector-toc-list-item-expanded">
+		<a class="vector-toc-link" href="#Evolución_del_lenguaje">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">4</span>
+				<span>Evolución del lenguaje</span>
+			</div>
+		</a>
+		
+		<ul id="toc-Evolución_del_lenguaje-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+	<li id="toc-Interfaces_gráficas_(GUI)"
+		class="vector-toc-list-item vector-toc-level-1 vector-toc-list-item-expanded">
+		<a class="vector-toc-link" href="#Interfaces_gráficas_(GUI)">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">5</span>
+				<span>Interfaces gráficas (GUI)</span>
+			</div>
+		</a>
+		
+			<button aria-controls="toc-Interfaces_gráficas_(GUI)-sublist" class="cdx-button cdx-button--weight-quiet cdx-button--icon-only vector-toc-toggle">
+				<span class="vector-icon mw-ui-icon-wikimedia-expand"></span>
+				<span>Alternar subsección Interfaces gráficas (GUI)</span>
+			</button>
+		
+		<ul id="toc-Interfaces_gráficas_(GUI)-sublist" class="vector-toc-list">
+			<li id="toc-gtk-rs"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#gtk-rs">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">5.1</span>
+					<span>gtk-rs</span>
+				</div>
+			</a>
+			
+			<ul id="toc-gtk-rs-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-conrod"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#conrod">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">5.2</span>
+					<span>conrod</span>
+				</div>
+			</a>
+			
+			<ul id="toc-conrod-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+	</ul>
+	</li>
+	<li id="toc-Proyectos"
+		class="vector-toc-list-item vector-toc-level-1 vector-toc-list-item-expanded">
+		<a class="vector-toc-link" href="#Proyectos">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">6</span>
+				<span>Proyectos</span>
+			</div>
+		</a>
+		
+			<button aria-controls="toc-Proyectos-sublist" class="cdx-button cdx-button--weight-quiet cdx-button--icon-only vector-toc-toggle">
+				<span class="vector-icon mw-ui-icon-wikimedia-expand"></span>
+				<span>Alternar subsección Proyectos</span>
+			</button>
+		
+		<ul id="toc-Proyectos-sublist" class="vector-toc-list">
+			<li id="toc-Navegador_web"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Navegador_web">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">6.1</span>
+					<span>Navegador web</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Navegador_web-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-Sistemas_operativos"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Sistemas_operativos">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">6.2</span>
+					<span>Sistemas operativos</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Sistemas_operativos-sublist" class="vector-toc-list">
+				<li id="toc-Rust_for_linux"
+			class="vector-toc-list-item vector-toc-level-3">
+			<a class="vector-toc-link" href="#Rust_for_linux">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">6.2.1</span>
+					<span>Rust for linux</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Rust_for_linux-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+	</ul>
+		</li>
+		<li id="toc-Otro"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Otro">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">6.3</span>
+					<span>Otro</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Otro-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+	</ul>
+	</li>
+	<li id="toc-Véase_también"
+		class="vector-toc-list-item vector-toc-level-1 vector-toc-list-item-expanded">
+		<a class="vector-toc-link" href="#Véase_también">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">7</span>
+				<span>Véase también</span>
+			</div>
+		</a>
+		
+		<ul id="toc-Véase_también-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+	<li id="toc-Referencias"
+		class="vector-toc-list-item vector-toc-level-1 vector-toc-list-item-expanded">
+		<a class="vector-toc-link" href="#Referencias">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">8</span>
+				<span>Referencias</span>
+			</div>
+		</a>
+		
+		<ul id="toc-Referencias-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+	<li id="toc-Enlaces_externos"
+		class="vector-toc-list-item vector-toc-level-1 vector-toc-list-item-expanded">
+		<a class="vector-toc-link" href="#Enlaces_externos">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">9</span>
+				<span>Enlaces externos</span>
+			</div>
+		</a>
+		
+		<ul id="toc-Enlaces_externos-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+</ul>
+</div>
+
+					</div>
+		</nav>
+			</div>
+		</div>
+		<div class="mw-content-container">
+			<main id="content" class="mw-body">
+				<header class="mw-body-header vector-page-titlebar no-font-mode-scale">
+					<nav aria-label="Contenidos" class="vector-toc-landmark">
+						
+<div id="vector-page-titlebar-toc" class="vector-dropdown vector-page-titlebar-toc vector-button-flush-left"  title="Tabla de contenidos" >
+	<input type="checkbox" id="vector-page-titlebar-toc-checkbox" role="button" aria-haspopup="true" data-event-name="ui.dropdown-vector-page-titlebar-toc" class="vector-dropdown-checkbox "  aria-label="Cambiar a la tabla de contenidos"   >
+	<label id="vector-page-titlebar-toc-label" for="vector-page-titlebar-toc-checkbox" class="vector-dropdown-label cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--icon-only " aria-hidden="true"  ><span class="vector-icon mw-ui-icon-listBullet mw-ui-icon-wikimedia-listBullet cdx-button__icon"></span>
+
+<span class="vector-dropdown-label-text">Cambiar a la tabla de contenidos</span>
+	</label>
+	<div class="vector-dropdown-content">
+
+
+							<div id="vector-page-titlebar-toc-unpinned-container" class="vector-unpinned-container">
+			</div>
+		
+	</div>
+</div>
+
+					</nav>
+					<h1 id="firstHeading" class="firstHeading mw-first-heading"><span lang="es" dir="ltr"><span class="mw-page-title-main">Rust (lenguaje de programación)</span></span></h1>
+			
+<div id="p-lang-btn" class="vector-dropdown mw-portlet mw-portlet-lang"  >
+	<input type="checkbox" id="p-lang-btn-checkbox" role="button" aria-haspopup="true" data-event-name="ui.dropdown-p-lang-btn" class="vector-dropdown-checkbox mw-interlanguage-selector"  aria-label="60 idiomas" aria-description="Ir a un artículo en otro idioma. Disponible en 60 idiomas"  >
+	<label id="p-lang-btn-label" for="p-lang-btn-checkbox" class="vector-dropdown-label cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--action-progressive mw-portlet-lang-heading-60" aria-hidden="true"  ><span class="vector-icon mw-ui-icon-language-progressive mw-ui-icon-wikimedia-language-progressive cdx-button__icon"></span>
+
+<span class="vector-dropdown-label-text">60 idiomas</span>
+	</label>
+	<div class="vector-dropdown-content">
+
+		<div class="vector-menu-content">
+			
+			<ul class="vector-menu-content-list">
+				
+				<li class="interlanguage-link interwiki-af mw-list-item"><a href="https://af.wikipedia.org/wiki/Rust_(programmeertaal)" title="Rust (programmeertaal) – afrikáans" lang="af" hreflang="af" data-title="Rust (programmeertaal)" data-language-autonym="Afrikaans" data-language-local-name="afrikáans" class="interlanguage-link-target"><span>Afrikaans</span></a></li><li class="interlanguage-link interwiki-ar mw-list-item"><a href="https://ar.wikipedia.org/wiki/%D8%B1%D8%B3%D8%AA_(%D9%84%D8%BA%D8%A9_%D8%A8%D8%B1%D9%85%D8%AC%D8%A9)" title="رست (لغة برمجة) – árabe" lang="ar" hreflang="ar" data-title="رست (لغة برمجة)" data-language-autonym="العربية" data-language-local-name="árabe" class="interlanguage-link-target"><span>العربية</span></a></li><li class="interlanguage-link interwiki-az mw-list-item"><a href="https://az.wikipedia.org/wiki/Rust_(proqramla%C5%9Fd%C4%B1rma_dili)" title="Rust (proqramlaşdırma dili) – azerbaiyano" lang="az" hreflang="az" data-title="Rust (proqramlaşdırma dili)" data-language-autonym="Azərbaycanca" data-language-local-name="azerbaiyano" class="interlanguage-link-target"><span>Azərbaycanca</span></a></li><li class="interlanguage-link interwiki-be mw-list-item"><a href="https://be.wikipedia.org/wiki/Rust" title="Rust – bielorruso" lang="be" hreflang="be" data-title="Rust" data-language-autonym="Беларуская" data-language-local-name="bielorruso" class="interlanguage-link-target"><span>Беларуская</span></a></li><li class="interlanguage-link interwiki-bg mw-list-item"><a href="https://bg.wikipedia.org/wiki/Rust" title="Rust – búlgaro" lang="bg" hreflang="bg" data-title="Rust" data-language-autonym="Български" data-language-local-name="búlgaro" class="interlanguage-link-target"><span>Български</span></a></li><li class="interlanguage-link interwiki-bh mw-list-item"><a href="https://bh.wikipedia.org/wiki/%E0%A4%B0%E0%A4%B8%E0%A5%8D%E0%A4%9F_(%E0%A4%AA%E0%A5%8D%E0%A4%B0%E0%A5%8B%E0%A4%97%E0%A5%8D%E0%A4%B0%E0%A4%BE%E0%A4%AE%E0%A4%BF%E0%A4%82%E0%A4%97_%E0%A4%AD%E0%A4%BE%E0%A4%B7%E0%A4%BE)" title="रस्ट (प्रोग्रामिंग भाषा) – Bhojpuri" lang="bh" hreflang="bh" data-title="रस्ट (प्रोग्रामिंग भाषा)" data-language-autonym="भोजपुरी" data-language-local-name="Bhojpuri" class="interlanguage-link-target"><span>भोजपुरी</span></a></li><li class="interlanguage-link interwiki-bn mw-list-item"><a href="https://bn.wikipedia.org/wiki/%E0%A6%B0%E0%A6%BE%E0%A6%B8%E0%A7%8D%E0%A6%9F_(%E0%A6%AA%E0%A7%8D%E0%A6%B0%E0%A7%8B%E0%A6%97%E0%A7%8D%E0%A6%B0%E0%A6%BE%E0%A6%AE%E0%A6%BF%E0%A6%82_%E0%A6%AD%E0%A6%BE%E0%A6%B7%E0%A6%BE)" title="রাস্ট (প্রোগ্রামিং ভাষা) – bengalí" lang="bn" hreflang="bn" data-title="রাস্ট (প্রোগ্রামিং ভাষা)" data-language-autonym="বাংলা" data-language-local-name="bengalí" class="interlanguage-link-target"><span>বাংলা</span></a></li><li class="interlanguage-link interwiki-ca mw-list-item"><a href="https://ca.wikipedia.org/wiki/Rust_(llenguatge_de_programaci%C3%B3)" title="Rust (llenguatge de programació) – catalán" lang="ca" hreflang="ca" data-title="Rust (llenguatge de programació)" data-language-autonym="Català" data-language-local-name="catalán" class="interlanguage-link-target"><span>Català</span></a></li><li class="interlanguage-link interwiki-ckb mw-list-item"><a href="https://ckb.wikipedia.org/wiki/%DA%95%DB%95%D8%B3%D8%AA_(%D8%B2%D9%85%D8%A7%D9%86%DB%8C_%D8%A8%DB%95%D8%B1%D9%86%D8%A7%D9%85%DB%95%D8%B3%D8%A7%D8%B2%DB%8C)" title="ڕەست (زمانی بەرنامەسازی) – kurdo sorani" lang="ckb" hreflang="ckb" data-title="ڕەست (زمانی بەرنامەسازی)" data-language-autonym="کوردی" data-language-local-name="kurdo sorani" class="interlanguage-link-target"><span>کوردی</span></a></li><li class="interlanguage-link interwiki-cs mw-list-item"><a href="https://cs.wikipedia.org/wiki/Rust_(programovac%C3%AD_jazyk)" title="Rust (programovací jazyk) – checo" lang="cs" hreflang="cs" data-title="Rust (programovací jazyk)" data-language-autonym="Čeština" data-language-local-name="checo" class="interlanguage-link-target"><span>Čeština</span></a></li><li class="interlanguage-link interwiki-da mw-list-item"><a href="https://da.wikipedia.org/wiki/Rust_(programmeringssprog)" title="Rust (programmeringssprog) – danés" lang="da" hreflang="da" data-title="Rust (programmeringssprog)" data-language-autonym="Dansk" data-language-local-name="danés" class="interlanguage-link-target"><span>Dansk</span></a></li><li class="interlanguage-link interwiki-de mw-list-item"><a href="https://de.wikipedia.org/wiki/Rust_(Programmiersprache)" title="Rust (Programmiersprache) – alemán" lang="de" hreflang="de" data-title="Rust (Programmiersprache)" data-language-autonym="Deutsch" data-language-local-name="alemán" class="interlanguage-link-target"><span>Deutsch</span></a></li><li class="interlanguage-link interwiki-dtp mw-list-item"><a href="https://dtp.wikipedia.org/wiki/Rust_(boros_tokud)" title="Rust (boros tokud) – Central Dusun" lang="dtp" hreflang="dtp" data-title="Rust (boros tokud)" data-language-autonym="Kadazandusun" data-language-local-name="Central Dusun" class="interlanguage-link-target"><span>Kadazandusun</span></a></li><li class="interlanguage-link interwiki-en badge-Q17437798 badge-goodarticle mw-list-item" title="artículo bueno"><a href="https://en.wikipedia.org/wiki/Rust_(programming_language)" title="Rust (programming language) – inglés" lang="en" hreflang="en" data-title="Rust (programming language)" data-language-autonym="English" data-language-local-name="inglés" class="interlanguage-link-target"><span>English</span></a></li><li class="interlanguage-link interwiki-eo mw-list-item"><a href="https://eo.wikipedia.org/wiki/Rust_(programlingvo)" title="Rust (programlingvo) – esperanto" lang="eo" hreflang="eo" data-title="Rust (programlingvo)" data-language-autonym="Esperanto" data-language-local-name="esperanto" class="interlanguage-link-target"><span>Esperanto</span></a></li><li class="interlanguage-link interwiki-et mw-list-item"><a href="https://et.wikipedia.org/wiki/Rust" title="Rust – estonio" lang="et" hreflang="et" data-title="Rust" data-language-autonym="Eesti" data-language-local-name="estonio" class="interlanguage-link-target"><span>Eesti</span></a></li><li class="interlanguage-link interwiki-eu mw-list-item"><a href="https://eu.wikipedia.org/wiki/Rust_(programazio-lengoaia)" title="Rust (programazio-lengoaia) – euskera" lang="eu" hreflang="eu" data-title="Rust (programazio-lengoaia)" data-language-autonym="Euskara" data-language-local-name="euskera" class="interlanguage-link-target"><span>Euskara</span></a></li><li class="interlanguage-link interwiki-fa mw-list-item"><a href="https://fa.wikipedia.org/wiki/%D8%B1%D8%A7%D8%B3%D8%AA_(%D8%B2%D8%A8%D8%A7%D9%86_%D8%A8%D8%B1%D9%86%D8%A7%D9%85%D9%87%E2%80%8C%D9%86%D9%88%DB%8C%D8%B3%DB%8C)" title="راست (زبان برنامه‌نویسی) – persa" lang="fa" hreflang="fa" data-title="راست (زبان برنامه‌نویسی)" data-language-autonym="فارسی" data-language-local-name="persa" class="interlanguage-link-target"><span>فارسی</span></a></li><li class="interlanguage-link interwiki-fi mw-list-item"><a href="https://fi.wikipedia.org/wiki/Rust_(ohjelmointikieli)" title="Rust (ohjelmointikieli) – finés" lang="fi" hreflang="fi" data-title="Rust (ohjelmointikieli)" data-language-autonym="Suomi" data-language-local-name="finés" class="interlanguage-link-target"><span>Suomi</span></a></li><li class="interlanguage-link interwiki-fr mw-list-item"><a href="https://fr.wikipedia.org/wiki/Rust_(langage)" title="Rust (langage) – francés" lang="fr" hreflang="fr" data-title="Rust (langage)" data-language-autonym="Français" data-language-local-name="francés" class="interlanguage-link-target"><span>Français</span></a></li><li class="interlanguage-link interwiki-ga mw-list-item"><a href="https://ga.wikipedia.org/wiki/Rust_(teanga_r%C3%ADomhchl%C3%A1r%C3%BAch%C3%A1in)" title="Rust (teanga ríomhchlárúcháin) – irlandés" lang="ga" hreflang="ga" data-title="Rust (teanga ríomhchlárúcháin)" data-language-autonym="Gaeilge" data-language-local-name="irlandés" class="interlanguage-link-target"><span>Gaeilge</span></a></li><li class="interlanguage-link interwiki-gl mw-list-item"><a href="https://gl.wikipedia.org/wiki/Rust_(linguaxe_de_programaci%C3%B3n)" title="Rust (linguaxe de programación) – gallego" lang="gl" hreflang="gl" data-title="Rust (linguaxe de programación)" data-language-autonym="Galego" data-language-local-name="gallego" class="interlanguage-link-target"><span>Galego</span></a></li><li class="interlanguage-link interwiki-he mw-list-item"><a href="https://he.wikipedia.org/wiki/%D7%A8%D7%90%D7%A1%D7%98_(%D7%A9%D7%A4%D7%AA_%D7%AA%D7%9B%D7%A0%D7%95%D7%AA)" title="ראסט (שפת תכנות) – hebreo" lang="he" hreflang="he" data-title="ראסט (שפת תכנות)" data-language-autonym="עברית" data-language-local-name="hebreo" class="interlanguage-link-target"><span>עברית</span></a></li><li class="interlanguage-link interwiki-hr mw-list-item"><a href="https://hr.wikipedia.org/wiki/Rust_(programski_jezik)" title="Rust (programski jezik) – croata" lang="hr" hreflang="hr" data-title="Rust (programski jezik)" data-language-autonym="Hrvatski" data-language-local-name="croata" class="interlanguage-link-target"><span>Hrvatski</span></a></li><li class="interlanguage-link interwiki-hu mw-list-item"><a href="https://hu.wikipedia.org/wiki/Rust_(programoz%C3%A1si_nyelv)" title="Rust (programozási nyelv) – húngaro" lang="hu" hreflang="hu" data-title="Rust (programozási nyelv)" data-language-autonym="Magyar" data-language-local-name="húngaro" class="interlanguage-link-target"><span>Magyar</span></a></li><li class="interlanguage-link interwiki-id mw-list-item"><a href="https://id.wikipedia.org/wiki/Rust_(bahasa_pemrograman)" title="Rust (bahasa pemrograman) – indonesio" lang="id" hreflang="id" data-title="Rust (bahasa pemrograman)" data-language-autonym="Bahasa Indonesia" data-language-local-name="indonesio" class="interlanguage-link-target"><span>Bahasa Indonesia</span></a></li><li class="interlanguage-link interwiki-io mw-list-item"><a href="https://io.wikipedia.org/wiki/Rust_(programifo-linguo)" title="Rust (programifo-linguo) – ido" lang="io" hreflang="io" data-title="Rust (programifo-linguo)" data-language-autonym="Ido" data-language-local-name="ido" class="interlanguage-link-target"><span>Ido</span></a></li><li class="interlanguage-link interwiki-is mw-list-item"><a href="https://is.wikipedia.org/wiki/Rust_(forritunarm%C3%A1l)" title="Rust (forritunarmál) – islandés" lang="is" hreflang="is" data-title="Rust (forritunarmál)" data-language-autonym="Íslenska" data-language-local-name="islandés" class="interlanguage-link-target"><span>Íslenska</span></a></li><li class="interlanguage-link interwiki-isv mw-list-item"><a href="https://isv.wikipedia.org/wiki/Rust" title="Rust – Interslavic" lang="isv" hreflang="isv" data-title="Rust" data-language-autonym="Medžuslovjansky" data-language-local-name="Interslavic" class="interlanguage-link-target"><span>Medžuslovjansky</span></a></li><li class="interlanguage-link interwiki-it mw-list-item"><a href="https://it.wikipedia.org/wiki/Rust_(linguaggio_di_programmazione)" title="Rust (linguaggio di programmazione) – italiano" lang="it" hreflang="it" data-title="Rust (linguaggio di programmazione)" data-language-autonym="Italiano" data-language-local-name="italiano" class="interlanguage-link-target"><span>Italiano</span></a></li><li class="interlanguage-link interwiki-ja mw-list-item"><a href="https://ja.wikipedia.org/wiki/Rust_(%E3%83%97%E3%83%AD%E3%82%B0%E3%83%A9%E3%83%9F%E3%83%B3%E3%82%B0%E8%A8%80%E8%AA%9E)" title="Rust (プログラミング言語) – japonés" lang="ja" hreflang="ja" data-title="Rust (プログラミング言語)" data-language-autonym="日本語" data-language-local-name="japonés" class="interlanguage-link-target"><span>日本語</span></a></li><li class="interlanguage-link interwiki-kab mw-list-item"><a href="https://kab.wikipedia.org/wiki/Rust_(Tutlayt_Usihel)" title="Rust (Tutlayt Usihel) – cabileño" lang="kab" hreflang="kab" data-title="Rust (Tutlayt Usihel)" data-language-autonym="Taqbaylit" data-language-local-name="cabileño" class="interlanguage-link-target"><span>Taqbaylit</span></a></li><li class="interlanguage-link interwiki-ko mw-list-item"><a href="https://ko.wikipedia.org/wiki/%EB%9F%AC%EC%8A%A4%ED%8A%B8_(%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4)" title="러스트 (프로그래밍 언어) – coreano" lang="ko" hreflang="ko" data-title="러스트 (프로그래밍 언어)" data-language-autonym="한국어" data-language-local-name="coreano" class="interlanguage-link-target"><span>한국어</span></a></li><li class="interlanguage-link interwiki-lmo mw-list-item"><a href="https://lmo.wikipedia.org/wiki/Rust_(lenguagg_de_programazzion)" title="Rust (lenguagg de programazzion) – lombardo" lang="lmo" hreflang="lmo" data-title="Rust (lenguagg de programazzion)" data-language-autonym="Lombard" data-language-local-name="lombardo" class="interlanguage-link-target"><span>Lombard</span></a></li><li class="interlanguage-link interwiki-lv mw-list-item"><a href="https://lv.wikipedia.org/wiki/Rust" title="Rust – letón" lang="lv" hreflang="lv" data-title="Rust" data-language-autonym="Latviešu" data-language-local-name="letón" class="interlanguage-link-target"><span>Latviešu</span></a></li><li class="interlanguage-link interwiki-ml mw-list-item"><a href="https://ml.wikipedia.org/wiki/%E0%B4%B1%E0%B4%B8%E0%B5%8D%E0%B4%B1%E0%B5%8D%E0%B4%B1%E0%B5%8D_(%E0%B4%AA%E0%B5%8D%E0%B4%B0%E0%B5%8B%E0%B4%97%E0%B5%8D%E0%B4%B0%E0%B4%BE%E0%B4%AE%E0%B4%BF%E0%B4%82%E0%B4%97%E0%B5%8D_%E0%B4%AD%E0%B4%BE%E0%B4%B7)" title="റസ്റ്റ് (പ്രോഗ്രാമിംഗ് ഭാഷ) – malayálam" lang="ml" hreflang="ml" data-title="റസ്റ്റ് (പ്രോഗ്രാമിംഗ് ഭാഷ)" data-language-autonym="മലയാളം" data-language-local-name="malayálam" class="interlanguage-link-target"><span>മലയാളം</span></a></li><li class="interlanguage-link interwiki-ms mw-list-item"><a href="https://ms.wikipedia.org/wiki/Rust_(bahasa_pengaturcaraan)" title="Rust (bahasa pengaturcaraan) – malayo" lang="ms" hreflang="ms" data-title="Rust (bahasa pengaturcaraan)" data-language-autonym="Bahasa Melayu" data-language-local-name="malayo" class="interlanguage-link-target"><span>Bahasa Melayu</span></a></li><li class="interlanguage-link interwiki-nl mw-list-item"><a href="https://nl.wikipedia.org/wiki/Rust_(programmeertaal)" title="Rust (programmeertaal) – neerlandés" lang="nl" hreflang="nl" data-title="Rust (programmeertaal)" data-language-autonym="Nederlands" data-language-local-name="neerlandés" class="interlanguage-link-target"><span>Nederlands</span></a></li><li class="interlanguage-link interwiki-no mw-list-item"><a href="https://no.wikipedia.org/wiki/Rust_(programmeringsspr%C3%A5k)" title="Rust (programmeringsspråk) – noruego bokmal" lang="nb" hreflang="nb" data-title="Rust (programmeringsspråk)" data-language-autonym="Norsk bokmål" data-language-local-name="noruego bokmal" class="interlanguage-link-target"><span>Norsk bokmål</span></a></li><li class="interlanguage-link interwiki-pl mw-list-item"><a href="https://pl.wikipedia.org/wiki/Rust_(j%C4%99zyk_programowania)" title="Rust (język programowania) – polaco" lang="pl" hreflang="pl" data-title="Rust (język programowania)" data-language-autonym="Polski" data-language-local-name="polaco" class="interlanguage-link-target"><span>Polski</span></a></li><li class="interlanguage-link interwiki-pt mw-list-item"><a href="https://pt.wikipedia.org/wiki/Rust_(linguagem_de_programa%C3%A7%C3%A3o)" title="Rust (linguagem de programação) – portugués" lang="pt" hreflang="pt" data-title="Rust (linguagem de programação)" data-language-autonym="Português" data-language-local-name="portugués" class="interlanguage-link-target"><span>Português</span></a></li><li class="interlanguage-link interwiki-qu mw-list-item"><a href="https://qu.wikipedia.org/wiki/Rust" title="Rust – quechua" lang="qu" hreflang="qu" data-title="Rust" data-language-autonym="Runa Simi" data-language-local-name="quechua" class="interlanguage-link-target"><span>Runa Simi</span></a></li><li class="interlanguage-link interwiki-ro mw-list-item"><a href="https://ro.wikipedia.org/wiki/Rust_(limbaj_de_programare)" title="Rust (limbaj de programare) – rumano" lang="ro" hreflang="ro" data-title="Rust (limbaj de programare)" data-language-autonym="Română" data-language-local-name="rumano" class="interlanguage-link-target"><span>Română</span></a></li><li class="interlanguage-link interwiki-ru mw-list-item"><a href="https://ru.wikipedia.org/wiki/Rust_(%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)" title="Rust (язык программирования) – ruso" lang="ru" hreflang="ru" data-title="Rust (язык программирования)" data-language-autonym="Русский" data-language-local-name="ruso" class="interlanguage-link-target"><span>Русский</span></a></li><li class="interlanguage-link interwiki-si mw-list-item"><a href="https://si.wikipedia.org/wiki/Rust_(%E0%B6%9A%E0%B7%8A%E2%80%8D%E0%B6%BB%E0%B6%B8%E0%B6%BD%E0%B7%9A%E0%B6%9B%E0%B6%B1_%E0%B6%B7%E0%B7%8F%E0%B7%82%E0%B7%8F%E0%B7%80)" title="Rust (ක්‍රමලේඛන භාෂාව) – cingalés" lang="si" hreflang="si" data-title="Rust (ක්‍රමලේඛන භාෂාව)" data-language-autonym="සිංහල" data-language-local-name="cingalés" class="interlanguage-link-target"><span>සිංහල</span></a></li><li class="interlanguage-link interwiki-simple mw-list-item"><a href="https://simple.wikipedia.org/wiki/Rust_(programming_language)" title="Rust (programming language) – Simple English" lang="en-simple" hreflang="en-simple" data-title="Rust (programming language)" data-language-autonym="Simple English" data-language-local-name="Simple English" class="interlanguage-link-target"><span>Simple English</span></a></li><li class="interlanguage-link interwiki-sk mw-list-item"><a href="https://sk.wikipedia.org/wiki/Rust_(programovac%C3%AD_jazyk)" title="Rust (programovací jazyk) – eslovaco" lang="sk" hreflang="sk" data-title="Rust (programovací jazyk)" data-language-autonym="Slovenčina" data-language-local-name="eslovaco" class="interlanguage-link-target"><span>Slovenčina</span></a></li><li class="interlanguage-link interwiki-sq mw-list-item"><a href="https://sq.wikipedia.org/wiki/Rust_(gjuh%C3%AB_programimi)" title="Rust (gjuhë programimi) – albanés" lang="sq" hreflang="sq" data-title="Rust (gjuhë programimi)" data-language-autonym="Shqip" data-language-local-name="albanés" class="interlanguage-link-target"><span>Shqip</span></a></li><li class="interlanguage-link interwiki-sr mw-list-item"><a href="https://sr.wikipedia.org/wiki/Rust_(%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D1%81%D0%BA%D0%B8_%D1%98%D0%B5%D0%B7%D0%B8%D0%BA)" title="Rust (програмски језик) – serbio" lang="sr" hreflang="sr" data-title="Rust (програмски језик)" data-language-autonym="Српски / srpski" data-language-local-name="serbio" class="interlanguage-link-target"><span>Српски / srpski</span></a></li><li class="interlanguage-link interwiki-sv mw-list-item"><a href="https://sv.wikipedia.org/wiki/Rust_(programspr%C3%A5k)" title="Rust (programspråk) – sueco" lang="sv" hreflang="sv" data-title="Rust (programspråk)" data-language-autonym="Svenska" data-language-local-name="sueco" class="interlanguage-link-target"><span>Svenska</span></a></li><li class="interlanguage-link interwiki-sw mw-list-item"><a href="https://sw.wikipedia.org/wiki/Rust" title="Rust – suajili" lang="sw" hreflang="sw" data-title="Rust" data-language-autonym="Kiswahili" data-language-local-name="suajili" class="interlanguage-link-target"><span>Kiswahili</span></a></li><li class="interlanguage-link interwiki-te mw-list-item"><a href="https://te.wikipedia.org/wiki/%E0%B0%B0%E0%B0%B8%E0%B1%8D%E0%B0%9F%E0%B1%8D_(%E0%B0%AA%E0%B1%8D%E0%B0%B0%E0%B1%8B%E0%B0%97%E0%B1%8D%E0%B0%B0%E0%B0%BE%E0%B0%AE%E0%B0%BF%E0%B0%82%E0%B0%97%E0%B1%8D_%E0%B0%AD%E0%B0%BE%E0%B0%B7)" title="రస్ట్ (ప్రోగ్రామింగ్ భాష) – telugu" lang="te" hreflang="te" data-title="రస్ట్ (ప్రోగ్రామింగ్ భాష)" data-language-autonym="తెలుగు" data-language-local-name="telugu" class="interlanguage-link-target"><span>తెలుగు</span></a></li><li class="interlanguage-link interwiki-th mw-list-item"><a href="https://th.wikipedia.org/wiki/%E0%B8%A0%E0%B8%B2%E0%B8%A9%E0%B8%B2%E0%B8%A3%E0%B8%B1%E0%B8%AA%E0%B8%95%E0%B9%8C" title="ภาษารัสต์ – tailandés" lang="th" hreflang="th" data-title="ภาษารัสต์" data-language-autonym="ไทย" data-language-local-name="tailandés" class="interlanguage-link-target"><span>ไทย</span></a></li><li class="interlanguage-link interwiki-tok mw-list-item"><a href="https://tok.wikipedia.org/wiki/toki_ilo_Wasi" title="toki ilo Wasi – toki pona" lang="tok" hreflang="tok" data-title="toki ilo Wasi" data-language-autonym="Toki pona" data-language-local-name="toki pona" class="interlanguage-link-target"><span>Toki pona</span></a></li><li class="interlanguage-link interwiki-tr mw-list-item"><a href="https://tr.wikipedia.org/wiki/Rust_(programlama_dili)" title="Rust (programlama dili) – turco" lang="tr" hreflang="tr" data-title="Rust (programlama dili)" data-language-autonym="Türkçe" data-language-local-name="turco" class="interlanguage-link-target"><span>Türkçe</span></a></li><li class="interlanguage-link interwiki-uk mw-list-item"><a href="https://uk.wikipedia.org/wiki/Rust_(%D0%BC%D0%BE%D0%B2%D0%B0_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D1%83%D0%B2%D0%B0%D0%BD%D0%BD%D1%8F)" title="Rust (мова програмування) – ucraniano" lang="uk" hreflang="uk" data-title="Rust (мова програмування)" data-language-autonym="Українська" data-language-local-name="ucraniano" class="interlanguage-link-target"><span>Українська</span></a></li><li class="interlanguage-link interwiki-vi mw-list-item"><a href="https://vi.wikipedia.org/wiki/Rust_(ng%C3%B4n_ng%E1%BB%AF_l%E1%BA%ADp_tr%C3%ACnh)" title="Rust (ngôn ngữ lập trình) – vietnamita" lang="vi" hreflang="vi" data-title="Rust (ngôn ngữ lập trình)" data-language-autonym="Tiếng Việt" data-language-local-name="vietnamita" class="interlanguage-link-target"><span>Tiếng Việt</span></a></li><li class="interlanguage-link interwiki-zh-min-nan mw-list-item"><a href="https://zh-min-nan.wikipedia.org/wiki/Rust_(pian-t%C3%AAng_g%C3%BA-gi%C3%A2n)" title="Rust (pian-têng gú-giân) – chino min nan" lang="nan" hreflang="nan" data-title="Rust (pian-têng gú-giân)" data-language-autonym="閩南語 / Bân-lâm-gí" data-language-local-name="chino min nan" class="interlanguage-link-target"><span>閩南語 / Bân-lâm-gí</span></a></li><li class="interlanguage-link interwiki-zh-yue mw-list-item"><a href="https://zh-yue.wikipedia.org/wiki/Rust" title="Rust – cantonés" lang="yue" hreflang="yue" data-title="Rust" data-language-autonym="粵語" data-language-local-name="cantonés" class="interlanguage-link-target"><span>粵語</span></a></li><li class="interlanguage-link interwiki-zh mw-list-item"><a href="https://zh.wikipedia.org/wiki/Rust_(%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80)" title="Rust (编程语言) – chino" lang="zh" hreflang="zh" data-title="Rust (编程语言)" data-language-autonym="中文" data-language-local-name="chino" class="interlanguage-link-target"><span>中文</span></a></li>
+			</ul>
+			<div class="after-portlet after-portlet-lang"><span class="wb-langlinks-edit wb-langlinks-link"><a href="https://www.wikidata.org/wiki/Special:EntityPage/Q575650#sitelinks-wikipedia" title="Editar enlaces interlingüísticos" class="wbc-editpage">Editar enlaces</a></span></div>
+		</div>
+
+	</div>
+</div>
+</header>
+				<div class="vector-page-toolbar">
+					<div class="vector-page-toolbar-container">
+						<div id="left-navigation">
+							<nav aria-label="Espacios de nombres">
+								
+<div id="p-associated-pages" class="vector-menu vector-menu-tabs mw-portlet mw-portlet-associated-pages"  >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			<li id="ca-nstab-main" class="selected mw-list-item vector-tab-noicon"><a data-mw-interface  href="/wiki/Rust_(lenguaje_de_programaci%C3%B3n)" title="Ver la página de contenido [c]" accesskey="c" class=""><span>Artículo</span></a>
+</li>
+<li id="ca-talk" class="mw-list-item vector-tab-noicon"><a data-mw-interface  href="/wiki/Discusi%C3%B3n:Rust_(lenguaje_de_programaci%C3%B3n)" rel="discussion" title="Discusión acerca de la página [t]" accesskey="t" class=""><span>Discusión</span></a>
+</li>
+
+			
+		</ul>
+		
+	</div>
+</div>
+
+								
+<div id="vector-variants-dropdown" class="vector-dropdown emptyPortlet"  >
+	<input type="checkbox" id="vector-variants-dropdown-checkbox" role="button" aria-haspopup="true" data-event-name="ui.dropdown-vector-variants-dropdown" class="vector-dropdown-checkbox " aria-label="Cambiar la variante del idioma"    >
+	<label id="vector-variants-dropdown-label" for="vector-variants-dropdown-checkbox" class="vector-dropdown-label cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet" aria-hidden="true"  ><span class="vector-dropdown-label-text">español</span>
+	</label>
+	<div class="vector-dropdown-content">
+
+
+					
+<div id="p-variants" class="vector-menu mw-portlet mw-portlet-variants emptyPortlet"  >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			
+		</ul>
+		
+	</div>
+</div>
+
+				
+	</div>
+</div>
+
+							</nav>
+						</div>
+						<div id="right-navigation" class="vector-collapsible">
+							<nav aria-label="Vistas">
+			    
+<div id="p-views" class="vector-menu vector-menu-tabs mw-portlet mw-portlet-views"  >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			<li id="ca-view" class="selected mw-list-item vector-menu-item--collapsible vector-tab-noicon"><a data-mw-interface  href="/wiki/Rust_(lenguaje_de_programaci%C3%B3n)" class=""><span>Leer</span></a>
+</li>
+<li id="ca-edit" class="mw-list-item vector-menu-item--collapsible vector-tab-noicon"><a data-mw-interface  href="/w/index.php?title=Rust_(lenguaje_de_programaci%C3%B3n)&amp;action=edit" title="Editar esta página [e]" accesskey="e" class=""><span>Editar</span></a>
+</li>
+<li id="ca-history" class="mw-list-item vector-menu-item--collapsible vector-tab-noicon"><a data-mw-interface  href="/w/index.php?title=Rust_(lenguaje_de_programaci%C3%B3n)&amp;action=history" title="Versiones anteriores de esta página [h]" accesskey="h" class=""><span>Ver historial</span></a>
+</li>
+<li id="ca-bookmark" class="mw-list-item vector-menu-item--collapsible"><a href="#" class="cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--icon-only reading-lists-bookmark" id="" title="Añadir esta página a tus ítems guardados"><span class="vector-icon mw-ui-icon-bookmarkOutline mw-ui-icon-wikimedia-bookmarkOutline cdx-button__icon"></span>
+
+<span>Guardar</span>
+</a>
+</li>
+
+			
+		</ul>
+		
+	</div>
+</div>
+
+			</nav>
+
+							<nav class="vector-page-tools-landmark" aria-label="Página de herramientas">
+								
+<div id="vector-page-tools-dropdown" class="vector-dropdown vector-page-tools-dropdown"  >
+	<input type="checkbox" id="vector-page-tools-dropdown-checkbox" role="button" aria-haspopup="true" data-event-name="ui.dropdown-vector-page-tools-dropdown" class="vector-dropdown-checkbox "  aria-label="Herramientas"   >
+	<label id="vector-page-tools-dropdown-label" for="vector-page-tools-dropdown-checkbox" class="vector-dropdown-label cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--icon-only " aria-hidden="true"  ><span class="vector-icon mw-ui-icon-verticalEllipsis mw-ui-icon-wikimedia-verticalEllipsis cdx-button__icon"></span>
+
+<span class="vector-dropdown-label-text">Herramientas</span>
+	</label>
+	<div class="vector-dropdown-content">
+
+
+									<div id="vector-page-tools-unpinned-container" class="vector-unpinned-container">
+						
+<div id="vector-page-tools" class="vector-page-tools vector-pinnable-element">
+	<div
+	class="vector-pinnable-header vector-page-tools-pinnable-header vector-pinnable-header-unpinned"
+	data-feature-name="page-tools-pinned"
+	data-pinnable-element-id="vector-page-tools"
+	data-pinned-container-id="vector-page-tools-pinned-container"
+	data-unpinned-container-id="vector-page-tools-unpinned-container"
+>
+	<div class="vector-pinnable-header-label">Herramientas</div>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-pin-button" data-event-name="pinnable-header.vector-page-tools.pin" aria-label="Mover Herramientas a la barra lateral">mover a la barra lateral</button>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-unpin-button" data-event-name="pinnable-header.vector-page-tools.unpin" aria-label="Ocultar Herramientas">ocultar</button>
+</div>
+
+	
+<div id="p-cactions" class="vector-menu mw-portlet mw-portlet-cactions emptyPortlet vector-has-collapsible-items"  >
+	<div class="vector-menu-heading">
+		Acciones
+	</div>
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			<li id="ca-view-more" class="selected mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/wiki/Rust_(lenguaje_de_programaci%C3%B3n)" class=""><span class="vector-icon mw-ui-icon-eye mw-ui-icon-wikimedia-eye cdx-button__icon"></span>
+
+<span>Leer</span></a>
+</li>
+<li id="ca-edit-more" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/w/index.php?title=Rust_(lenguaje_de_programaci%C3%B3n)&amp;action=edit" title="Editar esta página [e]" accesskey="e" class=""><span class="vector-icon mw-ui-icon-edit mw-ui-icon-wikimedia-edit cdx-button__icon"></span>
+
+<span>Editar</span></a>
+</li>
+<li id="ca-history-more" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/w/index.php?title=Rust_(lenguaje_de_programaci%C3%B3n)&amp;action=history" title="Versiones anteriores de esta página [h]" accesskey="h" class=""><span class="vector-icon mw-ui-icon-history mw-ui-icon-wikimedia-history cdx-button__icon"></span>
+
+<span>Ver historial</span></a>
+</li>
+<li id="ca-bookmark-more" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="#" class="reading-lists-bookmark" title="Añadir esta página a tus ítems guardados"><span class="vector-icon mw-ui-icon-bookmarkOutline mw-ui-icon-wikimedia-bookmarkOutline cdx-button__icon"></span>
+
+<span>Guardar</span></a>
+</li>
+
+			
+		</ul>
+		
+	</div>
+</div>
+
+<div id="p-tb" class="vector-menu mw-portlet mw-portlet-tb"  >
+	<div class="vector-menu-heading">
+		General
+	</div>
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			<li id="t-whatlinkshere" class="mw-list-item"><a href="/wiki/Especial:LoQueEnlazaAqu%C3%AD/Rust_(lenguaje_de_programaci%C3%B3n)" title="Lista de todas las páginas de la wiki que enlazan aquí [j]" accesskey="j"><span>Lo que enlaza aquí</span></a></li><li id="t-recentchangeslinked" class="mw-list-item"><a href="/wiki/Especial:CambiosEnEnlazadas/Rust_(lenguaje_de_programaci%C3%B3n)" rel="nofollow" title="Cambios recientes en las páginas que enlazan con esta [k]" accesskey="k"><span>Cambios en enlazadas</span></a></li><li id="t-upload" class="mw-list-item"><a href="//commons.wikimedia.org/wiki/Special:UploadWizard?uselang=es" title="Subir archivos [u]" accesskey="u"><span>Subir archivo</span></a></li><li id="t-permalink" class="mw-list-item"><a href="/w/index.php?title=Rust_(lenguaje_de_programaci%C3%B3n)&amp;oldid=173138344" title="Enlace permanente a esta versión de la página"><span>Enlace permanente</span></a></li><li id="t-info" class="mw-list-item"><a href="/w/index.php?title=Rust_(lenguaje_de_programaci%C3%B3n)&amp;action=info" title="Más información sobre esta página"><span>Información de la página</span></a></li><li id="t-cite" class="mw-list-item"><a href="/w/index.php?title=Especial:Citar&amp;page=Rust_%28lenguaje_de_programaci%C3%B3n%29&amp;id=173138344&amp;wpFormIdentifier=titleform" title="Información sobre cómo citar esta página"><span>Citar esta página</span></a></li><li id="t-urlshortener" class="mw-list-item"><a href="/w/index.php?title=Especial:Acortador_de_URL&amp;url=https%3A%2F%2Fes.wikipedia.org%2Fwiki%2FRust_%28lenguaje_de_programaci%25C3%25B3n%29"><span>Obtener URL acortado</span></a></li><li id="parsermigration-switch-to-legacy" class="mw-list-item"><a href="/w/index.php?title=Rust_(lenguaje_de_programaci%C3%B3n)&amp;useparsoid=0"><span>Cambiar al analizador antiguo</span></a></li>
+		</ul>
+		
+	</div>
+</div>
+
+<div id="p-coll-print_export" class="vector-menu mw-portlet mw-portlet-coll-print_export"  >
+	<div class="vector-menu-heading">
+		Imprimir/exportar
+	</div>
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			<li id="coll-create_a_book" class="mw-list-item"><a href="/w/index.php?title=Especial:Libro&amp;bookcmd=book_creator&amp;referer=Rust+%28lenguaje+de+programaci%C3%B3n%29"><span>Crear un libro</span></a></li><li id="coll-download-as-rl" class="mw-list-item"><a href="/w/index.php?title=Especial:DownloadAsPdf&amp;page=Rust_%28lenguaje_de_programaci%C3%B3n%29&amp;action=show-download-screen"><span>Descargar como PDF</span></a></li><li id="t-print" class="mw-list-item"><a href="javascript:print();" rel="alternate" title="Versión imprimible de esta página [p]" accesskey="p"><span>Versión para imprimir</span></a></li>
+		</ul>
+		
+	</div>
+</div>
+
+<div id="p-wikibase-otherprojects" class="vector-menu mw-portlet mw-portlet-wikibase-otherprojects"  >
+	<div class="vector-menu-heading">
+		En otros proyectos
+	</div>
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			<li class="wb-otherproject-link wb-otherproject-abstract mw-list-item"><a href="https://abstract.wikipedia.org/wiki/Q575650" hreflang="en"><span>Abstract Wikipedia</span></a></li><li class="wb-otherproject-link wb-otherproject-commons mw-list-item"><a href="https://commons.wikimedia.org/wiki/Category:Rust_(programming_language)" hreflang="en"><span>Wikimedia Commons</span></a></li><li id="t-wikibase" class="wb-otherproject-link wb-otherproject-wikibase-dataitem mw-list-item"><a href="https://www.wikidata.org/wiki/Special:EntityPage/Q575650" title="Enlace al elemento conectado del repositorio de datos [g]" accesskey="g"><span>Elemento de Wikidata</span></a></li>
+		</ul>
+		
+	</div>
+</div>
+
+</div>
+
+									</div>
+				
+	</div>
+</div>
+
+							</nav>
+						</div>
+					</div>
+				</div>
+				<div class="vector-column-end no-font-mode-scale">
+					<div class="vector-sticky-pinned-container">
+						<nav class="vector-page-tools-landmark" aria-label="Página de herramientas">
+							<div id="vector-page-tools-pinned-container" class="vector-pinned-container">
+				
+							</div>
+		</nav>
+						<nav class="vector-appearance-landmark" aria-label="Apariencia">
+							<div id="vector-appearance-pinned-container" class="vector-pinned-container">
+				<div id="vector-appearance" class="vector-appearance vector-pinnable-element">
+	<div
+	class="vector-pinnable-header vector-appearance-pinnable-header vector-pinnable-header-pinned"
+	data-feature-name="appearance-pinned"
+	data-pinnable-element-id="vector-appearance"
+	data-pinned-container-id="vector-appearance-pinned-container"
+	data-unpinned-container-id="vector-appearance-unpinned-container"
+>
+	<div class="vector-pinnable-header-label">Apariencia</div>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-pin-button" data-event-name="pinnable-header.vector-appearance.pin" aria-label="Mover Apariencia a la barra lateral">mover a la barra lateral</button>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-unpin-button" data-event-name="pinnable-header.vector-appearance.unpin" aria-label="Ocultar Apariencia">ocultar</button>
+</div>
+
+
+</div>
+
+							</div>
+		</nav>
+					</div>
+				</div>
+				<div id="bodyContent" class="vector-body" aria-labelledby="firstHeading" data-mw-ve-target-container>
+					<div class="vector-body-before-content">
+							<div class="mw-indicators">
+		</div>
+
+						<div id="siteSub" class="noprint">De Wikipedia, la enciclopedia libre</div>
+						<div id="contentSub"><div id="mw-content-subtitle"></div></div>
+						
+					</div>
+					
+					<div id="mw-content-text" class="mw-body-content"><div class="mw-content-ltr mw-parser-output" lang="es" dir="ltr" data-mw-parsoid-version="0.25.0.0-alpha1" data-mw-html-version="2.8.0"><section data-mw-section-id="0" id="mwAQ"><span class="mw-empty-elt" about="#mwt1" typeof="mw:Transclusion" id="mwAg" data-mw='{"parts":[{"template":{"target":{"wt":"Ficha de lenguaje de programación\n","href":"./Plantilla:Ficha_de_lenguaje_de_programación"},"params":{"nombre":{"wt":"Rust"},"logo":{"wt":"[[Archivo:Rust programming language black logo.svg|144px]]"},"tamaño_logo":{"wt":""},"captura":{"wt":""},"tamaño_captura":{"wt":""},"pie":{"wt":""},"extensiones_comunes":{"wt":"&lt;code>.rs&lt;/code> &lt;code>.rlib&lt;/code>"},"paradigma":{"wt":"[[Lenguaje de programación#Paradigma de programación|multiparadigma]], [[Programación imperativa|imperativo]], [[Programación orientada a objetos|orientado a objetos]], [[Programación por procedimientos|procedural]], [[Programación concurrente|concurrente]], [[Programación funcional|funcional]], [[Lenguaje de programación compilado|compilado]], [[Lenguaje de programación de propósito general|propósito general]]"},"año":{"wt":"2010"},"diseñador":{"wt":"Graydon Hoare"},"desarrollador":{"wt":"&apos;&apos;Rust Project&apos;&apos;"},"última_versión":{"wt":"1.95.0&lt;ref>https://blog.rust-lang.org&lt;/ref>"},"fecha_última_versión":{"wt":"{{fecha de lanzamiento|16|04|2026}}"},"tipo_dato":{"wt":"[[Sistema de tipificación#Tipado estático|estático]], [[Tipado fuerte|fuerte]], [[inferencia de tipos|inferido]], [[tipado estructural|estructural]]"},"implementaciones":{"wt":""},"dialectos":{"wt":""},"influido_por":{"wt":"[[Alef]], [[C Sharp|C#]], [[C++]], [[Camlp4]], [[Common Lisp]], [[Cyclone (lenguaje de programación)|Cyclone]], [[Erlang]], [[Haskell]], [[Hermes (lenguaje de programación)|Hermes]], [[Limbo (lenguaje de programación)|Limbo]], [[Napier (lenguaje de programación)|Napier]], [[Napier88]], [[Newsqueak]], NIL, [[Ruby]], [[Sather]], [[Standard ML]], [[Ocaml]], [[Racket (lenguaje de programación)|Racket]], [[Swift (lenguaje de programación)|Swift]]"},"ha_influido":{"wt":"[[C Sharp|C#]], [[Elm (lenguaje de progración)|Elm]], [[Idris (lenguaje de programación)|Idris]], [[Swift (lenguaje de programación)|Swift]]"},"sistema_operativo":{"wt":"[[Linux]], [[macOS]], [[Microsoft Windows|Windows]], [[FreeBSD]], [[OpenBSD]],&lt;ref>{{Cita web |título=OpenBSD ports |url=https://cvsweb.openbsd.org/cgi-bin/cvsweb/ports/lang/rust/|fechaacceso=3 de abril de 2018}}&lt;/ref> [[Redox (operating system)|Redox]], [[Android (operating system)|Android]], [[iOS]]&lt;ref>{{Cita web |título=Building and Deploying a Rust library on iOS |url=https://mozilla.github.io/firefox-browser-architecture/experiments/2017-09-06-rust-on-ios.html |fechaacceso=11 de enero de 2019 |fecha=6 de septiembre de 2017}}&lt;/ref>"},"licencia":{"wt":"[[Apache License|Licencia Apache 2.0]] o [[Licencia MIT]]&lt;ref name=&apos;license&apos;>{{cita web|url=https://github.com/mozilla/rust/blob/master/COPYRIGHT|título=COPYRIGHT|fechaacceso=17 de diciembre de 2012|editorial=Rust compiler source repository}}&lt;/ref>"}},"i":0}}]}'><style data-mw-deduplicate="TemplateStyles:r175117609" typeof="mw:Extension/templatestyles" about="#mwt2" data-mw='{"name":"templatestyles","attrs":{"src":"Plantilla:Ficha/imagelimit.css"},"body":{"extsrc":""}}'>/* stub */</style><link rel="mw:PageProp/Category" href="./Categoría:Wikipedia:Artículos_buenos_en_la_Wikipedia_en_inglés"/></span><table class="infobox" style="width:22.7em; line-height: 1.4em; text-align:left; padding:.23em;" about="#mwt1" id="mwAw"><tbody><tr><th colspan="3" class="cabecera informática" style="text-align:center;background-color:#eee;color:inherit;">Rust</th></tr><tr><td colspan="3" class="imagen " style="text-align:center;">
+<span typeof="mw:File"><a href="https://es.wikipedia.org/wiki/Archivo:Rust_programming_language_black_logo.svg" class="mw-file-description"><img resource="https://es.wikipedia.org/wiki/Archivo:Rust_programming_language_black_logo.svg" src="//thumb.wikimedia.org/wikipedia/commons/thumb/d/d5/Rust_programming_language_black_logo.svg/250px-Rust_programming_language_black_logo.svg.png?utm_source=es.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail" decoding="async" loading="lazy" srcset="//thumb.wikimedia.org/wikipedia/commons/thumb/d/d5/Rust_programming_language_black_logo.svg/330px-Rust_programming_language_black_logo.svg.png?utm_source=es.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail 2x" data-file-width="106" data-file-height="106" data-file-type="drawing" height="144" width="144" class="mw-file-element"/></a></span></td></tr><tr><td colspan="3" class="imagen " style="text-align:center;">
+<span typeof="mw:File" data-mw='{"caption":""}'><a href="https://es.wikipedia.org/wiki/Archivo:Cargo_clippy_hello_world_example.png" class="mw-file-description"><img resource="https://es.wikipedia.org/wiki/Archivo:Cargo_clippy_hello_world_example.png" src="//thumb.wikimedia.org/wikipedia/commons/thumb/6/6c/Cargo_clippy_hello_world_example.png/330px-Cargo_clippy_hello_world_example.png?utm_source=es.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail" decoding="async" loading="lazy" srcset="//upload.wikimedia.org/wikipedia/commons/6/6c/Cargo_clippy_hello_world_example.png?utm_source=es.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail_unscaled 2x" data-file-width="912" data-file-height="704" data-file-type="bitmap" height="247" width="320" class="mw-file-element"/></a></span></td></tr><tr><th colspan="3" class="section" style="text-align:center;background-color:#eee;">Desarrollador(es)</th></tr><tr><td colspan="3" style="text-align:center;">
+<i><b>Rust Project</b></i><br/><i><a rel="mw:ExtLink nofollow" href="https://rust-lang.org/" class="external free">https://rust-lang.org/</a></i></td></tr><tr><th colspan="3" class="section" style="text-align:center;background-color:#eee;">Información general</th></tr><tr><th scope="row" class="label" style="text-align:left;"><a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Extensión_de_archivo" title="Extensión de archivo">Extensiones comunes</a></th><td colspan="2">
+<code>.rs</code> <code>.rlib</code></td></tr><tr><th scope="row" class="label" style="text-align:left;"><a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Paradigma_de_programación" title="Paradigma de programación">Paradigma</a></th><td colspan="2">
+<a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Lenguaje_de_programación#Paradigma_de_programación" title="Lenguaje de programación">multiparadigma</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Programación_imperativa" title="Programación imperativa">imperativo</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Programación_orientada_a_objetos" title="Programación orientada a objetos">orientado a objetos</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Programación_por_procedimientos" title="Programación por procedimientos">procedural</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Programación_concurrente" title="Programación concurrente" class="mw-redirect">concurrente</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Programación_funcional" title="Programación funcional">funcional</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Lenguaje_de_programación_compilado" title="Lenguaje de programación compilado" class="mw-redirect">compilado</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Lenguaje_de_programación_de_propósito_general?action=edit&amp;redlink=1" title="Lenguaje de programación de propósito general (aún no redactado)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Lenguaje de programación de propósito general"]}}'>propósito general</a></td></tr><tr><th scope="row" class="label" style="text-align:left;">Apareció en</th><td colspan="2">
+2010</td></tr><tr><th scope="row" class="label" style="text-align:left;">Diseñado por</th><td colspan="2">
+Graydon Hoare</td></tr><tr><th scope="row" class="label" style="text-align:left;">Última versión estable</th><td colspan="2">
+1.95.0<sup about="#mwt3" class="mw-ref reference" id="cite_ref-1" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-1"}}'><a href="#cite_note-1" id="mwBA"><span class="mw-reflink-text" id="mwBQ"><span class="cite-bracket" id="mwBg">[</span>1<span class="cite-bracket" id="mwBw">]</span></span></a></sup> <small>(16 de abril de 2026 (7 meses<span typeof="mw:Entity"> </span>y<span typeof="mw:Entity"> </span>2 días))</small></td></tr><tr><th scope="row" class="label" style="text-align:left;"><a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Sistema_de_tipos" title="Sistema de tipos">Sistema de tipos</a></th><td colspan="2">
+<a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Sistema_de_tipificación#Tipado_estático" title="Sistema de tipificación" class="mw-redirect">estático</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Tipado_fuerte" title="Tipado fuerte">fuerte</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Inferencia_de_tipos" title="Inferencia de tipos">inferido</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Tipado_estructural?action=edit&amp;redlink=1" title="Tipado estructural (aún no redactado)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Tipado estructural"]}}'>estructural</a></td></tr><tr><th scope="row" class="label" style="text-align:left;">Influido por</th><td colspan="2">
+<a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Alef" title="Alef" class="mw-redirect">Alef</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/C_Sharp" title="C Sharp">C#</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/C++" title="C++">C++</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Camlp4?action=edit&amp;redlink=1" title="Camlp4 (aún no redactado)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Camlp4"]}}'>Camlp4</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Common_Lisp" title="Common Lisp">Common Lisp</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Cyclone_(lenguaje_de_programación)?action=edit&amp;redlink=1" title="Cyclone (lenguaje de programación) (aún no redactado)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Cyclone (lenguaje de programación)"]}}'>Cyclone</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Erlang" title="Erlang">Erlang</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Haskell" title="Haskell">Haskell</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Hermes_(lenguaje_de_programación)?action=edit&amp;redlink=1" title="Hermes (lenguaje de programación) (aún no redactado)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Hermes (lenguaje de programación)"]}}'>Hermes</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Limbo_(lenguaje_de_programación)" title="Limbo (lenguaje de programación)">Limbo</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Napier_(lenguaje_de_programación)?action=edit&amp;redlink=1" title="Napier (lenguaje de programación) (aún no redactado)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Napier (lenguaje de programación)"]}}'>Napier</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Napier88?action=edit&amp;redlink=1" title="Napier88 (aún no redactado)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Napier88"]}}'>Napier88</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Newsqueak?action=edit&amp;redlink=1" title="Newsqueak (aún no redactado)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Newsqueak"]}}'>Newsqueak</a>, NIL, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Ruby" title="Ruby">Ruby</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Sather?action=edit&amp;redlink=1" title="Sather (aún no redactado)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Sather"]}}'>Sather</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Standard_ML" title="Standard ML">Standard ML</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Ocaml?action=edit&amp;redlink=1" title="Ocaml (aún no redactado)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Ocaml"]}}'>Ocaml</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Racket_(lenguaje_de_programación)" title="Racket (lenguaje de programación)">Racket</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Swift_(lenguaje_de_programación)" title="Swift (lenguaje de programación)">Swift</a></td></tr><tr><th scope="row" class="label" style="text-align:left;">Ha influido a</th><td colspan="2">
+<a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/C_Sharp" title="C Sharp">C#</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Elm_(lenguaje_de_progración)?action=edit&amp;redlink=1" title="Elm (lenguaje de progración) (aún no redactado)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Elm (lenguaje de progración)"]}}'>Elm</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Idris_(lenguaje_de_programación)?action=edit&amp;redlink=1" title="Idris (lenguaje de programación) (aún no redactado)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Idris (lenguaje de programación)"]}}'>Idris</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Swift_(lenguaje_de_programación)" title="Swift (lenguaje de programación)">Swift</a></td></tr><tr><th scope="row" class="label" style="text-align:left;"><a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Sistema_operativo" title="Sistema operativo">Sistema operativo</a></th><td colspan="2">
+<a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Linux" title="Linux" class="mw-redirect">Linux</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/MacOS" title="MacOS">macOS</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Microsoft_Windows" title="Microsoft Windows">Windows</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/FreeBSD" title="FreeBSD">FreeBSD</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/OpenBSD" title="OpenBSD">OpenBSD</a>,<sup about="#mwt6" class="mw-ref reference" id="cite_ref-2" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-2"}}'><a href="#cite_note-2" id="mwCA"><span class="mw-reflink-text" id="mwCQ"><span class="cite-bracket" id="mwCg">[</span>2<span class="cite-bracket" id="mwCw">]</span></span></a></sup> <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Redox_(operating_system)?action=edit&amp;redlink=1" title="Redox (operating system) (aún no redactado)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Redox (operating system)"]}}'>Redox</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Android_(operating_system)" title="Android (operating system)" class="mw-redirect">Android</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/IOS" title="IOS">iOS</a><sup about="#mwt9" class="mw-ref reference" id="cite_ref-3" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-3"}}'><a href="#cite_note-3" id="mwDA"><span class="mw-reflink-text" id="mwDQ"><span class="cite-bracket" id="mwDg">[</span>3<span class="cite-bracket" id="mwDw">]</span></span></a></sup></td></tr><tr><th scope="row" class="label" style="text-align:left;"><a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Licencia_de_software" title="Licencia de software">Licencia</a></th><td colspan="2">
+<a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Apache_License" title="Apache License">Licencia Apache 2.0</a> o <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Licencia_MIT" title="Licencia MIT">Licencia MIT</a><sup about="#mwt12" class="mw-ref reference" id="cite_ref-license_4-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"license"},"body":{"id":"mw-reference-text-cite_note-license-4"}}'><a href="#cite_note-license-4" id="mwEA"><span class="mw-reflink-text" id="mwEQ"><span class="cite-bracket" id="mwEg">[</span>4<span class="cite-bracket" id="mwEw">]</span></span></a></sup></td></tr><tr><td class="noprint" colspan="3" style="text-align:left;"><div class="plainlinks wikidata-link" style="font-size: 0.85em"><span typeof="mw:Entity">[</span><a rel="mw:WikiLink/Interwiki" href="https://www.wikidata.org/wiki/Q575650" title="d:Q575650" class="extiw">editar datos en Wikidata</a><span typeof="mw:Entity">]</span></div></td></tr></tbody></table>
+
+<p id="mwFA"><b id="mwFQ">Rust</b> es un <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Lenguaje_de_programación" title="Lenguaje de programación" id="mwFg">lenguaje de programación</a> <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Lenguaje_de_programación_compilado" title="Lenguaje de programación compilado" class="mw-redirect" id="mwFw">compilado</a>, de <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Lenguaje_de_programación_de_propósito_general?action=edit&amp;redlink=1" title="Lenguaje de programación de propósito general (aún no redactado)" class="new" typeof="mw:LocalizedAttrs" id="mwGA" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Lenguaje de programación de propósito general"]}}'>propósito general</a> y <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Paradigma_de_programación" title="Paradigma de programación" id="mwGQ">multiparadigma</a> (aunque no soporta las características de los mismos en su totalidad) que está siendo desarrollado por <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Fundación_Rust?action=edit&amp;redlink=1" title="Fundación Rust (aún no redactado)" class="new" typeof="mw:LocalizedAttrs" id="mwGg" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Fundación Rust"]}}'>Fundación Rust</a>. Es un lenguaje de programación multiparadigmático que soporta programación <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Programación_funcional" title="Programación funcional" id="mwGw">funcional</a> pura, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Programación_por_procedimientos" title="Programación por procedimientos" id="mwHA">por procedimientos</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Programación_imperativa" title="Programación imperativa" id="mwHQ">imperativa</a> y <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Programación_orientada_a_objetos" title="Programación orientada a objetos" id="mwHg">orientada a objetos</a>.</p>
+
+<p id="mwHw">Según la política de Mozilla,<sup about="#mwt15" class="mw-ref reference" id="cite_ref-moz-manifesto_5-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"moz-manifesto"},"body":{"id":"mw-reference-text-cite_note-moz-manifesto-5"}}'><a href="#cite_note-moz-manifesto-5" id="mwIA"><span class="mw-reflink-text" id="mwIQ"><span class="cite-bracket" id="mwIg">[</span>5<span class="cite-bracket" id="mwIw">]</span></span></a></sup> Rust es desarrollado de forma totalmente abierta y busca la opinión y contribución de la comunidad. El diseño del lenguaje se ha ido perfeccionando a través de las experiencias en el desarrollo del motor de navegador <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Servo_(software)" title="Servo (software)" id="mwJA">Servo</a>,<sup about="#mwt17" class="mw-ref reference" id="cite_ref-rustinservo_6-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"rustinservo"},"body":{"id":"mw-reference-text-cite_note-rustinservo-6"}}'><a href="#cite_note-rustinservo-6" id="mwJQ"><span class="mw-reflink-text" id="mwJg"><span class="cite-bracket" id="mwJw">[</span>6<span class="cite-bracket" id="mwKA">]</span></span></a></sup> y el propio compilador de Rust. Aunque es desarrollado y patrocinado por Mozilla y Samsung, es un proyecto comunitario. Una gran parte de las contribuciones proceden de los miembros de la comunidad.<sup about="#mwt19" class="mw-ref reference" id="cite_ref-contributors_7-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"contributors"},"body":{"id":"mw-reference-text-cite_note-contributors-7"}}'><a href="#cite_note-contributors-7" id="mwKQ"><span class="mw-reflink-text" id="mwKg"><span class="cite-bracket" id="mwKw">[</span>7<span class="cite-bracket" id="mwLA">]</span></span></a></sup></p>
+
+<p id="mwLQ">Para el 2020 es uno de los lenguajes de programación más usados a la hora de trabajar con criptomonedas y crear nodos para minar criptoactivos.<sup about="#mwt21" class="mw-ref reference" id="cite_ref-8" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-8"}}'><a href="#cite_note-8" id="mwLg"><span class="mw-reflink-text" id="mwLw"><span class="cite-bracket" id="mwMA">[</span>8<span class="cite-bracket" id="mwMQ">]</span></span></a></sup> En 2022, Rust se convirtió en el tercer lenguaje de programación usado en el <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Núcleo_Linux" title="Núcleo Linux" id="mwMg">núcleo Linux</a>, después de <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/C_(lenguaje_de_programación)" title="C (lenguaje de programación)" id="mwMw">C</a> y <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Lenguaje_ensamblador" title="Lenguaje ensamblador" id="mwNA">ensamblador</a>.<sup about="#mwt23" class="mw-ref reference" id="cite_ref-9" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-9"}}'><a href="#cite_note-9" id="mwNQ"><span class="mw-reflink-text" id="mwNg"><span class="cite-bracket" id="mwNw">[</span>9<span class="cite-bracket" id="mwOA">]</span></span></a></sup> Rust prioriza la seguridad, la fiabilidad, el alto rendimiento y el uso eficiente de recursos, lo que lo convierte en una opción cada vez más adoptada en ámbitos como la automatización industrial, la automoción, la industria aeroespacial y el desarrollo de sistemas críticos.<sup about="#mwt25" class="mw-ref reference" id="cite_ref-10" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-10"}}'><a href="#cite_note-10" id="mwOQ"><span class="mw-reflink-text" id="mwOg"><span class="cite-bracket" id="mwOw">[</span>10<span class="cite-bracket" id="mwPA">]</span></span></a></sup></p>
+
+<meta property="mw:PageProp/toc" id="mwPQ" data-mw='{"autoGenerated":true}'/></section><section data-mw-section-id="1" id="mwPg" aria-labelledby="Descripción"><div class="mw-heading mw-heading2"><h2 id="Descripción"><span id="Descripci.C3.B3n" typeof="mw:FallbackId"></span>Descripción</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/w/index.php?title=Rust_(lenguaje_de_programaci%C3%B3n)&amp;action=edit&amp;section=1" title="Editar sección: Descripción"><span>editar</span></a><span class="mw-editsection-bracket">]</span></span></div>
+<p id="mwPw">El objetivo de Rust es ser un buen lenguaje para la creación de grandes programas del <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Lado_del_cliente" title="Lado del cliente" id="mwQA">lado del cliente</a> y <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Lado_del_cliente" title="Lado del cliente" id="mwQQ">del servidor</a> que se ejecuten en Internet. Esto ha llevado a un conjunto de características con un énfasis en la seguridad, el control de distribución de la memoria y la concurrencia. Se espera que el rendimiento de código seguro sea más lento que <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/C++" title="C++" id="mwQg">C++</a>, si el rendimiento es la única consideración, pero si lo comparamos con el código C++ hecho para que tome precauciones comparables a las que toma Rust, este último puede ser incluso más rápido.<sup about="#mwt27" class="mw-ref reference" id="cite_ref-cpp-design-goals_11-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"cpp-design-goals"},"body":{"id":"mw-reference-text-cite_note-cpp-design-goals-11"}}'><a href="#cite_note-cpp-design-goals-11" id="mwQw"><span class="mw-reflink-text" id="mwRA"><span class="cite-bracket" id="mwRQ">[</span>11<span class="cite-bracket" id="mwRg">]</span></span></a></sup></p>
+
+<p id="mwRw">La sintaxis de Rust es similar a la de <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/C_(lenguaje_de_programación)" title="C (lenguaje de programación)" id="mwSA">C</a> y C++, con bloques de código delimitados por llaves y estructuras de <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Estructuras_de_control" title="Estructuras de control" id="mwSQ">control de flujo</a> tales como <code id="mwSg">if</code>, <code id="mwSw">else</code>, <code id="mwTA">do</code>, <code id="mwTQ">while</code> y <code id="mwTg">for</code>. No todas las estructuras de C y C++ están presentes, además, otras (como la palabra clave <code id="mwTw">match</code> para ramificación multidireccional) serán menos familiares para programadores que vienen de estos lenguajes.</p>
+
+<p id="mwUA">El sistema está diseñado para tener un acceso seguro a la memoria, y no permite <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Puntero_(informática)" title="Puntero (informática)" id="mwUQ">punteros nulos</a> o <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Referencia_colgante" title="Referencia colgante" id="mwUg">punteros colgantes</a>.<sup about="#mwt29" class="mw-ref reference" id="cite_ref-cnet_12-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"cnet"},"body":{"id":"mw-reference-text-cite_note-cnet-12"}}'><a href="#cite_note-cnet-12" id="mwUw"><span class="mw-reflink-text" id="mwVA"><span class="cite-bracket" id="mwVQ">[</span>12<span class="cite-bracket" id="mwVg">]</span></span></a></sup><sup about="#mwt31" class="mw-ref reference" id="cite_ref-lwn_13-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"lwn"},"body":{"id":"mw-reference-text-cite_note-lwn-13"}}'><a href="#cite_note-lwn-13" id="mwVw"><span class="mw-reflink-text" id="mwWA"><span class="cite-bracket" id="mwWQ">[</span>13<span class="cite-bracket" id="mwWg">]</span></span></a></sup> Los valores de los datos sólo se pueden inicializar a través de un conjunto fijo de formas, las cuales requieren que sus entradas hayan sido ya inicializadas.<sup about="#mwt33" class="mw-ref reference" id="cite_ref-lang-faq_14-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"lang-faq"},"body":{"id":"mw-reference-text-cite_note-lang-faq-14"}}'><a href="#cite_note-lang-faq-14" id="mwWw"><span class="mw-reflink-text" id="mwXA"><span class="cite-bracket" id="mwXQ">[</span>14<span class="cite-bracket" id="mwXg">]</span></span></a></sup></p>
+
+<p id="mwXw">El sistema de tipos soporta un mecanismo similar a las interfaces de tipos, llamado "traits", inspirados directamente por el lenguaje <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Haskell" title="Haskell" id="mwYA">Haskell</a>.  Esta es una facilidad para el polimorfismo que soporta distintos tipos de argumentos (<i id="mwYQ">polimorfismo ad-hoc</i>), lograda mediante la adición de restricciones para escribir declaraciones de variables. Otras características de <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Haskell" title="Haskell" id="mwYg">Haskell</a>, como el polimorfismo de diferente tipo (<i id="mwYw">higher-kinded)</i>, no están soportadas.</p>
+
+<p id="mwZA">Rust cuenta con <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Inferencia_de_tipos" title="Inferencia de tipos" id="mwZQ">inferencia de tipos</a>, para las variables declaradas con la palabra clave let. Tales variables no requieren ser inicializadas con un valor asignado con el fin de determinar su tipo. A tiempo de compilación produce un error si cualquier rama de código falla al asignar un valor a la variable.<sup about="#mwt35" class="mw-ref reference" id="cite_ref-type-inference_15-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"type-inference"},"body":{"id":"mw-reference-text-cite_note-type-inference-15"}}'><a href="#cite_note-type-inference-15" id="mwZg"><span class="mw-reflink-text" id="mwZw"><span class="cite-bracket" id="mwaA">[</span>15<span class="cite-bracket" id="mwaQ">]</span></span></a></sup> Las funciones pueden recibir parámetros genéricos pero deben ser delimitados expresamente por los <i id="mwag"><a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Trait" title="Trait" id="mwaw">traits</a></i>, no hay manera de dejar fuera de declaraciones de tipo sin dejar de hacer uso de los métodos y operadores de los parámetros.</p>
+
+<p id="mwbA">La concurrencia es soportada a través de tareas simples, similares a los encontrados en <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Erlang" title="Erlang" id="mwbQ">Erlang</a> y otros lenguajes basado en actores. En dichos sistemas, las tareas se comunican a través del paso de mensajes, en lugar de compartir los datos directamente. Por motivos de rendimiento, es posible enviar datos sin copiar, usar cajas únicas. Las cajas únicas son la garantía de tener un solo propietario, y puede ser liberada por la tarea de enviar para su uso por el receptor.</p>
+
+<p id="mwbg">El sistema de objetos de Rust se basa en implementaciones, <i id="mwbw">traits</i> y tipos estructurados. Las implementaciones cumplen una función similar a la de las <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Clase_(informática)" title="Clase (informática)" id="mwcA">clases</a> en otros lenguajes, y se definen con la palabra clave impl. Herencia y polimorfismo son proporcionados por los <i id="mwcQ">traits</i>, permiten que los métodos se definan y se mezclen en las implementaciones. Los tipos estructurados se utilizan para definir los campos. Implementaciones y rasgos no pueden definir los campos propios, y sólo los <i id="mwcg">traits</i> proporcionar herencia, con el fin de evitar el <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Problema_del_diamante" title="Problema del diamante" id="mwcw">problema del diamante</a> de C++.</p>
+
+</section><section data-mw-section-id="2" id="mwdA" aria-labelledby="Historia"><div class="mw-heading mw-heading2"><h2 id="Historia">Historia</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/w/index.php?title=Rust_(lenguaje_de_programaci%C3%B3n)&amp;action=edit&amp;section=2" title="Editar sección: Historia"><span>editar</span></a><span class="mw-editsection-bracket">]</span></span></div>
+<figure class="mw-default-size" typeof="mw:File/Thumb" id="mwdQ"><a href="https://es.wikipedia.org/wiki/Archivo:Rustacean-orig-noshadow.svg" class="mw-file-description" id="mwdg"><img resource="https://es.wikipedia.org/wiki/Archivo:Rustacean-orig-noshadow.svg" src="//thumb.wikimedia.org/wikipedia/commons/thumb/2/20/Rustacean-orig-noshadow.svg/250px-Rustacean-orig-noshadow.svg.png?utm_source=es.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail" decoding="async" loading="lazy" srcset="//thumb.wikimedia.org/wikipedia/commons/thumb/2/20/Rustacean-orig-noshadow.svg/500px-Rustacean-orig-noshadow.svg.png?utm_source=es.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail 2x" data-file-width="512" data-file-height="341" data-file-type="drawing" height="167" width="250" class="mw-file-element" id="mwdw"/></a><figcaption id="mweA">Los usuarios de Rust se refieren a sí mismos como rustáceos y usan a Ferris como su mascota</figcaption></figure>
+<p id="mweQ">El lenguaje surgió a partir de un proyecto personal iniciado en 2006 por el empleado de Mozilla, Graydon Hoare,<sup about="#mwt36" class="mw-ref reference" id="cite_ref-rust_faq_16-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"rust faq"}}'><a href="#cite_note-rust_faq-16" id="mweg"><span class="mw-reflink-text" id="mwew"><span class="cite-bracket" id="mwfA">[</span>16<span class="cite-bracket" id="mwfQ">]</span></span></a></sup> quien afirmó que el proyecto posiblemente recibió su nombre de la familia de hongos de la roya.<sup about="#mwt37" class="mw-ref reference" id="cite_ref-rust_name_reddit_17-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"rust name reddit"}}'><a href="#cite_note-rust_name_reddit-17" id="mwfg"><span class="mw-reflink-text" id="mwfw"><span class="cite-bracket" id="mwgA">[</span>17<span class="cite-bracket" id="mwgQ">]</span></span></a></sup>  Mozilla comenzó a patrocinar el proyecto en 2009<sup about="#mwt38" class="mw-ref reference" id="cite_ref-rust_faq_16-1" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"rust faq"}}'><a href="#cite_note-rust_faq-16" id="mwgg"><span class="mw-reflink-text" id="mwgw"><span class="cite-bracket" id="mwhA">[</span>16<span class="cite-bracket" id="mwhQ">]</span></span></a></sup> y lo anunció en 2010.<sup about="#mwt39" class="mw-ref reference" id="cite_ref-future_tense_18-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"future tense"}}'><a href="#cite_note-future_tense-18" id="mwhg"><span class="mw-reflink-text" id="mwhw"><span class="cite-bracket" id="mwiA">[</span>18<span class="cite-bracket" id="mwiQ">]</span></span></a></sup><sup about="#mwt40" class="mw-ref reference" id="cite_ref-project_servo_19-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"project servo"}}'><a href="#cite_note-project_servo-19" id="mwig"><span class="mw-reflink-text" id="mwiw"><span class="cite-bracket" id="mwjA">[</span>19<span class="cite-bracket" id="mwjQ">]</span></span></a></sup> El mismo año, el trabajo pasó del compilador inicial (escrito en <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/OCaml" title="OCaml" id="mwjg">OCaml</a>) al compilador <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Self-hosting_(compiladores)" title="Self-hosting (compiladores)" id="mwjw">autohospedado</a> escrito en Rust.<sup about="#mwt41" class="mw-ref reference" id="cite_ref-rust_progress_20-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"rust progress"}}'><a href="#cite_note-rust_progress-20" id="mwkA"><span class="mw-reflink-text" id="mwkQ"><span class="cite-bracket" id="mwkg">[</span>20<span class="cite-bracket" id="mwkw">]</span></span></a></sup> Denominado rustc, se compiló con éxito en 2011.<sup about="#mwt42" class="mw-ref reference" id="cite_ref-stage1_rustc_21-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"stage1 rustc"}}'><a href="#cite_note-stage1_rustc-21" id="mwlA"><span class="mw-reflink-text" id="mwlQ"><span class="cite-bracket" id="mwlg">[</span>21<span class="cite-bracket" id="mwlw">]</span></span></a></sup> rustc usa <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/LLVM" title="LLVM" id="mwmA">LLVM</a> como su back end.</p>
+
+<p id="mwmQ">La primera versión pre-alfa numerada del compilador de Rust se produjo en enero de 2012.<sup about="#mwt43" class="mw-ref reference" id="cite_ref-rust_release_reddit_22-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"rust release reddit"}}'><a href="#cite_note-rust_release_reddit-22" id="mwmg"><span class="mw-reflink-text" id="mwmw"><span class="cite-bracket" id="mwnA">[</span>22<span class="cite-bracket" id="mwnQ">]</span></span></a></sup> Rust 1.0, la primera versión estable, se publicó el 15 de mayo de 2015.<sup about="#mwt44" class="mw-ref reference" id="cite_ref-rust_releases_github_23-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"rust releases github"}}'><a href="#cite_note-rust_releases_github-23" id="mwng"><span class="mw-reflink-text" id="mwnw"><span class="cite-bracket" id="mwoA">[</span>23<span class="cite-bracket" id="mwoQ">]</span></span></a></sup><sup about="#mwt45" class="mw-ref reference" id="cite_ref-announcing_rust_1_24-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"announcing rust 1"}}'><a href="#cite_note-announcing_rust_1-24" id="mwog"><span class="mw-reflink-text" id="mwow"><span class="cite-bracket" id="mwpA">[</span>24<span class="cite-bracket" id="mwpQ">]</span></span></a></sup> Después de 1.0, las versiones estables se publican cada seis semanas, mientras que las nuevas funcionalidades se desarrollan en las <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Compilación_diaria" title="Compilación diaria" id="mwpg">versiones diarias</a> (en inglés, <i id="mwpw">nightly</i>) y luego se prueban con versiones alfa y beta que duran seis semanas.<sup about="#mwt46" class="mw-ref reference" id="cite_ref-rust_1_scheduling_25-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"rust 1 scheduling"}}'><a href="#cite_note-rust_1_scheduling-25" id="mwqA"><span class="mw-reflink-text" id="mwqQ"><span class="cite-bracket" id="mwqg">[</span>25<span class="cite-bracket" id="mwqw">]</span></span></a></sup></p>
+
+<p id="mwrA">Junto con la escritura estática convencional, antes de la versión 0.4, Rust también admitía typestates. El sistema typestate modeló aserciones antes y después de las sentencias del programa, mediante el uso de una checksentencia especial. Las discrepancias se pueden descubrir en el momento de la compilación, en lugar de cuando se ejecuta un programa, como podría ser el caso de las aserciones en código C o C ++. El concepto typestate no era exclusivo de Rust, ya que se introdujo por primera vez en el lenguaje NIL.<sup about="#mwt47" class="mw-ref reference" id="cite_ref-typestate_26-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"typestate"}}'><a href="#cite_note-typestate-26" id="mwrQ"><span class="mw-reflink-text" id="mwrg"><span class="cite-bracket" id="mwrw">[</span>26<span class="cite-bracket" id="mwsA">]</span></span></a></sup> Los typestates se eliminaron porque en la práctica se usaban poco, aunque la misma función aún se puede lograr con un patrón de marca.<sup about="#mwt48" class="mw-ref reference" id="cite_ref-typestate_is_dead_27-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"typestate is dead"}}'><a href="#cite_note-typestate_is_dead-27" id="mwsQ"><span class="mw-reflink-text" id="mwsg"><span class="cite-bracket" id="mwsw">[</span>27<span class="cite-bracket" id="mwtA">]</span></span></a></sup></p>
+
+<p id="mwtQ">El estilo del sistema de objetos cambió considerablemente en las versiones 0.2, 0.3 y 0.4 de Rust. La versión 0.2 introdujo clases por primera vez, y la versión 0.3 agregó varias características, incluidos destructores y polimorfismo mediante el uso de interfaces. En Rust 0.4, se agregaron rasgos como un medio para proporcionar herencia; las interfaces se unificaron con rasgos y se eliminaron como una característica separada. Las clases también se eliminaron, reemplazadas por una combinación de implementaciones y tipos estructurados.</p>
+
+<p id="mwtg">Comenzando en Rust 0.9 y terminando en Rust 0.11, Rust tenía dos tipos de punteros incorporados: ~y @, simplificando el modelo de memoria central. Reimplementó esos tipos de puntero en la biblioteca estándar como Boxy (ahora eliminado) Gc.</p>
+
+<p id="mwtw">En enero de 2014, antes de la primera versión estable, Rust 1.0, el editor en jefe de Dr. Dobb's, Andrew Binstock, comentó sobre las posibilidades de Rust de convertirse en un competidor de C ++ y de los otros lenguajes próximos D, Go y Nim (entonces Nimrod). Según Binstock, mientras que Rust era "ampliamente visto como un lenguaje notablemente elegante", la adopción se ralentizó porque cambió repetidamente entre versiones.<sup about="#mwt49" class="mw-ref reference" id="cite_ref-rise_and_fall_28-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"rise and fall"}}'><a href="#cite_note-rise_and_fall-28" id="mwuA"><span class="mw-reflink-text" id="mwuQ"><span class="cite-bracket" id="mwug">[</span>28<span class="cite-bracket" id="mwuw">]</span></span></a></sup></p>
+
+<p id="mwvA">Rust fue el tercer lenguaje de programación más querido en la encuesta anual de Stack Overflow de 2015<sup about="#mwt50" class="mw-ref reference" id="cite_ref-developer_survey_2015_29-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"developer survey 2015"}}'><a href="#cite_note-developer_survey_2015-29" id="mwvQ"><span class="mw-reflink-text" id="mwvg"><span class="cite-bracket" id="mwvw">[</span>29<span class="cite-bracket" id="mwwA">]</span></span></a></sup> y ocupó el primer lugar en 2016-2020.<sup about="#mwt51" class="mw-ref reference" id="cite_ref-most_loved_2016_30-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"most loved 2016"}}'><a href="#cite_note-most_loved_2016-30" id="mwwQ"><span class="mw-reflink-text" id="mwwg"><span class="cite-bracket" id="mwww">[</span>30<span class="cite-bracket" id="mwxA">]</span></span></a></sup><sup about="#mwt52" class="mw-ref reference" id="cite_ref-most_loved_2017_31-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"most loved 2017"}}'><a href="#cite_note-most_loved_2017-31" id="mwxQ"><span class="mw-reflink-text" id="mwxg"><span class="cite-bracket" id="mwxw">[</span>31<span class="cite-bracket" id="mwyA">]</span></span></a></sup><sup about="#mwt53" class="mw-ref reference" id="cite_ref-developer_survey_2018_32-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"developer survey 2018"}}'><a href="#cite_note-developer_survey_2018-32" id="mwyQ"><span class="mw-reflink-text" id="mwyg"><span class="cite-bracket" id="mwyw">[</span>32<span class="cite-bracket" id="mwzA">]</span></span></a></sup><sup about="#mwt54" class="mw-ref reference" id="cite_ref-most_loved_2019_33-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"most loved 2019"}}'><a href="#cite_note-most_loved_2019-33" id="mwzQ"><span class="mw-reflink-text" id="mwzg"><span class="cite-bracket" id="mwzw">[</span>33<span class="cite-bracket" id="mw0A">]</span></span></a></sup><sup about="#mwt55" class="mw-ref reference" id="cite_ref-developer_survey_2020_34-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"developer survey 2020"}}'><a href="#cite_note-developer_survey_2020-34" id="mw0Q"><span class="mw-reflink-text" id="mw0g"><span class="cite-bracket" id="mw0w">[</span>34<span class="cite-bracket" id="mw1A">]</span></span></a></sup></p>
+
+<p id="mw1Q">El lenguaje se menciona en El libro de Mozilla como "metal oxidado".<sup about="#mwt56" class="mw-ref reference" id="cite_ref-mozilla_book_35-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"mozilla book"}}'><a href="#cite_note-mozilla_book-35" id="mw1g"><span class="mw-reflink-text" id="mw1w"><span class="cite-bracket" id="mw2A">[</span>35<span class="cite-bracket" id="mw2Q">]</span></span></a></sup></p>
+<section data-mw-section-id="3" id="mw2g" aria-labelledby="Creación_de_Fundación_Rust"><div class="mw-heading mw-heading3"><h3 id="Creación_de_Fundación_Rust"><span id="Creaci.C3.B3n_de_Fundaci.C3.B3n_Rust" typeof="mw:FallbackId"></span>Creación de Fundación Rust</h3><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/w/index.php?title=Rust_(lenguaje_de_programaci%C3%B3n)&amp;action=edit&amp;section=3" title="Editar sección: Creación de Fundación Rust"><span>editar</span></a><span class="mw-editsection-bracket">]</span></span></div>
+<p id="mw2w">En agosto de 2020, Mozilla despidió a 250 de sus 1000 empleados en todo el mundo como parte de una reestructuración corporativa provocada por el impacto a largo plazo de la pandemia de COVID-19. El equipo detrás de <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Servo_(software)" title="Servo (software)" id="mw3A">Servo</a>, un motor de navegador escrito en Rust, se disolvió por completo. El evento generó preocupaciones sobre el futuro de Rust, ya que algunos miembros del equipo eran colaboradores activos de Rust.</p>
+
+<p id="mw3Q">A la semana siguiente, el equipo central de Rust reconoció el grave impacto de los despidos y anunció que los planes para una fundación de Rust estaban en marcha. El primer objetivo de la fundación sería tomar posesión de todas las marcas comerciales y nombres de dominio, y asumir la responsabilidad financiera por sus costos.<sup about="#mwt58" class="mw-ref reference" id="cite_ref-36" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-36"}}'><a href="#cite_note-36" id="mw3g"><span class="mw-reflink-text" id="mw3w"><span class="cite-bracket" id="mw4A">[</span>36<span class="cite-bracket" id="mw4Q">]</span></span></a></sup></p>
+
+<p id="mw4g">El 8 de febrero de 2021, sus cinco empresas fundadoras (<a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Amazon_Web_Services" title="Amazon Web Services" id="mw4w">AWS</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Huawei" title="Huawei" id="mw5A">Huawei</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Google" title="Google" id="mw5Q">Google</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Microsoft" title="Microsoft" id="mw5g">Microsoft</a> y Mozilla) anunciaron la formación de la Fundación Rust.<sup about="#mwt60" class="mw-ref reference" id="cite_ref-37" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-37"}}'><a href="#cite_note-37" id="mw5w"><span class="mw-reflink-text" id="mw6A"><span class="cite-bracket" id="mw6Q">[</span>37<span class="cite-bracket" id="mw6g">]</span></span></a></sup><sup about="#mwt62" class="mw-ref reference" id="cite_ref-38" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-38"}}'><a href="#cite_note-38" id="mw6w"><span class="mw-reflink-text" id="mw7A"><span class="cite-bracket" id="mw7Q">[</span>38<span class="cite-bracket" id="mw7g">]</span></span></a></sup></p>
+
+<p id="mw7w">El 6 de abril de 2021, Google anunció la compatibilidad con Rust dentro del Proyecto de código abierto de <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Android" title="Android" id="mw8A">Android</a> como alternativa a C/C++.<sup about="#mwt64" class="mw-ref reference" id="cite_ref-39" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-39"}}'><a href="#cite_note-39" id="mw8Q"><span class="mw-reflink-text" id="mw8g"><span class="cite-bracket" id="mw8w">[</span>39<span class="cite-bracket" id="mw9A">]</span></span></a></sup></p>
+
+</section></section><section data-mw-section-id="4" id="mw9Q" aria-labelledby="Ejemplos"><div class="mw-heading mw-heading2"><h2 id="Ejemplos">Ejemplos</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/w/index.php?title=Rust_(lenguaje_de_programaci%C3%B3n)&amp;action=edit&amp;section=4" title="Editar sección: Ejemplos"><span>editar</span></a><span class="mw-editsection-bracket">]</span></span></div>
+<p id="mw9g">El siguiente código es válido para Rust 1.86.0. En versiones posteriores puede cambiar la sintaxis o las funciones.</p>
+
+<p id="mw9w">Programa que muestra la frase “¡Hola, mundo!”:</p>
+
+<div class="mw-highlight mw-highlight-lang-rust mw-content-ltr" dir="ltr" typeof="mw:Extension/syntaxhighlight" about="#mwt65" id="mw-A" data-mw='{"name":"syntaxhighlight","attrs":{"lang":"rust"},"body":{"extsrc":"\nfn main() {\n    println!(\"¡Hola, mundo!\");\n}\n"}}'><pre id="mw-Q"><span id="mw-g"></span><span class="k" id="mw-w">fn</span><span class="w" id="mw_A"> </span><span class="nf" id="mw_Q">main</span><span class="p" id="mw_g">()</span><span class="w" id="mw_w"> </span><span class="p" id="mwAQA">{</span>
+<span class="w" id="mwAQE">    </span><span class="fm" id="mwAQI">println!</span><span class="p" id="mwAQM">(</span><span class="s" id="mwAQQ">"¡Hola, mundo!"</span><span class="p" id="mwAQU">);</span>
+<span class="p" id="mwAQY">}</span>
+</pre></div>
+
+<p id="mwAQc">Tres versiones de la función <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Factorial" title="Factorial" id="mwAQg">factorial</a>, en estilo <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Recursivo" title="Recursivo" class="mw-redirect" id="mwAQk">recursivo</a>, <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Iterativo" title="Iterativo" class="mw-redirect" id="mwAQo">iterativo</a> y <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Programación_funcional" title="Programación funcional" id="mwAQs">funcional</a>:</p>
+<div class="mw-highlight mw-highlight-lang-rust mw-content-ltr" dir="ltr" typeof="mw:Extension/syntaxhighlight" about="#mwt66" id="mwAQw" data-mw='{"name":"syntaxhighlight","attrs":{"lang":"rust"},"body":{"extsrc":"\n// Las ramas en esta función exhiben los valores de retorno implícito opcional\n// de Rust, que pueden ser usados cuando se prefiera un estilo más “funcional”.\n// A diferencia de C++ y otros lenguajes similares, la estructura de control\n// `if` es una expresión en vez de una declaración, por tanto, tiene un valor de retorno propio\nfn recursive_factorial(n: i32) -> i32 {\n    if n == 0 {\n        1\n    } else {\n        n * recursive_factorial(n - 1)\n    }\n}\n\nfn iterative_factorial(n: i32) -> i32 {\n    // Las variables son declaradas con `let`.\n    // La palabra `mut` permite que las variables puedan ser mutadas.\n    let mut i = 1;\n    let mut result = 1;\n    while i &lt;= n {\n        result *= i;\n        i += 1;\n    }\n    return result; // Un retorno explícito, en contraste con la función previa.\n}\n\n// Calcula el factorial de un número entero positivo usando programación funcional.\n// A diferencia de los bucles o la recursión explícita, esta implementación usa\n// un estilo declarativo apoyado en iteradores. El rango `(1..=n)` produce una secuencia\n// inclusiva desde 1 hasta `n`. El método `fold` acumula el resultado aplicando la operación\n// multiplicación sucesiva a cada elemento del rango, comenzando desde el valor inicial 1.\nfn functional_factorial(n: u64) -> u64 {\n    (1..=n).into_iter().fold(1, |acc, x| acc * x)\n}\n\nfn main() {\n    println!(\"Resultado recursivo: {}\", recursive_factorial(10));\n    println!(\"Resultado iterativo: {}\", iterative_factorial(10));\n    println!(\"Resultado funcional: {}\", functional_factorial(10));\n}\n"}}'><pre id="mwAQ0"><span id="mwAQ4"></span><span class="c1" id="mwAQ8">// Las ramas en esta función exhiben los valores de retorno implícito opcional</span>
+<span class="c1" id="mwARA">// de Rust, que pueden ser usados cuando se prefiera un estilo más “funcional”.</span>
+<span class="c1" id="mwARE">// A diferencia de C++ y otros lenguajes similares, la estructura de control</span>
+<span class="c1" id="mwARI">// `if` es una expresión en vez de una declaración, por tanto, tiene un valor de retorno propio</span>
+<span class="k" id="mwARM">fn</span><span class="w" id="mwARQ"> </span><span class="nf" id="mwARU">recursive_factorial</span><span class="p" id="mwARY">(</span><span class="n" id="mwARc">n</span><span class="p" id="mwARg">:</span><span class="w" id="mwARk"> </span><span class="kt" id="mwARo">i32</span><span class="p" id="mwARs">)</span><span class="w" id="mwARw"> </span><span class="p" id="mwAR0">-></span><span class="w" id="mwAR4"> </span><span class="kt" id="mwAR8">i32</span><span class="w" id="mwASA"> </span><span class="p" id="mwASE">{</span>
+<span class="w" id="mwASI">    </span><span class="k" id="mwASM">if</span><span class="w" id="mwASQ"> </span><span class="n" id="mwASU">n</span><span class="w" id="mwASY"> </span><span class="o" id="mwASc">==</span><span class="w" id="mwASg"> </span><span class="mi" id="mwASk">0</span><span class="w" id="mwASo"> </span><span class="p" id="mwASs">{</span>
+<span class="w" id="mwASw">        </span><span class="mi" id="mwAS0">1</span>
+<span class="w" id="mwAS4">    </span><span class="p" id="mwAS8">}</span><span class="w" id="mwATA"> </span><span class="k" id="mwATE">else</span><span class="w" id="mwATI"> </span><span class="p" id="mwATM">{</span>
+<span class="w" id="mwATQ">        </span><span class="n" id="mwATU">n</span><span class="w" id="mwATY"> </span><span class="o" id="mwATc">*</span><span class="w" id="mwATg"> </span><span class="n" id="mwATk">recursive_factorial</span><span class="p" id="mwATo">(</span><span class="n" id="mwATs">n</span><span class="w" id="mwATw"> </span><span class="o" id="mwAT0">-</span><span class="w" id="mwAT4"> </span><span class="mi" id="mwAT8">1</span><span class="p" id="mwAUA">)</span>
+<span class="w" id="mwAUE">    </span><span class="p" id="mwAUI">}</span>
+<span class="p" id="mwAUM">}</span>
+
+<span class="k" id="mwAUQ">fn</span><span class="w" id="mwAUU"> </span><span class="nf" id="mwAUY">iterative_factorial</span><span class="p" id="mwAUc">(</span><span class="n" id="mwAUg">n</span><span class="p" id="mwAUk">:</span><span class="w" id="mwAUo"> </span><span class="kt" id="mwAUs">i32</span><span class="p" id="mwAUw">)</span><span class="w" id="mwAU0"> </span><span class="p" id="mwAU4">-></span><span class="w" id="mwAU8"> </span><span class="kt" id="mwAVA">i32</span><span class="w" id="mwAVE"> </span><span class="p" id="mwAVI">{</span>
+<span class="w" id="mwAVM">    </span><span class="c1" id="mwAVQ">// Las variables son declaradas con `let`.</span>
+<span class="w" id="mwAVU">    </span><span class="c1" id="mwAVY">// La palabra `mut` permite que las variables puedan ser mutadas.</span>
+<span class="w" id="mwAVc">    </span><span class="kd" id="mwAVg">let</span><span class="w" id="mwAVk"> </span><span class="k" id="mwAVo">mut</span><span class="w" id="mwAVs"> </span><span class="n" id="mwAVw">i</span><span class="w" id="mwAV0"> </span><span class="o" id="mwAV4">=</span><span class="w" id="mwAV8"> </span><span class="mi" id="mwAWA">1</span><span class="p" id="mwAWE">;</span>
+<span class="w" id="mwAWI">    </span><span class="kd" id="mwAWM">let</span><span class="w" id="mwAWQ"> </span><span class="k" id="mwAWU">mut</span><span class="w" id="mwAWY"> </span><span class="n" id="mwAWc">result</span><span class="w" id="mwAWg"> </span><span class="o" id="mwAWk">=</span><span class="w" id="mwAWo"> </span><span class="mi" id="mwAWs">1</span><span class="p" id="mwAWw">;</span>
+<span class="w" id="mwAW0">    </span><span class="k" id="mwAW4">while</span><span class="w" id="mwAW8"> </span><span class="n" id="mwAXA">i</span><span class="w" id="mwAXE"> </span><span class="o" id="mwAXI">&lt;=</span><span class="w" id="mwAXM"> </span><span class="n" id="mwAXQ">n</span><span class="w" id="mwAXU"> </span><span class="p" id="mwAXY">{</span>
+<span class="w" id="mwAXc">        </span><span class="n" id="mwAXg">result</span><span class="w" id="mwAXk"> </span><span class="o" id="mwAXo">*=</span><span class="w" id="mwAXs"> </span><span class="n" id="mwAXw">i</span><span class="p" id="mwAX0">;</span>
+<span class="w" id="mwAX4">        </span><span class="n" id="mwAX8">i</span><span class="w" id="mwAYA"> </span><span class="o" id="mwAYE">+=</span><span class="w" id="mwAYI"> </span><span class="mi" id="mwAYM">1</span><span class="p" id="mwAYQ">;</span>
+<span class="w" id="mwAYU">    </span><span class="p" id="mwAYY">}</span>
+<span class="w" id="mwAYc">    </span><span class="k" id="mwAYg">return</span><span class="w" id="mwAYk"> </span><span class="n" id="mwAYo">result</span><span class="p" id="mwAYs">;</span><span class="w" id="mwAYw"> </span><span class="c1" id="mwAY0">// Un retorno explícito, en contraste con la función previa.</span>
+<span class="p" id="mwAY4">}</span>
+
+<span class="c1" id="mwAY8">// Calcula el factorial de un número entero positivo usando programación funcional.</span>
+<span class="c1" id="mwAZA">// A diferencia de los bucles o la recursión explícita, esta implementación usa</span>
+<span class="c1" id="mwAZE">// un estilo declarativo apoyado en iteradores. El rango `(1..=n)` produce una secuencia</span>
+<span class="c1" id="mwAZI">// inclusiva desde 1 hasta `n`. El método `fold` acumula el resultado aplicando la operación</span>
+<span class="c1" id="mwAZM">// multiplicación sucesiva a cada elemento del rango, comenzando desde el valor inicial 1.</span>
+<span class="k" id="mwAZQ">fn</span><span class="w" id="mwAZU"> </span><span class="nf" id="mwAZY">functional_factorial</span><span class="p" id="mwAZc">(</span><span class="n" id="mwAZg">n</span><span class="p" id="mwAZk">:</span><span class="w" id="mwAZo"> </span><span class="kt" id="mwAZs">u64</span><span class="p" id="mwAZw">)</span><span class="w" id="mwAZ0"> </span><span class="p" id="mwAZ4">-></span><span class="w" id="mwAZ8"> </span><span class="kt" id="mwAaA">u64</span><span class="w" id="mwAaE"> </span><span class="p" id="mwAaI">{</span>
+<span class="w" id="mwAaM">    </span><span class="p" id="mwAaQ">(</span><span class="mi" id="mwAaU">1</span><span class="o" id="mwAaY">..=</span><span class="n" id="mwAac">n</span><span class="p" id="mwAag">).</span><span class="n" id="mwAak">into_iter</span><span class="p" id="mwAao">().</span><span class="n" id="mwAas">fold</span><span class="p" id="mwAaw">(</span><span class="mi" id="mwAa0">1</span><span class="p" id="mwAa4">,</span><span class="w" id="mwAa8"> </span><span class="o" id="mwAbA">|</span><span class="n" id="mwAbE">acc</span><span class="p" id="mwAbI">,</span><span class="w" id="mwAbM"> </span><span class="n" id="mwAbQ">x</span><span class="o" id="mwAbU">|</span><span class="w" id="mwAbY"> </span><span class="n" id="mwAbc">acc</span><span class="w" id="mwAbg"> </span><span class="o" id="mwAbk">*</span><span class="w" id="mwAbo"> </span><span class="n" id="mwAbs">x</span><span class="p" id="mwAbw">)</span>
+<span class="p" id="mwAb0">}</span>
+
+<span class="k" id="mwAb4">fn</span><span class="w" id="mwAb8"> </span><span class="nf" id="mwAcA">main</span><span class="p" id="mwAcE">()</span><span class="w" id="mwAcI"> </span><span class="p" id="mwAcM">{</span>
+<span class="w" id="mwAcQ">    </span><span class="fm" id="mwAcU">println!</span><span class="p" id="mwAcY">(</span><span class="s" id="mwAcc">"Resultado recursivo: {}"</span><span class="p" id="mwAcg">,</span><span class="w" id="mwAck"> </span><span class="n" id="mwAco">recursive_factorial</span><span class="p" id="mwAcs">(</span><span class="mi" id="mwAcw">10</span><span class="p" id="mwAc0">));</span>
+<span class="w" id="mwAc4">    </span><span class="fm" id="mwAc8">println!</span><span class="p" id="mwAdA">(</span><span class="s" id="mwAdE">"Resultado iterativo: {}"</span><span class="p" id="mwAdI">,</span><span class="w" id="mwAdM"> </span><span class="n" id="mwAdQ">iterative_factorial</span><span class="p" id="mwAdU">(</span><span class="mi" id="mwAdY">10</span><span class="p" id="mwAdc">));</span>
+<span class="w" id="mwAdg">    </span><span class="fm" id="mwAdk">println!</span><span class="p" id="mwAdo">(</span><span class="s" id="mwAds">"Resultado funcional: {}"</span><span class="p" id="mwAdw">,</span><span class="w" id="mwAd0"> </span><span class="n" id="mwAd4">functional_factorial</span><span class="p" id="mwAd8">(</span><span class="mi" id="mwAeA">10</span><span class="p" id="mwAeE">));</span>
+<span class="p" id="mwAeI">}</span>
+</pre></div>
+
+<p id="mwAeM">Una simple demostración de las capacidades de <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Concurrencia" title="Concurrencia" class="mw-disambig" id="mwAeQ">concurrencia</a> ligera de Rust:</p>
+
+<div class="mw-highlight mw-highlight-lang-rust mw-content-ltr" dir="ltr" typeof="mw:Extension/syntaxhighlight" about="#mwt67" id="mwAeU" data-mw='{"name":"syntaxhighlight","attrs":{"lang":"rust"},"body":{"extsrc":"\n/* Esta función crea diez “tareas” que se pueden ejecutar concurrentemente.\n   Ejecútalo múltiples veces y observa la salida irregular que se obtiene al\n   estar cada tarea llamando al stdout, ya que cada tarea puede producirse entre\n   las sucesivas llamadas a `println` y dentro de la función `println` en sí. */\n\nuse std::thread;\n\nfn main() {\n    // Esta cadena es inmutable, para que pueda ser accedida de forma segura\n    // por múltiples tareas.\n    let message = \"¡Miradme, soy un proceso ligero!\";\n    // Los bucles `for` funcionan con cualquier tipo que implemente el trait\n    // `Iterator`.\n\n    for num in 0..10 {\n        // Es muy probable que no muestre los 10 mensajes porque si la “tarea”\n        // principal termina antes, las “tareas” producidas ya no se ejecutan.\n        thread::spawn (move || {\n            println!(\"{}\", message);\n            // `println!` es una macro que verifica estáticamente un string de\n            // formato. Las macros son estructurales (como en Scheme) en lugar\n            // de ser textuales (como en C).\n            println!(\"Este mensaje ha sido ofrecido por la tarea {}.\", num);\n        });\n    }\n}\n"}}'><pre id="mwAeY"><span id="mwAec"></span><span class="cm" id="mwAeg">/* Esta función crea diez “tareas” que se pueden ejecutar concurrentemente.</span>
+<span class="cm" id="mwAek">   Ejecútalo múltiples veces y observa la salida irregular que se obtiene al</span>
+<span class="cm" id="mwAeo">   estar cada tarea llamando al stdout, ya que cada tarea puede producirse entre</span>
+<span class="cm" id="mwAes">   las sucesivas llamadas a `println` y dentro de la función `println` en sí. */</span>
+
+<span class="k" id="mwAew">use</span><span class="w" id="mwAe0"> </span><span class="n" id="mwAe4">std</span><span class="p" id="mwAe8">::</span><span class="n" id="mwAfA">thread</span><span class="p" id="mwAfE">;</span>
+
+<span class="k" id="mwAfI">fn</span><span class="w" id="mwAfM"> </span><span class="nf" id="mwAfQ">main</span><span class="p" id="mwAfU">()</span><span class="w" id="mwAfY"> </span><span class="p" id="mwAfc">{</span>
+<span class="w" id="mwAfg">    </span><span class="c1" id="mwAfk">// Esta cadena es inmutable, para que pueda ser accedida de forma segura</span>
+<span class="w" id="mwAfo">    </span><span class="c1" id="mwAfs">// por múltiples tareas.</span>
+<span class="w" id="mwAfw">    </span><span class="kd" id="mwAf0">let</span><span class="w" id="mwAf4"> </span><span class="n" id="mwAf8">message</span><span class="w" id="mwAgA"> </span><span class="o" id="mwAgE">=</span><span class="w" id="mwAgI"> </span><span class="s" id="mwAgM">"¡Miradme, soy un proceso ligero!"</span><span class="p" id="mwAgQ">;</span>
+<span class="w" id="mwAgU">    </span><span class="c1" id="mwAgY">// Los bucles `for` funcionan con cualquier tipo que implemente el trait</span>
+<span class="w" id="mwAgc">    </span><span class="c1" id="mwAgg">// `Iterator`.</span>
+
+<span class="w" id="mwAgk">    </span><span class="k" id="mwAgo">for</span><span class="w" id="mwAgs"> </span><span class="n" id="mwAgw">num</span><span class="w" id="mwAg0"> </span><span class="k" id="mwAg4">in</span><span class="w" id="mwAg8"> </span><span class="mi" id="mwAhA">0</span><span class="o" id="mwAhE">..</span><span class="mi" id="mwAhI">10</span><span class="w" id="mwAhM"> </span><span class="p" id="mwAhQ">{</span>
+<span class="w" id="mwAhU">        </span><span class="c1" id="mwAhY">// Es muy probable que no muestre los 10 mensajes porque si la “tarea”</span>
+<span class="w" id="mwAhc">        </span><span class="c1" id="mwAhg">// principal termina antes, las “tareas” producidas ya no se ejecutan.</span>
+<span class="w" id="mwAhk">        </span><span class="n" id="mwAho">thread</span><span class="p" id="mwAhs">::</span><span class="n" id="mwAhw">spawn</span><span class="w" id="mwAh0"> </span><span class="p" id="mwAh4">(</span><span class="k" id="mwAh8">move</span><span class="w" id="mwAiA"> </span><span class="o" id="mwAiE">||</span><span class="w" id="mwAiI"> </span><span class="p" id="mwAiM">{</span>
+<span class="w" id="mwAiQ">            </span><span class="fm" id="mwAiU">println!</span><span class="p" id="mwAiY">(</span><span class="s" id="mwAic">"{}"</span><span class="p" id="mwAig">,</span><span class="w" id="mwAik"> </span><span class="n" id="mwAio">message</span><span class="p" id="mwAis">);</span>
+<span class="w" id="mwAiw">            </span><span class="c1" id="mwAi0">// `println!` es una macro que verifica estáticamente un string de</span>
+<span class="w" id="mwAi4">            </span><span class="c1" id="mwAi8">// formato. Las macros son estructurales (como en Scheme) en lugar</span>
+<span class="w" id="mwAjA">            </span><span class="c1" id="mwAjE">// de ser textuales (como en C).</span>
+<span class="w" id="mwAjI">            </span><span class="fm" id="mwAjM">println!</span><span class="p" id="mwAjQ">(</span><span class="s" id="mwAjU">"Este mensaje ha sido ofrecido por la tarea {}."</span><span class="p" id="mwAjY">,</span><span class="w" id="mwAjc"> </span><span class="n" id="mwAjg">num</span><span class="p" id="mwAjk">);</span>
+<span class="w" id="mwAjo">        </span><span class="p" id="mwAjs">});</span>
+<span class="w" id="mwAjw">    </span><span class="p" id="mwAj0">}</span>
+<span class="p" id="mwAj4">}</span>
+</pre></div>
+
+</section><section data-mw-section-id="5" id="mwAj8" aria-labelledby="Evolución_del_lenguaje"><div class="mw-heading mw-heading2"><h2 id="Evolución_del_lenguaje"><span id="Evoluci.C3.B3n_del_lenguaje" typeof="mw:FallbackId"></span>Evolución del lenguaje</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/w/index.php?title=Rust_(lenguaje_de_programaci%C3%B3n)&amp;action=edit&amp;section=5" title="Editar sección: Evolución del lenguaje"><span>editar</span></a><span class="mw-editsection-bracket">]</span></span></div>
+<p id="mwAkA">Además de los tipos estáticos convencionales, Rust también incluyó <i id="mwAkE">typestates</i> hasta su versión 0.4. El sistema <i id="mwAkI">typestate</i> modela afirmaciones antes y después de las declaraciones del programa, mediante el uso de una declaración de verificación especial. Las discrepancias pueden ser descubiertas durante la compilación, en lugar de una vez que el programa se ejecuta, como podría ser el caso de las <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Aserción_(informática)" title="Aserción (informática)" id="mwAkM">aserciones</a> en el código C o C++. El concepto <i id="mwAkQ">typestate</i> no es exclusivo de Rust, ya que se introdujo por primera vez en el lenguaje de programación NIL.<sup about="#mwt68" class="mw-ref reference" id="cite_ref-typestate_26-1" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"typestate"}}'><a href="#cite_note-typestate-26" id="mwAkU"><span class="mw-reflink-text" id="mwAkY"><span class="cite-bracket" id="mwAkc">[</span>26<span class="cite-bracket" id="mwAkg">]</span></span></a></sup> Fueron retirados los <i id="mwAkk">typestates</i> porque en la práctica se encontraron poco usados, sin embargo la misma funcionalidad aún se puede lograr con los patrones del mismo lenguaje.<sup about="#mwt70" class="mw-ref reference" id="cite_ref-branding-patterns_40-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"branding-patterns"},"body":{"id":"mw-reference-text-cite_note-branding-patterns-40"}}'><a href="#cite_note-branding-patterns-40" id="mwAko"><span class="mw-reflink-text" id="mwAks"><span class="cite-bracket" id="mwAkw">[</span>40<span class="cite-bracket" id="mwAk0">]</span></span></a></sup></p>
+
+<p id="mwAk4">El estilo del sistema de objetos ha cambiado considerablemente en las versiones 0.2, 0.3 y 0.4 de Rust. La versión 0.2 introdujo clases por primera vez, con la versión 0.3 añadiendo un número de características que incluyen destructores y polimorfismo mediante el uso de interfaces. En Rust 0.4, se añadieron <i id="mwAk8">traits</i> como un medio para proporcionar herencia, las interfaces se unificaron con los <i id="mwAlA">traits</i> y eliminándose como una característica independiente. También se eliminaron las clases, reemplazadas por una combinación de las implementaciones y tipos estructurados.</p>
+
+</section><section data-mw-section-id="6" id="mwAlE" aria-labelledby="Interfaces_gráficas_(GUI)"><div class="mw-heading mw-heading2"><h2 id="Interfaces_gráficas_(GUI)"><span id="Interfaces_gr.C3.A1ficas_.28GUI.29" typeof="mw:FallbackId"></span>Interfaces gráficas (GUI)</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/w/index.php?title=Rust_(lenguaje_de_programaci%C3%B3n)&amp;action=edit&amp;section=6" title="Editar sección: Interfaces gráficas (GUI)"><span>editar</span></a><span class="mw-editsection-bracket">]</span></span></div>
+<p id="mwAlI">Rust permite la creación de interfaces gráficas mediante las APIs nativas de la plataforma anfitriona, esto gracias a que tiene características de un lenguaje de bajo nivel. Sin embargo, esta ruta de desarrollo puede llegar a generar dificultades en proyectos que planten la admision de múltiples plataformas.<sup about="#mwt71" class="mw-ref reference" id="cite_ref-rust_gui_41-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"rust gui"}}'><a href="#cite_note-rust_gui-41" id="mwAlM"><span class="mw-reflink-text" id="mwAlQ"><span class="cite-bracket" id="mwAlU">[</span>41<span class="cite-bracket" id="mwAlY">]</span></span></a></sup></p>
+
+<p id="mwAlc">Actualmente existen múltiples desarrollos para crear GUIs en Rust, algunos permiten la creación de la interfaz junto a Electron o haciendo uso de HTML, algunos otros, suministran bibliotecas nativas para el lenguaje, pero todavía se encuentran en un estado inmaduro de desarrollo. Finalmente están los proyectos que enlazan bibliotecas bastante conocidas y con una mayor madurez en su desarrollo, como <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/GTK" title="GTK" id="mwAlg">GTK</a> o <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Qt_(biblioteca)" title="Qt (biblioteca)" id="mwAlk">Qt</a>, lo cuales permiten desarrollos <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Multiplataforma" title="Multiplataforma" id="mwAlo">multiplataforma</a>.<sup about="#mwt72" class="mw-ref reference" id="cite_ref-rust_gui_medium_42-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"rust gui medium"}}'><a href="#cite_note-rust_gui_medium-42" id="mwAls"><span class="mw-reflink-text" id="mwAlw"><span class="cite-bracket" id="mwAl0">[</span>42<span class="cite-bracket" id="mwAl4">]</span></span></a></sup> Algunos proyectos populares son los siguientes:</p>
+
+<section data-mw-section-id="7" id="mwAl8" aria-labelledby="gtk-rs"><div class="mw-heading mw-heading3"><h3 id="gtk-rs">gtk-rs</h3><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/w/index.php?title=Rust_(lenguaje_de_programaci%C3%B3n)&amp;action=edit&amp;section=7" title="Editar sección: gtk-rs"><span>editar</span></a><span class="mw-editsection-bracket">]</span></span></div>
+<figure class="mw-default-size" typeof="mw:File/Thumb" id="mwAmA"><a href="https://es.wikipedia.org/wiki/Archivo:Gtk3-widget-factory-3.16.0.png" class="mw-file-description" id="mwAmE"><img resource="https://es.wikipedia.org/wiki/Archivo:Gtk3-widget-factory-3.16.0.png" src="//thumb.wikimedia.org/wikipedia/commons/thumb/8/8a/Gtk3-widget-factory-3.16.0.png/250px-Gtk3-widget-factory-3.16.0.png?utm_source=es.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail" decoding="async" loading="lazy" srcset="//thumb.wikimedia.org/wikipedia/commons/thumb/8/8a/Gtk3-widget-factory-3.16.0.png/500px-Gtk3-widget-factory-3.16.0.png?utm_source=es.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail 2x" data-file-width="1303" data-file-height="780" data-file-type="bitmap" height="150" width="250" class="mw-file-element" id="mwAmI"/></a><figcaption id="mwAmM">Ejemplo de interfaz con GTK</figcaption></figure>
+<p id="mwAmQ">Es una implementación de las bibliotecas de <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/GTK" title="GTK" id="mwAmU">GTK</a> para el uso junto al lenguaje Rust. Para ello, crea funciones de Rust superpuestas a las funciones de las bibliotecas de <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/GTK" title="GTK" id="mwAmY">GTK</a> en C, haciendo uso de Foreign Function Interface que ofrece Rust.</p>
+
+</section><section data-mw-section-id="8" id="mwAmc" aria-labelledby="conrod"><div class="mw-heading mw-heading3"><h3 id="conrod">conrod</h3><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/w/index.php?title=Rust_(lenguaje_de_programaci%C3%B3n)&amp;action=edit&amp;section=8" title="Editar sección: conrod"><span>editar</span></a><span class="mw-editsection-bracket">]</span></span></div>
+<p id="mwAmg">Biblioteca de bajo nivel que hace uso de OpenGL o Vulkan.</p>
+
+</section></section><section data-mw-section-id="9" id="mwAmk" aria-labelledby="Proyectos"><div class="mw-heading mw-heading2"><h2 id="Proyectos">Proyectos</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/w/index.php?title=Rust_(lenguaje_de_programaci%C3%B3n)&amp;action=edit&amp;section=9" title="Editar sección: Proyectos"><span>editar</span></a><span class="mw-editsection-bracket">]</span></span></div>
+<section data-mw-section-id="10" id="mwAmo" aria-labelledby="Navegador_web"><div class="mw-heading mw-heading3"><h3 id="Navegador_web">Navegador web</h3><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/w/index.php?title=Rust_(lenguaje_de_programaci%C3%B3n)&amp;action=edit&amp;section=10" title="Editar sección: Navegador web"><span>editar</span></a><span class="mw-editsection-bracket">]</span></span></div>
+<p id="mwAms">Se están escribiendo en Rust un navegador web y varios componentes relacionados, que incluyen:</p>
+<ul id="mwAmw"><li id="mwAm0">Firefox
+<ul id="mwAm4"><li id="mwAm8"><a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Servo_(software)" title="Servo (software)" id="mwAnA">Servo</a>: motor de navegador web paralelo de Mozilla desarrollado en colaboración con Samsung</li>
+<li id="mwAnE">Quantum: un proyecto, compuesto por varios subproyectos, para mejorar el motor del navegador web Gecko de Firefox, desarrollado por Mozilla</li>
+<li id="mwAnI"><a rel="mw:WikiLink/Interwiki" href="https://wiki.mozilla.org/Oxidation" title="mozillawiki:Oxidation" class="extiw" id="mwAnM">Oxidation</a>: un proyecto para integrar código escrito en el lenguaje de programación Rust en Gecko y Firefox, impulsado por Mozilla</li></ul></li>
+<li id="mwAnQ">Brave
+<ul id="mwAnU"><li id="mwAnY">Brave Shields (<a rel="mw:ExtLink nofollow" href="https://github.com/brave/adblock-rust" class="external text" id="mwAnc">adblock-rust</a>): Un bloqueador de anuncios nativo del navegador web Brave, que integra la sintaxis de <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/UBlock_Origin" title="UBlock Origin" id="mwAng">uBlock Origin</a> y que ofrece un gran rendimiento  en comparación con su anterior implementación basada en JavaScript, según sus desarrolladores</li></ul></li></ul>
+
+</section><section data-mw-section-id="11" id="mwAnk" aria-labelledby="Sistemas_operativos"><div class="mw-heading mw-heading3"><h3 id="Sistemas_operativos">Sistemas operativos</h3><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/w/index.php?title=Rust_(lenguaje_de_programaci%C3%B3n)&amp;action=edit&amp;section=11" title="Editar sección: Sistemas operativos"><span>editar</span></a><span class="mw-editsection-bracket">]</span></span></div>
+<p id="mwAno">Muchos sistemas operativos (SO) y componentes relacionados se están escribiendo en Rust. A partir de enero de 2019, los sistemas operativos incluían: BlogOS, intermezzOS, QuiltOS, Redox, RustOS, Rux, Tefflin y Tock.</p>
+<ul id="mwAns"><li id="mwAnw">Redox: Un micronucleo</li>
+<li id="mwAn0">Stratis: Un sistema de archivos para <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Fedora_(distribución_Linux)" title="Fedora (distribución Linux)" class="mw-redirect" id="mwAn4">Fedora</a> y RHEL 8.</li></ul>
+
+<section data-mw-section-id="12" id="mwAn8" aria-labelledby="Rust_for_linux"><div class="mw-heading mw-heading4"><h4 id="Rust_for_linux">Rust for linux</h4><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/w/index.php?title=Rust_(lenguaje_de_programaci%C3%B3n)&amp;action=edit&amp;section=12" title="Editar sección: Rust for linux"><span>editar</span></a><span class="mw-editsection-bracket">]</span></span></div>
+<div class="noprint AP rellink" about="#mwt73" typeof="mw:Transclusion" id="mwAoA" data-mw='{"parts":[{"template":{"target":{"wt":"Artículo principal","href":"./Plantilla:Artículo_principal"},"params":{"1":{"wt":"Rust for Linux"}},"i":0}}]}'><span style="font-size:88%">Artículo principal:</span><span typeof="mw:Entity"> </span><i><a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Rust_for_Linux" title="Rust for Linux"> Rust for Linux</a></i></div>
+<p id="mwAoE">Desde su versión 6.1, el <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Núcleo_Linux" title="Núcleo Linux" id="mwAoI">kernel de linux</a> integra Rust como un segundo lenguaje de programación. <sup about="#mwt75" class="mw-ref reference" id="cite_ref-43" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-43"}}'><a href="#cite_note-43" id="mwAoM"><span class="mw-reflink-text" id="mwAoQ"><span class="cite-bracket" id="mwAoU">[</span>43<span class="cite-bracket" id="mwAoY">]</span></span></a></sup></p>
+
+</section></section><section data-mw-section-id="13" id="mwAoc" aria-labelledby="Otro"><div class="mw-heading mw-heading3"><h3 id="Otro">Otro</h3><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/w/index.php?title=Rust_(lenguaje_de_programaci%C3%B3n)&amp;action=edit&amp;section=13" title="Editar sección: Otro"><span>editar</span></a><span class="mw-editsection-bracket">]</span></span></div>
+<ul id="mwAog"><li id="mwAok"><a rel="mw:ExtLink nofollow" href="https://github.com/eza-community/eza" class="external text" id="mwAoo">eza</a> - un reemplazo moderno para ls.</li>
+<li id="mwAos">Microsoft Azure IoT Edge: una plataforma utilizada para ejecutar servicios de Azure e inteligencia artificial en dispositivos de IoT tiene componentes implementados en Rust</li>
+<li id="mwAow"><a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/OpenDNS" title="OpenDNS" id="mwAo0">OpenDNS</a>: utilizado en dos de sus componentes</li>
+<li id="mwAo4"><a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Tor_(red_de_anonimato)" title="Tor (red de anonimato)" id="mwAo8">Tor</a>: una red de anonimato , escrita originalmente en C, está experimentando con la migración a Rust con Arti por sus características de seguridad<sup about="#mwt77" class="mw-ref reference" id="cite_ref-44" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-44"}}'><a href="#cite_note-44" id="mwApA"><span class="mw-reflink-text" id="mwApE"><span class="cite-bracket" id="mwApI">[</span>44<span class="cite-bracket" id="mwApM">]</span></span></a></sup></li>
+<li id="mwApQ">TiKV: una base de datos distribuida de valor clave desarrollada por primera vez por PingCAP , ahora un proyecto miembro de Cloud Native Computing Foundation</li>
+<li id="mwApU">Xi: un editor de texto de Raph Levien, utilizado dentro del sistema operativo Fuchsia.</li>
+<li id="mwApY">Deno<span typeof="mw:DisplaySpace" id="mwApc"> </span>: un tiempo de ejecución seguro para JavaScript y TypeScript creado con V8 , Rust y Tokio</li>
+<li id="mwApg">Linkerd 2.x: una herramienta de "malla de servicios" para la supervisión de microservicios está escrita en gran parte en Rust.</li>
+<li id="mwApk">TerminusDB - diseño y disposición de la estructura de datos</li>
+<li id="mwApo"><a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Discord" title="Discord" id="mwAps">Discord</a><span typeof="mw:DisplaySpace" id="mwApw"> </span>: servicio de chat dirigido a jugadores que usa Rust para partes de su backend, así como codificación de video del lado del cliente.<sup about="#mwt79" class="mw-ref reference" id="cite_ref-45" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-45"}}'><a href="#cite_note-45" id="mwAp0"><span class="mw-reflink-text" id="mwAp4"><span class="cite-bracket" id="mwAp8">[</span>45<span class="cite-bracket" id="mwAqA">]</span></span></a></sup></li>
+<li id="mwAqE">rav1e: un codificador de formato de video AV1 experimental.</li>
+<li id="mwAqI"><a rel="mw:ExtLink nofollow" href="https://zed.dev/" class="external text" id="mwAqM">Zed</a>: un editor de código escrito desde cero en Rust por los creadores de <a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Atom_(software)" title="Atom (software)" id="mwAqQ">Atom</a>.</li>
+<li id="mwAqU"><a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Mozilla_Thunderbird" title="Mozilla Thunderbird" id="mwAqY">Thunderbird</a>: El código responsable de ofrecer soporte para Exchange está escrito en Rust.<sup about="#mwt81" class="mw-ref reference" id="cite_ref-46" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-46"}}'><a href="#cite_note-46" id="mwAqc"><span class="mw-reflink-text" id="mwAqg"><span class="cite-bracket" id="mwAqk">[</span>46<span class="cite-bracket" id="mwAqo">]</span></span></a></sup></li>
+<li id="mwAqs"><a rel="mw:ExtLink nofollow" href="https://www.getzola.org/" class="external text" id="mwAqw">Zola</a>: Un motor para servir sitios web estáticos, como Hugo. A diferencia de Hugo, Zola está escrito en Rust.<sup about="#mwt83" class="mw-ref reference" id="cite_ref-47" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-47"}}'><a href="#cite_note-47" id="mwAq0"><span class="mw-reflink-text" id="mwAq4"><span class="cite-bracket" id="mwAq8">[</span>47<span class="cite-bracket" id="mwArA">]</span></span></a></sup></li></ul>
+ 
+</section></section><section data-mw-section-id="14" id="mwArE" aria-labelledby="Véase_también"><div class="mw-heading mw-heading2"><h2 id="Véase_también"><span id="V.C3.A9ase_tambi.C3.A9n" typeof="mw:FallbackId"></span>Véase también</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/w/index.php?title=Rust_(lenguaje_de_programaci%C3%B3n)&amp;action=edit&amp;section=14" title="Editar sección: Véase también"><span>editar</span></a><span class="mw-editsection-bracket">]</span></span></div>
+<ul id="mwArI"><li id="mwArM"><a rel="mw:WikiLink" href="https://es.wikipedia.org/wiki/Servo_(software)" title="Servo (software)" id="mwArQ">Servo</a></li></ul>
+
+</section><section data-mw-section-id="15" id="mwArU" aria-labelledby="Referencias"><div class="mw-heading mw-heading2"><h2 id="Referencias">Referencias</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/w/index.php?title=Rust_(lenguaje_de_programaci%C3%B3n)&amp;action=edit&amp;section=15" title="Editar sección: Referencias"><span>editar</span></a><span class="mw-editsection-bracket">]</span></span></div>
+<div class="listaref" style="-moz-column-count:2; -webkit-column-count:2; column-count:2; list-style-type: decimal;" about="#mwt84" typeof="mw:Transclusion" id="mwArY" data-mw='{"parts":[{"template":{"target":{"wt":"listaref","href":"./Plantilla:Listaref"},"params":{"1":{"wt":"2"},"refs":{"wt":"&lt;ref name=\"rust faq\">{{cita web\n|autor            = Rust Team\n|título           = The Rust Project\n|fecha            = 9 de junio de 2016\n|sitioweb         = rust-lang\n|url              = http://lambda-the-ultimate.org/node/4009\n|idioma           = en\n|fechaacceso      = 27 de junio de 2019\n|urlarchivo       = https://web.archive.org/web/20160609195720/https://www.rust-lang.org/faq.html#project\n|fechaarchivo     = 9 de junio de 2016}}&lt;/ref>&lt;ref name=\"rust name reddit\">{{cita web\n|autor            = kibwen\n|título           = Internet archaeology: the definitive, end-all source for why Rust is named \"Rust\"\n|fecha            = 7 de junio de 2014\n|sitioweb         = reddit\n|url              = https://www.reddit.com/r/rust/comments/27jvdt/internet_archaeology_the_definitive_endall_source/\n|idioma           = en\n|fechaacceso      = 17 de septiembre de 2019}}&lt;/ref>&lt;ref name=\"future tense\">{{cita web\n|autor            = Brendan Eich\n|título           = Future Tense\n|fecha            = 29 de abril de 2011\n|sitioweb         = slideshare\n|url              = https://www.slideshare.net/BrendanEich/future-tense-7782010\n|idioma           = en\n|fechaacceso      = 18 de septiembre de 2020}}&lt;/ref>&lt;ref name=\"project servo\">{{cita web\n|autor            = Mozilla Team\n|título           = Project Servo\n|fecha            = 29 de abril de 2011\n|sitioweb         = venge\n|url              = http://venge.net/graydon/talks/intro-talk-2.pdf\n|idioma           = en\n|formato          = PDF\n|fechaacceso      = 7 de julio de 2010}}&lt;/ref>&lt;ref name=\"rust progress\">{{cita web\n|autor            = Graydon\n|título           = Rust progress\n|fecha            = 2 de octubre de 2010\n|sitioweb         = Graydon&apos;s work on Mozilla\n|url              = http://blog.mozilla.org/graydon/2010/10/02/rust-progress/\n|idioma           = en\n|fechaacceso      = 30 de octubre de 2010\n|urlarchivo       = https://web.archive.org/web/20140815054745/http://blog.mozilla.org/graydon/2010/10/02/rust-progress/ \n|fechaarchivo     = 15 de agosto de 2014 }}&lt;/ref>&lt;ref name=\"stage1 rustc\">{{cita lista de correo\n|apellidos       = Hoare\n|nombre          = Graydon\n|título          = rust-dev stage1 rustc builds\n|lista de correo = rust-dev\n|fecha           = 20 de abril de 2011\n|url             = https://mail.mozilla.org/pipermail/rust-dev/2011-April/000330.html\n|idioma          = en\n|fechaacceso     = 18 de septiembre de 2020\n|fechaarchivo    = 20 de julio de 2011\n|urlarchivo      = https://web.archive.org/web/20110720122600/https://mail.mozilla.org/pipermail/rust-dev/2011-April/000330.html\n}}&lt;/ref>\n&lt;ref name=\"rust release reddit\">{{cita web\n|autor            = catamorphism\n|título           = Mozilla and the Rust community release Rust 0.1 (a strongly-typed systems programming language with a focus on memory safety and concurrency)\n|fecha            = 20 de enero de 2012\n|sitioweb         = reddit\n|url              = https://www.reddit.com/r/programming/comments/opgxd/mozilla_and_the_rust_community_release_rust_01_a/\n|idioma           = en\n|fechaacceso      = 18 de septiembre de 2020}}&lt;/ref>&lt;ref name=\"rust releases github\">{{cita web\n|autor            = Rust Team\n|título           = rust/RELEASES.md\n|fecha            = 20 de enero de 2012\n|sitioweb         = github\n|url              = https://github.com/rust-lang/rust/blob/master/RELEASES.md\n|idioma           = en\n|fechaacceso      = 18 de septiembre de 2020}}&lt;/ref>&lt;ref name=\"announcing rust 1\">{{cita web\n|autor            = Rust Team\n|título           = Announcing Rust 1.0\n|fecha            = 15 de mayo de 2015\n|sitioweb         = Rust Blog\n|url              = https://blog.rust-lang.org/2015/05/15/Rust-1.0.html\n|idioma           = en\n|fechaacceso      = 18 de septiembre de 2020}}&lt;/ref>&lt;ref name=\"rust 1 scheduling\">{{cita web\n|autor            = Rust Team\n|título           = Rust 1.0: Scheduling the trains\n|fecha            = 12 de diciembre de 2014\n|sitioweb         = Rust Blog\n|url              = https://blog.rust-lang.org/2014/12/12/1.0-Timeline.html\n|idioma           = en\n|fechaacceso      = 18 de septiembre de 2020}}&lt;/ref>&lt;ref name=\"typestate\">{{cita publicación\n|apellido1        = Strom\n|nombre1          = Robert E.\n|apellido2        = Yemini\n|nombre2          = Shaula\n|título           = Typestate: A Programming Language Concept for Enhancing Software Reliability\n|fecha            = 1986\n|url              = http://www.cs.cmu.edu/~aldrich/papers/classic/tse12-typestate.pdf\n|editorial        = IEEE Transactions on Software Engineering\n|issn             = 0098-5589\n|fechaacceso      = 14 de noviembre de 2010}}&lt;/ref>&lt;ref name=\"typestate is dead\">{{cita web\n |autor        = pcwalton\n |título       = Typestate Is Dead, Long Live Typestate!\n |fecha        = 26 de diciembre de 2012\n |sitioweb     = pcwalton\n |url          = https://pcwalton.github.io/2012/12/26/typestate-is-dead.html\n |idioma       = en\n |fechaacceso  = 18 de septiembre de 2020\n |fechaarchivo = 23 de febrero de 2018\n |urlarchivo   = https://web.archive.org/web/20180223120322/https://pcwalton.github.io/2012/12/26/typestate-is-dead.html\n |deadurl      = yes\n}}&lt;/ref>&lt;ref name=\"rise and fall\">{{cita web\n|apellido         = Binstock\n|nombre           = Andrew\n|título           = The Rise And Fall of Languages in 2013\n|fecha            = 7 de enero de 2014\n|sitioweb         = Dr.Dobb&apos;s\n|url              = https://www.drdobbs.com/jvm/the-rise-and-fall-of-languages-in-2013/240165192\n|idioma           = en\n|fechaacceso      = 18 de septiembre de 2020}}&lt;/ref>&lt;ref name=\"developer survey 2015\">{{cita web\n|autor            = stackoverflow Team\n|título           = 2015 Developer Survey\n|fecha            = 2015\n|sitioweb         = stackoverflow\n|url              = https://insights.stackoverflow.com/survey/2015\n|idioma           = en\n|fechaacceso      = 18 de septiembre de 2020}}&lt;/ref>&lt;ref name=\"most loved 2016\">{{cita web\n|autor            = stackoverflow Team\n|título           = Most Loved, Dreaded, and Wanted\n|fecha            = 2016\n|sitioweb         = stackoverflow\n|url              = https://insights.stackoverflow.com/survey/2016#technology-most-loved-dreaded-and-wanted\n|idioma           = en\n|fechaacceso      = 18 de septiembre de 2020}}&lt;/ref>&lt;ref name=\"most loved 2017\">{{cita web\n|autor            = stackoverflow Team\n|título           = Most Loved, Dreaded, and Wanted\n|fecha            = 2017\n|sitioweb         = stackoverflow\n|url              = https://insights.stackoverflow.com/survey/2017#most-loved-dreaded-and-wanted\n|idioma           = en\n|fechaacceso      = 18 de septiembre de 2020}}&lt;/ref>&lt;ref name=\"developer survey 2018\">{{cita web\n|autor            = stackoverflow Team\n|título           = Developer Survey Results 2018\n|fecha            = 2018\n|sitioweb         = stackoverflow\n|url              = https://insights.stackoverflow.com/survey/2018#technology-most-loved-dreaded-and-wanted-languages\n|idioma           = en\n|fechaacceso      = 18 de septiembre de 2020}}&lt;/ref>&lt;ref name=\"most loved 2019\">{{cita web\n|autor            = stackoverflow Team\n|título           = Most Loved, Dreaded, and Wanted\n|fecha            = 2019\n|sitioweb         = stackoverflow\n|url              = https://insights.stackoverflow.com/survey/2019#technology-_-most-loved-dreaded-and-wanted-languages\n|idioma           = en\n|fechaacceso      = 18 de septiembre de 2020}}&lt;/ref>&lt;ref name=\"developer survey 2020\">{{cita web\n|autor            = stackoverflow Team\n|título           = The 2020 Developer Survey results are here!\n|fecha            = 27 de mayo de 2020\n|sitioweb         = stackoverflow\n|url              = https://stackoverflow.blog/2020/05/27/2020-stack-overflow-developer-survey-results/\n|idioma           = en\n|fechaacceso      = 18 de septiembre de 2020}}&lt;/ref>&lt;ref name=\"mozilla book\">{{cita web\n|autor            = Mozilla Team\n|título           = The Book of Mozilla\n|fecha            = 2020\n|sitioweb         = mozilla\n|url              = https://www.mozilla.org/en-US/book/\n|idioma           = en\n|cita             = The Beast adopted new raiment and studied the ways of Time and Space and Light and the Flow of energy through the Universe. From its studies, the Beast fashioned new structures from oxidised metal and proclaimed their glories. And the Beast’s followers rejoiced, finding renewed purpose in these teachings.\n|fechaacceso      = 18 de septiembre de 2020}}&lt;/ref>&lt;ref name=\"rust gui\">{{cita web\n|autor            = areweguiyet\n|título           = Are we GUI Yet?\n|fecha            = 2020\n|sitioweb         = areweguiyet\n|url              = https://www.areweguiyet.com/\n|idioma           = en\n|fechaacceso      = 19 de septiembre de 2020}}&lt;/ref>&lt;ref name=\"rust gui medium\">{{cita web\n|apellido         = Amann\n|nombre           = Marco\n|título           = GUI programming with Rust\n|fecha            = 7 de febrero de2020\n|sitioweb         = medium\n|url              = https://medium.com/digitalfrontiers/gui-programming-with-rust-c71fe4051b1a\n|idioma           = en\n|fechaacceso      = 19 de septiembre de 2020}}&lt;/ref>"}},"i":0}}]}'><ol class="mw-references references" typeof="mw:Extension/references" about="#mwt151" id="mwArc" data-mw='{"name":"references","attrs":{"group":""},"body":{"extsrc":"{{#parsoid\u0000fragment:6}}{{#parsoid\u0000fragment:7}}{{#parsoid\u0000fragment:8}}{{#parsoid\u0000fragment:9}}{{#parsoid\u0000fragment:10}}{{#parsoid\u0000fragment:11}}\n{{#parsoid\u0000fragment:12}}{{#parsoid\u0000fragment:13}}{{#parsoid\u0000fragment:14}}{{#parsoid\u0000fragment:15}}{{#parsoid\u0000fragment:16}}{{#parsoid\u0000fragment:17}}{{#parsoid\u0000fragment:18}}{{#parsoid\u0000fragment:19}}{{#parsoid\u0000fragment:20}}{{#parsoid\u0000fragment:21}}{{#parsoid\u0000fragment:22}}{{#parsoid\u0000fragment:23}}{{#parsoid\u0000fragment:24}}{{#parsoid\u0000fragment:25}}{{#parsoid\u0000fragment:26}}{{#parsoid\u0000fragment:27}}"}}'><li about="#cite_note-1" id="cite_note-1" data-mw-footnote-number="1"><span class="mw-cite-backlink" id="mwArg"><a href="#cite_ref-1" rel="mw:referencedBy" id="mwArk"><span class="mw-linkback-text" id="mwAro">↑</span></a></span> <span id="mw-reference-text-cite_note-1" class="mw-reference-text reference-text"><a rel="mw:ExtLink nofollow" href="https://blog.rust-lang.org" class="external free" id="mwArs">https://blog.rust-lang.org</a></span></li>
+<li about="#cite_note-2" id="cite_note-2" data-mw-footnote-number="2"><span class="mw-cite-backlink" id="mwArw"><a href="#cite_ref-2" rel="mw:referencedBy" id="mwAr0"><span class="mw-linkback-text" id="mwAr4">↑</span></a></span> <span id="mw-reference-text-cite_note-2" class="mw-reference-text reference-text"><cite class="web" id="mwAr8"></cite><span class="citation web" id="mwAsA"><a rel="mw:ExtLink nofollow" href="https://cvsweb.openbsd.org/cgi-bin/cvsweb/ports/lang/rust/" class="external text" id="mwAsE">«OpenBSD ports»</a><span class="reference-accessdate" id="mwAsI">. Consultado el 3 de abril de 2018</span>.</span><span title="ctx_ver=Z39.88-2004&amp;rfr_id=info%3Asid%2Fes.wikipedia.org%3ARust+%28lenguaje+de+programaci%C3%B3n%29&amp;rft.btitle=OpenBSD+ports&amp;rft.genre=book&amp;rft_id=https%3A%2F%2Fcvsweb.openbsd.org%2Fcgi-bin%2Fcvsweb%2Fports%2Flang%2Frust%2F&amp;rft_val_fmt=info%3Aofi%2Ffmt%3Akev%3Amtx%3Abook" class="Z3988" id="mwAsM"><span style="display:none;" id="mwAsQ"><span typeof="mw:Entity" id="mwAsU"> </span></span></span></span></li>
+<li about="#cite_note-3" id="cite_note-3" data-mw-footnote-number="3"><span class="mw-cite-backlink" id="mwAsY"><a href="#cite_ref-3" rel="mw:referencedBy" id="mwAsc"><span class="mw-linkback-text" id="mwAsg">↑</span></a></span> <span id="mw-reference-text-cite_note-3" class="mw-reference-text reference-text"><cite class="web" id="mwAsk"></cite><span class="citation web" id="mwAso"><a rel="mw:ExtLink nofollow" href="https://mozilla.github.io/firefox-browser-architecture/experiments/2017-09-06-rust-on-ios.html" class="external text" id="mwAss">«Building and Deploying a Rust library on iOS»</a>. 6 de septiembre de 2017<span class="reference-accessdate" id="mwAsw">. Consultado el 11 de enero de 2019</span>.</span><span title="ctx_ver=Z39.88-2004&amp;rfr_id=info%3Asid%2Fes.wikipedia.org%3ARust+%28lenguaje+de+programaci%C3%B3n%29&amp;rft.btitle=Building+and+Deploying+a+Rust+library+on+iOS&amp;rft.date=6+de+septiembre+de+2017&amp;rft.genre=book&amp;rft_id=https%3A%2F%2Fmozilla.github.io%2Ffirefox-browser-architecture%2Fexperiments%2F2017-09-06-rust-on-ios.html&amp;rft_val_fmt=info%3Aofi%2Ffmt%3Akev%3Amtx%3Abook" class="Z3988" id="mwAs0">

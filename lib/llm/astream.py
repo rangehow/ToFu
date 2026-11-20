@@ -24,6 +24,7 @@ from lib.llm._sse_core import (
     prepare_request,
 )
 from lib.llm.request import transport_body_arguments
+from lib.llm.sent_frame import transport_send
 from lib.llm._sse_stream import SSEByteStream
 from lib.llm._transport import (
     MAX_STREAM_RETRIES,
@@ -144,15 +145,16 @@ async def _abortable_stream_open(context, abort_check, log_prefix: str = ''):
 
 
 @contextlib.asynccontextmanager
-async def _open_server_stream(plan, log_prefix: str = ''):
+async def _open_server_stream(plan, log_prefix: str = '', *, payload=None):
     """Model budgets wrap the shared HTTP transport, including route recovery."""
     from lib.llm.request import mark_model_request_dispatched
 
     client = get_async_client(automatic=True)
     stream_context = client.stream(
         'POST', plan.url, headers=plan.hdrs,
-        extensions={'tofu_network_scope': getattr(plan, 'network_scope', None)},
-        **transport_body_arguments(plan.body, transport='httpx'))
+        extensions={'tofu_network_scope': getattr(plan, 'network_scope', None),
+                    'tofu_wire_send_authority': getattr(plan, 'physical_model_dispatch_guard', None)},
+        **transport_body_arguments(plan.body, transport='httpx', payload=payload))
     mark_model_request_dispatched(plan)
     async with stream_context as response:
         if not isinstance(getattr(response, 'extensions', None), dict):
@@ -166,7 +168,7 @@ async def async_stream_chat(body, *, on_thinking=None, on_content=None,
                             abort_check=None, log_prefix='', api_key=None,
                             base_url=None, extra_headers=None,
                             api_protocol='openai', oauth='',
-                            adapter=None,
+                            adapter=None, codex_account_fingerprints=(),
                             on_first_byte_wait=None,
                             on_stream_wait=None,
                             owner_user_id=None) -> ProviderStreamResult:
@@ -202,6 +204,7 @@ async def async_stream_chat(body, *, on_thinking=None, on_content=None,
                 attempt=attempt, api_key=api_key, base_url=base_url,
                 extra_headers=extra_headers, api_protocol=api_protocol,
                 oauth=oauth, adapter=adapter,
+                codex_account_fingerprints=codex_account_fingerprints,
                 on_first_byte_wait=on_first_byte_wait,
                 on_stream_wait=on_stream_wait,
                 owner_user_id=owner_user_id))
@@ -256,7 +259,7 @@ async def _async_stream_chat_once_impl(body, *, on_thinking=None, on_content=Non
                                   abort_check=None, log_prefix='', attempt=0,
                                   api_key=None, base_url=None,
                                   extra_headers=None, api_protocol='openai',
-                                  oauth='', adapter=None,
+                                  oauth='', adapter=None, codex_account_fingerprints=(),
                                   on_first_byte_wait=None,
                                   on_stream_wait=None,
                                   owner_user_id=None):
@@ -279,6 +282,7 @@ async def _async_stream_chat_once_impl(body, *, on_thinking=None, on_content=Non
             abort_check=abort_check, log_prefix=log_prefix, attempt=attempt,
             api_key=api_key, base_url=base_url, extra_headers=extra_headers,
             api_protocol=api_protocol, oauth=oauth, adapter=adapter,
+            codex_account_fingerprints=codex_account_fingerprints,
             on_first_byte_wait=on_first_byte_wait,
             on_stream_wait=on_stream_wait,
             owner_user_id=owner_user_id)
@@ -294,6 +298,7 @@ async def _async_stream_chat_once_impl(body, *, on_thinking=None, on_content=Non
             body, attempt=attempt, log_prefix=log_prefix,
             api_key=api_key, base_url=base_url, extra_headers=extra_headers,
             api_protocol=api_protocol, oauth=oauth,
+            codex_account_fingerprints=codex_account_fingerprints,
             owner_user_id=_owner_scope)
     # Read the operator value at attempt time so tests and long-lived servers
     # can retune it without creating a second async timeout definition.
@@ -334,6 +339,8 @@ async def _async_stream_chat_once_impl(body, *, on_thinking=None, on_content=Non
         # The sync bridge attempt prepares its own plan; close this abandoned
         # async plan first so debug raw-dump file descriptors never leak.
         _close_abandoned_raw_dumper(plan, log_prefix, 'egress handoff')
+        from lib.llm.request import refuse_unfenced_model_relay
+        refuse_unfenced_model_relay(getattr(plan, 'physical_model_dispatch_guard', None))
         from lib.llm.stream import _stream_chat_once as _sync_stream_once
         return await asyncio.to_thread(
             _sync_stream_once, body,
@@ -342,6 +349,7 @@ async def _async_stream_chat_once_impl(body, *, on_thinking=None, on_content=Non
             abort_check=abort_check, log_prefix=log_prefix, attempt=attempt,
             api_key=api_key, base_url=base_url, extra_headers=extra_headers,
             api_protocol=api_protocol, oauth=oauth, adapter=adapter,
+            codex_account_fingerprints=codex_account_fingerprints,
             on_first_byte_wait=on_first_byte_wait,
             on_stream_wait=on_stream_wait,
             owner_user_id=owner_user_id)
@@ -387,9 +395,14 @@ async def _async_stream_chat_once_impl(body, *, on_thinking=None, on_content=Non
 
     raw_chunks = None
     try:
+        # The exact bytes this attempt hands to httpx and the frame naming
+        # them: a content-encoded body is compressed once here and passed
+        # unchanged to the client.
+        _wire_payload, _sent_frame = transport_send(
+            plan.body, transport='sse', frame=getattr(plan, 'sent_frame', None))
         async with _abortable_stream_open(
-                _open_server_stream(plan, log_prefix), abort_check,
-                log_prefix) as (resp, route):
+                _open_server_stream(plan, log_prefix, payload=_wire_payload),
+                abort_check, log_prefix) as (resp, route):
             _active_subscription_route = route
             route_extension = resp.extensions.get('tofu_network_route')
             if isinstance(route_extension, dict):
@@ -452,7 +465,7 @@ async def _async_stream_chat_once_impl(body, *, on_thinking=None, on_content=Non
                 on_tool_call_ready=on_tool_call_ready,
                 route_output_limit_key=plan.route_output_limit_key,
                 credential_present=getattr(plan, 'credential_present', False),
-                progress=_progress)
+                progress=_progress, sent_frame=_sent_frame)
 
             # ── Idle watchdog (async idiom) ──
             # Mirrors the sync StreamIdleWatchdog in lib/llm/_transport.py:

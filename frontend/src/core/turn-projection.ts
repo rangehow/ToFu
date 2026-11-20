@@ -43,8 +43,6 @@ export interface ProjectedConversation extends JsonRecord {
   _serverRev?: number;
   _serverTurnCount?: number;
   _turnSnapshotRequired?: boolean;
-  _finishingStream?: boolean;
-  _finishingAttemptId?: string | null;
 }
 
 export interface ApplyTurnProjectionInput {

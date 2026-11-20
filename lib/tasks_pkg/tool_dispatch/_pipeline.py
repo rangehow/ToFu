@@ -842,6 +842,23 @@ def _settle_tool_result(
             # back to argument-derived identities rather than show stale text.
             projection_items = None
 
+    # Known credential values (vault entries, provider keys, the task owner's
+    # model-routing keys) never reach the model, the events or the stored
+    # round, whichever tool printed them.
+    from lib.tasks_pkg.manager import task_user_id
+    from lib.tool_results.credential_redaction import known_credential_redactor
+    _known_credentials = known_credential_redactor(owner_user_id=task_user_id(task))
+    if _known_credentials:
+        if isinstance(tool_content, str):
+            if _known_credentials.contains(tool_content):
+                from lib.tools.result_value import posthook_result
+                tool_content = posthook_result(tool_content, _known_credentials.redact)
+                projection_items = None
+        else:
+            tool_content = _known_credentials.redact_value(tool_content)
+        if canonical_content is not None:
+            canonical_content = _known_credentials.redact_value(canonical_content)
+
     # Empty result marker: prevent models from misinterpreting
     # empty tool results as conversation end.
     if isinstance(tool_content, str):

@@ -267,7 +267,8 @@ sent.
   raises the Watchdog outbox fault once and is never sent again. It holds
   no thread. Each later pass asks again, and the first read that shows it
   or a later message settles it. This is rung (4)'s owner hold with no
-  timer. `accepted_confirmation` passes for 大象; the other adapters carry
+  timer. `accepted_confirmation` covers history-backed 大象. Personal 微信 settles
+  on provider ACK as specified in P5; adapters without files carry
   no files.
 
 Evidence: `restart_mid_send` and `unknown_reconciliation` pass for 大象, GitHub
@@ -301,7 +302,8 @@ facts (mentions, quotes, edits, recalls, attachments, echoes, sender kinds),
 history abilities (including reading one message by ID, `history.message`,
 P16), outbound reconciliation abilities and reply windows, and
 per identity (`self`, `bot`): whether its message notifies the owner, formats,
-`maxTextBytes`, quote replies, markers, attachment types and size bounds, and
+`maxTextBytes`, quote replies, markers, attachment types, published limits
+(nullable when undocumented) and attachment confirmation modes, and
 the platform-documented rate limits with their source. The in-repository
 targets live in the contract's `x-adapters`, with every number a `$fact`
 pointer into `channels_v1`, so a platform limit has one home
@@ -310,7 +312,9 @@ calls an optional method only when declared, and degrades content the chosen
 identity cannot carry: a card → its fallback text; a file → a note naming it
 (and its delivery link when it is a published artifact); text beyond
 `maxTextBytes` → chunks at UTF-8 boundaries, each its own intent; Markdown →
-plain text. No Tofu feature may depend on one chat app. Files today
+plain text. `confirmation: ack` settles a file when the provider accepts the
+message, not at upload and not as proof of handset delivery; the default
+attachment confirmation is thread history. No Tofu feature may depend on one chat app. Files today
 (`lib/channels/outbox.py` `_place_attachments`): a channel without files
 (`x-channelTraits.attachments`) gets each file named in the item's text from
 enqueue on, so a draft and its notice show it, with a published artifact's
@@ -770,7 +774,11 @@ Every adapter declares `inbound.quotes`. Conformance:
   codes, then −32001…−32005). stdout carries protocol lines only; stderr is
   diagnostics that never contain content or credentials. A request ends with
   its answer or with the binding (process exit, closed pipe), which makes an
-  in-flight send `unknown`; the protocol adds no timeout. Messages in one
+  in-flight send `unknown`; the protocol adds no timeout. A response whose
+  `id` is not an integer matches no request (IDs are integers counted from
+  1); an error response whose `code` is not an integer or whose `data` is
+  not an object fails only its own request with `internalError`, and the
+  binding keeps answering (it never strands the caller). Messages in one
   direction are handled in order; a notification and a response may
   interleave, so health is read as eventually consistent.
 - **In-process:** the adapter object is called with the same objects; the

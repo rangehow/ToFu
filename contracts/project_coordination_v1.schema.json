@@ -106,7 +106,7 @@
       }
     },
     "deliverableTaskSummary": {
-      "description": "One task of the lead's own project with deliverables: its key, its title on its newest item, how many items it has and when the newest arrived.",
+      "description": "One task of the lead's own project with deliverables: its key, title on its newest item, item count, newest time, and any last recorded off-board state. A linked delivery report is not an acceptance verdict.",
       "type": "object",
       "additionalProperties": false,
       "required": ["key", "title", "count", "latestAt"],
@@ -115,12 +115,15 @@
         "title": {"$ref": "#/$defs/progressTask/properties/title"},
         "count": {"type": "integer", "minimum": 1},
         "latestAt": {"type": "integer", "minimum": 0},
+        "reason": {"$ref": "#/$defs/progressTask/properties/reason", "description": "Recorded cancellation reason when archived as cancelled."},
+        "archivedGroup": {"enum": ["dropped", "completed", "cancelled"], "description": "Last recorded state of a task that left the board; absent for current tasks or missing history."},
+        "hasDeliveryReport": {"type": "boolean", "description": "True only for a linked delivery report, never an automatic completion note. Absent on older servers."},
         "translation": {
           "type": "object",
           "additionalProperties": false,
           "required": ["title"],
           "description": "The title's display translation from the task's history (progressHistoryTask.translation), when it translates exactly this title.",
-          "properties": {"title": {"$ref": "#/$defs/progressTranslation/properties/texts/items/properties/text"}}
+          "properties": {"title": {"$ref": "#/$defs/progressTranslation/properties/texts/items/properties/text"}, "reason": {"$ref": "#/$defs/progressText"}}
         }
       }
     },
@@ -509,15 +512,96 @@
         }
       }
     },
+    "progressBlockerRef": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\r\\n]+$",
+      "description": "Exact identifier a typed blocker points at: a dispatch assignment id or a question/guidance id."
+    },
+    "progressBlocker": {
+      "description": "Typed, falsifiable claim about why a pending task is not being worked now (or what an in-progress task waits on). Exactly one kind, each carrying the exact thing that ends the wait: a running assignment, a dependency pin, an external resource with its proving check and either the owner's action that obtains it or the limit when it cannot be obtained now, the owner's open decision plus its plain-language question, or a next action a Worker can start now. A free-text note (reason, progress) is supplemental prose and never satisfies this requirement.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "assignmentId"],
+          "description": "A Worker this board's Coordinator dispatched is running this task now.",
+          "properties": {
+            "kind": {"const": "active_dispatch"},
+            "assignmentId": {"$ref": "#/$defs/progressBlockerRef"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "assignmentId", "revision"],
+          "description": "Another assignment this task waits on, pinned to the exact revision that must settle.",
+          "properties": {
+            "kind": {"const": "blocked_by_dependency"},
+            "assignmentId": {"$ref": "#/$defs/progressBlockerRef"},
+            "revision": {"type": "integer", "minimum": 1, "description": "The depended assignment's revision the wait is pinned to."}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "resource", "check", "ownerAction"],
+          "description": "A thing outside the project that must arrive first, named exactly with the check that proves it is present, plus the one concrete action the owner does elsewhere to obtain it.",
+          "properties": {
+            "kind": {"const": "needs_external_resource"},
+            "resource": {"$ref": "#/$defs/progressText", "description": "The exact external resource, credential, dataset or decision artifact awaited."},
+            "check": {"$ref": "#/$defs/progressText", "description": "The exact check that proves the resource is present."},
+            "ownerAction": {"$ref": "#/$defs/progressText", "description": "One concrete thing the owner does elsewhere to obtain the resource, e.g. confirming receipt on a phone. This is an actionable wait, not a limit."}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "resource", "check", "unavailable", "limit"],
+          "description": "A thing outside the project that cannot be obtained now. Terminal: the row is a limit, never a wait, and states what stays unverified.",
+          "properties": {
+            "kind": {"const": "needs_external_resource"},
+            "resource": {"$ref": "#/$defs/progressText", "description": "The exact external resource, credential, dataset or decision artifact that cannot be obtained now."},
+            "check": {"$ref": "#/$defs/progressText", "description": "The exact check that would prove the resource present."},
+            "unavailable": {"const": true, "description": "The resource cannot be obtained now; this row is a terminal limit."},
+            "limit": {"$ref": "#/$defs/progressText", "description": "What stays unverified because the resource is unavailable."}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "questionId", "question"],
+          "description": "The owner must decide; questionId is the ask_human card or guidance the answer arrives through, and question is the one-line question in plain language.",
+          "properties": {
+            "kind": {"const": "needs_owner_decision"},
+            "questionId": {"$ref": "#/$defs/progressBlockerRef"},
+            "question": {"$ref": "#/$defs/progressText", "description": "One line in plain language the owner can answer without domain knowledge."}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "action"],
+          "description": "Nothing blocks it: the concrete action a Worker can start now.",
+          "properties": {
+            "kind": {"const": "next_action"},
+            "action": {"$ref": "#/$defs/progressText", "description": "One concrete action a Worker can start now, not a restatement of the task title."}
+          }
+        }
+      ]
+    },
     "progressTask": {
       "type": "object",
       "additionalProperties": false,
       "description": "One task the human cares about, in the human's terms. Never a session, worker or question for the human.",
       "required": ["title", "status"],
       "properties": {
-        "title": {"type": "string", "minLength": 1, "maxLength": 120, "pattern": "^[^\\r\\n]*\\S[^\\r\\n]*$"},
-        "status": {"enum": ["pending", "in_progress", "completed", "cancelled"]},
-        "progress": {"type": "string", "minLength": 1, "maxLength": 280, "pattern": "^[^\\r\\n]*\\S[^\\r\\n]*$"},
+        "title": {"$ref": "#/$defs/progressText"},
+        "status": {"type": "string", "enum": ["pending", "in_progress", "completed", "cancelled"]},
+        "progress": {"$ref": "#/$defs/progressText"},
+        "reason": {"$ref": "#/$defs/progressText", "description": "Supplemental note. For cancelled: why work stopped. For pending: prose beside the required blocker (progressBlocker), never instead of it — a note alone never says what the task waits for. Omit for other statuses; changing status clears any old reason."},
+        "blocker": {"$ref": "#/$defs/progressBlocker", "description": "Required for a new or changed pending task: the typed claim that names what it waits for, or the next action a Worker can start now. Optional for in_progress (use it when the running work waits on something specific). Omitted on an unchanged legacy row; changing status clears any old blocker."},
         "due": {"type": "string", "minLength": 16, "maxLength": 40, "pattern": "^\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}(:\\d{2}(\\.\\d{1,6})?)?(Z|[+-]\\d{2}:?\\d{2})?$", "description": "ISO 8601 date-time (with offset; without one it is the server's local time) by which the Coordinator committed to the owner that this task is done or reported. A task carrying it while pending or in_progress is an open commitment (docs/PROJECT_COORDINATION.md, Commitments on the task board)."}
       }
     },
@@ -548,14 +632,42 @@
         }
       }
     },
+    "progressText": {"type": "string", "minLength": 1, "pattern": "^(?=[^\\r\\n]*\\S)[^\\r\\n]+$"},
     "progressRequest": {
       "type": "object",
       "additionalProperties": false,
-      "description": "The Coordinator's complete current task board; every update replaces the previous board.",
+      "description": "The Coordinator's complete current task board, stored regardless of which write form produced it.",
       "required": ["summary", "tasks"],
       "properties": {
-        "summary": {"type": "string", "minLength": 1, "maxLength": 280, "pattern": "^[^\\r\\n]*\\S[^\\r\\n]*$"},
-        "tasks": {"type": "array", "maxItems": 24, "items": {"$ref": "#/$defs/progressTask"}}
+        "summary": {"$ref": "#/$defs/progressText"},
+        "tasks": {"type": "array", "items": {"$ref": "#/$defs/progressTask"}}
+      }
+    },
+    "progressTaskChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title"],
+      "minProperties": 2,
+      "properties": {
+        "title": {"$ref": "#/$defs/progressTask/properties/title"},
+        "status": {"$ref": "#/$defs/progressTask/properties/status"},
+        "progress": {"$ref": "#/$defs/progressTask/properties/progress"},
+        "reason": {"anyOf": [{"$ref": "#/$defs/progressTask/properties/reason"}, {"type": "null"}], "description": "Set the note for the resulting status, or null to clear it. On status changes an omitted reason never carries forward."},
+        "blocker": {"anyOf": [{"$ref": "#/$defs/progressBlocker"}, {"type": "null"}], "description": "Set the typed blocker for the resulting status, or null to clear it. On status changes an omitted blocker never carries forward; a pending result needs one."},
+        "due": {"$ref": "#/$defs/progressTask/properties/due"}
+      }
+    },
+    "progressToolCall": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "summary": {"$ref": "#/$defs/progressRequest/properties/summary", "description": "Overall progress for the human. Required for the first board or a full replacement; omitted in a change-only update keeps it."},
+        "tasks": {"$ref": "#/$defs/progressRequest/properties/tasks", "description": "Complete replacement in display order. Use only to initialize, reorder, rename or explicitly remove rows. Omitted rows leave the board."},
+        "changes": {"type": "array", "items": {"$ref": "#/$defs/progressTaskChange"}, "description": "Only the tasks that changed, by exact title. Specify changed fields only; new titles need status and append in this order. Other tasks and fields stay unchanged. Use [] with summary for a summary-only update."},
+        "read": {"type": "object", "additionalProperties": false, "properties": {
+          "title": {"$ref": "#/$defs/progressTask/properties/title", "description": "Only rows with this exact title. Omit for the complete board."}
+        }, "description": "Read the current board without changing it. Use {} for the complete board."},
+        "expected_revision": {"type": "integer", "minimum": 0, "description": "Optional write guard: use the revision you read, or 0 for no board yet. A different revision refuses the write."}
       }
     },
     "progressBoard": {
@@ -572,20 +684,20 @@
     "progressTranslation": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Display translation of the current board's own texts into the owner's reading language, derived by the shared translation engine while the Coordinator conversation auto-translates. Reconstructible from the board; never evidence or authority. Each entry pairs one exact board text (the summary, a task title or a progress note) with its translation; a text without an entry is shown as written. 49 entries = the summary plus a title and a note for each of the board's 24 tasks.",
+      "description": "Display translation of the current board's own texts into the owner's reading language, derived by the shared translation engine while the Coordinator conversation auto-translates. Reconstructible from the board; never evidence or authority. Each entry pairs one exact board text (the summary, a task title, note or status reason) with its translation; a text without an entry is shown as written.",
       "required": ["target", "texts"],
       "properties": {
         "target": {"type": "string", "minLength": 1, "maxLength": 64},
         "texts": {
           "type": "array",
-          "maxItems": 49,
+          "minItems": 1,
           "items": {
             "type": "object",
             "additionalProperties": false,
             "required": ["source", "text"],
             "properties": {
-              "source": {"type": "string", "minLength": 1, "maxLength": 280, "pattern": "^[^\\r\\n]*\\S[^\\r\\n]*$"},
-              "text": {"type": "string", "minLength": 1, "maxLength": 560, "pattern": "^[^\\r\\n]*\\S[^\\r\\n]*$"}
+              "source": {"$ref": "#/$defs/progressText"},
+              "text": {"$ref": "#/$defs/progressText"}
             }
           }
         }
@@ -594,11 +706,11 @@
     "progressTaskTranslation": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Display translation of one history task's own texts (its title and progress note) into the owner's reading language, so a task that left the board still reads in that language. Carried from the board's progressTranslation when the task leaves the board and derived by the same translation job for tasks that left untranslated. Entries pair an exact current text with its translation; a text the task no longer carries loses its entry. Reconstructible display data, never evidence.",
+      "description": "Display translation of one history task's own texts (its title, note and status reason) into the owner's reading language, so a task that left the board still reads in that language. Carried from the board's progressTranslation when the task leaves the board and derived by the same translation job for tasks that left untranslated. Entries pair an exact current text with its translation; a text the task no longer carries loses its entry. Reconstructible display data, never evidence.",
       "required": ["target", "texts"],
       "properties": {
         "target": {"$ref": "#/$defs/progressTranslation/properties/target"},
-        "texts": {"type": "array", "minItems": 1, "maxItems": 2, "items": {"$ref": "#/$defs/progressTranslation/properties/texts/items"}}
+        "texts": {"type": "array", "minItems": 1, "maxItems": 3, "items": {"$ref": "#/$defs/progressTranslation/properties/texts/items"}}
       }
     },
     "progressHead": {
@@ -608,9 +720,10 @@
       "properties": {
         "scope": {"$ref": "#/$defs/reportScope"},
         "board": {"$ref": "#/$defs/progressBoard"},
+        "historyDelta": {"type": "array", "items": {"$ref": "#/$defs/progressHistoryRecord"}, "description": "Changed history values published atomically by this board head CAS, retained until indexed before the next board revision."},
         "translation": {"$ref": "#/$defs/progressTranslation"},
-        "commitments": {"type": "array", "maxItems": 24, "items": {"$ref": "#/$defs/progressCommitment"}},
-        "taskKeys": {"type": "array", "maxItems": 24, "items": {"$ref": "#/$defs/progressHistoryKey"}, "description": "History identity of each board task, in board order, written in the same CAS as the board. Absent on a head written before task history: its first changed board seeds the history from the Coordinator's transcript (docs/PROJECT_COORDINATION.md, Task history)."}
+        "commitments": {"type": "array", "items": {"$ref": "#/$defs/progressCommitment"}},
+        "taskKeys": {"type": "array", "items": {"$ref": "#/$defs/progressHistoryKey"}, "description": "History identity of each board task, in board order, written in the same CAS as the board. Absent on a head written before task history: its first changed board seeds the history from the Coordinator's transcript (docs/PROJECT_COORDINATION.md, Task history)."}
       }
     },
     "progressHistoryKey": {
@@ -630,6 +743,8 @@
         "formerTitles": {"type": "array", "items": {"$ref": "#/$defs/progressTask/properties/title"}, "description": "Earlier titles of this task, oldest first, each once."},
         "status": {"$ref": "#/$defs/progressTask/properties/status"},
         "progress": {"$ref": "#/$defs/progressTask/properties/progress"},
+        "reason": {"$ref": "#/$defs/progressTask/properties/reason"},
+        "blocker": {"$ref": "#/$defs/progressTask/properties/blocker"},
         "due": {"$ref": "#/$defs/progressTask/properties/due"},
         "dueAt": {"type": "integer", "minimum": 0},
         "firstSeenAt": {"type": "integer", "minimum": 0},
@@ -657,6 +772,8 @@
         "onBoard": {"type": "boolean"},
         "dropped": {"type": "boolean"},
         "progress": {"$ref": "#/$defs/progressTask/properties/progress"},
+        "reason": {"$ref": "#/$defs/progressTask/properties/reason"},
+        "blocker": {"$ref": "#/$defs/progressTask/properties/blocker"},
         "due": {"$ref": "#/$defs/progressTask/properties/due"},
         "dueAt": {"type": "integer", "minimum": 0},
         "dueOutcome": {"enum": ["met", "missed", "open", "withdrawn"]},
@@ -700,18 +817,58 @@
         "translation": {"$ref": "#/$defs/progressTranslation"}
       }
     },
+    "progressWorkEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "coverage", "requestId", "sourceTurnId", "rows"],
+      "properties": {
+        "additionalRequests": {
+          "type": "array",
+          "description": "Positive-only older-request subset from one newest admission-index page. Coverage remains unknown; omitted requests do not establish absence.",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["requestId", "sourceTurnId", "rows"],
+            "properties": {
+              "requestId": {"type": "string"},
+              "sourceTurnId": {"type": "string"},
+              "rows": {"$ref": "#/$defs/progressWorkEvidence/properties/rows"}
+            }
+          }
+        },
+        "scope": {"const": "latest_request"},
+        "coverage": {"const": "unknown"},
+        "requestId": {"type": ["string", "null"]},
+        "sourceTurnId": {"type": ["string", "null"]},
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["assignmentId", "conversationId", "taskKeys", "phase"],
+            "properties": {
+              "assignmentId": {"type": "string"},
+              "conversationId": {"type": "string"},
+              "taskKeys": {"type": "array", "items": {"type": "string"}},
+              "phase": {"enum": ["queued", "active", "awaiting_review", "awaiting_delivery", "delivered", "held", "ended", "unknown"]}
+            }
+          }
+        }
+      }
+    },
     "progressState": {
       "type": "object",
       "additionalProperties": false,
       "required": ["projectPath", "conversationId", "bindingRevision", "board"],
       "properties": {
-        "commitments": {"type": "array", "maxItems": 24, "items": {"$ref": "#/$defs/progressCommitment"}},
+        "workEvidence": {"$ref": "#/$defs/progressWorkEvidence"},
+        "commitments": {"type": "array", "items": {"$ref": "#/$defs/progressCommitment"}},
         "projectPath": {"type": "string", "minLength": 1, "maxLength": 4096},
         "conversationId": {"type": "string", "maxLength": 256},
         "bindingRevision": {"type": "integer", "minimum": 0},
         "board": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/progressBoard"}]},
+        "idleTaskKeys": {"type": "array", "items": {"$ref": "#/$defs/progressHistoryKey"}, "description": "Task keys of pending rows nothing is doing: they name no running assignment, no dependency, and no concrete next action (a generic or absent one). Derived at read time from the board and the Worker phases of this request; omitted when that evidence could not be read. Continuation marks them idle; nothing is deleted or restatused for them."},
         "translation": {"$ref": "#/$defs/progressTranslation"},
-        "taskKeys": {"type": "array", "maxItems": 24, "items": {"$ref": "#/$defs/progressHistoryKey"}, "description": "History identity of each board task, in board order (progressHead.taskKeys; for a head written before task history, each title's first identity). The browser matches a task's deliverables by it."}
+        "taskKeys": {"type": "array", "items": {"$ref": "#/$defs/progressHistoryKey"}, "description": "History identity of each board task, in board order (progressHead.taskKeys; for a head written before task history, each title's first identity). The browser matches a task's deliverables by it."}
       }
     }
   },

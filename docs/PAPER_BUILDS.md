@@ -135,6 +135,59 @@ Verify parser faults, native resource bounds and lifecycle with
 `tests/paper/test_paper_build_pdf_validation.py`; the Overleaf boundary suite also
 checks checksum-correct malformed PDFs and preservation of the previous build.
 
+## PDF fidelity gate: reproduction and translation
+
+Structural validation proves a PDF is readable, not that our output kept its
+layout. `lib/paper/builds/pdf_fidelity.py` is the measurable gate behind the
+"100% format guarantee" for born-digital (not scanned) PDFs. The report
+(`tofu.pdf-fidelity/v1`) names its `mode` and lists every check's inputs and
+failures as `{page, check, detail}`.
+
+`mode='reproduction'` (the default, unchanged) demands that our output
+reproduce the source: page count and page size match; body-column count and
+column-major reading order are unchanged; every corresponding block keeps bbox
+IoU >= 0.85; figure and table boxes are exact (IoU >= 0.999); every source text
+block is still present; used Latin/CJK families and source-to-output family
+mapping agree with the caller's declared font stack; and no block intrudes into
+a figure/table reserved region.
+
+`mode='translation'` keeps format preservation measurable after the wording
+changed. Page count, page size, column count and reading order stay identical;
+figures, tables and ruled elements keep their exact original bbox (IoU >=
+0.999); non-translated text (headers, folios, math-only, skipped or refused
+blocks) keeps its original box within the reproduction tolerance or, for
+refusals, its original text; a translated block must stay inside its original
+column band and must not intrude into any figure/table or another block's
+region; every source block must still produce a non-empty target block; and
+output fonts must map to the declared stack. An optional per-page manifest
+(`{"pages":[{"page":1,"blocks":[{"source_bbox":[...],"status":
+"translated"|"preserved"|"refused"|"fixed"}]}]}`) names block status and
+refusals; without it, status is inferred from source-text presence. A supplied
+manifest must cover every source block exactly once, so a partial manifest
+cannot turn the mode into a vacuous pass.
+
+**Problem:** a slogan cannot be tested, and a dropped block, swapped column or
+substituted font previously passed every structural gate. A reproduction gate
+could never accept a genuinely translated page, because its `text_presence`
+check demands the source wording.
+**Decision:** compare source and output directly with PyMuPDF geometry, make
+the contract explicit in the report, require a declared font stack, and make
+each check independently falsifiable in both modes.
+**Alternatives considered:** raster similarity (blind to dropped text and font
+identity, and sensitive to harmless antialiasing), trusting the build's
+SyncTeX (describes the source, not the delivered PDF), and loosening the
+reproduction checks for everyone (which would hide real reproduction defects).
+
+Run `python3 -m lib.paper.builds.pdf_fidelity --source original.pdf
+--rendered rendered.pdf --fonts '{"latin":["Inter"],"cjk":["Noto Sans CJK SC"]}'
+[--mode translation] [--translation manifest.json] --report fidelity.json`; exit
+0 passes, 1 means a named check failed, 2 means the input was unusable. The
+fixture suite is `tests/paper/test_paper_pdf_fidelity.py`; every check has a
+synthetic negative control that must fail that check and leave the others
+passing, including four translation-mode controls (cross-column translation,
+a 2 pt figure move, a dropped block and a shifted non-translated block). The
+gate is read-only and runs no compiler, model or network.
+
 ## HTTP surface
 
 [`paper_build_v1.schema.json`](../contracts/paper_build_v1.schema.json) owns

@@ -12,9 +12,10 @@ import json
 import hashlib
 from contextlib import ExitStack
 from pathlib import Path
+import re
 import threading
 from typing import Any, Callable, Mapping
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from lib.agent_core.native_process import (
     NativeProcessClient,
@@ -26,7 +27,7 @@ from lib.agent_core.native_process import (
     ApprovalPolicy,
 )
 from lib.identity import PrincipalContext
-from lib.provider.provider_headers import sanitise_extra_headers
+from lib.provider.provider_headers import merge_header_layers, sanitise_extra_headers
 from .dispatch_adapter import decode_credential_secret, issued_route_identity
 from .domain import ModelRoutingError, NativeModelSelection
 from .inference import candidate_inference_metadata
@@ -34,7 +35,19 @@ from .repository import OwnerBoundary, RepositoryPort
 from .routing import RoutePolicy, compile_candidates
 
 
-ROUTE_OVERRIDE_FIELDS = frozenset({"endpoint", "headers", "template", "provider_protocol", "responses_reasoning_replay", "responses_profile", "oauth", "secret_reference", "_credential_resolver", "chat_preserve_text_parts"})
+_NATIVE_PROTOCOLS = frozenset({"openai", "local", "anthropic", "openai_responses"})
+# Match reqwest's http::HeaderName::from_bytes and HeaderValue::from_str
+# (tofu-runtime/src/cli_http.rs). Values allow HTAB and UTF-8, not other ASCII
+# controls or DEL. Lone surrogates cannot be serialized as UTF-8.
+_NATIVE_HEADER_NAME = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
+_NATIVE_HEADER_NAME_MAX_BYTES = (1 << 16) - 1  # http::header::MAX_HEADER_NAME_LEN
+_NATIVE_INVALID_HEADER_VALUE = re.compile(r"[\x00-\x08\x0a-\x1f\x7f\ud800-\udfff]")
+# url::Host::parse_cow percent-decodes special-URL domains before applying
+# idna::AsciiDenyList::URL. This is not a DNS-label restriction (e.g. `_`).
+_NATIVE_FORBIDDEN_DOMAIN_CODEPOINT = re.compile(r"[\x00-\x20\x7f%#/:<>?@\[\\\]^|]")
+
+
+ROUTE_OVERRIDE_FIELDS = frozenset({"endpoint", "headers", "template", "provider_protocol", "responses_reasoning_replay", "responses_profile", "oauth", "secret_reference", "_credential_resolver", "chat_preserve_text_parts", "codex_account_fingerprints"})
 
 
 class NativeRouteError(ModelRoutingError):
@@ -132,6 +145,64 @@ class Route:
         return public, decoded
 
 
+def _route_is_supported(candidate, resolver_present: bool, metadata) -> bool:
+    """Protocol and credential admissibility, checked before any secret is read."""
+    if candidate.connection["protocol"] not in _NATIVE_PROTOCOLS:
+        return False
+    if candidate.credential["kind"] not in {"api_key", "local_identity", "oauth"}:
+        return False
+    if candidate.credential["kind"] == "oauth":
+        return (resolver_present
+                and candidate.connection["protocol"] == "openai_responses"
+                and metadata.get("responses_profile") == "codex")
+    return True
+
+
+def _native_transport(candidate) -> tuple[str, dict[str, str]]:
+    """Validate the selected endpoint and merged headers before reading secrets."""
+    base = candidate.connection["base_url"]
+    try:
+        # For special URLs the Rust parser treats backslash as a path separator.
+        # Preserve the routed base's existing scheme/authority requirement.
+        scheme, separator, rest = base.partition("://")
+        url = urlsplit(scheme + separator + rest.replace("\\", "/"))
+        host = url.hostname
+        valid = (
+            url.scheme in {"http", "https"}
+            and host
+            and not url.username
+            and not url.password
+            # Rust URL components distinguish an empty component from absence.
+            # A routed base must have neither before appending the API path.
+            and "?" not in base
+            and "#" not in base
+            # Bracketed IPv6 bypasses URL domain processing.
+            and (":" in host or not _NATIVE_FORBIDDEN_DOMAIN_CODEPOINT.search(
+                unquote(host, errors="strict")))
+        )
+        _ = url.port
+    except ValueError:
+        valid = False
+    if not valid:
+        raise NativeRouteError("native_route_endpoint")
+    # Request-name selectors layer over the shared Connection's so one
+    # Deployment can pick a serving provider without a second Connection.
+    # Rust inserts by case-insensitive HeaderName. Resolve duplicates before
+    # serialization so JSON map iteration cannot change the chosen value.
+    headers, error = sanitise_extra_headers(merge_header_layers(
+        candidate.connection.get("extra_headers") or {},
+        candidate.deployment.get("extra_headers") or {},
+    ))
+    if error or any(
+        len(name) > _NATIVE_HEADER_NAME_MAX_BYTES
+        or not _NATIVE_HEADER_NAME.fullmatch(name)
+        or _NATIVE_INVALID_HEADER_VALUE.search(value)
+        for name, value in headers.items()
+    ):
+        raise NativeRouteError("native_route_headers")
+    return base, headers
+
+
 def compile_native_route(
     repository: RepositoryPort,
     boundary: OwnerBoundary,
@@ -141,6 +212,7 @@ def compile_native_route(
     byte_limit: int = 8 * 1024 * 1024,
     credential_resolver=None,
     expected_route_identity: Mapping | None = None,
+    bind_credential_resolver=None,
 ) -> Route:
     if type(byte_limit) is not int or byte_limit <= 0:
         raise NativeRouteError("native_route_bytes")
@@ -152,9 +224,7 @@ def compile_native_route(
             or expected_route_identity.get("revision") != authority.revision):
         raise NativeRouteError("native_route_changed")
     candidates = compile_candidates(
-        authority.document, selection, policy=policy,
-        max_candidates=None if expected_route_identity is not None else 1,
-    )
+        authority.document, selection, policy=policy, max_candidates=None)
     if expected_route_identity is not None:
         candidates = [candidate for candidate in candidates
             if issued_route_identity(candidate, boundary, authority.revision) == dict(expected_route_identity)]
@@ -162,40 +232,21 @@ def compile_native_route(
             raise NativeRouteError("native_route_changed")
     if not candidates:
         raise NativeRouteError("native_route_unavailable")
-    chosen = candidates[0]
-    if chosen.connection["protocol"] not in {"openai", "local", "anthropic", "openai_responses"}:
-        raise NativeRouteError("native_route_protocol_unsupported")
+    first = candidates[0]
+    if not _route_is_supported(
+            first, callable(credential_resolver), candidate_inference_metadata(first)):
+        if first.connection["protocol"] not in _NATIVE_PROTOCOLS:
+            raise NativeRouteError("native_route_protocol_unsupported")
+        raise NativeRouteError("native_route_credential_unsupported")
+    chosen = next((candidate for candidate in candidates
+                   if _route_is_supported(
+                       candidate, callable(credential_resolver),
+                       candidate_inference_metadata(candidate))), None)
+    if chosen is None:
+        raise NativeRouteError("native_route_unavailable")
     oauth_selected = chosen.credential["kind"] == "oauth"
     metadata = candidate_inference_metadata(chosen)
-    if (chosen.credential["kind"] not in {"api_key", "local_identity", "oauth"}
-            or (oauth_selected and (not callable(credential_resolver)
-                or chosen.connection["protocol"] != "openai_responses"
-                or metadata.get("responses_profile") != "codex"))):
-        raise NativeRouteError("native_route_credential_unsupported")
-    base = chosen.connection["base_url"]
-    try:
-        url = urlsplit(base)
-        valid = (
-            url.scheme in {"http", "https"}
-            and url.hostname
-            and not url.username
-            and not url.password
-            and not url.query
-            and not url.fragment
-        )
-        _ = url.port
-    except ValueError:
-        valid = False
-    if not valid:
-        raise NativeRouteError("native_route_endpoint")
-    # Request-name selectors layer over the shared Connection's so one
-    # Deployment can pick a serving provider without a second Connection.
-    headers, error = sanitise_extra_headers({
-        **(chosen.connection.get("extra_headers") or {}),
-        **(chosen.deployment.get("extra_headers") or {}),
-    })
-    if error:
-        raise NativeRouteError("native_route_headers")
+    base, headers = _native_transport(chosen)
     api_key = ""
     reference = chosen.credential["secret_reference"]
     if reference:
@@ -213,16 +264,17 @@ def compile_native_route(
             and not secret_headers
         ):
             raise NativeRouteError("native_route_credential_missing")
-        headers.update(secret_headers)
-        if api_key:
-            headers["Authorization"] = "Bearer " + api_key
+        headers = merge_header_layers(
+            headers, secret_headers, {"Authorization": "Bearer " + api_key} if api_key else {},
+        )
     elif chosen.credential["kind"] in {"api_key", "oauth"}:
         raise NativeRouteError("native_route_credential_missing")
     private = {"endpoint": base.rstrip("/") + "/chat/completions", "headers": headers}
     if chosen.connection["protocol"] == "anthropic":
         from lib.llm.anthropic_outbound._url import anthropic_headers, anthropic_messages_url
         private = {"endpoint": anthropic_messages_url(base),
-                   "headers": anthropic_headers(api_key, headers), "provider_protocol": "anthropic"}
+                   "headers": merge_header_layers(anthropic_headers(api_key), headers),
+                   "provider_protocol": "anthropic"}
     if chosen.connection["protocol"] == "openai_responses":
         from lib.llm.responses_outbound._url import responses_url
         from lib.llm.route_features import route_feature
@@ -236,6 +288,12 @@ def compile_native_route(
     if oauth_selected:
         private['oauth'] = 'codex'
         private['secret_reference'] = reference
+        if chosen.codex_account_fingerprints:
+            private['codex_account_fingerprints'] = list(chosen.codex_account_fingerprints)
+            # Include the authorization in the route proof without exposing
+            # account fingerprints in diagnostics or application metadata.
+            metadata['codex_account_grants_sha256'] = hashlib.sha256(
+                '|'.join(chosen.codex_account_fingerprints).encode()).hexdigest()
     from .serving_locality import candidate_is_local_inference
     metadata.update(
         local_inference=candidate_is_local_inference(chosen),
@@ -270,6 +328,8 @@ def compile_native_route(
         private['chat_preserve_text_parts'] = _gateway_honors_cache_markers(metadata['wire_model'])
     if oauth_selected:
         metadata['credential_kind'] = 'oauth'
+        if bind_credential_resolver is not None:
+            credential_resolver = bind_credential_resolver(authority)
     return Route(
         boundary.owner_user_id,
         metadata,
@@ -339,9 +399,15 @@ async def run_native_route(
         resolver = private.pop('_credential_resolver', None)
         subscription = private.pop('oauth', None)
         reference = private.pop('secret_reference', None)
+        account_fingerprints = tuple(private.pop('codex_account_fingerprints', ()))
+        reject_http_401 = getattr(resolver, 'reject_http_401', None)
         if subscription is not None:
             if not callable(resolver) or not callable(getattr(model_policy, 'bind_credentials', None)):
                 raise NativeRouteError('native_route_credential_binding')
+            if account_fingerprints:
+                from functools import partial
+                from lib.oauth.native_credentials import resolve_scoped_native_headers
+                resolver = partial(resolve_scoped_native_headers, resolver, account_fingerprints)
             scopes = ExitStack()
             cache_key = scopes.enter_context(model_policy.bind_credentials(
                 principal=client.principal, task_id=configuration.get('task_id'), metadata=metadata,
@@ -399,6 +465,12 @@ async def run_native_route(
             approval_policy=approval_policy,
             stop_signal=stop_signal,
         )
+        error = event.get('error')
+        if (subscription == 'codex' and callable(reject_http_401) and event.get('status') == 'error'
+                and isinstance(error, dict) and error.get('kind') == 'provider_http_status'
+                and error.get('statusCode') == 401):
+            import asyncio
+            await asyncio.to_thread(reject_http_401)
         return Result(event, metadata)
     finally:
         import sys

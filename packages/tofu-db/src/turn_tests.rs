@@ -2220,6 +2220,40 @@
     }
 
     #[test]
+    fn unbound_startup_failure_never_overwrites_a_dispatch_claim() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        for claim_wins in [false, true] {
+            let attempt_id = if claim_wins { "claimed-attempt" } else { "refused-attempt" };
+            let mut seed = database.begin_with_identity_claim_scopes(7, 11).unwrap();
+            append_live_attempt(&database, &mut seed, attempt_id, attempt_id, attempt_id);
+            database.commit(seed).unwrap();
+
+            let mut failure = live_projection_request(attempt_id, "", 3);
+            failure.terminal = true;
+            failure.status = "failed".to_owned();
+            failure.task_id.clear();
+            failure.event_type = "terminal_settlement".to_owned();
+            failure.event_payload.insert("_requireUnboundAttempt".to_owned(), json!(true));
+            let mut terminal = database.begin_with_identity_claim_scopes(7, 11).unwrap();
+            let mut claim = database.begin_with_identity_claim_scopes(7, 11).unwrap();
+            let staged = event_record(&database, &mut terminal, &failure).unwrap();
+            let response: Value = serde_json::from_slice(&staged).unwrap();
+            assert_eq!(response["applied"], true);
+            assert_eq!(attempt_claim(&database, &mut claim, attempt_id, "starter", 2).unwrap(), b"true");
+            if claim_wins {
+                database.commit(claim).unwrap();
+                assert!(database.commit(terminal).is_err());
+            } else {
+                database.commit(terminal).unwrap();
+                assert!(database.commit(claim).is_err());
+            }
+            let mut replay = database.begin_with_identity_claim_scopes(7, 11).unwrap();
+            assert_eq!(event_record(&database, &mut replay, &failure).unwrap(), br#"{"applied":false}"#);
+        }
+    }
+
+    #[test]
     fn attempt_claim_is_owner_fenced_replayable_and_occ_serialized() {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();

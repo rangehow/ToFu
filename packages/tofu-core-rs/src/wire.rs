@@ -10,8 +10,13 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::canonical::{normalize_text_blocks, Result, Unsupported};
-use crate::pyjson::{compact, dumps_sorted_ascii, dumps_spaced, public_fields, py_blank, truthy};
+use crate::canonical::{normalize_text_blocks, Error, Result, Unsupported};
+use crate::pyjson::{compact, dumps_spaced, public_fields, py_blank, py_lstrip, truthy};
+use crate::reasoning::{native_reasoning_effort, resolve_wire_effort};
+use crate::route::{
+    add_cache_breakpoints, gateway_trait, honors_cache_markers, is_claude, merge_affinity_headers,
+    route_feature, RouteSpec,
+};
 
 type Msg = Map<String, Value>;
 
@@ -44,149 +49,10 @@ pub struct SealedRequest {
 }
 
 fn unsupported<T>(what: &str) -> Result<T> {
-    Err(Unsupported(what.to_owned()))
+    Err(Unsupported(what.to_owned()).into())
 }
 
 // ── tool preflight ─────────────────────────────────────────────────────────
-
-fn schema_allows_object(schema: &Msg) -> Result<bool> {
-    match schema.get("type") {
-        None => Ok(true),
-        Some(Value::String(name)) => Ok(name == "object"),
-        Some(Value::Array(names)) if !names.is_empty() => {
-            Ok(names.iter().any(|name| name.as_str() == Some("object")))
-        }
-        _ => unsupported("invalid parameters.type"),
-    }
-}
-
-/// `_project_moonshot_root_object` for the root shapes the prototype ports:
-/// a plain object, a missing type, and one `anyOf`/`oneOf` whose branches
-/// carry only `required`/`properties` (no `allOf`, no nested types).
-fn project_root_object(schema: &Msg) -> Result<Option<Msg>> {
-    if !schema_allows_object(schema)? {
-        return unsupported("non-object tool arguments");
-    }
-    let combinators: Vec<&str> = ["anyOf", "oneOf", "allOf"]
-        .into_iter()
-        .filter(|key| schema.contains_key(*key))
-        .collect();
-    if combinators.is_empty() {
-        if schema.get("type").and_then(Value::as_str) == Some("object") {
-            return Ok(None);
-        }
-        let mut projected = Msg::new();
-        projected.insert("type".to_owned(), json!("object"));
-        for (key, value) in schema {
-            if key != "type" {
-                projected.insert(key.clone(), value.clone());
-            }
-        }
-        return Ok(Some(projected));
-    }
-    if combinators.len() > 1 || combinators[0] == "allOf" {
-        return unsupported("root allOf or multiple root combinators");
-    }
-    let combinator = combinators[0];
-    let Some(Value::Array(branches)) = schema.get(combinator) else {
-        return unsupported("empty root combinator");
-    };
-    let mut viable: Vec<&Msg> = Vec::new();
-    for branch in branches {
-        let Value::Object(branch) = branch else {
-            return unsupported("non-object combinator branch");
-        };
-        if schema_allows_object(branch)? {
-            viable.push(branch);
-        }
-    }
-    if viable.is_empty() {
-        return unsupported("no object-compatible branch");
-    }
-    let parent_properties = match schema.get("properties") {
-        None => None,
-        Some(Value::Object(map)) => Some(map),
-        Some(_) => return unsupported("properties must be an object"),
-    };
-    let mut merged = parent_properties.cloned().unwrap_or_default();
-    let mut candidates: Vec<(String, Vec<Value>, usize)> = Vec::new();
-    for branch in &viable {
-        if let Some(Value::Object(properties)) = branch.get("properties") {
-            for (name, child) in properties {
-                if merged.contains_key(name) {
-                    continue;
-                }
-                match candidates.iter_mut().find(|(known, _, _)| known == name) {
-                    Some((_, values, presence)) => {
-                        values.push(child.clone());
-                        *presence += 1;
-                    }
-                    None => candidates.push((name.clone(), vec![child.clone()], 1)),
-                }
-            }
-        }
-    }
-    for (name, values, presence) in candidates {
-        let mut unique: Vec<Value> = Vec::new();
-        for value in values {
-            if !unique.contains(&value) {
-                unique.push(value);
-            }
-        }
-        let value = if presence < viable.len() {
-            json!({})
-        } else if unique.len() > 1 {
-            json!({"anyOf": unique})
-        } else {
-            unique.remove(0)
-        };
-        merged.insert(name, value);
-    }
-    let required_of = |map: &Msg| -> Vec<Value> {
-        match map.get("required") {
-            Some(Value::Array(names)) => names.clone(),
-            _ => Vec::new(),
-        }
-    };
-    let branch_required: Vec<Vec<Value>> = viable.iter().map(|b| required_of(b)).collect();
-    let mut unconditional: Vec<Value> = branch_required[0].clone();
-    for names in &branch_required[1..] {
-        unconditional.retain(|name| names.contains(name));
-    }
-    let mut merged_required: Vec<Value> = Vec::new();
-    for name in required_of(schema).into_iter().chain(
-        branch_required
-            .iter()
-            .flatten()
-            .filter(|n| unconditional.contains(n))
-            .cloned(),
-    ) {
-        if !merged_required.contains(&name) {
-            merged_required.push(name);
-        }
-    }
-    let mut projected = Msg::new();
-    projected.insert("type".to_owned(), json!("object"));
-    for (key, value) in schema {
-        if !matches!(key.as_str(), "type" | "properties" | "required") && key != combinator {
-            projected.insert(key.clone(), value.clone());
-        }
-    }
-    if !merged.is_empty() || parent_properties.is_some() {
-        projected.insert("properties".to_owned(), Value::Object(merged));
-    }
-    if !merged_required.is_empty() {
-        projected.insert("required".to_owned(), Value::Array(merged_required));
-    }
-    if !schema.contains_key("additionalProperties")
-        && viable
-            .iter()
-            .all(|branch| branch.get("additionalProperties") == Some(&Value::Bool(false)))
-    {
-        projected.insert("additionalProperties".to_owned(), json!(false));
-    }
-    Ok(Some(projected))
-}
 
 fn tool_name(tool: &Value) -> Option<&str> {
     tool.get("function")
@@ -196,92 +62,19 @@ fn tool_name(tool: &Value) -> Option<&str> {
         .filter(|name| !name.is_empty())
 }
 
-/// `sanitize_wire_tools` for an ordinary (non-Kimi) model.
-pub fn preflight_tools(tools: &[Value]) -> Result<Vec<Value>> {
-    let mut out = Vec::with_capacity(tools.len());
-    for tool in tools {
-        let Value::Object(source) = tool else {
-            continue;
-        };
-        if tool_name(tool).is_none() {
-            continue;
-        }
-        let mut keep = source.clone();
-        match keep.get_mut("function") {
-            Some(Value::Object(function)) => match function.get("parameters") {
-                None => {
-                    function.insert(
-                        "parameters".to_owned(),
-                        json!({"type": "object", "properties": {}}),
-                    );
-                }
-                Some(Value::Bool(true)) => {
-                    function.insert("parameters".to_owned(), json!({"type": "object"}));
-                }
-                Some(Value::Object(parameters)) => {
-                    if let Some(projected) = project_root_object(parameters)? {
-                        function.insert("parameters".to_owned(), Value::Object(projected));
-                    }
-                }
-                Some(_) => return unsupported("tool parameters shape"),
-            },
-            _ => return unsupported("non-function tool"),
-        }
-        if keep.get("type").and_then(Value::as_str) != Some("function") {
-            keep.insert("type".to_owned(), json!("function"));
-        }
-        if keep.contains_key("decoded_result_schema") {
-            let declared = keep.shift_remove("decoded_result_schema");
-            if let Some(Value::Object(declared)) = declared {
-                let text = dumps_sorted_ascii(&Value::Object(declared));
-                let function = keep["function"].as_object_mut().expect("function object");
-                let description = function
-                    .get("description")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_owned();
-                function.insert(
-                    "description".to_owned(),
-                    Value::String(format!(
-                        "{description}\nSuccessful decoded JSON value (producer declaration; coverage/freshness unknown): {text}"
-                    )),
-                );
-            } else if declared.is_some_and(|value| !value.is_null()) {
-                return unsupported("invalid decoded_result_schema");
-            }
-        }
-        out.push(Value::Object(keep));
-    }
-    Ok(out)
+/// `sanitize_wire_tools`: drops every tool Python isolates, projects the
+/// rest (`crate::schema`).
+pub fn preflight_tools(tools: &[Value], model: &str) -> Result<Vec<Value>> {
+    Ok(crate::schema::sanitize_wire_tools(tools, model)?.0)
 }
 
 // ── tool-call IDs ──────────────────────────────────────────────────────────
 
-fn check_call_ids(messages: &[Value], protocol: Protocol) -> Result<()> {
-    let accepts = |id: &str| match protocol {
-        Protocol::OpenAi => id.chars().count() <= 40,
-        Protocol::Responses => id.chars().count() <= 64,
-        Protocol::Anthropic => id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
-    };
-    for message in messages {
-        let mut ids: Vec<&str> = Vec::new();
-        if let Some(Value::Array(calls)) = message.get("tool_calls") {
-            ids.extend(
-                calls
-                    .iter()
-                    .filter_map(|call| call.get("id").and_then(Value::as_str)),
-            );
-        }
-        if let Some(id) = message.get("tool_call_id").and_then(Value::as_str) {
-            ids.push(id);
-        }
-        if ids.into_iter().any(|id| !id.is_empty() && !accepts(id)) {
-            return unsupported("tool-call ID respelling");
-        }
-    }
-    Ok(())
+fn conversion_error<T>(code: &str) -> Result<T> {
+    Err(Error::raised(
+        "ProtocolConversionError",
+        format!("protocol_conversion:{code}"),
+    ))
 }
 
 // ── Chat Completions ───────────────────────────────────────────────────────
@@ -297,16 +90,17 @@ fn all_plain_text(content: &[Value]) -> bool {
         })
 }
 
-fn to_chat(body: &Msg) -> Result<Msg> {
+fn to_chat(body: &Msg, route: &RouteSpec<'_>) -> Result<Msg> {
     let messages = body["messages"].as_array().expect("canonical messages");
-    check_call_ids(messages, Protocol::OpenAi)?;
+    let model = body.get("model").and_then(Value::as_str).unwrap_or("");
+    let preserve_text_parts = honors_cache_markers(model, route.inference_profile, "openai");
     let mut projected = public_fields(body);
     let wire: Vec<Value> = messages
         .iter()
         .map(|message| {
             let mut clean = public_fields(message.as_object().expect("canonical message"));
             if let Some(Value::Array(parts)) = clean.get("content") {
-                if all_plain_text(parts) {
+                if !preserve_text_parts && all_plain_text(parts) {
                     let joined: String = parts
                         .iter()
                         .map(|part| part["text"].as_str().unwrap_or(""))
@@ -355,8 +149,70 @@ fn anthropic_content_blocks(content: Option<&Value>) -> Result<Vec<Value>> {
     }
 }
 
-fn has_cache_control(content: Option<&Value>) -> bool {
-    matches!(content, Some(Value::Array(blocks)) if blocks.iter().any(|b| truthy(b.get("cache_control"))))
+/// `_block_cache_control`: the marker a message-level breakpoint left on its
+/// content, hoisted onto the emitted tool_result / last assistant block.
+fn block_cache_control(content: Option<&Value>) -> Option<Value> {
+    match content {
+        Some(Value::Array(blocks)) => blocks
+            .iter()
+            .find(|block| block.is_object() && truthy(block.get("cache_control")))
+            .map(|block| block["cache_control"].clone()),
+        _ => None,
+    }
+}
+
+fn strip_cache_control(blocks: &mut [Value]) {
+    for block in blocks {
+        if let Value::Object(block) = block {
+            block.shift_remove("cache_control");
+        }
+    }
+}
+
+/// `apply_gateway_anthropic_shape`: the declared identity leads the system.
+fn apply_gateway_anthropic_shape(out: &mut Msg, route: &RouteSpec<'_>) {
+    let Some(declared) = gateway_trait(
+        route.gateway_profiles,
+        "anthropic_system_identity",
+        route.base_url,
+    ) else {
+        return;
+    };
+    let identity = declared["text"].as_str().unwrap_or("").to_owned();
+    let accepted = declared["accepted_prefix"]
+        .as_str()
+        .unwrap_or("")
+        .to_lowercase();
+    let leads = |text: &str| py_lstrip(text).to_lowercase().starts_with(&accepted);
+    match out.get("system") {
+        Some(Value::String(system)) => {
+            if !leads(system) {
+                let shaped = if py_blank(system) {
+                    identity
+                } else {
+                    format!("{identity}\n\n{system}")
+                };
+                out.insert("system".to_owned(), Value::String(shaped));
+            }
+        }
+        Some(Value::Array(system)) if !system.is_empty() => {
+            let blocks: Vec<Value> = system.iter().filter(|b| b.is_object()).cloned().collect();
+            let first_text = blocks
+                .iter()
+                .find(|b| b.get("type").and_then(Value::as_str) == Some("text"))
+                .and_then(|b| b.get("text").and_then(Value::as_str))
+                .unwrap_or("")
+                .to_owned();
+            if !leads(&first_text) {
+                let mut shaped = vec![json!({"type": "text", "text": identity})];
+                shaped.extend(blocks);
+                out.insert("system".to_owned(), Value::Array(shaped));
+            }
+        }
+        _ => {
+            out.insert("system".to_owned(), Value::String(identity));
+        }
+    }
 }
 
 fn object_arguments(arguments: Option<&Value>) -> Result<Value> {
@@ -373,13 +229,10 @@ fn object_arguments(arguments: Option<&Value>) -> Result<Value> {
 
 fn to_anthropic(body: &Msg) -> Result<Msg> {
     let messages = body["messages"].as_array().expect("canonical messages");
-    check_call_ids(messages, Protocol::Anthropic)?;
     for key in [
         "tool_choice",
         "parallel_tool_calls",
         "response_format",
-        "effort",
-        "reasoning_effort",
         "output_config",
         "stop",
     ] {
@@ -409,6 +262,10 @@ fn to_anthropic(body: &Msg) -> Result<Msg> {
         if let Some(value) = body.get(key) {
             out.insert(key.to_owned(), value.clone());
         }
+    }
+    // Messages carries both effort spellings as `output_config.effort`.
+    if let Some(effort) = body.get("effort").or_else(|| body.get("reasoning_effort")) {
+        out.insert("output_config".to_owned(), json!({"effort": effort}));
     }
     if let Some(Value::Array(tools)) = body.get("tools") {
         let mut converted = Vec::new();
@@ -462,34 +319,36 @@ fn to_anthropic(body: &Msg) -> Result<Msg> {
                 system.extend(blocks);
             }
             "tool" => {
-                if has_cache_control(content) {
-                    return unsupported("cache markers on tool results");
-                }
+                let marker = block_cache_control(content);
                 let tool_content = match content {
                     Some(Value::String(text)) => json!(text),
                     other => {
-                        let blocks = anthropic_content_blocks(other)?;
+                        let mut blocks = anthropic_content_blocks(other)?;
                         if blocks.is_empty() {
                             json!("")
                         } else {
+                            if marker.is_some() {
+                                strip_cache_control(&mut blocks);
+                            }
                             Value::Array(blocks)
                         }
                     }
                 };
-                let block = json!({
+                let mut block = json!({
                     "type": "tool_result",
                     "tool_use_id": message.get("tool_call_id").cloned().unwrap_or(json!("")),
                     "content": tool_content,
                 });
+                if let Some(marker) = marker {
+                    block["cache_control"] = marker;
+                }
                 match wire.last_mut() {
                     Some((Value::Array(batch), true)) => batch.push(block),
                     _ => wire.push((Value::Array(vec![block]), true)),
                 }
             }
             "assistant" => {
-                if has_cache_control(content) {
-                    return unsupported("cache markers on assistant messages");
-                }
+                let marker = block_cache_control(content);
                 let text = match content {
                     Some(value) if truthy(Some(value)) => value.clone(),
                     _ => json!(""),
@@ -505,6 +364,11 @@ fn to_anthropic(body: &Msg) -> Result<Msg> {
                             "input": object_arguments(Some(function.get("arguments").unwrap_or(&json!("{}"))))?,
                         }));
                     }
+                }
+                if let Some(marker) = marker.filter(|_| !blocks.is_empty()) {
+                    strip_cache_control(&mut blocks);
+                    let last = blocks.last_mut().expect("non-empty");
+                    last["cache_control"] = marker;
                 }
                 if blocks.is_empty() {
                     blocks.push(json!({"type": "text", "text": "[empty response]"}));
@@ -551,9 +415,58 @@ fn to_anthropic(body: &Msg) -> Result<Msg> {
 
 // ── Responses ──────────────────────────────────────────────────────────────
 
-fn to_responses(body: &Msg) -> Result<Msg> {
+/// The native effort `openai_body_to_responses` sends: a selected route must
+/// represent it exactly on the `reasoning_effort` wire.
+fn responses_effort(body: &Msg, route: &RouteSpec<'_>) -> Result<Option<String>> {
+    let effort = native_reasoning_effort(body)?;
+    let effort = effort.as_ref().and_then(Value::as_str).map(str::to_owned);
+    if let (Some(selected), Some(value)) = (route.inference_profile, effort.as_deref()) {
+        let empty = json!({});
+        let declared = selected
+            .get("reasoning")
+            .filter(|r| r.is_object())
+            .unwrap_or(&empty);
+        let disabled = declared
+            .get("disabled_effort")
+            .and_then(Value::as_str)
+            .unwrap_or("none");
+        let mode = if value == "none" || value == disabled {
+            "off"
+        } else {
+            "exact"
+        };
+        match resolve_wire_effort(declared, mode, Some(value)) {
+            Ok((fmt, resolved)) => {
+                if fmt != "reasoning_effort" || resolved.as_deref() != Some(value) {
+                    return conversion_error("reasoning_wire_unrepresentable");
+                }
+            }
+            Err(Error::Raised { class, message }) if class == "ReasoningContractError" => {
+                let kind = message
+                    .split_once(": ")
+                    .map_or(message.as_str(), |(k, _)| k);
+                return conversion_error(kind);
+            }
+            Err(other) => return Err(other),
+        }
+    }
+    Ok(effort)
+}
+
+fn to_responses(body: &Msg, route: &RouteSpec<'_>) -> Result<Msg> {
     let messages = body["messages"].as_array().expect("canonical messages");
-    check_call_ids(messages, Protocol::Responses)?;
+    let model = body.get("model").and_then(Value::as_str).unwrap_or("");
+    // Without a selected route, the GPT-5.6 family opens stateful legacy
+    // gates (prompt-cache key, breakpoints, compaction) this port lacks.
+    if route.inference_profile.is_none() && model.to_lowercase().contains("gpt-5.6") {
+        return unsupported("GPT-5.6 legacy Responses gates");
+    }
+    let replay = route_feature(
+        route.inference_profile,
+        "responses_reasoning_replay",
+        "responses",
+    )
+    .unwrap_or(false);
     for key in [
         "tool_choice",
         "response_format",
@@ -582,6 +495,22 @@ fn to_responses(body: &Msg) -> Result<Msg> {
     }
     if let Some(value) = body.get("max_tokens") {
         out.insert("max_output_tokens".to_owned(), value.clone());
+    }
+    let effort = responses_effort(body, route)?;
+    // A selected route declares no `responses_reasoning_summary` binding the
+    // port accepts, and without one the generic face keeps omission.
+    let mut reasoning = Msg::new();
+    if let Some(effort) = effort.filter(|effort| !effort.is_empty()) {
+        reasoning.insert("effort".to_owned(), json!(effort));
+    }
+    if replay {
+        reasoning.insert("context".to_owned(), json!("all_turns"));
+    }
+    if !reasoning.is_empty() || replay {
+        out.insert("reasoning".to_owned(), Value::Object(reasoning));
+    }
+    if replay {
+        out.insert("include".to_owned(), json!(["reasoning.encrypted_content"]));
     }
     let mut input: Vec<Value> = Vec::new();
     for message in messages {
@@ -718,15 +647,33 @@ fn sent_tool_names(payload: &Msg) -> Vec<String> {
     }
 }
 
-/// `prepare_request` for an api-key route without OAuth or a gateway profile.
-pub fn prepare(
-    mut body: Msg,
-    protocol: Protocol,
-    base_url: &str,
-    api_key: &str,
-) -> Result<SealedRequest> {
+impl Protocol {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::OpenAi => "openai",
+            Self::Anthropic => "anthropic",
+            Self::Responses => "responses",
+        }
+    }
+}
+
+/// `prepare_request` for an api-key route without OAuth: the final tool
+/// projection (tool-name budget, preflight), cache breakpoints, protocol
+/// translation, declared gateway shape and headers, then sealing.
+pub fn prepare(mut body: Msg, protocol: Protocol, route: &RouteSpec<'_>) -> Result<SealedRequest> {
+    crate::route::check_profile(route.inference_profile)?;
+    let model = body
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned();
+    crate::tool_wire::project_tool_wire(&mut body, protocol.name(), route)?;
+    let contract = crate::call_ids::contract(protocol.name(), &model);
+    if let Some(Value::Array(messages)) = body.get_mut("messages") {
+        crate::call_ids::respell(messages, &contract);
+    }
     if let Some(Value::Array(tools)) = body.get("tools") {
-        let tools = preflight_tools(tools)?;
+        let tools = preflight_tools(tools, &model)?;
         if tools.is_empty() {
             body.shift_remove("tools");
             body.shift_remove("tool_choice");
@@ -734,16 +681,29 @@ pub fn prepare(
             body.insert("tools".to_owned(), Value::Array(tools));
         }
     }
-    let base = base_url.trim_end_matches('/');
-    let (payload, url, headers) = match protocol {
-        Protocol::OpenAi => (
-            to_chat(&body)?,
-            format!("{base}/chat/completions"),
-            vec![
+    add_cache_breakpoints(&mut body, route, protocol.name());
+    let mut extra: Vec<(String, String)> = Vec::new();
+    if is_claude(&model) && route.extended_cache_ttl {
+        extra.push((
+            "anthropic-beta".to_owned(),
+            "extended-cache-ttl-2025-04-11".to_owned(),
+        ));
+    }
+    let api_key = route.api_key;
+    let base = route.base_url.trim_end_matches('/');
+    let (payload, url, mut headers) = match protocol {
+        Protocol::OpenAi => {
+            let mut headers = vec![
                 ("Content-Type".to_owned(), "application/json".to_owned()),
                 ("Authorization".to_owned(), format!("Bearer {api_key}")),
-            ],
-        ),
+            ];
+            headers.extend(extra);
+            (
+                to_chat(&body, route)?,
+                format!("{base}/chat/completions"),
+                headers,
+            )
+        }
         Protocol::Anthropic => {
             let url = if base.ends_with("/messages") {
                 base.to_owned()
@@ -752,26 +712,50 @@ pub fn prepare(
             } else {
                 format!("{base}/v1/messages")
             };
-            (
-                to_anthropic(&body)?,
-                url,
-                vec![
-                    ("Content-Type".to_owned(), "application/json".to_owned()),
-                    ("anthropic-version".to_owned(), "2023-06-01".to_owned()),
-                    ("x-api-key".to_owned(), api_key.to_owned()),
-                    ("Authorization".to_owned(), format!("Bearer {api_key}")),
-                ],
-            )
+            let mut payload = to_anthropic(&body)?;
+            apply_gateway_anthropic_shape(&mut payload, route);
+            let mut headers = vec![
+                ("Content-Type".to_owned(), "application/json".to_owned()),
+                ("anthropic-version".to_owned(), "2023-06-01".to_owned()),
+            ];
+            if !api_key.is_empty() {
+                headers.push(("x-api-key".to_owned(), api_key.to_owned()));
+                headers.push(("Authorization".to_owned(), format!("Bearer {api_key}")));
+            }
+            headers.extend(extra);
+            if let Some(Value::String(header)) = gateway_trait(
+                route.gateway_profiles,
+                "working_directory_header",
+                route.base_url,
+            ) {
+                let dir = if route.working_dir.is_empty() {
+                    "/"
+                } else {
+                    route.working_dir
+                };
+                headers.push((header.clone(), dir.to_owned()));
+            }
+            (payload, url, headers)
         }
-        Protocol::Responses => (
-            to_responses(&body)?,
-            format!("{base}/responses"),
-            vec![
+        Protocol::Responses => {
+            let mut headers = vec![
                 ("Content-Type".to_owned(), "application/json".to_owned()),
                 ("Authorization".to_owned(), format!("Bearer {api_key}")),
-            ],
-        ),
+            ];
+            headers.extend(extra);
+            (
+                to_responses(&body, route)?,
+                format!("{base}/responses"),
+                headers,
+            )
+        }
     };
+    merge_affinity_headers(
+        &mut headers,
+        route.inference_profile,
+        protocol.name(),
+        route.lineage,
+    );
     let payload = public_fields(&payload);
     let tool_names = sent_tool_names(&payload);
     Ok(SealedRequest {
@@ -782,22 +766,59 @@ pub fn prepare(
     })
 }
 
+/// One `byte-identity` request: `{protocol, model, max_tokens, temperature,
+/// tools, messages, base_url, api_key}` plus the optional route facts
+/// `inference_profile`, `gateway_profiles`, `extended_cache_ttl`, `lineage`
+/// and `working_dir`. `body_extra` (an object) is merged into the canonical
+/// body after `build_body`, the way Python callers attach private fields
+/// (`_conv_id`, `_executable_tool_catalog`, ...).
+pub fn prepare_request_json(request: &Value) -> Result<SealedRequest> {
+    // OAuth changes provider headers and payload shaping; it is not a route
+    // fact this prototype can safely discard.
+    if truthy(request.get("oauth")) {
+        return unsupported("OAuth request shaping");
+    }
+    let protocol = Protocol::parse(request["protocol"].as_str().unwrap_or(""))
+        .ok_or_else(|| Unsupported("unknown protocol".to_owned()))?;
+    let messages = request["messages"].as_array().cloned().unwrap_or_default();
+    let tools = request["tools"].as_array().cloned();
+    let profile = request.get("inference_profile").filter(|p| !p.is_null());
+    let profiles = request["gateway_profiles"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let body = crate::canonical::build_body(
+        &messages,
+        &crate::canonical::BodySpec {
+            model: request["model"].as_str().unwrap_or(""),
+            max_tokens: request["max_tokens"].as_u64().unwrap_or(4096),
+            temperature: request["temperature"].as_f64(),
+            tools: tools.as_deref(),
+            inference_profile: profile,
+            reasoning: request.get("reasoning").filter(|r| !r.is_null()),
+        },
+    )?;
+    let mut body = body;
+    if let Some(Value::Object(extra)) = request.get("body_extra") {
+        for (key, value) in extra {
+            body.insert(key.clone(), value.clone());
+        }
+    }
+    let route = RouteSpec {
+        base_url: request["base_url"].as_str().unwrap_or(""),
+        api_key: request["api_key"].as_str().unwrap_or(""),
+        gateway_profiles: &profiles,
+        inference_profile: profile,
+        extended_cache_ttl: request["extended_cache_ttl"].as_bool().unwrap_or(false),
+        lineage: request["lineage"].as_str().unwrap_or(""),
+        working_dir: request["working_dir"].as_str().unwrap_or("/"),
+    };
+    prepare(body, protocol, &route)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn root_one_of_relaxes_to_a_plain_object() {
-        let schema = json!({"additionalProperties": false, "oneOf": [{"required": ["a"]}, {"required": ["b"]}],
-                            "properties": {"a": {"type": "string"}, "b": {"type": "string"}}, "type": "object"});
-        let projected = project_root_object(schema.as_object().unwrap())
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            compact(&Value::Object(projected)),
-            br#"{"type":"object","additionalProperties":false,"properties":{"a":{"type":"string"},"b":{"type":"string"}}}"#
-        );
-    }
 
     #[test]
     fn decoded_result_schema_moves_into_the_description() {
@@ -805,7 +826,7 @@ mod tests {
             json!({"type": "function", "decoded_result_schema": {"b": 1, "a": "\u{e9}"},
                                 "function": {"name": "t", "description": "d", "parameters": {"type": "object"}}}),
         ];
-        let out = preflight_tools(&tools).unwrap();
+        let out = preflight_tools(&tools, "m").unwrap();
         assert_eq!(out[0].get("decoded_result_schema"), None);
         assert_eq!(
             out[0]["function"]["description"],
@@ -825,7 +846,12 @@ mod tests {
                     {"id": "y", "type": "function", "function": {"name": "t", "arguments": "{}"}}]},
                 {"role": "tool", "tool_call_id": "x", "content": "1"},
                 {"role": "tool", "tool_call_id": "y", "content": "2"}]})).unwrap();
-        let sealed = prepare(body, Protocol::Anthropic, "http://h/v1", "k").unwrap();
+        let sealed = prepare(
+            body,
+            Protocol::Anthropic,
+            &RouteSpec::plain("http://h/v1", "k"),
+        )
+        .unwrap();
         let wire: Value = serde_json::from_slice(&sealed.payload).unwrap();
         assert_eq!(sealed.url, "http://h/v1/messages");
         assert_eq!(wire["system"], "s");

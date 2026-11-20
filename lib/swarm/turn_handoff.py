@@ -13,6 +13,7 @@ from __future__ import annotations
 from lib import agent_inbox
 from lib.identity import require_user_id
 from lib.log import get_logger
+from lib.swarm.delivery import current_result_hints
 
 logger = get_logger(__name__)
 
@@ -55,9 +56,8 @@ def prepare_swarm_turn_end(
         return
     status = session.get_status()
     presented = task.get('_swarm_inject_pending') or []
-    unread = {str(item.get('agent_id') or '')
-              for item in [*agent_inbox.pending_items(key, modes=['swarm-update']), *presented]
-              if not item.get('swarm_run_id') or item['swarm_run_id'] == session.task_id}
+    unread = {str(item.get('agent_id') or '') for item in current_result_hints(key,
+        [*agent_inbox.pending_items(key, modes=['swarm-update']), *presented])}
     dependencies = []
     for agent_id, info in status.items():
         if not isinstance(info, dict) or info.get('required_for_completion', True) is False:
@@ -100,7 +100,7 @@ def resume_swarm_after_turn(task: dict, *, user_id: int) -> None:
     if (session is None or session.user_id != owner_id
             or not (session.is_terminated or getattr(session, 'delivery_dependencies_settled', False))):
         return
-    if not agent_inbox.has_pending(key, modes=['swarm-update']):
+    if not current_result_hints(key, agent_inbox.pending_items(key, modes=['swarm-update'])):
         return
     if session.on_settled is not None:
         session.on_settled()

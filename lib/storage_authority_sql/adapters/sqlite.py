@@ -7,9 +7,7 @@ from lib.storage_authority_sql.worker_control import WorkerCommitHints, WorkerCo
 from collections import deque
 from collections.abc import Callable as Callable, Mapping, Sequence as Sequence
 from dataclasses import dataclass, field
-import faulthandler
 import os
-import sys
 from pathlib import Path
 import sqlite3
 import threading
@@ -169,25 +167,16 @@ def _place_temporary_files() -> str:
             f'SQLite did not accept {directory} as its temporary directory')
     path = os.path.join(directory, f'.tofu-sqlite-unlinked-probe-{uuid.uuid4().hex}')
     payload = b'tofu-sqlite-temporary-file-probe'
-    # SQLite's Windows VFS never unlinks an open file (Windows refuses that);
-    # it opens temporary files delete-on-close, which O_TEMPORARY reproduces.
-    windows = sys.platform == 'win32'
-    flags = os.O_RDWR | os.O_CREAT | os.O_EXCL
-    if sys.platform == 'win32':
-        flags |= os.O_TEMPORARY | os.O_BINARY
     try:
-        descriptor = os.open(path, flags, 0o600)
+        descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
     except OSError as exc:
         raise StorageError(
             'database_unavailable',
             f'SQLite temporary directory {directory} is not writable: {exc}') from exc
     try:
-        if not windows:
-            os.unlink(path)
-        os.lseek(descriptor, 0, os.SEEK_SET)
-        os.write(descriptor, payload)
-        os.lseek(descriptor, 0, os.SEEK_SET)
-        if os.read(descriptor, len(payload)) != payload:
+        os.unlink(path)
+        os.pwrite(descriptor, payload, 0)
+        if os.pread(descriptor, len(payload), 0) != payload:
             raise OSError('read back different bytes')
     except OSError as exc:
         raise StorageError(
@@ -227,6 +216,15 @@ class SQLiteSession:
         self.worker_hints = WorkerCommitHints()
         self.connection = connection
         self.turn_projection_cache = turn_projection_cache
+        self._utf8_bytes_registered = False
+
+    def utf8_bytes_sql(self, column: str) -> str:
+        # CAST(text AS BLOB) uses the database encoding, which may be UTF-16.
+        # Register on demand, including for sessions over offline read-only connections.
+        if not self._utf8_bytes_registered:
+            self.connection.create_function('tofu_utf8_bytes', 1, str.encode, deterministic=True)
+            self._utf8_bytes_registered = True
+        return f'tofu_utf8_bytes({column})'
 
     def worker_lease_authority(self) -> WorkerLeaseAuthoritySnapshot:
         if self.worker_lease_clock is None:
@@ -443,7 +441,7 @@ class _FairWriter:
                 'phase_started_at': now,
                 'deadline_at': job.deadline_at,
                 'interrupted': False,
-                'token': id(job),
+                'token': object(),
             }
 
     def _transaction_budget_s(self, job: _WriteJob) -> float:
@@ -473,7 +471,7 @@ class _FairWriter:
                 'deadline_at': min(job.deadline_at for job in jobs),
                 'interrupted': False,
                 'batch_size': len(jobs),
-                'token': id(jobs),
+                'token': object(),
             }
 
     def _arm_current_job(self, job: '_WriteJob', deadline_at: float) -> None:
@@ -496,7 +494,7 @@ class _FairWriter:
             self._current['phase_started_at'] = now
             self._current['deadline_at'] = deadline_at
             self._current['interrupted'] = False
-            self._current['token'] = id(job)
+            self._current['token'] = object()
 
     def _set_phase(self, phase: str) -> None:
         """Publish the writer's blocking boundary for watchdog diagnosis."""
@@ -534,9 +532,6 @@ class _FairWriter:
                 # The writer thread is the only consumer of the queues; its
                 # death would wedge every future submit. Nothing in-process
                 # can be trusted to recover a half-dead connection state.
-                logger.critical(
-                    'SQLite writer thread has exited; hard-exiting the sidecar '
-                    'so the supervisor restarts the authority')
                 self._hard_exit('writer-thread-dead')
                 return
             with self._current_lock:
@@ -547,63 +542,43 @@ class _FairWriter:
             overrun = now - current['deadline_at']
             if overrun <= self._stall_grace_s:
                 continue
-            if not current['interrupted']:
-                with self._current_lock:
-                    if (self._current is not None
-                            and self._current.get('token') == current.get('token')):
-                        self._current['interrupted'] = True
-                        self._current['interrupted_at'] = now
-                        self._last_stall = {
-                            'operation': current['operation'] or 'unknown',
-                            'priority': current['priority'],
-                            'phase': current.get('phase') or 'unknown',
-                            'observed_at_ms': int(time.time() * 1000),
-                            'held_s': round(now - current['started_at'], 3),
-                            'phase_s': round(
-                                now - current.get('phase_started_at', now), 3),
-                            'overrun_s': round(overrun, 3),
-                        }
-                    else:
-                        continue
-                self.metrics['stall_interrupts'] += 1
-                logger.error(
-                    'SQLite writer transaction stalled %.0fs past its deadline '
-                    '(op=%s priority=%s phase=%s, held %.0fs phase_held=%.0fs) '
-                    '— interrupting SQLite; commit/fsync is not interruptible '
-                    'and will force a bounded sidecar restart if it does not return',
-                    overrun, current['operation'] or 'unknown',
-                    current['priority'], current.get('phase') or 'unknown',
-                    now - current['started_at'],
-                    now - current.get('phase_started_at', now))
-                try:
-                    self._connection.interrupt()
-                except sqlite3.Error as exc:
-                    logger.debug('SQLite interrupt on stalled writer failed: %s', exc)
-            if overrun > self._hard_kill_s:
-                with self._current_lock:
-                    still_current = (
-                        self._current is not None
-                        and self._current.get('token') == current.get('token'))
-                if not still_current:
-                    continue
-                logger.critical(
-                    'SQLite writer still stalled %.0fs past deadline after '
-                    'interrupt (op=%s priority=%s phase=%s) — hard-exiting the sidecar; '
-                    'the supervisor auto-restarts it and WAL recovery keeps '
-                    'the committed prefix',
-                    overrun, current['operation'] or 'unknown',
-                    current['priority'], current.get('phase') or 'unknown')
-                self._hard_exit('writer-stalled-past-hard-kill')
+            if self._apply_watchdog_sample(current['token'], now, overrun):
                 return
 
+    def _apply_watchdog_sample(self, token: object, now: float, overrun: float) -> bool:
+        # Revalidate and act under the same lock the writer uses to hand off.
+        # Keep all diagnostics in memory: a blocked log/dump sink must not
+        # prevent this tick or any later tick from enforcing the hard bound.
+        with self._current_lock:
+            active = self._current
+            if active is None or active['token'] is not token:
+                return False
+            if not active['interrupted']:
+                active['interrupted'] = True
+                active['interrupted_at'] = now
+                self._last_stall = {
+                    'operation': active['operation'] or 'unknown',
+                    'priority': active['priority'],
+                    'phase': active['phase'],
+                    'observed_at_ms': int(time.time() * 1000),
+                    'held_s': round(now - active['started_at'], 3),
+                    'phase_s': round(max(0.0, now - active['phase_started_at']), 3),
+                    'overrun_s': round(overrun, 3),
+                }
+                self.metrics['stall_interrupts'] += 1
+                try:
+                    self._connection.interrupt()
+                except sqlite3.Error:
+                    # A failed interrupt does not disarm the hard bound.
+                    pass
+            if overrun > self._hard_kill_s:
+                self._hard_exit('writer-stalled-past-hard-kill')
+                return True
+        return False
+
     def _hard_exit(self, reason: str) -> None:
-        # Overridable seam for tests; production dumps every thread's stack
-        # to stderr (inherited into the server console log) and exits with a
-        # distinctive code so the supervisor's crash callback fires.
-        try:
-            faulthandler.dump_traceback()
-        except Exception as exc:
-            logger.debug('faulthandler dump_traceback failed during hard exit: %s', exc)
+        # The supervisor's crash callback observes exit 75. Never write a
+        # stack dump, log, or flush streams before exiting the Sidecar.
         os._exit(75)
 
     @staticmethod
@@ -717,13 +692,33 @@ class _FairWriter:
         job.started.set()
         job.done.set()
 
+    def _checkpoint_between_batches(self, checkpoint: Callable[[sqlite3.Connection], None]) -> None:
+        # This maintenance pass runs after the preceding acknowledgements. It
+        # can block the sole writer in I/O, but has no caller deadline to arm
+        # the watchdog. Give it the writer's existing default transaction budget.
+        with self._current_lock:
+            now = time.monotonic()
+            self._current = {
+                'operation': 'wal_checkpoint',
+                'priority': 'maintenance',
+                'phase': 'checkpoint',
+                'started_at': now,
+                'phase_started_at': now,
+                'deadline_at': now + self._transaction_timeout_s,
+                'interrupted': False,
+                'token': object(),
+            }
+        try:
+            checkpoint(self._connection)
+        except sqlite3.Error:
+            logger.warning('SQLite writer-side WAL checkpoint failed', exc_info=True)
+        finally:
+            self._set_current(None)
+
     def _run(self) -> None:
         while True:
-            if self._between_batches is not None:
-                try:
-                    self._between_batches(self._connection)
-                except sqlite3.Error:
-                    logger.warning('SQLite writer-side WAL checkpoint failed', exc_info=True)
+            if (checkpoint := self._between_batches) is not None:
+                self._checkpoint_between_batches(checkpoint)
             batch = self._take_batch()
             if batch is None:
                 return
@@ -1357,6 +1352,7 @@ class SQLiteBackend(Backend):
         self._turn_search_projection: Any = None
         self._turn_search_projection_error = ''
         self._wal_coalescing = WalCoalescing(None, 'backend not started')
+        self._writer_configuration: dict[str, Any] = {}
 
     def _connect(self, *, query_only: bool) -> sqlite3.Connection:
         database, uri = connection_target(self._authority_path, self._wal_coalescing.vfs)
@@ -1602,6 +1598,14 @@ class SQLiteBackend(Backend):
             # the bounded readiness gates.  The exhaustive scan remains
             # available through ``system.integrity_check`` / storage_certify.
             writer_connection.commit()
+            # Read back the actual connection handed to the sole writer, before
+            # its thread starts. Do not query it concurrently from metrics.
+            self._writer_configuration = {
+                'journal_mode': writer_connection.execute('PRAGMA main.journal_mode').fetchone()[0],
+                'synchronous': writer_connection.execute('PRAGMA main.synchronous').fetchone()[0],
+                'coalescing_vfs_selected': bool(self._wal_coalescing.vfs and writer_connection.execute(
+                    'SELECT tofu_wal_coalescing_selected()').fetchone()[0]),
+            }
         except BaseException:
             writer_connection.rollback()
             writer_connection.close()
@@ -1907,6 +1911,7 @@ class SQLiteBackend(Backend):
                 }),
             'queries': {**self._metrics, 'pool_rotations': readers['rotations']},
             'writer': writer,
+            'writer_configuration_at_open': dict(self._writer_configuration) if self._writer else {},
             'fastpath': fastpath_status,
             'wal_coalescing': self._wal_coalescing.report(),
             'wal_checkpointer': checkpointer,

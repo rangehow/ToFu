@@ -51,7 +51,7 @@ def _serialize_native_tool_catalog(task: dict, tool_list: list, *, permissions=N
             # The canonical gateway retains this producer documentation with
             # the prepared definition; the Rust catalog projects inputs only.
             from lib.tools.contracts import serialize_decoded_result_schema
-            serialize_decoded_result_schema(definition['decoded_result_schema'])
+            declared_json = serialize_decoded_result_schema(definition['decoded_result_schema'])
         function = definition['function']
         name = function.get('name')
         if (not isinstance(name, str) or not name or name in declared
@@ -60,8 +60,13 @@ def _serialize_native_tool_catalog(task: dict, tool_list: list, *, permissions=N
                 or not isinstance(function.get('description',''), str)):
             raise ValueError('Native tool catalog definition is invalid or duplicated')
         if 'decoded_result_schema' in definition:
+            from lib.tools.contracts import decoded_result_description
             from lib.tools.gateway import sanitize_wire_tools
-            projected = sanitize_wire_tools([definition])
+            documented = {key: value for key, value in definition.items()
+                          if key != 'decoded_result_schema'}
+            documented['function'] = dict(function, description=decoded_result_description(
+                function.get('description', ''), declared_json))
+            projected = sanitize_wire_tools([documented])
             if len(projected) != 1:
                 raise ValueError('Native tool documentation projection was refused')
             function = dict(function, description=projected[0]['function']['description'])

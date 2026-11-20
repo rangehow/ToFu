@@ -16,7 +16,6 @@ from tests.e2e.test_e2e_smoke import (  # noqa: F401 -- imported fixtures are lo
     _SENTINEL,
     _disable_open_mode_rate_limit,
     _install_llm_stubs,
-    _start_new_chat,
     _wait_app_ready,
     _select_stub_model,
 )
@@ -31,7 +30,7 @@ _TINY_PNG = base64.b64decode(
 
 def _fresh_chat(page):
     _wait_app_ready(page)
-    _start_new_chat(page)
+    page.locator('.new-chat-btn').click()
     page.wait_for_function(
         "!document.querySelector('#chatInner').innerText.includes('stubbed model')")
     _select_stub_model(page)

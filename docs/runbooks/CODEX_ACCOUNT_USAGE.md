@@ -3,6 +3,30 @@
 This guide owns the detailed reset-entitlement lifecycle referenced by the
 [authentication/provider domain map](../modules/auth_providers_billing.md).
 
+## Per-account request attribution from Tofu's local record
+
+Settings' Codex account list may show, per account, requests handled, tokens,
+cost where the local record priced the request, the covered time window, and a
+last-used time only when the record carries one. These figures are **Tofu's
+local record of the requests it dispatched**, never provider billing and never
+a reconciliation of upstream usage.
+
+`lib/oauth/account_usage.py` owns the projection. It reads the persisted
+per-request `apiRounds` ledger through `conversation.turn_usage`; a round is in
+scope only when its stored `subscriptionProvider` marker names the provider.
+The marker and `accountId` are stamped at dispatch from the slot's issued
+subscription binding (`Slot.subscription_attribution`). A round is attributed
+to a configured account only when that stored id names one of the account ids
+in the current inventory. Missing, malformed, removed or otherwise unresolved
+accounts are counted as `unknown`; route names, model names, provider ids and
+ordering never infer an account. Renaming keeps the opaque `oa_...` identity,
+and removing an account moves only its own old rows to `unknown`.
+
+`GET /api/v4/oauth/accounts?provider=codex` returns this projection under
+`usage` (with `status: unavailable` instead of counts when the local record
+cannot be read). A scan that reaches the conversation repository's own bound
+reports `truncated: true` rather than implying a complete history.
+
 Codex exposes two different reset concepts and they must never be conflated:
 
 - quota-window `resets_at` / `reset_at` means scheduled rolling-window

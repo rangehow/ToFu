@@ -15,7 +15,7 @@ the next review. Owners without an available Watchdog record nothing (reporting
 never creates a Watchdog), a signal about the Watchdog's own Turn never wakes
 it, and reporting never raises into the reporting owner.
 
-Entry points: FaultSignals (record/get/resolve/open_page/open_turn_failures),
+Entry points: FaultSignals (record/get/resolve/open_page/iter_open/open_turn_failures),
 report_turn_failure, report_recovery_failure, report_outbox_fault,
 report_channel_status, report_client_crash, wake_watchdog, render_signal_notice.
 Dependencies: router.contract, router.watchdog.binding, router.home,
@@ -195,6 +195,18 @@ class FaultSignals:
         signals = [signal for signal in map(self._open, (entry['signalId'] for entry in entries))
                    if signal is not None]
         return {'signals': signals, 'next_cursor': next_cursor}
+
+    def iter_open(self):
+        """Every open signal, oldest index key first, across index pages."""
+        cursor = None
+        while True:
+            entries, cursor = self._index_page(cursor)
+            for entry in entries:
+                signal = self._open(entry['signalId'])
+                if signal is not None:
+                    yield signal
+            if cursor is None:
+                return
 
     def open_turn_failures(self, conversation_id: str) -> list[dict]:
         """Open signals of one conversation's failed Turns, located through the index rows."""

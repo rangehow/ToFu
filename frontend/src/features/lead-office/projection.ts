@@ -16,7 +16,7 @@
 import type { ProjectDispatchHistoryRow, ProjectDispatchPage } from '../../api/project-dispatch.generated';
 import type { CoordinatorProgressBoard, CoordinatorReportState } from '../../api/project-coordination.generated';
 import { assignmentStatus, cleanTitle } from '../project-coordination-graph';
-import { coordinatorProgressTally } from '../coordinator-progress';
+import { coordinatorProgressTally } from '../coordinator-progress-summary';
 import { modelForRole, type CharacterModel } from '../office-game/office-character';
 
 export type OfficeAltitude = 'floor' | 'headquarters';

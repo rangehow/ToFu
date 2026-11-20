@@ -317,18 +317,17 @@ class TraceSpanFold:
                                      detail_key=p.get('detailKey') or '')
 
     def _apply_dispatch_first_token(self, usage):
-        """Prefer the dispatcher's measured first-token offset for the settled
-        attempt over the delta spine (which can be late or lost).
+        """Prefer the settled dispatcher's first-output callback offset over
+        the delta spine (which can be late or lost).
 
-        The offset counts from the dispatcher's attempt start, which the
-        attempt's model_request_start marks. It applies only when exactly one
-        dispatch with complete observer evidence served the request, so the
-        last attempt is unambiguously the settled one; an earlier observed
-        first token is never moved later.
+        Locate the offset on the attempt's model_request_start when exactly
+        one dispatch with complete observer evidence served the request. This
+        is a dispatcher-local projection, not physical send or provider time;
+        an earlier observed output is never moved later.
         """
         dispatch = usage.get('_dispatch')
-        if not isinstance(dispatch, Mapping) \
-                or dispatch.get('ttft_measurement') != 'measured':
+        if not isinstance(dispatch, Mapping) or dispatch.get('ttft_measurement') not in (
+                'dispatcher_attempt_to_first_output_callback', 'measured'):
             return
         offset = dispatch.get('ttft_ms')
         if isinstance(offset, bool) or not isinstance(offset, (int, float)) \

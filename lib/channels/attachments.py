@@ -327,7 +327,7 @@ def _scope(task: dict[str, Any]) -> tuple[list[str], Callable[[str], str], set[s
 
 
 def from_tool(task: dict[str, Any], owner: int, conversation_id: str, entries: Any, *,
-              carried: bool = True) -> list[dict[str, Any]]:
+              carried: bool = True, generic_file: bool = False) -> list[dict[str, Any]]:
     """``channel_send`` attachments: every entry admitted, or the first refusal (``carried``: see ``admit``).
 
     An entry is ``{path}`` (this conversation's file, artifact or deck) or
@@ -337,7 +337,7 @@ def from_tool(task: dict[str, Any], owner: int, conversation_id: str, entries: A
     if entries is None:
         return []
     try:
-        return _admitted_entries(task, owner, conversation_id, entries, carried=carried)
+        return _admitted_entries(task, owner, conversation_id, entries, carried=carried, generic_file=generic_file)
     except ChannelError as error:
         from lib.channels.protocol.contract import CONTRACT
         raise ChannelError(error.code, f'{error} {_PROJECT_FORM} '
@@ -345,7 +345,7 @@ def from_tool(task: dict[str, Any], owner: int, conversation_id: str, entries: A
 
 
 def _admitted_entries(task: dict[str, Any], owner: int, conversation_id: str, entries: Any, *,
-                      carried: bool) -> list[dict[str, Any]]:
+                      carried: bool, generic_file: bool) -> list[dict[str, Any]]:
     if not isinstance(entries, list) or not entries or not all(isinstance(e, dict) for e in entries):
         raise ChannelError('invalid_attachments', 'attachments must be a non-empty list of {path} or '
                                                   '{path, project} objects')
@@ -362,7 +362,9 @@ def _admitted_entries(task: dict[str, Any], owner: int, conversation_id: str, en
         else:
             record = admit(route(reference) if isinstance(reference, str) else reference, roots=roots,
                            owner=owner, conversation_id=conversation_id, carried=carried)
-        if carried:
+        if generic_file:
+            record['kind'] = 'file'
+        if carried or generic_file:
             _refuse_secrets(record, owner)
         identity = _identity(record)
         if identity not in seen:
@@ -385,7 +387,7 @@ def linked_references(markdown: str) -> list[str]:
 
 
 def for_final_answer(task: dict[str, Any], owner: int, conversation_id: str,
-                     text: str) -> tuple[list[dict[str, Any]], list[str]]:
+                     text: str, *, generic_file: bool = False) -> tuple[list[dict[str, Any]], list[str]]:
     """The files a final answer explicitly links, and a note per linked file refused.
 
     Only Markdown links and images whose target is a file of this
@@ -412,7 +414,10 @@ def for_final_answer(task: dict[str, Any], owner: int, conversation_id: str,
             else:
                 continue  # not a file of this conversation: nothing to attach or to explain
             try:
-                record = admit(target, roots=roots, owner=owner, conversation_id=conversation_id)
+                record = admit(target, roots=roots, owner=owner, conversation_id=conversation_id,
+                               carried=not generic_file)
+                if generic_file:
+                    record['kind'] = 'file'
                 _refuse_secrets(record, owner)
             except ChannelError as error:
                 if error.code in ('attachment_type_unsupported', 'attachment_too_large', 'attachment_secret'):

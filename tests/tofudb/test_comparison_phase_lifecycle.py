@@ -81,10 +81,6 @@ def test_failed_start_releases_accepted_workers_without_executing_operations(
         return _WAIT(event, timeout)
 
     def start(thread):
-        # The patch is process-wide; under xdist, threads left by earlier
-        # tests keep starting. Only the phase's own carriers are injected.
-        if not thread.name.startswith('perf-'):
-            return _START(thread)
         if started:
             assert gated.wait(2)
             if failure_point == 'after_start':

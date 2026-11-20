@@ -375,6 +375,9 @@ def _verify_safe_box(video_path: str, burned: str, cues, width: int,
     category ``subtitle_overflow`` / ``subtitle_missing``. Inability to
     inspect (no numpy/PIL, extraction failure) is NOT a failure — it reports
     ``checked=0`` so a thin environment degrades instead of blocking.
+    Vertical edge contact is ambiguous on an already-cropped frame: those
+    samples are excluded from ``checked`` and returned in
+    ``vertical_inconclusive`` rather than certified or refused.
     """
     from lib.motion_video._subtitle import safe_box, style_for_frame, wrap_line
 
@@ -388,6 +391,7 @@ def _verify_safe_box(video_path: str, burned: str, cues, width: int,
         key=lambda c: -max((len(ln) for ln in wrap_line(c[2], style)),
                            default=0))
     checked = 0
+    vertical_inconclusive = []
     for start, end, text in ranked[:3]:
         mid = float(start) + (float(end) - float(start)) / 2.0
         b_png = os.path.join(workdir, f'_sbcheck_before_{checked}.png')
@@ -399,13 +403,14 @@ def _verify_safe_box(video_path: str, burned: str, cues, width: int,
                 continue
             box = _subtitle_ink_bbox(b_png, a_png)
             if box == 'unavailable':
-                return {'ok': True, 'checked': checked}
+                return {'ok': True, 'checked': checked,
+                        'vertical_inconclusive': vertical_inconclusive}
             if box is None:
                 return {'ok': False, 'category': 'subtitle_missing',
                         'detail': (f'the burn changed no pixels at t={mid:.2f}s '
                                    f'though cue text was present — subtitles '
                                    f'did not render')}
-            x0, _y0, x1, _y1 = box
+            x0, y0, x1, y1 = box
             if x0 < left or x1 > right:
                 return {
                     'ok': False, 'category': 'subtitle_overflow',
@@ -415,7 +420,16 @@ def _verify_safe_box(video_path: str, burned: str, cues, width: int,
                         f'frame is x[{left}..{right}] — the line runs past the '
                         f'frame edge and is clipped. Text was '
                         f'{len(text)} chars: {text[:40]!r}')}
-            checked += 1
+            if y0 <= 0 or y1 >= height - 1:
+                # Visible pixels cannot distinguish clipped glyphs from ink
+                # intentionally flush with the edge; do not certify either.
+                vertical_inconclusive.append({
+                    'time_s': mid, 'bbox': list(box),
+                    'detail': 'subtitle ink touches a vertical frame boundary; '
+                              'complete glyph visibility cannot be established '
+                              'from the cropped frame'})
+            else:
+                checked += 1
         finally:
             for p in (b_png, a_png):
                 try:
@@ -423,7 +437,8 @@ def _verify_safe_box(video_path: str, burned: str, cues, width: int,
                         os.unlink(p)
                 except OSError as e:
                     logger.debug('[MotionVideo] safe-box temp cleanup: %s', e)
-    return {'ok': True, 'checked': checked}
+    return {'ok': True, 'checked': checked,
+            'vertical_inconclusive': vertical_inconclusive}
 
 
 def burn_in_subtitles(video_path: str, srt_path: str, output: str, *,
@@ -543,6 +558,7 @@ def burn_in_subtitles(video_path: str, srt_path: str, output: str, *,
         # Safe-box and media probes run before promotion, so a rejected burn
         # cannot overwrite the last good deliverable.
         safe_checked = 0
+        vertical_inconclusive = []
         if verify_safe_box and cues and frame_w > 0 and frame_h > 0:
             vres = _verify_safe_box(
                 video_path, tmp_out, cues, frame_w, frame_h, ffmpeg=ffmpeg,
@@ -553,6 +569,7 @@ def burn_in_subtitles(video_path: str, srt_path: str, output: str, *,
                                vres.get('detail'))
                 return vres
             safe_checked = vres.get('checked', 0)
+            vertical_inconclusive = vres.get('vertical_inconclusive', [])
 
         v_probe = probe_video(video_path)
         f_probe = probe_video(tmp_out)
@@ -571,4 +588,5 @@ def burn_in_subtitles(video_path: str, srt_path: str, output: str, *,
     return {'ok': True, 'output': output,
             'duration': round(float(f_probe.get('duration') or 0), 3),
             'safe_box_checked': safe_checked,
+            'subtitle_vertical_inconclusive': vertical_inconclusive,
             'elapsed': round(res['elapsed'], 2)}

@@ -131,7 +131,7 @@ def test_task_kick_failure_clears_pooled_worker_correlation(monkeypatch):
         _run, 'check_autopilot_kick',
         lambda _task: (_ for _ in ()).throw(RuntimeError('kick failed')))
     with pytest.raises(RuntimeError, match='kick failed'):
-        _run.run_task({'id': 'task-correlation-test'})
+        _run.run_task({'id': 'task-correlation-test', '_userId': 1})
     assert req_id() == ''
     assert log_fields() == {}
 

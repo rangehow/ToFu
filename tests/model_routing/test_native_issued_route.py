@@ -71,7 +71,7 @@ def test_unowned_or_released_group_refuses_before_repository_read(change):
 
 def test_minted_witness_is_immutable_and_names_first_usable_candidate():
     repo = Repository()
-    def mint(**kwargs): return SimpleNamespace(slot=SimpleNamespace())
+    def mint(**kwargs): return SimpleNamespace(slot=SimpleNamespace(oauth=kwargs.get('oauth')))
     with patch('lib.model_routing.dispatch_adapter.prepare_ephemeral_slot', side_effect=mint), \
             patch('lib.model_routing.dispatch_adapter.publish_ephemeral_slots'):
         issued = mint_routed_slot_group(repo, repo.boundary, selection())

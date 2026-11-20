@@ -120,6 +120,7 @@ def _read_all_messages(conversation_id: str, *, user_id: int) -> tuple[dict, lis
     before: int | None = None
     revision: int | None = None
     total: int | None = None
+    title = ''
     while True:
         if before is None:
             snapshot = _read_conversation_snapshot(
@@ -146,10 +147,16 @@ def _read_all_messages(conversation_id: str, *, user_id: int) -> tuple[dict, lis
         if revision is None:
             revision = page_revision
             total = page_total
+            title = snapshot.get('title') or ''
+            if total < 0:
+                raise TranscriptExportError('conversation_count_malformed')
             if total > MAX_EXPORT_MESSAGES:
                 raise TranscriptExportError('conversation_too_large')
         elif page_revision != revision or page_total != total:
             raise TranscriptExportError('conversation_changed_during_export')
+        expected = min(EXPORT_PAGE_SIZE, total if before is None else before)
+        if len(page) != expected:
+            raise TranscriptExportError('conversation_export_incomplete')
         if not page:
             break
         pages.append(page)
@@ -164,7 +171,7 @@ def _read_all_messages(conversation_id: str, *, user_id: int) -> tuple[dict, lis
     if total is not None and len(messages) != total:
         # A short read is a failed export, never a silently shorter file.
         raise TranscriptExportError('conversation_export_incomplete')
-    return {'id': conversation_id, 'rev': revision, 'msg_count': total}, messages
+    return {'id': conversation_id, 'rev': revision, 'msg_count': total, 'title': title}, messages
 
 
 def render_full_transcript(

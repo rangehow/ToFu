@@ -18,6 +18,7 @@ This domain is the shared execution layer for long-running “prompt to delivera
 | Shared candidate critic and blind A/B (slides, film, documents) | `lib/production/critic.py` |
 | Capability recipes | `lib/motion_video/`, `lib/slides/`, `lib/longform/` (reports; staged papers/resumes in `lib/longform/documents/`, [`DOCUMENT_PIPELINE.md`](../DOCUMENT_PIPELINE.md)), `lib/research/`, `lib/paper/podcast_engine/` |
 | Binary publication | each capability’s artifact/deliverable service |
+| Headless launch contract, model-free preflight, run outcome taxonomy | `lib/production/deliverable_launch.py`, `contracts/deliverable_launch_v1.schema.json`, CLI `scripts/deliverable_run.py` ([below](#headless-deliverable-launch-contract)) |
 
 `lib.production` is the only public Python entry point for shared production contracts. A capability imports the specific owner module when it needs a narrow dependency. Historical capability-local copies and import shims are not part of the architecture.
 
@@ -241,6 +242,20 @@ persist `aborted`, so startup recovery does not restart them as unfinished work.
 The silent baseline stays available for later subtitle revisions. This protects
 the final MP4 publication boundary; companion files are not a multi-file atomic
 transaction. Scene-edit operations retain their existing revision contracts.
+
+Subtitle burn evidence is preserved through the subtitle node into the final
+owner-facing result: `safe_box_checked` counts verified samples and
+`subtitle_vertical_inconclusive` retains timestamped bounding boxes for samples
+whose ink touches a vertical frame edge. Edge contact in an already-cropped
+frame cannot prove clipping, so those samples are neither refused nor counted
+as verified. Inset ink, horizontal overflow and no-ink behavior stay distinct.
+The evidence stays in the authoritative final result and persisted publish
+receipt, not in public phase metadata or a new pipeline or store. The existing
+burn phase contract remains unchanged.
+A deliberate unburned run reports zero checked and an empty inconclusive list,
+which does not certify subtitle visibility. Tests in
+`test_motion_video_workflow.py` cover verified, ambiguous and failed burns through
+final settlement with synthetic media seams; they do not prove codec rendering.
 
 Retention: one overwritten `film_state.json` contains eleven current stage
 receipts, with no per-attempt history or new task store. It is retained with the
@@ -886,6 +901,108 @@ Verify with `tests/slides/test_slides_source_coverage.py`,
 `tests/slides/test_chart_preview_portability.py` and
 `tests/slides/test_slides_layout_repair.py`.
 
+## Headless deliverable launch contract
+
+**Problem.** Outside Chat, every non-coding deliverable had its own launcher
+and failure semantics. Audit (2026-11-18):
+
+| Deliverable | Launch path before | Shared with |
+|---|---|---|
+| Slides (PPT) | `evaluations/slides_bench/run_tofu.py` + `run_arm_all.sh`; renderer proven only at the render stage | `llm_bridge` endpoint route |
+| Paper / resume | `scripts/document_pipeline.py run`; missing toolchain surfaced mid-run as a traceback (exit 1) | `llm_bridge` endpoint route |
+| Motion video | Chat tool / HTTP → `lib/motion_video/service.py::start_motion_video` (owner-bound TaskRuntime job in a server process) | production runtime |
+| Research | Chat/HTTP → `lib/research/action.py::start_research_action` (owner-bound TaskRuntime, versioned program CAS) | production runtime |
+
+No path checked input presence, output writability on the real filesystem or
+renderer availability before spending model calls, and none reported
+setup/infra failures distinctly from a gate refusal.
+
+**Decision.** One declared contract (`contracts/deliverable_launch_v1.schema.json`)
+and one entry point, `deliverable_launch.launch`, used by
+`scripts/deliverable_run.py <contract.json>`, `scripts/document_pipeline.py run`
+and `run_tofu.py`. The contract declares kind, input files, output directory,
+model name and routing endpoint, budget (`deadline_s`), owner and extra
+required tools. `load_contract` requires an exact integer `schema_version: 1`
+(not a boolean, float or string) and an exact, case-sensitive string kind
+(`slides` or `document`). Missing, malformed and unsupported kinds/versions
+raise the existing field-specific `ContractError` (`ValueError`), which the
+CLI's validation catch reports as `setup_error` before preflight or execution.
+The inert public JSON regression suite is
+`tests/production/test_deliverable_contract_validation.py`; it can run directly
+with `python -m unittest` using a disposable `TOFU_DATA_DIR`, without invoking
+preflight, recipes or the CLI. Each kind calls its recipe's existing public entry point
+(`build_deck_from_topic`, `run_document_pipeline`); no model loop, stage graph
+or quality rule moves. Preflight runs, in order, input checks (present,
+readable, non-empty; for documents also the brief, dossier/draft and files the
+brief names), a write probe on every output folder (create, fsync, rename,
+unlink on the target filesystem; documents also probe the brief's
+`output_dir` beside the inputs), declared tools, and the kind's renderer probe
+from its owner (`lib/slides/readiness.py` Chromium smoke launch;
+`lib/paper/latex_layout.latex_toolchain`). The model route is a caller port
+installed only after preflight passes, so a failing preflight makes no model
+request. `budget.deadline_s` is a caller-declared deadline that sets the
+recipe's abort event; it is observed at the recipe's abort checks.
+
+Outcomes, recorded in `<output_dir>/launch_result.json`:
+
+| Outcome | Meaning | Measured? | CLI exit |
+|---|---|---|---|
+| `scored` | recipe reached its own verdict; `delivered` false carries the refusing stage and errors | yes | 0 delivered / 2 refused |
+| `timeout` | `deadline_s` expired | yes | 2 |
+| `harness_error` | unclassified exception (a defect, never excluded as infra) | yes | 2 |
+| `setup_error` | declared prerequisite missing/unusable: input absent/empty, permission or not-a-directory, tool/renderer not installed, malformed contract | no | 1 |
+| `infra_error` | environment failed under a valid contract: storage `EIO`/`EDQUOT`/`ENOSPC`/`ESTALE`/`ENOTCONN`/remote I/O, renderer installed but failing to launch, model endpoint unavailable after the bridge's retries (`ModelEndpointUnavailable`) | no | 1 |
+
+The first two columns mirror Paper B's scored/timeout/setup/infra split and
+the Terminal-Bench runner's measured vs `infra_error` phases. Infra detection
+walks the exception cause chain, so `StageFailed` now keeps the last attempt's
+exception as `__cause__`, and the slide outline stage chains the last
+candidate's exception when every candidate failed by exception (a gate
+rejection among them keeps it a measured refusal).
+
+**Alternatives rejected.** A new task engine or headless agent loop for
+deliverables (principle 4: modes vary policy, not loops). Per-kind preflight
+scripts (the drift this replaces). Probing the model endpoint during preflight
+(it would be a request; endpoint failure is attributed at run time instead).
+Treating every exception as `infra_error` (hides harness defects from the
+denominator).
+
+**Gaps.** Video and research are not launchable kinds: both start owner-bound
+TaskRuntime jobs that need the server's storage authority and settle through
+the task stream, so a CLI process cannot run them in-process the way slides
+and documents do. Porting them means launching through the server's task API,
+which is new work. The document pipeline's `research` subcommand (survey and
+ideate stages, owned by the research Worker's change) is the natural third
+kind once it lands. Scenario quality evaluation for creative and research
+deliverables stays with those owners; this contract only owns launch,
+preflight and outcome attribution. The deadline is cooperative: a single
+long model call is not interrupted. The standalone launcher exposes no external
+cancel handle: its abort event is private to the call. Command Stop remains
+owned by the common process runner; it is not a durable recipe-cancellation
+receipt. At return, the shared outcome boundary compares the monotonic clock
+with the explicit deadline even when the recipe never polled abort: a late
+return is `timeout`, `delivered: false`, with `artifact`, `partial_artifact`
+and `summary` retained for recovery. This classifies completion honestly but
+does not forcibly interrupt running work. The existing deadline timer is
+cancelled on settlement; no additional timer or execution loop is introduced.
+
+The repository declares its persistent TeX and Poppler paths in
+`tofu.toolchains.json`, consumed by the existing project toolchain owner;
+there is no per-task install or environment shell script. The real-renderer
+specification `test_document_real_renderer_and_delivery` uses isolated inputs
+and output, stubs only model/retrieval replies, compiles with the actual TeX
+installation, checks readable non-empty PDF bytes and the publication manifest.
+It skips explicitly when the declared TeX dependencies are unavailable; the
+model-free failure fixtures remain runnable without them. PPTX export is
+exercised by `test_slides_normal_path_delivers_through_the_launcher` (browser
+preview and model replies substituted, native PPTX export real).
+
+Specification: `tests/production/test_deliverable_launch.py` (injected
+missing-artifact, empty-artifact, unwritable-path, storage-fault,
+missing-renderer and missing-tool fixtures with no model request; slides and
+document normal paths through the real stage graphs; timeout, endpoint-outage
+and harness-error attribution; the three ported CLIs).
+
 ## Stage contract
 
 A `Stage` declares:
@@ -1020,6 +1137,7 @@ pytest -q tests/visual/test_visual_work_unit_cards.py tests/visual/test_visual_m
 pytest -q tests/slides/test_slides.py tests/slides/test_slides_creative_foundation.py tests/slides/test_slides_research_foundation.py tests/visual/test_visual_qa.py tests/slides/test_slides_semantic_components.py
 pytest -q tests/slides/test_slides_patch.py tests/slides/test_slides_theme_ops.py tests/slides/test_slides_batch_edit.py tests/slides/test_slides_versions.py tests/slides/test_slides_templates.py tests/slides/test_slides_outline_gate.py tests/slides/test_slides_editor_api.py
 pytest -q tests/production/test_production_creative_director.py
+pytest -q tests/production/test_deliverable_launch.py
 pytest -q tests/slides/test_slides_visual_repair.py tests/slides/test_visual_repair_recovery.py tests/slides/test_pptx_package_qa.py tests/motion_video/test_temporal_qa_bounds.py
 pytest -q tests/visual/test_motion_temporal_capture.py
 ```

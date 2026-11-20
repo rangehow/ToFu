@@ -82,12 +82,16 @@ class DispatchFailurePolicy:
         restart=None,
         attempt_observer=None,
         on_failure=None,
+        keep_model_on_app_minute_limit=False,
     ):
         self.state = state
         self.dispatcher = dispatcher
         self.capability = capability
         self.strict_model = strict_model
         self.max_429_attempts = max_429_attempts
+        self.keep_model_on_app_minute_limit = (keep_model_on_app_minute_limit
+                                              and strict_model
+                                              and max_429_attempts is None)
         self.owner_user_id = owner_user_id
         self.log_prefix = log_prefix
         self.on_retry = on_retry
@@ -120,6 +124,20 @@ class DispatchFailurePolicy:
 
     def handle(self, error, slot, *, tag):
         """Settle one failed reservation; retry with a delay or raise unchanged."""
+        if getattr(slot, 'subscription_account', None) is not None:
+            # A bound invocation may not restart selection on any failure.
+            slot.release()
+            if isinstance(error, PermissionError_) and error.status_code == 401:
+                from lib.oauth.account_dispatch import reject_bound_account
+                from lib.llm.llm_errors import ModelAdmissionRefused
+                from lib.model_routing.domain import ModelRoutingError
+                from lib.storage.errors import StorageError
+                try:
+                    reject_bound_account(slot.subscription_account)
+                except (ModelRoutingError, StorageError) as exc:
+                    raise ModelAdmissionRefused('Selected Codex account rejected; status could not be saved') from exc
+                raise ModelAdmissionRefused('Selected Codex account needs reauthorization') from None
+            raise error
         if isinstance(error, LocalRequestPreparationError):
             return self._local_preparation(error, slot, tag)
         if isinstance(error, DispatchSharedContentionDeferred):
@@ -168,14 +186,16 @@ class DispatchFailurePolicy:
         return 0.0
 
     def _skip_unrepresentable_route(self, error, slot, tag):
-        """Let a non-strict pick pass over a route that cannot carry the request.
+        """Pass over a route whose protocol cannot carry the request.
 
         Native continuity (signed reasoning, opaque replay items) binds the
-        request to protocols that represent it; another route may. A strict
-        pick cannot change model or protocol and still surfaces the error.
+        request to protocols that represent it; another route may, unchanged.
+        Only the route is excluded, so a strict pick still never leaves its
+        Model: it tries that Model's other routes and surfaces the error when
+        none can carry the request.
         """
         from lib.llm.conversion import ProtocolConversionError
-        if self.strict_model or not (
+        if not (
                 isinstance(error, ProtocolConversionError)
                 and error.code == 'mandatory_continuity_unrepresentable'):
             return False
@@ -267,6 +287,7 @@ class DispatchFailurePolicy:
             error=_err_str if _is_quota else '',
         )
         observe_rejection(slot, error, queue_wait_ms=self.state.queue_wait_ms)
+        was_holding_app_limit = self.state.holding_app_minute_limit
         self._remember_failure(error)
         if not _is_quota:
             # A spent balance is the key's; a rate limit speaks for the Model.
@@ -279,8 +300,21 @@ class DispatchFailurePolicy:
         )
         _past_window = getattr(
             self.dispatcher, 'shared_contention_rejecting_past_window', None)
-        if (_is_contention and _credential_limit and callable(_past_window)
-                and _past_window(slot)):
+        _gated_minute_limit = (_is_contention and _credential_limit
+                               and callable(_past_window))
+        # A budgeted request does not count probes inside the window the
+        # provider named: they cannot succeed before it rolls, so counting
+        # them spent a 3-response fallback budget in about two seconds of a
+        # sixty-second window (2026-11-18). It holds the pair for one window
+        # of its own rejections instead, then leaves it like the shared rule.
+        _window_held = (_gated_minute_limit
+                        and self.max_429_attempts is not None)
+        _own_past_window = (_window_held
+                            and self.state.minute_limit_rejected_past_window(slot))
+        hold_model = (_gated_minute_limit and self.keep_model_on_app_minute_limit
+                      and not (_is_quota or _is_gateway or _is_subscription)
+                      and error.status_code == 429)
+        if _gated_minute_limit and not hold_model and (_own_past_window or _past_window(slot)):
             # The key's own minute limit has rejected for a full provider
             # window, so its warm cache no longer pays for the wait. Leave
             # the pair for this request: another key serves it, or the typed
@@ -311,13 +345,16 @@ class DispatchFailurePolicy:
             )
             self._restart('key balance exhausted')
             return 0.0
-        self.state.note_free_429(is_gateway=bool(getattr(error, 'is_gateway', False)))
+        self.state.note_free_429(is_gateway=_is_gateway)
+        if hold_model:
+            self.state.hold_app_minute_limit(error)
         _credential_anomaly_exhausted = self.state.note_credential_delivery_anomaly(error)
-        _raise_if_429_attempt_budget_exhausted(
-            max_429_attempts=self.max_429_attempts,
-            upstream_attempts=self.state._429_count,
-            last_error=error,
-        )
+        if not _window_held:
+            _raise_if_429_attempt_budget_exhausted(
+                max_429_attempts=self.max_429_attempts,
+                upstream_attempts=self.state._429_count,
+                last_error=error,
+            )
         if _credential_anomaly_exhausted:
             logger.error(
                 '%s Credential-delivery anomaly persisted for %d actual responses on %s — stopping bounded gateway rotation without excluding the key or recording an auth failure',
@@ -326,15 +363,18 @@ class DispatchFailurePolicy:
                 slot.model,
             )
             raise error
-        _err_body = str(error)[:300]
-        if self.state._429_count <= 3 or self.state._429_count % 100 == 0:
+        if hold_model:
+            log_rejection = not was_holding_app_limit
+        else:
+            log_rejection = self.state._429_count <= 3 or self.state._429_count % 100 == 0
+        if log_rejection:
             logger.info(
                 '%s 429 rate-limited on %s:%s (cycle #%d) — body: %s',
                 self.log_prefix,
                 slot.key_name,
                 slot.model,
                 self.state._429_count,
-                _err_body,
+                str(error)[:300],
             )
         else:
             logger.debug(

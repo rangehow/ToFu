@@ -76,7 +76,7 @@ def start_background_services(
     Imports stay inside this function so importing the HTTP application cannot
     launch threads, touch persisted job state or probe the network. The caller
     runs this function off the event loop and does not announce readiness until
-    every owner has either started or reported its best-effort failure.
+    every required owner has armed and optional starts have been attempted.
 
     Only owners a request can observe within seconds of the gate stay on this
     path: role-scoped schedulers, proxy configuration, the first-boot key and
@@ -147,13 +147,12 @@ def start_background_services(
         _timed(log, 'conversation-delivery', lambda: ensure_started(app))
 
     if owns_attempt_execution:
-        try:
-            from lib.durable_worker.runtime import ensure_workers_started
+        from lib.durable_worker.runtime import ensure_workers_started
 
-            if _timed(log, 'durable-workers', lambda: ensure_workers_started(app, environ=env)):
-                log.info('[Server] canonical conversation and automation workers armed')
-        except Exception as exc:
-            log.warning('[Server] durable worker start failed: %s', exc)
+        # Arming the required claim owner is part of boot, not a best-effort
+        # integration. Preserve typed errors for the BootRunner retry policy.
+        if _timed(log, 'durable-workers', lambda: ensure_workers_started(app, environ=env)):
+            log.info('[Server] canonical conversation and automation workers armed')
 
     if owns_task_workers:
         try:
@@ -392,35 +391,28 @@ def start_registered_background_services(app, *, process_role='all'):
         except Exception as e:
             _log.warning('Database panel maintenance start failed: %s', e)
 
-    # ── Catalogue projections (OAuth reconcile + world model catalogue) ──
-    # Both syncs are idempotent, insert-or-prune projections consumed only by
-    # post-readiness request paths (model catalog UI, provider setup), so
-    # they no longer sit on the time-to-ready critical path: compiling every
-    # provider template bundle and re-evaluating pricing tags cost ~2s of
-    # every boot. They run once the readiness gate opens; without a serving
-    # gate (embedders, tests) they run inline exactly as before.
-    start_post_ready_catalog_sync(app, process_role=process_role)
-
-    # ── Refresh the authenticated Codex `/model` catalogue ──
+    # Authenticated Codex feed/borrowed-login discovery can do network work.
+    # Unlike the local routing convergence, it is not a claim prerequisite.
     if process_role_has(process_role, CAPABILITY_REQUEST_SERVICES):
-        try:
-            from lib.oauth.codex_catalog import start_codex_catalog_refresher
+        def start_feed():
             from runtime_guards import load_deployment_configuration
 
-            deployment = load_deployment_configuration()
-            if deployment.mode == 'personal':
-                if start_codex_catalog_refresher():
-                    started += 1
-            else:
-                # TODO(enterprise): enumerate account owners through an
-                # owner-scoped OAuth/catalog repository before enabling this
-                # personal-token worker in distributed deployments.
-                _log.info(
-                    'Codex model catalogue refresher disabled in distributed '
-                    'mode: no owner-scoped catalogue authority is configured')
-        except Exception as e:
-            _log.warning(
-                'Codex model catalogue refresher start deferred: %s', e)
+            if load_deployment_configuration().mode != 'personal':
+                return False
+            from lib.oauth.codex_catalog import start_codex_catalog_refresher
+            return start_codex_catalog_refresher(discover_shared_login=True)
+
+        try:
+            if not _schedule_post_ready(
+                    app, start_feed, name='tofu-post-ready-codex-feed',
+                    require_execution=True):
+                # Runner-less embedders keep the historical inline behavior.
+                # A production runner without a serving owner must not bypass
+                # the prerequisite just because it could not schedule work.
+                if 'tofu_boot_runner' not in extensions:
+                    started += int(start_feed())
+        except Exception as exc:
+            _log.warning('Codex model catalogue refresher start deferred: %s', exc)
 
     # Resume only corpora whose durable owner settings explicitly opted in.
     if process_role_has(process_role, CAPABILITY_TASK_WORKERS):
@@ -479,7 +471,8 @@ def _run_or_schedule_plugin_startup_hooks(app, *, process_role: str) -> int:
         return 0
 
 
-def _schedule_post_ready(app, callback: Callable[[], Any], *, name: str) -> bool:
+def _schedule_post_ready(app, callback: Callable[[], Any], *, name: str,
+                         require_execution: bool = False) -> bool:
     """Schedule on the serving owner; callers retain explicit inline behavior."""
     import asyncio
 
@@ -495,72 +488,28 @@ def _schedule_post_ready(app, callback: Callable[[], Any], *, name: str) -> bool
         await gate.wait()
         if stop_event is not None and stop_event.is_set():
             return
+        def run_if_ready() -> bool:
+            if stop_event is not None and stop_event.is_set():
+                return True
+            if require_execution:
+                from lib.server.server_boot_readiness import application_boot_snapshot
+                if application_boot_snapshot(app)['status'] != 'ready':
+                    return False
+            if stop_event is None or not stop_event.is_set():
+                callback()
+            return True
+
         try:
-            await asyncio.to_thread(callback)
+            from lib.server.server_boot_readiness import BOOT_RETRY_AFTER_SECONDS
+            while not await asyncio.to_thread(run_if_ready):
+                # Reuse the boot response cadence. The runtime owns this task
+                # and cancels/joins it on shutdown; it never delays readiness.
+                await asyncio.sleep(BOOT_RETRY_AFTER_SECONDS)
         except Exception as exc:
             logging.getLogger(__name__).warning('%s failed: %s', name, exc)
 
     runtime.create_task(run(), name=name)
     return True
-
-
-def start_post_ready_catalog_sync(app, *, process_role='all') -> bool:
-    """Run the catalogue projections after the readiness gate opens.
-
-    Returns True when the work was scheduled on the serving loop; False when
-    it ran inline (no production gate — embedders and direct test calls keep
-    the historical synchronous semantics).
-    """
-    import logging
-    from lib.process_roles import (
-        CAPABILITY_REQUEST_SERVICES,
-        normalize_process_role,
-        process_role_has,
-    )
-
-    _log = logging.getLogger(__name__)
-    process_role = normalize_process_role(process_role)
-    if not process_role_has(process_role, CAPABILITY_REQUEST_SERVICES):
-        return False
-
-    def _run_sync() -> None:
-        from runtime_guards import load_deployment_configuration
-
-        deployment = load_deployment_configuration()
-        if deployment.mode != 'personal':
-            # TODO(enterprise): enumerate account owners through owner-scoped
-            # OAuth/model-routing repositories before reconciling personal
-            # catalogues in distributed deployments.
-            _log.info(
-                'Catalogue sync disabled in distributed mode: no '
-                'owner-scoped OAuth/model-routing authority is configured')
-            return
-        try:
-            # Template/spec updates (e.g. a newly shipped Claude model) must
-            # not wait for an OAuth page visit or re-login. Idempotent: an
-            # unchanged projection writes nothing; the codex side reads only
-            # the local catalogue cache here.
-            from lib.oauth.outbound import reconcile_oauth_providers
-            reconcile_oauth_providers()
-        except Exception as exc:
-            _log.warning('OAuth provider reconciliation deferred: %s', exc)
-        try:
-            # The Model catalog tab lists models that EXIST, not models a
-            # configured provider supplies: newly shipped models must not
-            # wait for a provider bundle to carry them. Idempotent and
-            # insert-only except for template-retired identities, which are
-            # pruned — an unchanged catalogue writes nothing.
-            from lib.model_routing.world_catalog import (
-                sync_world_model_catalog)
-            sync_world_model_catalog()
-        except Exception as exc:
-            _log.warning('World model catalogue sync deferred: %s', exc)
-
-    if _schedule_post_ready(
-            app, _run_sync, name='tofu-post-ready-catalog-sync'):
-        return True
-    _run_sync()
-    return False
 
 
 # The owner whose stop is in progress, so a caller whose own budget ends first
@@ -793,7 +742,6 @@ __all__ = [
     'begin_stopping_registered_background_services',
     'start_registered_background_services',
     'stop_registered_background_services',
-    'start_post_ready_catalog_sync',
     'start_background_services',
     'start_deferred_background_services',
     'start_lan_discovery_responder',

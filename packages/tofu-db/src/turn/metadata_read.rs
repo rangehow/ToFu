@@ -42,6 +42,17 @@ pub(super) fn get(
     conversation_id: &str,
     turn_id: &str,
 ) -> io::Result<Option<Vec<u8>>> {
+    get_value(database, transaction, conversation_id, turn_id)?
+        .map(|value| encode_response(&value))
+        .transpose()
+}
+
+pub(super) fn get_value(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    conversation_id: &str,
+    turn_id: &str,
+) -> io::Result<Option<Value>> {
     let key = turn_key(transaction, conversation_id, turn_id)?;
     let Some(stored) = database.entity_get(transaction, &key)? else {
         return Ok(None);
@@ -56,7 +67,7 @@ pub(super) fn get(
         None => whole_document(database, transaction, &stored, &logical_key)?,
     };
     validate_metadata(&document, conversation_id, turn_id)?;
-    encode_response(&public_turn(document, execution_epoch)?).map(Some)
+    public_turn(document, execution_epoch).map(Some)
 }
 
 fn whole_document(
@@ -183,8 +194,9 @@ fn validate_metadata(
             return Err(invalid_data("Turn metadata text field is malformed"));
         }
     }
-    // Earlier Turn documents can omit presentationId and nullable pointers.
-    // Retain absence exactly; never manufacture a second public normalizer.
+    // Earlier Turn documents can omit presentationId. The shared public
+    // producer supplies its legacy display identity after the scoped checks.
+    // A present malformed identity is still rejected here.
     if document
         .get("presentationId")
         .is_some_and(|value| !value.is_string())

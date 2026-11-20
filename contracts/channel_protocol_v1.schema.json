@@ -199,11 +199,11 @@
       "channel": "wechat",
       "threadKinds": ["uid", "gid"],
       "commandChat": true,
-      "inbound": {"mode": "long_poll", "senderKinds": ["user"], "mentions": false, "quotes": true, "edits": false, "recalls": false, "attachments": [], "echoes": true},
+      "inbound": {"mode": "long_poll", "senderKinds": ["user"], "mentions": false, "quotes": true, "edits": false, "recalls": false, "attachments": ["file"], "echoes": true},
       "history": {"read": false, "threads": false, "byMessageId": false},
       "outbound": {"lookup": false, "idempotentResend": "none", "requiresInboundFirst": true, "replyWindows": null},
       "identities": {
-        "bot": {"notifiesOwner": true, "formats": ["plain"], "maxTextBytes": null, "quoteReply": false, "markers": false, "attachments": {}, "rateLimits": []}
+        "bot": {"notifiesOwner": true, "formats": ["plain"], "maxTextBytes": null, "quoteReply": false, "markers": false, "attachments": {"file": {"suffixes": null, "sizeBelowBytes": null, "confirmation": "ack"}}, "rateLimits": []}
       }
     }
   },
@@ -525,8 +525,8 @@
     },
     "AttachmentLimit": {
       "type": "object", "additionalProperties": false, "required": ["suffixes", "sizeBelowBytes"],
-      "description": "The platform's documented upload limits for one kind: accepted file suffixes (lowercase, no dot) and the exclusive size bound.",
-      "properties": {"suffixes": {"type": "array", "items": {"type": "string"}, "minItems": 1}, "sizeBelowBytes": {"type": "integer", "minimum": 1}}
+      "description": "The platform's documented upload limits for one kind: accepted file suffixes (lowercase, no dot) and exclusive size bound; null means no published restriction. confirmation defaults to thread history; ack means provider message acceptance, not recipient receipt.",
+      "properties": {"suffixes": {"type": ["array", "null"], "items": {"type": "string"}, "minItems": 1}, "sizeBelowBytes": {"type": ["integer", "null"], "minimum": 1}, "confirmation": {"enum": ["history", "ack"]}}
     },
     "ReplyWindow": {
       "type": "object", "additionalProperties": false, "required": ["windowS", "replies"],

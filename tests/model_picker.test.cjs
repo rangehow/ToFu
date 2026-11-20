@@ -48,6 +48,35 @@ test('canonical projection unions capability metadata once and preserves distinc
   assert.deepEqual(projectModelPickerCatalog(null), []); assert.deepEqual(projectModelPickerCatalog({ contract_version: 'other' }), []);
 });
 
+test('server route verdict is visible on the exact model and provider, without rewriting selection', () => {
+  const f = fixture(), picker = createModelPicker(f.ports);
+  const doc = { contract_version: 'tofu.model-routing/v2',
+    models: [{ creator_id: 'c', model_id: 'a' }],
+    providers: [{ provider_id: 'p1', name: 'One' }, { provider_id: 'p2', name: 'Two' }],
+    provider_accesses: ['p1', 'p2'].map(id => ({ provider_access_id: id, provider_id: id, enabled: true })),
+    offerings: ['p1', 'p2'].map(id => ({ offering_id: id, provider_access_id: id, enabled: true,
+      identity_state: 'confirmed', model: { creator_id: 'c', model_id: 'a' }, capabilities: ['text'] })),
+    deployments: ['p1', 'p2'].map(offering_id => ({ offering_id })),
+  };
+  const statuses = (auto, other) => [['', auto], ['p1', 'no_route'], ['p2', other]].map(([provider_id, availability]) => ({
+    creator_id: 'c', model_id: 'a', offering_id: '', provider_id, availability,
+  }));
+  picker.populate(projectModelPickerCatalog(doc, statuses('no_route', 'no_route')));
+  let row = f.d.querySelector('.preset-dropdown-item');
+  assert.match(row.textContent, /mobile\.depthUnavailable/);
+  assert.ok(row.classList.contains('active'));
+  assert.deepEqual(f.picks, []);
+  picker.populate(projectModelPickerCatalog(doc, statuses('available', 'available')));
+  row = f.d.querySelector('.preset-dropdown-item');
+  assert.doesNotMatch(row.textContent, /mobile\.depthUnavailable/);
+  row.querySelector('.ps-dd-provider-chip').click();
+  const [, blocked, available] = f.d.querySelectorAll('.ps-dd-provider-menu-item');
+  assert.match(blocked.textContent, /One · mobile\.depthUnavailable/);
+  assert.equal(available.textContent, 'Two');
+  available.click(); assert.equal(f.picks[0].provider_id, 'p2');
+  picker.destroy(); f.dom.window.close();
+});
+
 test('provider reopening reads the latest preference; keyboard dismissal returns focus; same-name creators stay independent', () => {
   const f = fixture(), picker = createModelPicker(f.ports); picker.populate([v2('c1'), v2('c2')]);
   const rows = f.d.querySelectorAll('.preset-dropdown-item'), chip = rows[0].querySelector('.ps-dd-provider-chip');

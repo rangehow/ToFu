@@ -78,6 +78,39 @@ def _is_semantically_adapted(
     return False
 
 
+def _stream_violations(source: str) -> list[ast.Call]:
+    tree = ast.parse(source)
+    parents = _parents(tree)
+    return [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and _call_name(node) in _STREAM_CALLS
+        and not _is_semantically_adapted(node, parents)
+    ]
+
+
+@pytest.mark.parametrize(('source', 'violations'), [
+    ('result = dispatch_stream()', 1),
+    ('result = ensure_provider_stream_result(dispatch_stream())', 0),
+    ('def dispatch_stream():\n'
+     '    return ensure_provider_stream_result(_dispatch_stream())\n'
+     'result = dispatch_stream()', 1),
+    ('def dispatch_stream():\n'
+     '    return _dispatch_stream()\n'
+     'result = dispatch_stream()', 2),
+    ('def dispatch_stream():\n'
+     '    if condition:\n'
+     '        return _dispatch_stream()\n'
+     '    return ensure_provider_stream_result(_dispatch_stream())\n'
+     'result = dispatch_stream()', 2),
+    ('def dispatch_stream():\n'
+     '    return ensure_provider_stream_result(_dispatch_stream())\n'
+     'result = other.dispatch_stream()', 1),
+])
+def test_stream_adapter_ratchet_recognizes_only_verified_wrappers(source, violations):
+    assert len(_stream_violations(source)) == violations
+
+
 def test_production_stream_calls_cross_the_typed_adapter_boundary():
     """No production caller may consume a raw stream tuple directly."""
     violations = []
@@ -85,20 +118,10 @@ def test_production_stream_calls_cross_the_typed_adapter_boundary():
         source = path.read_text(encoding='utf-8')
         if not any(call_name in source for call_name in _STREAM_CALLS):
             continue
-        tree = ast.parse(source, filename=str(path))
-        parents = _parents(tree)
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            if _call_name(node) not in _STREAM_CALLS:
-                continue
-            # Definitions of the low-level typed shell call their private
-            # one-attempt implementation; every public/consumer call in
-            # this vocabulary must visibly cross an adapter.
-            if not _is_semantically_adapted(node, parents):
-                violations.append(
-                    f'{path.relative_to(_ROOT)}:{node.lineno} '
-                    f'{_call_name(node)}')
+        for node in _stream_violations(source):
+            violations.append(
+                f'{path.relative_to(_ROOT)}:{node.lineno} '
+                f'{_call_name(node)}')
     assert not violations, (
         'provider stream calls bypass typed semantic adaptation:\n'
         + '\n'.join(violations))
@@ -157,3 +180,15 @@ def test_terminal_evidence_is_constructed_only_at_semantic_authority():
     assert not violations, (
         'terminal evidence constructed outside lib.turn_verdict:\n'
         + '\n'.join(violations))
+
+
+@pytest.mark.parametrize('use', [
+    'def invoke(dispatch_stream):\n    return dispatch_stream()\n',
+    'def invoke():\n    dispatch_stream = lambda: ((), {})\n    return dispatch_stream()\n',
+    'dispatch_stream = lambda: ((), {})\nresult = dispatch_stream()\n',
+    'from other import raw as dispatch_stream\nresult = dispatch_stream()\n',
+])
+def test_shadowed_or_rebound_wrapper_name_never_bypasses_adapter(use):
+    declaration = ('def dispatch_stream():\n'
+                   '    return ensure_provider_stream_result(_dispatch_stream())\n')
+    assert len(_stream_violations(declaration + use)) == 1

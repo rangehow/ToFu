@@ -80,7 +80,6 @@ import stat
 import sqlite3
 from pathlib import Path
 import shutil
-import statistics
 import subprocess
 import sys
 import tempfile
@@ -796,12 +795,9 @@ class TofuDbEngine:
     def crash_cycle(self) -> float:
         """SIGKILL the daemon then reopen the SAME authority, timed end to end.
 
-        The ungraceful half of restart_cycle: no stdin EOF, no clean
-        catch-up; recovery must replay the WAL tail exactly like a power
-        loss. Callers verify acknowledged writes afterwards — strict
-        durability makes every pre-kill acknowledgement durable. Embedded
-        mode abandons the runtime (drivers joined, WAL-window retirement
-        skipped) — the in-process power-loss approximation.
+        No stdin EOF or clean shutdown. Callers verify acknowledged writes
+        after recovery. Process death leaves the OS page cache intact and is
+        not a power-loss test. Embedded mode abandons the runtime instead.
         """
         if self._client_mode == 'embedded':
             if self._embedded is None:
@@ -824,14 +820,13 @@ class TofuDbEngine:
             self._log.close()
             self._log = None
         began = time.perf_counter_ns()
-        self._process.kill()
-        self._accumulate_write_bytes()
-        try:
-            self._process.wait(timeout=30)
-        except subprocess.TimeoutExpired as exc:
-            raise BenchError('tofu-db SIGKILL did not reap within 30 s') from exc
+        killed = self._process
+        self.last_crash_receipt = None
+        exit_code = _kill_benchmark_child(killed, self._accumulate_write_bytes)
+        self.last_crash_receipt = _crash_receipt(killed, exit_code, self._data_dir)
         self._process = None
         self._launch_serve()
+        _record_benchmark_reopen(self.last_crash_receipt, killed, self._process, self._data_dir)
         return (time.perf_counter_ns() - began) / 1e6
 
     def sigkill_authority(self) -> int:
@@ -1000,6 +995,33 @@ class TofuDbEngine:
         self._settle_logs()
 
 
+def _kill_benchmark_child(process, sample_after_signal):
+    """Require signal exit of the owned process, never substitute a clean stop."""
+    if process is None or process.poll() is not None:
+        raise BenchError('benchmark has no running owned storage child to SIGKILL')
+    process.kill()
+    sample_after_signal()
+    try:
+        exit_code = process.wait(timeout=30)
+    except subprocess.TimeoutExpired as exc:
+        raise BenchError('benchmark SIGKILL did not reap within 30 s') from exc
+    if exit_code != -signal.SIGKILL:
+        raise BenchError(f'benchmark child did not exit by SIGKILL: {exit_code}')
+    return exit_code
+
+
+def _crash_receipt(killed, exit_code, authority):
+    return {'killed_pid': killed.pid, 'exit_code': exit_code,
+            'authority_directory': str(authority)}
+
+
+def _record_benchmark_reopen(receipt, killed, reopened, authority):
+    if (reopened is None or reopened is killed or reopened.poll() is not None
+            or receipt['authority_directory'] != str(authority)):
+        raise BenchError('benchmark did not reopen the same authority with a running replacement child')
+    receipt['reopened_pid'] = reopened.pid
+
+
 class LegacyEngine:
     """The legacy Python storage authority on one backend."""
 
@@ -1129,19 +1151,14 @@ class LegacyEngine:
         """
         if self._runtime is None:
             raise BenchError('legacy benchmark engine is not started')
-        pid = None
-        try:
-            status = self._runtime.status()
-            pid = status.get('pid') if isinstance(status, dict) else None
-        except Exception:  # noqa: BLE001 - status is best-effort telemetry
-            pid = None
+        killed = self._runtime._supervisor._process
         began = time.perf_counter_ns()
-        if pid is not None:
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except OSError:
-                pid = None
-        self._relaunch_after_kill(pid)
+        self.last_crash_receipt = None
+        exit_code = _kill_benchmark_child(killed, self._accumulate_write_bytes)
+        self.last_crash_receipt = _crash_receipt(killed, exit_code, self._project_root)
+        self._relaunch_after_kill(None)
+        _record_benchmark_reopen(self.last_crash_receipt, killed,
+                                 self._runtime._supervisor._process, self._project_root)
         return (time.perf_counter_ns() - began) / 1e6
 
     def _relaunch_overrides(self) -> dict:
@@ -1659,12 +1676,9 @@ CREATE TABLE IF NOT EXISTS credentials(
 # (the concurrent phase supplies its own threading and timing).
 
 def _record_value(i: int) -> dict:
-    return {
-        'n': i,
-        's': f'value-{i}-' + 'x' * 64,
-        'l': [True, None, i],
-        'nested': {'a': i, 'b': f'string-{i}'},
-    }
+    from scripts.tofudb_workloads.records import record_value
+
+    return record_value(i)
 
 
 def _workload_inputs(scale: dict[str, int], user: int, namespace: str):
@@ -1681,7 +1695,7 @@ def _workload_ports():
         record_value=_record_value, large_turn_content=_large_turn_content,
         execute=_execute_workload_operation, summarize=_latency_summary,
         error=BenchError, unsupported_error=UnsupportedBenchmarkOperation,
-        raw_sqlite_type=RawSqliteEngine,
+        raw_sqlite_type=RawSqliteEngine, measure=measure_workload,
     )
 
 
@@ -1728,29 +1742,13 @@ _SCALES = {
 }
 
 
-def _percentile(sorted_samples: list[float], fraction: float) -> float:
-    if not sorted_samples:
-        return 0.0
-    index = min(
-        len(sorted_samples) - 1,
-        max(0, int(round(fraction * (len(sorted_samples) - 1)))),
-    )
-    return sorted_samples[index]
-
-
 def _latency_summary(samples_ms: list[float], *, retain_samples: bool = True) -> dict:
-    ordered = sorted(samples_ms)
-    total_s = sum(ordered) / 1e3
+    from scripts.tofudb_workloads.latency import latency_metrics
+
     result = {
-        'iterations': len(ordered),
-        'p99_sample_count_sufficient': len(ordered) >= _MINIMUM_TAIL_SAMPLES,
-        'p50_ms': round(_percentile(ordered, 0.50), 6),
-        'p95_ms': round(_percentile(ordered, 0.95), 6),
-        'p99_ms': round(_percentile(ordered, 0.99), 6),
-        'mean_ms': round(statistics.fmean(ordered), 6),
-        'min_ms': round(ordered[0], 6),
-        'max_ms': round(ordered[-1], 6),
-        'ops_per_sec': round(len(ordered) / total_s, 1) if total_s else 0.0,
+        'iterations': len(samples_ms),
+        'p99_sample_count_sufficient': len(samples_ms) >= _MINIMUM_TAIL_SAMPLES,
+        **latency_metrics(samples_ms),
     }
     if retain_samples:
         # Keep the collector's order, outside timed calls. Concurrent collectors
@@ -1797,7 +1795,7 @@ def _execute_workload_operation(engine, operation: str, payload: dict, command: 
 
 
 def measure_workload(engine, setup, operation, iterations: int,
-                     warmup: int = 5) -> dict:
+                     warmup: int = 5, *, result_oracle: dict | None = None) -> dict:
     if iterations <= 0 or warmup < 0:
         raise BenchError('iterations must be positive and warmup nonnegative')
     prepare = getattr(engine, 'prepare_workload', None)
@@ -1808,13 +1806,29 @@ def measure_workload(engine, setup, operation, iterations: int,
     for i in range(warmup):
         op, payload, command = operation(i)
         _execute_workload_operation(engine, op, payload, command)
+    from copy import deepcopy
+
+    result_samples = []
     samples_ms: list[float] = []
     for i in range(warmup, warmup + iterations):
         op, payload, command = operation(i)
+        request = deepcopy([op, payload, command]) if result_oracle is not None else None
         start = time.perf_counter_ns()
-        _execute_workload_operation(engine, op, payload, command)
-        samples_ms.append((time.perf_counter_ns() - start) / 1e6)
+        value = _execute_workload_operation(engine, op, payload, command)
+        elapsed_ns = time.perf_counter_ns() - start
+        samples_ms.append(elapsed_ns / 1e6)
+        if result_oracle is not None:
+            result_samples.append({'iteration': i, 'request': request,
+                                   'result': deepcopy(value)})
     result = _latency_summary(samples_ms)
+    if result_oracle is not None:
+        from scripts.tofudb_workloads.result_evidence import FORMAT
+
+        result['result_evidence'] = {
+            'format': FORMAT, **result_oracle, 'warmup': warmup,
+            'response_shape': 'bare' if isinstance(engine, RawSqliteEngine) else 'versioned',
+            'samples': result_samples,
+        }
     result['sample_order'] = 'sequential-operation-start'
     # Preserve temporal order in at most ten windows: a global percentile
     # cannot distinguish history-dependent amplification from isolated stalls.
@@ -2082,11 +2096,13 @@ def _operation_runtime_evidence(name, engine):
             ' FROM pragma_synchronous AS s, pragma_journal_mode AS j').fetchone()
         return {'synchronous': synchronous, 'journal_mode': journal_mode}
     if name == 'sqlite':
-        fastpath = engine._client.metrics().get('fastpath', {})
-        # FULL is enforced by the source-pinned adapter's writer factory, not
-        # a PRAGMA from an unrelated observer connection (which proves nothing).
-        return {'synchronous': 2, 'synchronous_evidence': 'source-pinned writer factory',
-                'fastpath_active': fastpath.get('active')}
+        metrics = engine._client.metrics()
+        writer = metrics.get('writer_configuration_at_open')
+        configuration = writer if isinstance(writer, dict) else {}
+        return {'writer_configuration_at_open': writer,
+                'synchronous': configuration.get('synchronous'),
+                'journal_mode': configuration.get('journal_mode'),
+                'fastpath_active': metrics.get('fastpath', {}).get('active')}
     return {}
 
 
@@ -2126,11 +2142,20 @@ def _finish_operation_evidence(report, engines, before_sources, declared, before
     unprofiled = bool(native) and all(row.get('profiling') is False and row.get('profile_sample_every') == 0
                                     for row in native.values())
     meta['profiling_requested'] = False if unprofiled else None
-    meta['equivalent_durability'] = (
+    observed = (
         bool(native and sqlite and raw) and
+        all(row.get('wal_durability') is not None for row in native.values()) and
+        all(row.get('synchronous') is not None and row.get('journal_mode') is not None
+            and row.get('fastpath_active') is not None for row in sqlite.values()) and
+        all(row.get('synchronous') is not None and row.get('journal_mode') is not None
+            for row in raw.values()))
+    meta['equivalent_durability'] = (
         all(row.get('wal_durability') == 'strict' for row in native.values()) and
-        all(row.get('synchronous') == 2 and row.get('fastpath_active') is False for row in sqlite.values()) and
-        all(row.get('synchronous') == 2 and str(row.get('journal_mode')).lower() == 'wal' for row in raw.values()))
+        all(type(row.get('synchronous')) is int and row.get('synchronous') == 2
+            and str(row.get('journal_mode')).lower() == 'wal'
+            and row.get('fastpath_active') is False for row in sqlite.values()) and
+        all(row.get('synchronous') == 2 and str(row.get('journal_mode')).lower() == 'wal'
+            for row in raw.values())) if observed else None
     report['env'] = {'native': {'profile': not unprofiled},
                      'sqlite_synchronous': sqlite.get('before', {}).get('synchronous'),
                      'sqlite_runtime': {'version': sqlite3.sqlite_version, 'python': sys.version.split()[0],
@@ -2410,12 +2435,16 @@ def _print_report(report: dict) -> None:
         for name, per_engine in workloads.items():
             mine = per_engine.get('tofudb')
             theirs = per_engine.get(baseline)
-            if (not mine or not theirs or 'error' in mine
-                    or 'error' in theirs or not mine.get('mean_ms')
-                    or not theirs.get('mean_ms')):
-                continue
-            if mine.get('scope') != theirs.get('scope'):
+            from scripts.tofudb_workloads.result_evidence import compare_results
+
+            if mine and theirs and mine.get('scope') != theirs.get('scope'):
                 print(f'  {name:28s} incomparable measurement scopes')
+                continue
+            fidelity = compare_results({'tofudb': mine, baseline: theirs}, workload=name)
+            if not fidelity['qualified']:
+                print(f'  {name:28s} unqualified: ' + '; '.join(fidelity['reasons']))
+                continue
+            if not mine.get('mean_ms') or not theirs.get('mean_ms'):
                 continue
             ratio = theirs['mean_ms'] / mine['mean_ms']
             marker = 'FASTER' if ratio > 1.0 else 'slower'
@@ -2450,6 +2479,26 @@ def _reset_postgres_database(dsn: str) -> None:
             sql.SQL('CREATE DATABASE {}').format(sql.Identifier(dbname)))
     from lib.storage_authority_sql.migrate import migrate_external_postgres
     migrate_external_postgres(dsn)
+
+
+def _publish_report(path: Path, report) -> None:
+    payload = json.dumps(report, indent=2, sort_keys=True)
+    temporary = path.with_name(f'.perf-report-{uuid.uuid4().hex}.partial')
+    stream = temporary.open('x', encoding='utf-8')
+    try:
+        with stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        # An occupied name, including a concurrent winner, must never be replaced.
+        os.link(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def main() -> int:
@@ -2488,7 +2537,7 @@ def main() -> int:
                              'same command id (production-faithful), counted '
                              'and reported; default surfaces them as errors')
     parser.add_argument('--output', default='',
-                        help='write the JSON report to this path')
+                        help='write one JSON report to a new path (must not exist)')
     parser.add_argument('--workloads', default='',
                         help='comma subset of workload names (default: all)')
     parser.add_argument('--charter-witnesses', default='',
@@ -2496,6 +2545,8 @@ def main() -> int:
                              + ' or "all": joined charter witnesses on fresh authorities '
                                'beside the measured ones (needs tofudb and sqlite)')
     args = parser.parse_args()
+    if args.output and os.path.lexists(args.output):
+        parser.error('--output path already exists; choose a new report path')
 
     selected = [name.strip() for name in args.engines.split(',') if name.strip()]
     if not selected or len(selected) != len(set(selected)):
@@ -2620,7 +2671,10 @@ def main() -> int:
                         engine.retain_logs()
                         message += f' (daemon log: {log_path})'
                     per_engine[engine_name] = {'error': message}
+            from scripts.tofudb_workloads.result_evidence import compare_results
+
             report['workloads'][name] = per_engine
+            report.setdefault('operation_result_comparison', {})[name] = compare_results(per_engine, workload=name)
             print(f'[done] {name}', flush=True)
         report['resources'] = {}
         for engine_name, engine in engines.items():
@@ -2647,8 +2701,7 @@ def main() -> int:
     print('Scope: storage operation measurements; active-conversation capacity and latency NOT ASSESSED.')
     _print_report(report)
     if args.output:
-        Path(args.output).write_text(
-            json.dumps(report, indent=2, sort_keys=True), encoding='utf-8')
+        _publish_report(Path(args.output), report)
         print(f'report written to {args.output}')
     return int(bool(skipped) or any(
         'error' in stats

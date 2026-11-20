@@ -7,11 +7,23 @@ redirects and response consumption, so failover cannot replay a read failure.
 from __future__ import annotations
 
 import asyncio
+import sys
 import time
 
 import httpx
 
-from lib.http_transport.outbound import append_untried, httpx_peer, route_metadata
+# httpcore runs ``import sniffio`` inside every async request. Production's
+# environment does not install it, and a failed import searches every
+# sys.path directory on the shared volume, on the event loop. Resolve the
+# probe once at boot: imported when present, recorded absent otherwise, so
+# each request's import is a sys.modules lookup and httpcore keeps its
+# documented asyncio fallback.
+try:
+    import sniffio  # noqa: F401
+except ImportError:
+    sys.modules.setdefault('sniffio', None)
+
+from lib.http_transport.outbound import append_untried, current_wire_send_authority, httpx_peer, route_metadata
 from lib.log import get_logger
 
 logger = get_logger(__name__)
@@ -103,8 +115,11 @@ class RoutingAsyncTransport(httpx.AsyncBaseTransport):
             key, transport = await self._acquire(route.async_proxy_url())
             trace = ConnectTrace(request)
             request.extensions['trace'] = trace.asynchronous
-            note_wire_send()
             try:
+                guard = request.extensions.get('tofu_wire_send_authority') or current_wire_send_authority()
+                if guard is not None:
+                    await asyncio.to_thread(guard)
+                note_wire_send()
                 response = await transport.handle_async_request(request)
             except (self._http.ConnectError, self._http.ConnectTimeout, self._http.ProxyError, self._http.ReadTimeout) as error:
                 await _joined_close(self._release(key))

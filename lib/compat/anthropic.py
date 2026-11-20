@@ -20,11 +20,13 @@ import json
 from typing import AsyncGenerator
 
 from lib.compat._common import (
+    CompatModelAttributionUnknown,
     CompatTerminalFailure,
     apply_common_cfg,
     apply_thinking_cfg,
     apply_tools_and_personal_defaults,
     require_deliverable_terminal,
+    responding_models,
     short_id,
 )
 from lib.error_envelope import BadRequest
@@ -142,8 +144,7 @@ def _content_blocks_from_task(task: dict) -> list[dict]:
     """Build Anthropic content[] from the assembled task content."""
     from lib.tasks_pkg.segments import deliverable_text
     blocks: list[dict] = []
-    if task.get('thinking'):
-        blocks.append({'type': 'thinking', 'thinking': task['thinking']})
+    # Task reasoning has no per-event dispatch identity; never relabel it.
     # Deliverable = narration-free answer from the segment model (epic
     # , step 3) — one source of truth with the streaming path.
     text = deliverable_text(task)
@@ -172,6 +173,7 @@ def _content_blocks_from_task(task: dict) -> list[dict]:
 def build_anthropic_response(task: dict, model: str) -> dict:
     """Tofu finished task → Anthropic Messages response."""
     require_deliverable_terminal(task)
+    model, _ = responding_models(task, model)
     stop_reason = _terminal_stop_reason(task)
     usage = task.get('usage') or {}
     return {
@@ -195,38 +197,34 @@ def _evt(name: str, data: dict) -> str:
     return f'event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n'
 
 
-def _terminal_frames(task, model, msg_id, *, started, block_index,
-                     thinking_block_open, terminal_event=None):
+def _terminal_frames(task, model, msg_id, *, terminal_event=None):
     """Project one verified terminal observation, including late connections."""
     event = terminal_event or {}
     try:
         require_deliverable_terminal(task, terminal_event)
-    except CompatTerminalFailure as exc:
+        model, _ = responding_models(task, model, terminal_event)
+    except (CompatTerminalFailure, CompatModelAttributionUnknown) as exc:
         yield _evt('error', {
             'type': 'error',
             'error': {
                 'type': 'api_error',
                 'message': str(exc),
+                'code': (exc.cause if isinstance(exc, CompatModelAttributionUnknown)
+                         else exc.verdict.cause),
             },
         })
         return
-    if not started:
-        yield _evt('message_start', {
-            'type': 'message_start',
-            'message': {
-                'id': msg_id, 'type': 'message', 'role': 'assistant',
-                'model': model,
-                'content': [], 'stop_reason': None,
-                'stop_sequence': None,
-                'usage': {'input_tokens': 0, 'output_tokens': 0},
-            },
-        })
-    # Close the live thinking block (if any) before the answer block.
-    if thinking_block_open:
-        yield _evt('content_block_stop', {
-            'type': 'content_block_stop', 'index': block_index,
-        })
-        block_index += 1
+    block_index = 0
+    yield _evt('message_start', {
+        'type': 'message_start',
+        'message': {
+            'id': msg_id, 'type': 'message', 'role': 'assistant',
+            'model': model,
+            'content': [], 'stop_reason': None,
+            'stop_sequence': None,
+            'usage': {'input_tokens': 0, 'output_tokens': 0},
+        },
+    })
     # Emit the narration-free deliverable as one text block NOW.
     from lib.tasks_pkg.segments import deliverable_text
     answer = deliverable_text(task)
@@ -301,6 +299,8 @@ async def stream_anthropic_chunks(task, model: str
     Sequence: message_start → content_block_start → content_block_delta*
               → content_block_stop → message_delta → message_stop.
 
+    Message start waits for terminal ledger attribution; reasoning without
+    dispatch identity is suppressed. Existing task storage holds the answer.
     Event-driven: blocks on the task's wakeup signal instead of polling,
     so it never pins a thread while the model is generating.
     """
@@ -308,9 +308,6 @@ async def stream_anthropic_chunks(task, model: str
 
     msg_id = short_id('msg_', 16)
     cursor = 0
-    started = False
-    thinking_block_open = False
-    block_index = 0
     task_id = task.get('id') or ''
     from lib.task_replay.task_replay import task_memory_replay_page
 
@@ -323,51 +320,17 @@ async def stream_anthropic_chunks(task, model: str
 
             for ev in new_events:
                 etype = ev.get('type', '')
-                if not started:
-                    yield _evt('message_start', {
-                        'type': 'message_start',
-                        'message': {
-                            'id': msg_id, 'type': 'message', 'role': 'assistant',
-                            'model': model,
-                            'content': [], 'stop_reason': None,
-                            'stop_sequence': None,
-                            'usage': {'input_tokens': 0, 'output_tokens': 0},
-                        },
-                    })
-                    started = True
-                if etype == 'delta':
-                    # Narrator-leak root fix (, step 3):
-                    #   content deltas are unclassifiable mid-stream and a wire
-                    #   client can't retract, so we do NOT stream raw content as the
-                    #   answer text block. The narration-free deliverable is emitted
-                    #   from the segment model at `done`. Thinking DOES stream live
-                    #   as a thinking block (real-time reasoning without polluting
-                    #   the answer). Retires the compat surface's DELTA_RESET need.
-                    if ev.get('thinking'):
-                        if not thinking_block_open:
-                            yield _evt('content_block_start', {
-                                'type': 'content_block_start',
-                                'index': block_index,
-                                'content_block': {'type': 'thinking', 'thinking': ''},
-                            })
-                            thinking_block_open = True
-                        yield _evt('content_block_delta', {
-                            'type': 'content_block_delta',
-                            'index': block_index,
-                            'delta': {'type': 'thinking_delta',
-                                      'thinking': ev['thinking']},
-                        })
-                elif etype == 'done':
+                # message_start is immutable. Wait for the existing task ledger
+                # to identify the answer; unattributed reasoning is never replayed.
+                if etype == 'done':
                     for frame in _terminal_frames(
-                        task, model, msg_id, started=started, block_index=block_index,
-                        thinking_block_open=thinking_block_open, terminal_event=ev):
+                        task, model, msg_id, terminal_event=ev):
                         yield frame
                     return
 
             if task.get('status') in ('done', 'error', 'aborted') and not new_events:
                 for frame in _terminal_frames(
-                    task, model, msg_id, started=started, block_index=block_index,
-                    thinking_block_open=thinking_block_open):
+                    task, model, msg_id):
                     yield frame
                 return
 

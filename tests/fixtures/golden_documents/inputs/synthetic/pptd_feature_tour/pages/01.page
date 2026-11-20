@@ -1,0 +1,82 @@
+pageType: cover
+background:
+  type: solid
+  color: $bg
+elements:
+- elementId: title
+  elementType: text
+  bounds:
+  - 80
+  - 80
+  - 1120
+  - 110
+  content:
+    text: <p>同一模型只换 harness：<b>golden</b> corpus 封面</p>
+    style: $title
+- elementId: body
+  elementType: text
+  bounds:
+  - 80
+  - 220
+  - 700
+  - 200
+  content:
+    text: <p>中文正文与 <i>English</i> 混排。</p><ul><li>第一点</li><li>second point</li></ul>
+    style: $body
+    fit: shrink
+    wrap: true
+- elementId: card
+  elementType: shape
+  bounds:
+  - 820
+  - 220
+  - 380
+  - 220
+  shapeName: roundRect
+  fill:
+    type: gradient
+    angle: 90
+    stops:
+    - color: $primary
+      position: 0
+    - color: $accent
+      position: 1
+  shadow:
+    blur: 12
+    offset:
+    - 0
+    - 4
+    color: '#00000033'
+  border:
+    style: solid
+    width: 2
+    color: $hairline
+- elementId: rule
+  elementType: line
+  bounds:
+  - 80
+  - 470
+  - 1120
+  - 20
+  viewBox:
+  - 1120
+  - 20
+  points: 0,10 1120,10
+  curve: sharp
+  arrow:
+  - null
+  - triangle
+  border:
+    style: solid
+    width: 2
+    color: $accent
+- elementId: figure
+  elementType: image
+  bounds:
+  - 80
+  - 510
+  - 320
+  - 180
+  src: media/gradient.png
+  fit:
+    mode: cover

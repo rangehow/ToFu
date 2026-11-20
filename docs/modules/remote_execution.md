@@ -20,7 +20,7 @@ the same thing; the tool field keeps the name `device`.
 | Node status/listing/removal, pairing, distribution API | `routes/api_v1/desktop.py` |
 | Pairing authority (6-digit code + link secret, one durable record) | `lib/desktop/pairing.py`, `contracts/desktop_node_registry_v1.schema.json` |
 | Home node registry: pending/active, confirmation, credential binding, conflicts, revocation | `lib/desktop/node_registry.py`, poll gate `routes/desktop.py::_node_admission` |
-| Node runtime (bridge loop, command execution) | `lib/desktop_agent/` |
+| Node runtime (bridge loop, command execution) | `lib/desktop_agent/`; its Rust replacement `tofu node` in `packages/tofu-node/` (same contracts, config and journal; every command, the tray and browser-relay pairing are ported; see its README) |
 | Node links: one loop per joined server + local server | `lib/desktop_agent/links.py` |
 | Joining: redeem a pairing link, persist the attachment | `lib/desktop_agent/attachments.py`, `lib/desktop_agent/config.py` |
 | Agent permission policy | `lib/desktop_agent/_permissions.py` |
@@ -43,6 +43,40 @@ declared capabilities, share roots and the optional `system` facts (below); stat
 authenticated owner. The in-memory bridge
 queue is deliberately ephemeral transport, not durable job state (credentials/owner records stay in the Sidecar); a
 restart fails outstanding bridge calls honestly and durable jobs reconcile via their own state machine.
+
+### Sensitive call journal results
+
+**Problem.** Both node implementations share `<config>.calls/`; saving every
+completion there retained Codex access tokens and egress response bodies (and
+possibly secrets in errors) in plaintext.
+
+**Decision.** `codex_login_read`, `egress_http` and `egress_http_stream` retain
+only an id/type/time and `sensitive_done` tombstone, never the result or error.
+The original completion is delivered normally. A repeat of that call ID,
+including after switching node implementations or restarting, returns an
+explicit `device_unavailable` refusal saying the result was not retained and
+the call was not run again. A fresh request requires a new call ID and still
+passes both permission checks. A started or unreadable record also refuses;
+missing result data is never permission to replay a side effect.
+
+Opening a journal atomically redacts legacy sensitive completions, preserving
+their file modification time so the contract's retention horizon is not
+extended. Unix journal directories/files are private (0700/0600). This affects
+only node journal records, not transcripts or the Home's result stores.
+Retention is unchanged (`device_routing_v1`'s journal horizon); after eviction
+that horizon no longer promises deduplication, as before. A synthetic 1 MiB
+egress completion measured 1,048,710 serialized bytes before this policy and
+103 bytes as a tombstone (2026-11-18, Python journal). Growth now follows
+command metadata, not response size. Windows permissions remain the existing
+platform ACL behavior; 0700/0600 assertions apply only on Unix. macOS and
+Windows runtime behavior is still unverified (cross-target compilation only).
+
+**Alternatives considered.** Encrypting replayable results requires a shared
+cross-language key lifecycle, secure storage and recovery policy. Retaining no
+sensitive result avoids both that new secret and decrypt-on-retry exposure;
+the deliberate trade-off is an explicit refusal rather than durable result
+replay. Ordinary non-sensitive results keep their existing replay behavior.
+Existing backups or copies of old plaintext journal files are not scrubbed.
 
 ### One node ID per host
 
@@ -74,6 +108,14 @@ digests are stored.
 - Migration: the legacy single `agent_id` goes to the first host that starts
   and stays in the file; a phase-0 slot keyed without the container ID is
   claimed by the first container that matches it.
+
+Platform coverage: `tests/desktop/test_desktop_node_host_identity.py` exercises
+Windows registry and macOS `ioreg` readers with injected fixtures, rename/restart
+identity retention, missing-machine hostname fallback and distinct-machine
+credential isolation. `test_desktop_node_registry.py` exercises the same
+pair/confirm/poll/new-boot reconnect contract with `linux`, `darwin` and `win32`
+frame fixtures. These run on Linux; they do not verify a native Windows/macOS
+installation, OS permissions, GUI, or real remote-device reconnect.
 
 Alternatives considered: a host-local file outside the home (`/etc`,
 `/var/lib`) is not writable by an unprivileged node and `/tmp` does not survive
@@ -169,6 +211,57 @@ remote-worktree UX but cannot weaken bridge authority.
 ## Client execution and connection lifecycle
 
 `lib/desktop_agent/links.py` owns link start/stop/restart: the desktop app and the headless CLI (`python -m lib.desktop_agent [--join <link>]`) keep one polling worker per joined server, plus a local link with the process capability to the packaged app's own server. Remote links get status, route repair over the attachment's own candidate routes and a per-link browser relay (its origin gate admits only that server, so a signed-in page finds exactly its own relay); the local link never discovers remote destinations. A worker alive after the stop join stays tracked. A Tofu `401` on a remote link means its credential was revoked: the link stops and the attachment is marked `revoked` until the owner joins again.
+
+Rejoining an already-running server replaces only that attachment's worker;
+the join cancellation event belongs to pairing, not link shutdown. If shutdown
+exceeds the bounded join, the worker stays owned and no replacement starts.
+The renewed attachment is saved; a later `start()` can use it after the old
+worker exits. Stop and leave also retain surviving workers for cleanup. Refusal
+and route persistence compare the worker's credential with the saved credential
+inside the atomic attachment transaction: a delayed response from a retired
+credential cannot revoke or rewrite a renewed attachment. A refusal for the
+current credential still persists normally. Other
+joined servers retain their workers and saved records. Focused link regressions
+cover cancellation-event and headless callers, unsuccessful shutdown and
+stop/start without overlapping workers. Pairing redemption stays outside the
+manager lock, while publication saves the attachment and installs its worker
+under that lock, ordered with other joins and leaves. A delayed join return
+cannot install a superseded credential or resurrect a removed attachment.
+Route failover retains the old URL among the already-authorized candidates in
+both live state and the atomic saved record, so returning to an earlier route
+also works after restart without pairing or discovering new destinations.
+On explicit rejoin, atomic publication resolves the successfully redeemed URL
+against saved authorized routes and keeps that attachment's stable local ID,
+even if its original pairing used another route. Existing authorized routes
+remain available. Incoming candidates alone do not identify another saved
+attachment; ambiguous saved route ownership refuses publication without changing
+config. Alternate-route renewal therefore replaces one worker and one record,
+and removal by that ID forgets the renewed attachment rather than leaving a
+second copy behind.
+
+The disposable loopback flow in
+`tests/desktop/test_desktop_node_multi_service.py` exercises the real launcher
+link owner, pairing HTTP client, production frame construction/polling/status
+interpretation and durable config. Two synthetic services return command-free
+protocol responses. HTTP unavailability and dropped connections recover without
+redeeming another pairing; explicit active rejoin renews only one attachment.
+Restart changes the injected process boot ID, not the persisted node identity or
+credentials. Fixture listings expire recorded heartbeats using the liveness
+window (tests explicitly age them), not a full server's presence owner. Service
+authentication and host facts remain synthetic. This is not a native installer,
+full app-server authentication, or macOS/Windows runtime check. The fixture
+answers production `/api/health` probes explicitly; its availability transition
+is checked with the production unauthenticated probe. Route round-trip recovery
+is separately exercised through the production walker with injected reachability
+and command-free waiting workers, not a sustained real-network outage.
+
+The separate [pre-start qualification gate](../../tests/support/desktop_node_qualification.md)
+remains **blocked**: no supported, already-approved fixture confines the complete
+interpreter initialization chain and local I/O before startup. The retained
+namespace probe is not that isolation mechanism and must not be used as its
+acceptance. The gate records exact facility-owner blockers and later requirements
+for two actual isolated process generations, two synthetic services, no pairing,
+independent detach and continued B recovery; that sequence has not been run.
 
 The agent executes ordinary commands, paper builds and egress streams outside of the poll thread, on demand without a local worker ceiling. Legacy IDs stay known until shutdown. Negotiated bridge v3 retires expired finite IDs only after completion and output ACK and refuses stale redelivery; server delivery credits derive from CPU/memory headroom. This is process-local deduplication, not durable exactly-once execution. See [client lifecycle](../DESKTOP_CLIENTS.md). `TOFU_DESKTOP_EXECUTION_WORKERS` is retired and ignored. Pending results/stream frames use launch-probed memory reuse (1/128 of the smaller capacity/headroom, 1 MiB lean fallback), split 7/8 for results and 1/8 for streams; overflow spools to private local temporary files instead of blocking producers. One result poll still sends up to 512 frames/16 MiB and one stream poll up to 256 frames/2 MiB. Full response validation precedes prefix acknowledgement; acknowledgement immediately deletes spooled frames. Teardown waits for owned execution to settle before reclaiming the outboxes. Project stream cancellation kills/reaps its process tree and joins pipe readers; `cancelled`, `timed_out`, and exit status remain independent outcomes. Only Popen reaps its direct child so a killed process cannot acquire a false zero exit status. The browser relay owns an uncapped live-job FIFO and removes each job on timeout, completion or close; close wakes pending request/take waiters. Server egress readers release consumed body chunks instead of retaining full replay; diagnostics retain the 256 KiB provider-error prefix budget (`test_egress_stream_memory.py`). Retry waits are jittered, capped 60s, interruptible by stop. Direct probes/polls honor Requests proxy/NO_PROXY and CA settings, suppress ambient netrc, and do not follow redirects; auth errors carry the flat `bridge_auth_required` envelope. Credentials fail over only to explicitly configured attach candidates — LAN health, public boot IDs, and discovered SSH hosts never authorize bearer reuse; unattended service needs a gateway-supported device route.
 
@@ -269,8 +362,10 @@ Decision: one node model.
   `<server base>/#tofu-pair=<secret>[&via=<route>]*` and the same pairing as a
   6-digit `code`. The owner pastes the link into the desktop app's "Join a
   server" dialog (tray or control panel) or passes it to
-  `python -m lib.desktop_agent --join`. The node tries the `via` routes (a
-  reachable direct LAN address) first and the browser-visible base last, and
+  `tofu node --join` (or `python -m lib.desktop_agent --join`). The node tries
+  the `via` routes (a reachable direct LAN address: the LAN IP with the port
+  the minting request arrived on, never the environment's `PORT`, so a test
+  Home never names production) first and the browser-visible base last, and
   redeems the secret through unauthenticated `POST /api/desktop/pair`, which
   returns a normal `agents:bridge` credential once. Nobody copies a credential.
   The link parser tolerates an SPA route or trailing slash around the pairing
@@ -320,7 +415,10 @@ bundle IDs and protocol/config keys preserve upgrades.
 `lib/desktop_dist/store.py` serves only exact manifest keys; mirrors/builders
 publish atomically and keep a last-known-good on refresh failure. Publication
 requires the changelog, complete platform/component assets and size floors;
-each native build runs a frozen-runtime smoke before packaging. The full-app
+each native build runs a frozen-runtime smoke before packaging. The two macOS
+DMGs also require Developer ID signing, notarization, stapling and native
+verification of the final image and its mounted app before promotion (see the
+[desktop release runbook](../../desktop/README.md#macos-release-trust)). The full-app
 spec preserves the `lib/model_info/data` catalog, the `contracts/` directory
 and `frontend/authoring-inputs.json` metadata at their runtime-relative paths,
 and checks source freshness before building. Login startup uses per-user HKCU
@@ -460,7 +558,18 @@ restart mid-command, execution host killed, node killed and re-joined,
 partition and heal through a proxy edge, duplicate process, twins on one home,
 recreated container, revoked reconnect, and the routing hooks: revoked default,
 offline ceiling, re-pair keeping policy): `tests/chaos/test_chaos_nodes.py`
-(`make test-chaos`).
+(`make test-chaos`). The selected-device lifecycle case in that suite drives
+public pairing, policy and Turn APIs against separate API and execution hosts
+with two real node subprocesses and a scripted loopback model endpoint. An
+explicit selection overrides the default; offline (named or default) and revoked
+(named) targets never fall through to the other node. Concurrent default and
+ceiling edits preserve the committed policy; an ordered companion case requires
+an HTTP 409 when a ceiling editor submits a snapshot after a default changed.
+A real ceiling revision increment and successful exact replay are verified before
+remove/re-pair. Re-pairing the same ID binds a new credential, rejects that same
+replay, and requires a fresh owner grant before execution resumes. This is a headless protocol
+check, not verification of native macOS/Windows, mobile clients, installers,
+or the browser extension; the SQLite Home run is not native TofuDB evidence.
 
 Hope large-checkpoint publication is owned by the private environment provider's
 [Worker result publication contract](../../bundles/yourprovider/environment-provider/README.md#worker-result-publication).
@@ -601,16 +710,31 @@ Decision:
   kind is the Home registry's (`NodeKind`, declared at pairing and confirmed
   by the owner): the poll gate writes it into the admitted frame, so the
   frame's own optional `kind` never overrides it.
-- Identity at the routing boundary: the policy routes find a device among the
-  live bridge agents and the active records of the node registry, so the owner
-  can set an offline or just-confirmed node's ceiling and default. Removing a
-  node (DELETE, reject, token revocation: `NodeRegistry.forget`) also drops
-  its ceiling and default marks (`device_policy.forget_node`), so it leaves
-  placement; a confirmed re-pair of a known device under a new node ID
-  (`predecessor`) moves both to the new ID (`device_policy.transfer_node`),
-  while a re-pair under the same ID keeps them unchanged. These registry
-  transitions send the same `device_policy_reconcile` as the policy routes.
+- Identity at the routing boundary: an active registry row (online or offline)
+  supplies the durable incarnation for Home ceiling and computer/server default
+  writes. Bridge presence supplies capabilities, not remote ownership; only a
+  credential-less in-process node may use the no-registry path. Browser defaults
+  remain governed by browser-client ownership.
+- Lifecycle fence: `record.device_policy_commit` validates the witnessed
+  owner/node, registry row version, stored credential ID and policy revision
+  in one transaction. The witness does not check credential validity. Removal
+  and activation of a different same-ID incarnation commit the registry transition
+  and policy cleanup together. Even empty cleanup
+  advances the revision and ends the previous ceiling acknowledgement window.
+  An explicitly paired new ID can still take policy from its exact offline
+  predecessor: old-row retirement and transfer to the witnessed active target
+  are atomic, in a separate commit after new-ID confirmation. A reused
+  predecessor ID fails the durable witness; a predecessor observed online is
+  skipped. Presence is not part of the durable transaction. Older pending
+  records without a predecessor credential binding cannot transfer.
+  Conflicts return HTTP 409; reread before retrying. Credential revocation and
+  bridge disconnection are separate effects, not transaction rollback claims.
+  Successful transitions invalidate Home policy and reconcile with execution.
   `GET /api/v4/desktop/nodes` reports `tiers` as the effective intersection.
+  SQL serializes on record locks; TofuDB checks witnesses in the entity
+  transaction. Older authorities reject the new command rather than fall back
+  to unchecked writes. A second owner read outside the write or a process-local
+  mutex cannot order independent clients against the durable commit.
 - Permissions (`lib/desktop/device_policy.py`): one owner-scoped record in
   portable record CAS (`desktop.device_policy.v1`) holds per-node ceilings and
   per-kind defaults; its version is the `rev`. A node without a stored ceiling
@@ -630,7 +754,30 @@ Decision:
   phase 0 relay), so a running Turn's next command already sees the change;
   the reconcile keeps placement defaults and the environment listing current
   on the execution host and shards. `GET /api/v4/devices/permissions` lists
-  `{home, device, effective}` per node.
+  `{home, device, effective}` per node, including confirmed nodes before their
+  first poll (`device: null`), and reads the current owner policy `rev` directly
+  from storage. Full ceiling replacements require `expected_revision`
+  from that snapshot (or a successful write); older clients that omit it get
+  HTTP 400, not an unconditional write. The caller's revision is checked at the
+  common record CAS, including after a competing commit. HTTP 409
+  `stale_device_policy` means reread and review unsaved edits, not retry the old
+  full tier set on the new revision. An identical replay of the immediately
+  preceding ceiling mutation returns its committed revision without writing
+  again; any intervening policy mutation ends that replay window. The record
+  stores just the last ceiling mutation's node ID, not a growing receipt log.
+  Either PUT can return HTTP 503 if storage cannot confirm the outcome. It does
+  not mean the write rolled back: reread permissions for a ceiling write or
+  defaults for a defaults write before deciding what still needs to be saved.
+  A successful defaults PUT returns `{defaults, rev, execution}`. In Settings,
+  an unconfirmed defaults save locks only the affected kind until a fresh GET
+  establishes its current value. If that read fails, Settings shows the value
+  as unknown and offers a manual read retry, never a replay of the write.
+  On stale or uncertain ceiling saves, the Devices drawer rereads and presents pending
+  intent for review rather than automatically regranting tiers from an old view.
+  After confirmation, the Devices wizard requires a current permissions row
+  before completing setup, including for Read-only. It offers Retry for a failed
+  read or missing row, and reports unsupported reads separately. It does not
+  rename the device, set it as default, or report success while blocked.
 - Node loss: the bridge owner runs one liveness watcher that wakes at the
   earliest `last_seen + 15 s` (`x-liveness-window-seconds`, the existing
   window). A device whose window lapsed settles its unclaimed addressed

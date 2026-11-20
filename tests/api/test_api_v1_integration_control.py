@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 
 import pytest
 
@@ -41,6 +42,73 @@ def test_status_route_preserves_explicit_project_path(monkeypatch: pytest.Monkey
     assert body['ok'] is True
     assert body['repo']['root'] == '/tmp/explicit-repo'
     assert seen == [('/tmp/explicit-repo', 1)]
+
+
+def _synthetic_workspace_rows(repo, count: int) -> list[dict]:
+    return [
+        {
+            'id': index, 'user_id': 1, 'project_root': str(repo),
+            'task_id': f'task-{index}', 'title': f'task-{index}',
+            'workspace_path': '', 'managed': 0, 'state': 'merged',
+            'base_sha': '', 'checkpoint_sha': '', 'candidate_sha': '',
+            'error': '', 'origin': {}, 'created_at': 1.0,
+            'updated_at': float(index),
+        }
+        for index in range(1, count + 1)
+    ]
+
+
+def _status_over_workspace_rows(tmp_path, monkeypatch, count: int):
+    from lib import integration_control as control
+    from lib.api_keys import local_admin_context
+    from quart import Quart, g
+    from routes.api_v1 import integration as route
+
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    subprocess.run(['git', 'init'], cwd=repo, check=True, capture_output=True)
+    rows = _synthetic_workspace_rows(repo, count)
+    monkeypatch.setattr(
+        control._state, 'status_rows',
+        lambda project_root, *, user_id: (rows, []))
+    control._STATUS_CACHE.clear()
+
+    app = Quart(__name__)
+
+    @app.before_request
+    async def _auth():
+        g.auth_ctx = local_admin_context()
+
+    app.register_blueprint(route.api_v1_integration_bp)
+
+    async def _run():
+        response = await app.test_client().get(
+            '/api/v1/project/integration/status',
+            query_string={'path': str(repo)})
+        return response.status_code, await response.get_json()
+
+    return asyncio.run(_run())
+
+
+def test_status_endpoint_answers_more_workspaces_than_the_former_bound(
+        tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Accepted workspace history above the old fixed row cap is a status, not a 500."""
+    status, body = _status_over_workspace_rows(tmp_path, monkeypatch, 1001)
+
+    assert status == 200
+    assert [row['workId'] for row in body['workspaces']] == [
+        f'task-{index}' for index in range(1, 1002)]
+    assert body['counts'] == {'merged': 1001}
+    assert all(row['state'] == 'merged' for row in body['workspaces'])
+
+
+def test_status_endpoint_single_workspace_is_unchanged(
+        tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    status, body = _status_over_workspace_rows(tmp_path, monkeypatch, 1)
+
+    assert status == 200
+    assert [row['workId'] for row in body['workspaces']] == ['task-1']
+    assert body['counts'] == {'merged': 1}
 
 
 def test_status_of_a_missing_project_path_is_a_client_error(tmp_path) -> None:

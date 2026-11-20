@@ -19,7 +19,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
-__all__ = ['assemble', 'compile_and_check', 'pdf_text', 'BODY_END_LABEL']
+__all__ = ['assemble', 'compile_and_check', 'pdf_text', 'BODY_END_LABEL',
+           'body_end_location', 'page_overrun_message']
 
 BODY_END_LABEL = 'tofu-pipeline-body-end'
 _OVERFULL_RE = re.compile(r'^Overfull \\[hv]box \(([\d.]+)pt too \w+\)(.*)$',
@@ -29,7 +30,29 @@ _UNDEFINED_RE = re.compile(
 _NATBIB_UNDEFINED_RE = re.compile(
     r"Package natbib Warning: Citation `([^']+)' on page \d+ undefined")
 _BODY_END_RE = re.compile(
-    r'\\newlabel\{' + re.escape(BODY_END_LABEL) + r'\}\{\{[^}]*\}\{(\d+)\}')
+    r'\\newlabel\{' + re.escape(BODY_END_LABEL) + r'\}\{\{[^}]*\}\{(\d+)\}'
+    r'(?:\{((?:[^{}]|\{[^{}]*\})*)\}\{([^}]*)\})?')
+
+
+def body_end_location(aux: str) -> tuple[int, str, bool] | None:
+    """(page, enclosing section title, unnumbered) of the body-end label."""
+    match = _BODY_END_RE.search(aux)
+    if not match:
+        return None
+    return (int(match.group(1)), match.group(2) or '',
+            bool(re.match(r'(?:sub){0,2}section\*', match.group(3) or '')))
+
+
+def page_overrun_message(aux: str, page_limit: int, exempt: tuple[str, ...]) -> str:
+    """The page-limit failure, naming an unnumbered section the venue does not
+    exempt when the body ends inside one (often a renamed required statement)."""
+    page, title, unnumbered = body_end_location(aux)
+    message = f'body ends on page {page}, over the {page_limit}-page limit'
+    if unnumbered and title:
+        message += (f'; the page-limited body ends inside the unnumbered section {title!r}, '
+                    f'which this venue does not exempt (exempt headings: {list(exempt)}); '
+                    'if it is one of those statements, use the venue\'s heading')
+    return message
 
 
 def figure_block(figure: dict) -> str:
@@ -71,7 +94,7 @@ def assemble(build: Path, *, doc_type, brief: dict, kit: dict, kit_dir: Path,
             parts.append(f'\\label{{{BODY_END_LABEL}}}\n')
     body = '\n'.join(parts)
     if doc_type.needs_venue:
-        tex = frame_main_tex(brief['venue'], kit, title=brief['title'],
+        tex = frame_main_tex(kit.get('family') or brief['venue'], kit, title=brief['title'],
                              authors=brief.get('authors') or 'Anonymous',
                              abstract=sections['abstract'], body=body, bibfile='references')
     else:
@@ -112,6 +135,30 @@ def forbidden_package_uses(build: Path, main: str, forbidden: tuple[str, ...]) -
     return sorted(used & set(forbidden))
 
 
+_REQUIRE_RE = re.compile(r'\\RequirePackage(?:\[[^\]]*\])?\{([^}]*)\}')
+
+
+def missing_kit_packages(build: Path, kit: dict) -> list[str]:
+    """Packages the kit's style files require that neither the kit nor the TeX
+    installation provides (ICML's ``forloop``). Without a toolchain the
+    compile reports the failure itself."""
+    from lib.paper import latex_layout
+    shipped = {Path(leaf).stem for leaf in kit.get('files') or {}}
+    required = set()
+    for leaf in kit.get('files') or {}:
+        if leaf.endswith(('.sty', '.cls')) and (build / leaf).is_file():
+            for group in _REQUIRE_RE.findall((build / leaf).read_text(
+                    encoding='utf-8', errors='replace')):
+                required.update(name.strip() for name in group.split(',') if name.strip())
+    wanted = sorted(required - shipped)
+    if not wanted:
+        return []
+    found = latex_layout.kpsewhich([f'{name}.sty' for name in wanted])
+    if found is None:
+        return []
+    return [name for name in wanted if f'{name}.sty' not in found]
+
+
 def compile_and_check(build: Path, *, engine: str, page_limit: int,
                       kit: dict, main: str = 'main.tex',
                       forbidden_packages: tuple[str, ...] = ()) -> dict:
@@ -119,6 +166,12 @@ def compile_and_check(build: Path, *, engine: str, page_limit: int,
     from lib.paper.checks import run_pdf_file_checks, run_source_checks
     from lib.paper.latex_layout import compile_project
     stem = Path(main).with_suffix('')
+    missing = missing_kit_packages(build, kit)
+    if missing:
+        return {'compile_status': 'missing-packages', 'engine': engine, 'errors': [],
+                'failures': [f'the official kit requires {missing}, which this TeX '
+                             f'installation lacks; install with: tlmgr install '
+                             f'{" ".join(missing)}']}
     result = compile_project(build, engine=engine, main=main)
     failures: list[str] = []
     report = {'compile_status': result.get('status'), 'engine': engine,
@@ -152,7 +205,9 @@ def compile_and_check(build: Path, *, engine: str, page_limit: int,
     pages = pdf_pages(pdf)
     body_pages = int(match.group(1)) if match else pages
     if body_pages > page_limit:
-        failures.append(f'body ends on page {body_pages}, over the '
+        failures.append(page_overrun_message(aux, page_limit,
+                                             tuple(kit.get('unlimited_sections') or ()))
+                        if match else f'body ends on page {body_pages}, over the '
                         f'{page_limit}-page limit')
     drift = sorted(leaf for leaf, digest in (kit.get('files') or {}).items()
                    if not (build / leaf).is_file() or _sha(build / leaf) != digest)

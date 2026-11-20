@@ -11,6 +11,8 @@
 
 import { featureRegistry } from '../../feature-registry';
 import {activateIndependentSettingsTab} from './tab-activation';
+import {syncAntigravitySettingsTab} from './antigravity-card';
+import {syncSubscriptionTab} from './subscription-navigation';
 import {isMessagingPlatform, openMessagingPlatform} from './messaging-platforms';
 import {notifyMcpSettingsVisibility} from './mcp-settings-reads';
 import { loadModelRoutingAuthority, refreshCommittedModelRouting, persistModelRoutingNow } from './model-routing-authority';
@@ -176,6 +178,8 @@ function switchSettingsTab(tabId: string): void {
     panel.classList.toggle('active', panel.id === 'settingsTab_' + tabId);
   });
   notifyMcpSettingsVisibility();
+  syncAntigravitySettingsTab(tabId);
+  syncSubscriptionTab(tabId);
   activateIndependentSettingsTab(tabId);
   if (tabId === 'speech' && typeof bridge._refreshSttStatus === 'function') {
     bridge._refreshSttStatus();

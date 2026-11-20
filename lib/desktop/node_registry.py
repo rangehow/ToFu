@@ -270,6 +270,18 @@ class NodeRegistry:
     def _node_row(self, node_id: str):
         return self._get(NAMESPACES['nodes'], self._node_key(node_id), 'nodeRecord')
 
+    @staticmethod
+    def policy_witness(node_id, row, *, active=False):
+        return {'id': node_id, 'version': row['version'] if row else 0,
+                'credential': row['value']['credentialId'] if row else None, 'active': active}
+
+    def policy_target(self, node_id):
+        """One snapshot for both route ownership and the durable commit witness."""
+        row = self._node_row(node_id) if valid_node_id(node_id) else None
+        if row is None or row['value']['state'] != 'active':
+            return None
+        return row['value'], self.policy_witness(node_id, row, active=True)
+
     def _bind_credential(self, credential_id: str, node_id: str) -> None:
         """Write the credential index before the record it names (a hint, validated on read)."""
         key = self.prefix + credential_id
@@ -291,9 +303,8 @@ class NodeRegistry:
         if row is not None:
             self._delete(NAMESPACES['credentials'], self.prefix + credential_id, row['version'])
 
-    def _mutate(self, node_id: str, change):
+    def _mutate(self, node_id: str, change, *, reset_policy=False):
         """CAS-retry ``change(value) -> new value | None`` on one node record."""
-        key = self._node_key(node_id)
         while True:
             row = self._node_row(node_id)
             if row is None:
@@ -303,11 +314,20 @@ class NodeRegistry:
                 return row['value']
             validate(updated, 'nodeRecord')
             try:
-                self._put(NAMESPACES['nodes'], key, updated, row['version'])
+                from lib.desktop import device_policy
+                witness = dict(self.policy_witness(node_id, row, active=row['value']['state'] == 'active'),
+                               next=updated)
+                if reset_policy and (row['value']['state'] != updated['state']
+                                     or row['value']['credentialId'] != updated['credentialId']):
+                    device_policy.forget_node(self.owner, node_id, nodes=(witness,), client=self.client)
+                else:
+                    device_policy.commit_node_metadata(self.owner, witness, client=self.client)
                 return updated
             except StorageError as error:
                 if error.code != 'database_conflict':
                     raise
+                if reset_policy:
+                    raise NodeStateError('Device changed during confirmation. Refresh before retrying.') from error
 
     # ── reads ───────────────────────────────────────────────────────────
     def get(self, node_id: str) -> dict | None:
@@ -351,16 +371,24 @@ class NodeRegistry:
             else:
                 if row is not None and row['value']['credentialId'] != credential_id:
                     superseded.append(row['value']['credentialId'])
+                predecessor = self.get(previous_node_id) if previous_node_id != node_id else None
                 value = {'version': 1, 'owner': self.owner, 'nodeId': node_id, 'state': 'pending',
                          'credentialId': credential_id, 'fingerprint': pending['fingerprint'],
                          'name': pending['name'], 'platform': pending['platform'], 'kind': kind,
                          'origin': 'pairing', 'pairedAt': now, 'confirmedAt': None,
                          'replacement': None, 'conflict': None,
-                         'predecessor': (previous_node_id if previous_node_id != node_id
-                                         and self.get(previous_node_id) is not None else None)}
+                         'predecessor': previous_node_id if predecessor else None}
+                if predecessor:
+                    value['predecessorCredentialId'] = predecessor['credentialId']
             validate(value, 'nodeRecord')
             try:
-                self._put(NAMESPACES['nodes'], key, value, row['version'] if row else 0)
+                if row is None:
+                    self._put(NAMESPACES['nodes'], key, value, 0)
+                else:
+                    from lib.desktop import device_policy
+                    witness = dict(self.policy_witness(node_id, row, active=row['value']['state'] == 'active'),
+                                   next=value)
+                    device_policy.commit_node_metadata(self.owner, witness, client=self.client)
                 break
             except StorageError as error:
                 if error.code != 'database_conflict':
@@ -378,7 +406,7 @@ class NodeRegistry:
 
         def change(value):
             if value.get('predecessor'):
-                predecessors.append(value['predecessor'])
+                predecessors.append((value['predecessor'], value.pop('predecessorCredentialId', None)))
                 value['predecessor'] = None
             if value['state'] == 'pending':
                 value['state'] = 'active'
@@ -397,23 +425,23 @@ class NodeRegistry:
                 value['name'] = name[:80]
             return value
 
-        value = self._mutate(node_id, change)
+        value = self._mutate(node_id, change, reset_policy=True)
         disconnected = self._revoke(revoked, node_id)
         for credential in revoked:
             self._unbind_credential(credential)
-        for predecessor in predecessors:
-            # A re-pair replaces its predecessor; a live predecessor is a twin and stays.
-            if _online(self.owner, predecessor):
+        for predecessor, credential in predecessors:
+            # Transfer is an intentional re-pair of the exact predecessor. A
+            # live twin or an older record with no binding is never retired here.
+            if credential is None or _online(self.owner, predecessor):
                 continue
-            # The same device keeps its Home ceiling and default-device marks.
-            from lib.desktop import device_policy
-            device_policy.transfer_node(self.owner, predecessor, node_id)
             try:
-                disconnected += self.forget(predecessor, reason='replaced')['disconnected']
+                disconnected += self.forget(
+                    predecessor, reason='replaced', expected_credential=credential,
+                    transfer_to=(node_id, value['credentialId']))['disconnected']
             except NodeNotFound:
                 pass
         audit_log('desktop_node_confirmed', owner_user_id=self.owner, node_id=node_id,
-                  replaced=revoked, predecessors=predecessors)
+                  replaced=revoked, predecessors=[node for node, _ in predecessors])
         _wake(self.owner, node_id)
         notify_devices_changed(self.owner)
         return {'node_id': node_id, 'state': value['state'], 'revoked_credentials': revoked,
@@ -455,33 +483,40 @@ class NodeRegistry:
         notify_devices_changed(self.owner)
         return {'node_id': node_id, 'state': value['state']}
 
-    def forget(self, node_id: str, *, reason: str = 'removed') -> dict:
+    def forget(self, node_id: str, *, reason: str = 'removed',
+               expected_credential=None, transfer_to=None) -> dict:
         """Revoke every credential of the node, disconnect it and delete its record.
 
         The single removal path (owner DELETE, reject of a pending node,
         credential revocation); it also drops the node's Home ceiling and
         default-device marks (lib/desktop/device_policy.py).
         """
-        key = self._node_key(node_id)
-        while True:
-            row = self._node_row(node_id)
-            if row is None:
-                raise NodeNotFound(node_id)
-            value = row['value']
-            credentials = [value['credentialId']] + (
-                [value['replacement']['credentialId']] if value.get('replacement') else [])
-            # Revoke before deleting: a crash in between leaves a record whose
-            # credentials no longer authenticate, never a live unlisted credential.
-            # The device leaves placement with it: no ceiling, no default mark.
-            disconnected = self._revoke(credentials, node_id)
-            from lib.desktop import device_policy
-            device_policy.forget_node(self.owner, node_id)
-            try:
-                self._delete(NAMESPACES['nodes'], key, row['version'])
-                break
-            except StorageError as error:
-                if error.code != 'database_conflict':
-                    raise
+        row = self._node_row(node_id)
+        if row is None:
+            raise NodeNotFound(node_id)
+        value = row['value']
+        if expected_credential is not None and value['credentialId'] != expected_credential:
+            raise NodeNotFound(node_id)
+        credentials = [value['credentialId']] + (
+            [value['replacement']['credentialId']] if value.get('replacement') else [])
+        from lib.desktop import device_policy
+        witness = dict(self.policy_witness(node_id, row), next=None)
+        target = self.policy_target(transfer_to[0]) if transfer_to else None
+        if transfer_to and (target is None or target[0]['credentialId'] != transfer_to[1]):
+            raise NodeStateError('Replacement changed. Refresh the device list.')
+        # Revoke before retiring the registry row. Credential cleanup is not
+        # part of the policy transaction and may already have run on conflict.
+        disconnected = self._revoke(credentials, node_id)
+        try:
+            if target is None:
+                device_policy.forget_node(self.owner, node_id, nodes=(witness,), client=self.client)
+            else:
+                device_policy.transfer_node(self.owner, node_id, transfer_to[0],
+                                            nodes=(witness, target[1]), client=self.client)
+        except StorageError as error:
+            if error.code != 'database_conflict':
+                raise
+            raise NodeStateError('Device changed during removal. Refresh before trying again.') from error
         for credential in credentials:
             self._unbind_credential(credential)
         _forget_presence(self.owner, node_id)
@@ -506,7 +541,10 @@ class NodeRegistry:
             self._unbind_credential(credential_id)
             return None
         if record['credentialId'] == credential_id:
-            return self.forget(node_id, reason='credential_revoked')
+            try:
+                return self.forget(node_id, reason='credential_revoked', expected_credential=credential_id)
+            except NodeNotFound:
+                return None
         if (record.get('replacement') or {}).get('credentialId') == credential_id:
             return self.reject(node_id)
         self._unbind_credential(credential_id)
@@ -576,7 +614,9 @@ class NodeRegistry:
                  'predecessor': None}
         validate(value, 'nodeRecord')
         try:
-            self._put(NAMESPACES['nodes'], self._node_key(agent_id), value, 0)
+            from lib.desktop import device_policy
+            witness = dict(self.policy_witness(agent_id, None), next=value)
+            device_policy.forget_node(self.owner, agent_id, nodes=(witness,), client=self.client)
         except StorageError as error:
             if error.code != 'database_conflict':
                 raise

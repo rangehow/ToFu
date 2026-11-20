@@ -7,17 +7,18 @@
 import { createButton } from '../ui';
 import { t } from '../i18n';
 import { apiFailure, isTransientApiFailure } from '../api/errors';
-import {
-  coordinatorProgressHeadline, coordinatorProgressText, createCoordinatorProgress,
-  type CoordinatorProgressCard, type CoordinatorProgressView,
-} from './coordinator-progress';
+import type { CoordinatorProgressCard, CoordinatorProgressView } from './coordinator-progress';
+import { coordinatorProgressHeadline, coordinatorProgressText } from './coordinator-progress-summary';
 import type { CoordinatorProgressBoard, CoordinatorReportState } from '../api/project-coordination.generated';
-import { coordinationText } from './project-coordination-text';
+import { coordinationText } from './project-coordination-board';
 import { createRouterWorkerModel, type RouterWorkerModelControl } from './router-worker-model';
 import { createCoordinatorConversationId } from './coordinator-conversation-id';
 import type { ProjectCoordinationPorts } from './project-coordination';
 import type { CoordinationBinding } from '../api/project-coordination.generated';
-import './project-coordination.css';
+import '../styles/application/33-project-coordination.css';
+
+// Sidebar and Worker chats need only the summary, not the board view.
+let createBoard: typeof import('./coordinator-progress').createCoordinatorProgress | undefined;
 
 /** Newer board revisions of the open Coordinator chat, for a task history open over it. */
 export interface CoordinatorBoardChanges { subscribe(changed: () => void): () => void }
@@ -70,7 +71,7 @@ export function createProjectCoordinationSurface(ports: {
   let alive = true, generation = 0, pending = false;
   let flight: AbortController | null = null;
   // Failed binding demand that recovery signals retry: either shown, or kept stale behind a confirmed binding.
-  let bindingFailed = false, bindingStale = false;
+  let bindingFailed = false, bindingStale = false, bindingConfirmed = false;
   // The board starts folded to its one-line head: the sidebar already lists the
   // Coordinator's work, so the chat keeps its reading space until the owner opens it.
   let signature = '', projectSignature = '', boardOpen = false, finishedOpen = false;
@@ -113,7 +114,7 @@ export function createProjectCoordinationSurface(ports: {
       const helper = createTaskDeliverables({
         conversationId, projectPath: scope.path,
         read: (query, signal) => port.read(conversationId, scope.path, query, signal),
-        subscribe: port.subscribe,
+        subscribe: port.subscribe, subscribeBoard,
       }, () => card.card.repaint());
       card.deliverables = helper;
       card.card.attachDeliverables(helper);
@@ -220,7 +221,7 @@ export function createProjectCoordinationSurface(ports: {
       flight?.abort(); flight = null; pending = false;
       dropBoardCard();
       if (projectChanged) {
-        bindingFailed = false; bindingStale = false;
+        bindingFailed = false; bindingStale = false; bindingConfirmed = false;
         /* Paint the row shell synchronously on a folder switch. Clearing the
          * container here left the sidebar empty until the binding read
          * resolved, then the row pushed the conversation list down. */
@@ -246,6 +247,7 @@ export function createProjectCoordinationSurface(ports: {
     if (flight) { pending = true; return; }
     const controller = new AbortController();
     flight = controller; pending = false;
+    if (boardCard?.card.invalidateEvidence()) rendered = '';
     const own = generation;
     const valid = () => alive && own === generation && norm(scope.currentPath()) === norm(scope.path)
       && (ports.mode === 'sidebar' || !scope.currentConversation || scope.currentConversation() === scope.currentConversationId);
@@ -262,7 +264,7 @@ export function createProjectCoordinationSurface(ports: {
         /* A read the server never answered, or asked to repeat, is no evidence
          * against the binding this mount already painted from a successful read:
          * keep it usable and unflagged until a recovery or project signal re-reads. */
-        if (rendered !== '' && !bindingFailed && isTransientApiFailure(bindingRead.reason)) {
+        if (bindingConfirmed && !bindingFailed && isTransientApiFailure(bindingRead.reason)) {
           bindingStale = true; return;
         }
         bindingFailed = true;
@@ -291,6 +293,15 @@ export function createProjectCoordinationSurface(ports: {
       ports.canvas.querySelector('.coordination-read-error')?.remove();
       ports.sidebar.querySelector('.coordination-read-error')?.remove();
       const binding: CoordinationBinding | null = bindingRead.status === 'fulfilled' ? bindingRead.value : null;
+      // A Coordinator without a progress port (the Router Watchdog) has no board to show.
+      const coordinatorChat = ports.mode !== 'sidebar' && binding?.availability === 'available'
+        && binding.conversationId === scope.currentConversationId ? binding.conversationId : '';
+      if (coordinatorChat && scope.progress && !createBoard) {
+        try { ({ createCoordinatorProgress: createBoard } = await import('./coordinator-progress')); }
+        catch (error) { console.warn('[ProjectCoordination] board view unavailable', error); }
+        if (!valid()) return;
+      }
+      const boardViewUnavailable = !!(coordinatorChat && scope.progress && !createBoard);
       const progressUnavailable = progressRead.status === 'rejected';
       const progress = progressRead.status === 'fulfilled' ? progressRead.value : null;
       // A board belongs to exactly one binding; a replaced Coordinator starts empty.
@@ -298,13 +309,15 @@ export function createProjectCoordinationSurface(ports: {
         && progress.conversationId === binding.conversationId && progress.bindingRevision === binding.revision
         ? progress.board : null;
       const translation = progressBoard ? progress?.translation : undefined;
+      const workEvidence = progressBoard && !detailsPending && !resumed ? progress?.workEvidence : undefined;
 
       if (!detailsPending && reportRead.status === 'fulfilled') lastReport = reportRead.value;
       const report = lastReport?.conversationId === binding?.conversationId
         && lastReport?.bindingRevision === binding?.revision ? lastReport : undefined;
-      const facts = JSON.stringify([key, detailsPending, binding, progressBoard, translation, progressUnavailable, report]);
+      const facts = JSON.stringify([key, detailsPending, binding, progressBoard, translation, workEvidence, progressUnavailable, boardViewUnavailable, report]);
       if (facts === rendered) return;
       rendered = facts;
+      bindingConfirmed = bindingRead.status === 'fulfilled';
 
       const boardScroll = ports.canvas.querySelector('.coordinator-progress-body')?.scrollTop ?? 0;
       const focused = document.activeElement;
@@ -320,16 +333,13 @@ export function createProjectCoordinationSurface(ports: {
         if (sidebarCurrent || valid()) scope.navigate(id);
       };
 
-      // A Coordinator without a progress port (the Router Watchdog) has no board to show.
-      const coordinatorChat = ports.mode !== 'sidebar' && binding?.availability === 'available'
-        && binding.conversationId === scope.currentConversationId ? binding.conversationId : '';
-      if (coordinatorChat && scope.progress) {
+      if (coordinatorChat && scope.progress && createBoard) {
         const boardKey = JSON.stringify([scope.path, coordinatorChat]);
         if (boardCard?.key !== boardKey) {
           dropBoardCard();
           // The Worker model sits in the board's footer beside Manage work, not on a line of its own.
           const workerModel = scope.workerModel ? createRouterWorkerModel(scope.workerModel, scope.path) : undefined;
-          boardCard = { key: boardKey, workerModel, card: createCoordinatorProgress({
+          boardCard = { key: boardKey, workerModel, card: createBoard({
             open: boardOpen, finishedOpen, footer: workerModel?.el,
             toggle: open => { boardOpen = open; }, toggleFinished: open => { finishedOpen = open; },
           }) };
@@ -416,9 +426,9 @@ export function createProjectCoordinationSurface(ports: {
       if (ports.mode !== 'sidebar' && binding?.availability === 'available' && binding.conversationId === scope.currentConversationId) {
         if (boardCard) {
           const view: CoordinatorProgressView = progressUnavailable ? { kind: 'unavailable' }
-            : progressBoard ? { kind: 'board', board: progressBoard, translation, taskKeys: progress?.taskKeys }
+            : progressBoard ? { kind: 'board', board: progressBoard, translation, taskKeys: progress?.taskKeys, workEvidence }
               : { kind: 'empty' };
-          boardCard.card.render(view, { history, retry: invalidate });
+          boardCard.card.render(view, { history, retry: invalidate, openWorker: navigate });
           if (progressBoard && progressBoard.revision !== shownBoardRevision) {
             const first = shownBoardRevision === 0;
             shownBoardRevision = progressBoard.revision;
@@ -427,6 +437,12 @@ export function createProjectCoordinationSurface(ports: {
           if (boardCard.card.el.parentNode !== ports.canvas) ports.canvas.append(boardCard.card.el);
           const body = ports.canvas.querySelector('.coordinator-progress-body');
           if (body) body.scrollTop = boardScroll;
+        } else if (boardViewUnavailable) {
+          const warning = document.createElement('div'); warning.className = 'coordination-read-error';
+          warning.setAttribute('role', 'status');
+          warning.append(coordinationText(t('coordinatorProgress.unavailable'), 'small'),
+            createButton({ label: t('projectCoordination.retry'), size: 'sm', variant: 'ghost', onClick: invalidate }));
+          ports.canvas.append(warning);
         }
         const latest = report?.unread ? report.latest : null;
         if (latest && scope.reports) {
@@ -467,7 +483,7 @@ export function createProjectCoordinationSurface(ports: {
       if (!resumed) ports.changed?.();
     };
     try {
-      // A resumed canvas paints synchronously: no await precedes its DOM write.
+      // A resumed canvas paints synchronously once its board view has been loaded.
       if (resumed) await paint(resumed, false, true);
       if (ports.mode === 'sidebar') {
         // Binding establishes navigation authority. Optional work/report reads

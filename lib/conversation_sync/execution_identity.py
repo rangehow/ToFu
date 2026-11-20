@@ -1,30 +1,54 @@
-"""Accepted conversation identity, not autonomous execution authorization.
+"""Accepted conversation identity and explicitly admitted owner actions.
 
-The machine contract owns envelope keys and reserved public fields. Command
-acceptance stamps a least-privilege user identity; executor recovery validates
-it before context construction. Nonhuman dispatch remains denied until the
-project grant/revocation/cost authority exists. No repository or worker lives
-here; the existing attempt config remains the only durable carrier.
+Command acceptance stamps least-privilege identity and only the action grants
+listed in the machine contract. Executor recovery validates both before context
+construction. Nonhuman dispatch uses the separate project grant authority.
+The existing attempt config remains the only durable carrier.
 """
 from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from lib.identity import PrincipalContext, require_user_id
-from lib.storage.generated_worker_job_contract import WORKER_EXECUTION_CONFIG_KEY
 
 _CONTRACT = json.loads((Path(__file__).resolve().parents[2] / 'contracts' /
                         'conversation_execution_identity_v1.json').read_text())
+WORKER_EXECUTION_CONFIG_KEY = json.loads((Path(__file__).resolve().parents[2] /
+    'contracts' / 'worker_job_lifecycle_v1.json').read_text())['conversationExecutionWitness']['configKey']
 EXECUTION_IDENTITY_CONFIG_KEY = _CONTRACT['configKey']
 RESERVED_EXECUTION_FIELDS = frozenset(_CONTRACT['reservedConfigFields']) | {WORKER_EXECUTION_CONFIG_KEY}
 REVIEW_SOURCE_CONFIG_KEY = _CONTRACT['reviewSource']['configKey']
 REVIEW_SOURCE_SCHEMA = _CONTRACT['reviewSource']['schema']
 _ENVELOPE_FIELDS = frozenset(_CONTRACT['fields'])
+_CAPABILITY_FIELD = _CONTRACT['optionalCapabilityField']
+_CAPABILITY_GRANTS = _CONTRACT['capabilityGrants']
+_BINDING_FIELD = _CONTRACT['capabilityBindingField']
+_BINDING_FIELDS = tuple(_CONTRACT['capabilityBindingFields'])
+_MANUAL_DETECT = 'schedule_manage.run.provider_probe_daily'
 _PRINCIPAL_FIELDS = frozenset(_CONTRACT['principalFields'])
 _SUPPORTED_KINDS = frozenset(_CONTRACT['supportedPrincipalKinds'])
+
+
+@dataclass(frozen=True, slots=True)
+class ManualDetectAdmission:
+    """Exact action authority bound to the original executor and principal."""
+
+    task_id: str
+    principal: PrincipalContext
+    conversation_id: str
+    turn_id: str
+    attempt_id: str
+
+    def verify_current(self, *, require_live_worker=False) -> None:
+        """Require the original durable grant and its currently running carrier."""
+        verify_durable_detect(
+            self.principal, self.conversation_id, self.turn_id, self.attempt_id,
+            running_task_id=self.task_id, require_live_worker=require_live_worker,
+        )
 
 
 def public_execution_fields(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -34,7 +58,7 @@ def public_execution_fields(value: Mapping[str, Any]) -> dict[str, Any]:
 
 def capture_execution_identity(
     config: Mapping[str, Any], user_id: Any,
-    principal: PrincipalContext | None,
+    principal: PrincipalContext | None, *, issue_capabilities: bool = False,
 ) -> dict[str, Any]:
     """Discard client authority and freeze the authenticated minimal identity.
 
@@ -60,7 +84,29 @@ def capture_execution_identity(
     accepted[EXECUTION_IDENTITY_CONFIG_KEY] = {
         'version': _CONTRACT['version'], 'principal': frozen.to_payload(), 'attended': True,
     }
+    capabilities = sorted(action for action, scope in _CAPABILITY_GRANTS.items()
+                          if issue_capabilities and principal.has_scope(scope))
+    if capabilities:
+        accepted[EXECUTION_IDENTITY_CONFIG_KEY].update({
+            _CAPABILITY_FIELD: capabilities, _BINDING_FIELD: None,
+        })
     return accepted
+
+
+def bind_accepted_capabilities(config, conversation_id, turn_id, attempt_id):
+    """Consume an issuance marker atomically with durable Attempt creation.
+
+    Never restamp a previously bound capability (including copied configs).
+    Keep the native Turn writer's counterpart in sync with this contract.
+    """
+    envelope = config.get(EXECUTION_IDENTITY_CONFIG_KEY) if isinstance(config, dict) else None
+    if (isinstance(envelope, dict) and _BINDING_FIELD in envelope
+            and envelope[_BINDING_FIELD] is None):
+        return {**config, EXECUTION_IDENTITY_CONFIG_KEY: {
+            **envelope, _BINDING_FIELD: dict(zip(_BINDING_FIELDS, (
+                conversation_id, turn_id, attempt_id))),
+        }}
+    return config
 
 
 def restore_execution_identity(config: Mapping[str, Any]) -> tuple[PrincipalContext, bool]:
@@ -88,11 +134,18 @@ def restore_execution_identity(config: Mapping[str, Any]) -> tuple[PrincipalCont
         return PrincipalContext.user(subject_id=f'user:{owner}', owner_user_id=owner,
                                      tenant_id=tenant or None), True
     envelope = config[EXECUTION_IDENTITY_CONFIG_KEY]
-    if (not isinstance(envelope, Mapping) or set(envelope) != _ENVELOPE_FIELDS
+    if (not isinstance(envelope, Mapping)
+            or set(envelope) - {_CAPABILITY_FIELD, _BINDING_FIELD} != _ENVELOPE_FIELDS
             or type(envelope.get('version')) is not int
             or envelope['version'] != _CONTRACT['version']
             or envelope.get('attended') is not True):
         raise PermissionError('Invalid accepted conversation execution identity')
+    capabilities = envelope.get(_CAPABILITY_FIELD, [])
+    if (not isinstance(capabilities, list)
+            or any(not isinstance(action, str) or action not in _CAPABILITY_GRANTS
+                   for action in capabilities)
+            or capabilities != sorted(set(capabilities))):
+        raise PermissionError('Invalid accepted conversation capabilities')
     payload = envelope.get('principal')
     if (not isinstance(payload, Mapping) or set(payload) != _PRINCIPAL_FIELDS
             or not isinstance(payload.get('kind'), str)
@@ -110,4 +163,97 @@ def restore_execution_identity(config: Mapping[str, Any]) -> tuple[PrincipalCont
     principal = PrincipalContext.from_payload(payload)
     if config.get('_turnPrincipalTenantId', '') != (principal.tenant_id or ''):
         raise PermissionError('Accepted conversation tenant identity does not match')
+    if capabilities or _BINDING_FIELD in envelope:
+        binding = envelope.get(_BINDING_FIELD)
+        if (not capabilities or not isinstance(binding, Mapping)
+                or set(binding) != set(_BINDING_FIELDS)
+                or any(not isinstance(binding[key], str) or not binding[key] for key in _BINDING_FIELDS)):
+            raise PermissionError('Accepted conversation capability binding does not match')
     return principal, True
+
+
+def verify_durable_detect(principal, conversation_id, turn_id, attempt_id, *, running_task_id=None,
+                          require_live_worker=False):
+    """Check actual owner-scoped membership, freshness and original grant."""
+    restored = read_durable_detect(principal.require_owner(), conversation_id, turn_id,
+                                   attempt_id, running_task_id=running_task_id,
+                                   require_live_worker=require_live_worker)
+    if restored != principal:
+        raise PermissionError('Detect principal differs from accepted authority')
+
+
+def read_durable_detect(owner, conversation_id, turn_id, attempt_id, *, running_task_id=None,
+                        require_live_worker=False):
+    """Recover the principal from the exact private accepted capability."""
+    from lib.turn_lifecycle import LifecycleNotFound, get_attempt, get_turn
+    try:
+        attempt = get_attempt(attempt_id, user_id=owner, include_execution_config=True)
+        turn = get_turn(conversation_id, turn_id, user_id=owner, include_projection=False)
+    except LifecycleNotFound as exc:
+        raise PermissionError('Detect attempt is not owned or no longer exists') from exc
+    identity = dict(zip(_BINDING_FIELDS, (conversation_id, turn_id, attempt_id)))
+    if (any(attempt.get(key) != value for key, value in identity.items())
+            or turn.get('currentAttemptId') != attempt_id
+            or attempt.get('status') not in ('pending', 'running')
+            or (running_task_id is not None and (
+                attempt.get('status') != 'running' or attempt.get('taskId') != running_task_id))):
+        raise PermissionError('Detect attempt is not the current accepted execution')
+    config = attempt.get('config') or {}
+    envelope = config.get(EXECUTION_IDENTITY_CONFIG_KEY)
+    if ('_projectDispatchAdmission' in config or not isinstance(envelope, Mapping)
+            or envelope.get(_BINDING_FIELD) != identity
+            or envelope.get(_CAPABILITY_FIELD) != [_MANUAL_DETECT]):
+        raise PermissionError('Detect capability was not issued for this attempt')
+    restored, attended = restore_execution_identity({
+        **config, '_turnOwnerUserId': owner, '_turnId': turn_id, '_attemptId': attempt_id,
+    })
+    if attended is not True:
+        raise PermissionError('Detect attempt is not attended')
+    if require_live_worker:
+        _require_uncancelled_detect_worker(attempt, restored)
+    return restored
+
+
+def _require_uncancelled_detect_worker(attempt, principal):
+    import time
+    from lib.storage import get_storage_client
+
+    task_id = attempt['taskId']
+    client = get_storage_client()
+    job = client.query('worker_job.get', {
+        'user_id': principal.require_owner(), 'task_id': task_id})
+    payload = job.get('payload', {}) if job else {}
+    claim = (attempt['config'].get(WORKER_EXECUTION_CONFIG_KEY) or {}).get('claim')
+    if (task_id != f"conversation-attempt:{attempt['attemptId']}"
+            or not job or job['taskKind'] != 'conversation-attempt' or job['status'] != 'running'
+            or job['cancelRequestedAtMs'] or not job['claimOwner'] or not job['fencingToken']
+            or claim != {'worker_id': job['claimOwner'], 'fencing_token': job['fencingToken']}
+            or job['tenantId'] != (principal.tenant_id or '')
+            or payload.get('contract') != 'tofu.conversation-attempt-job/v1'
+            or any(payload.get(field) != attempt[field] for field in _BINDING_FIELDS)):
+        raise PermissionError('Detect worker is cancelled or does not own the accepted Attempt')
+    # The storage authority checks epoch, lease and protected-worker evidence.
+    # Matching a retained row and token alone is not proof of live ownership.
+    state = client.query('worker_job.claim_state', {
+        'task_id': task_id, **claim, 'now_ms': time.time_ns() // 1_000_000})
+    if not state or state.get('ok') is not True or state.get('cancelRequestedAtMs') != 0:
+        raise PermissionError('Detect worker claim is stale or cancelled')
+
+
+def restore_manual_detect_admission(
+    config: Mapping[str, Any], principal: PrincipalContext, conversation_id: str,
+) -> tuple[str, str, str] | None:
+    """Verify the original binding before building context or registering."""
+    if '_projectDispatchAdmission' in config:
+        return None
+    envelope = config.get(EXECUTION_IDENTITY_CONFIG_KEY, {})
+    if _MANUAL_DETECT not in envelope.get(_CAPABILITY_FIELD, ()):
+        return None
+    binding = envelope[_BINDING_FIELD]
+    if (binding['conversationId'] != conversation_id
+            or binding['turnId'] != config.get('_turnId')
+            or binding['attemptId'] != config.get('_attemptId')):
+        raise PermissionError('Detect capability belongs to another conversation Turn or Attempt')
+    turn_id, attempt_id = binding['turnId'], binding['attemptId']
+    verify_durable_detect(principal, conversation_id, turn_id, attempt_id)
+    return conversation_id, turn_id, attempt_id

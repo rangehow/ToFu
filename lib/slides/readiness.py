@@ -22,8 +22,11 @@ class SlidesRuntimeUnavailable(RuntimeError):
 
     retryable = False
 
-    def __init__(self, detail: str):
+    def __init__(self, detail: str, *, missing: bool = True):
         self.detail = str(detail or 'unknown slide-render runtime failure')
+        # True: a dependency/browser is not installed for this interpreter;
+        # False: it is installed but failed to launch (environment fault).
+        self.missing = bool(missing)
         install = ' '.join(headless_shell_install_command())
         self.hint = (
             f'Install the browser this interpreter launches: {install}. If '
@@ -130,7 +133,8 @@ def ensure_slides_runtime_ready() -> dict:
                     browser.close()
         except Exception as exc:
             raise SlidesRuntimeUnavailable(
-                f'Chromium smoke launch failed ({type(exc).__name__}: {exc})'
+                f'Chromium smoke launch failed ({type(exc).__name__}: {exc})',
+                missing=False,
             ) from exc
 
         _ready_identity = identity

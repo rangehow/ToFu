@@ -14,6 +14,7 @@ settled history encodes and hashes only its new messages.
 """
 from collections.abc import Mapping
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 import hashlib
 from itertools import islice
@@ -389,6 +390,40 @@ class ModelRequestBudgetScope:
                 confirm(successful=error is None and self.verified_complete and lease is leases[-1])
 
 
+_physical_model_dispatch_guard = ContextVar('physical_model_dispatch_guard', default=None)
+
+
+@contextmanager
+def physical_model_dispatch_scope(guard):
+    """Bind invocation-owned authority without putting it in model input or config."""
+    if guard is not None and not callable(guard):
+        raise TypeError('physical model dispatch guard must be callable')
+    token = _physical_model_dispatch_guard.set(guard)
+    try:
+        yield
+    finally:
+        _physical_model_dispatch_guard.reset(token)
+
+
+def current_physical_model_dispatch_guard():
+    return _physical_model_dispatch_guard.get()
+
+
+def refuse_unfenced_model_relay(guard):
+    """A delayed desktop POST cannot borrow an earlier server admission."""
+    if guard is not None:
+        from lib.llm.llm_errors import ModelAdmissionRefused
+        raise ModelAdmissionRefused('Recovered Swarm model dispatch requires an execution-side fence; '
+                                   'desktop relay is unsupported')
+
+
+def require_physical_model_dispatch(plan):
+    """Recheck authority for an individual send, including same-plan retries."""
+    guard = getattr(plan, 'physical_model_dispatch_guard', None)
+    if guard is not None:
+        guard()
+
+
 def mark_model_request_dispatched(plan):
     """Required budget evidence just before the transport attempts a send."""
     lease = getattr(plan, 'model_budget_lease', None)
@@ -396,13 +431,28 @@ def mark_model_request_dispatched(plan):
         prepare = getattr(lease, 'prepare_input', None)
         if prepare is not None:
             prepare(getattr(plan, 'body', {}))
+    on_dispatching = getattr(plan, 'on_model_request_dispatching', None)
+    if on_dispatching is not None:
+        on_dispatching()
+    require_physical_model_dispatch(plan)
+    if lease is not None:
         lease.mark_dispatched()
+    # This port commits local policy only. Completed-switch publication is
+    # owned by the caller after the physical attempt, never in this gap.
+    on_dispatched = getattr(plan, 'on_model_request_dispatched', None)
+    if on_dispatched is not None:
+        on_dispatched()
 
 
 def dispatch_model_request(plan, send, *args, **kwargs):
     """Arguments are prepared before marking an ambiguous physical attempt."""
     mark_model_request_dispatched(plan)
-    return send(*args, **kwargs)
+    guard = getattr(plan, 'physical_model_dispatch_guard', None)
+    if guard is None:
+        return send(*args, **kwargs)
+    from lib.http_transport.outbound import wire_send_authority
+    with wire_send_authority(guard):
+        return send(*args, **kwargs)
 
 
 def seal_request(body, *, model, provider_id='', protocol='openai',
@@ -728,17 +778,23 @@ def transport_body(body):
     return body.wire_body() if isinstance(body, AdmittedRequest) else body
 
 
-def transport_body_arguments(body, *, transport):
-    """Use admitted JSON once; ordinary bodies keep their client's JSON path."""
+def transport_body_arguments(body, *, transport, payload=None):
+    """Use admitted JSON once; ordinary bodies keep their client's JSON path.
+
+    ``payload`` is the exact bytes a send boundary already encoded (and
+    hashed as its sent frame); passing it prevents a content-encoded body
+    from being compressed a second time.
+    """
     if transport not in ('requests', 'httpx'):
         raise ValueError('unsupported HTTP transport: ' + str(transport))
     if isinstance(body, AdmittedRequest):
         return {'data' if transport == 'requests' else 'content':
-                body.encoded_payload()}
+                body.encoded_payload() if payload is None else payload}
     return {'json': body}
 
 
-def transport_payload(body):
+def transport_payload(body, *, payload=None):
     """Byte-oriented egress reuses sealed JSON; legacy encoding stays intact."""
-    return (body.encoded_payload() if isinstance(body, AdmittedRequest)
-            else json.dumps(body).encode())
+    if not isinstance(body, AdmittedRequest):
+        return json.dumps(body).encode()
+    return body.encoded_payload() if payload is None else payload

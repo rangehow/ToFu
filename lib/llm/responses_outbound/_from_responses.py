@@ -18,6 +18,7 @@ Shape notes:
 
 from __future__ import annotations
 
+from lib.cost import RESPONSES_INPUT_USAGE_KEY, responses_input_usage_evidence
 from lib.llm.responses_outbound._message_phase import capture_phase_messages
 from lib.llm.responses_replay import capture_replay_order
 
@@ -261,7 +262,8 @@ def responses_response_to_openai(data: object,
         message['_responses_items'] = capture_replay_order(
             output, message, response_items, tool_name_reverse=tool_name_reverse)
 
-    usage = _usage_to_openai(data.get('usage') or {})
+    usage = _usage_to_openai(data.get('usage'))
+    usage[RESPONSES_INPUT_USAGE_KEY] = responses_input_usage_evidence(data)
     if _program_needs_followup(output):
         usage['_program_pending'] = True
     return {

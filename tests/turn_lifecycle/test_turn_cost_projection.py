@@ -142,7 +142,7 @@ def _settled_rounds(count, *, frozen=False):
     return rounds
 
 
-def test_frozen_cost_projection_never_reuses_the_live_fold_of_the_same_ledger():
+def test_stored_quote_projection_is_identical_for_native_and_python_ledgers():
     import copy
 
     from lib.turn_lifecycle import _task_projection
@@ -155,12 +155,13 @@ def test_frozen_cost_projection_never_reuses_the_live_fold_of_the_same_ledger():
     live = _task_projection(task, {})['cost']
     task['_nativeFrozenCostProjection'] = True
     frozen = _task_projection(task, {})['cost']
-    assert frozen == oracle.compute_api_rounds_cost(
+    expected = oracle.compute_api_rounds_cost(
         copy.deepcopy(rounds), fallback_model_id='gpt-4o', use_frozen_costs=True)
-    assert frozen != live
+    expected.update(cacheSavingsUsd=0.0, cacheSavingsCny=0.0)
+    assert frozen == expected
+    assert frozen == live
     del task['_nativeFrozenCostProjection']
-    assert _task_projection(task, {})['cost'] == live == oracle.compute_api_rounds_cost(
-        copy.deepcopy(rounds), fallback_model_id='gpt-4o')
+    assert _task_projection(task, {})['cost'] == live == expected
 
 
 def test_a_captured_frame_over_2000_settled_rounds_reprices_and_resanitizes_none(

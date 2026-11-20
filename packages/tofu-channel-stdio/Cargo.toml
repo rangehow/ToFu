@@ -1,0 +1,20 @@
+[package]
+name = "tofu-channel-stdio"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Rust port of Tofu's channel protocol stdio binding (lib/channels/protocol/stdio.py)"
+publish = false
+
+# Standalone: own lock and build like packages/tofu-core-rs, not a root workspace member.
+[workspace]
+
+[dependencies]
+# arbitrary_precision keeps number tokens verbatim so integers of any size and
+# float overflow follow Python's json.loads/json.dumps (see src/pyjson.rs).
+serde_json = { version = "=1.0.151", features = ["preserve_order", "arbitrary_precision"] }
+libc = "0.2"
+
+[[bin]]
+name = "tofu-channel-stdio-link"
+path = "src/bin/tofu-channel-stdio-link.rs"

@@ -28,6 +28,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
+from lib.tool_results.credential_redaction import redact_value as redact_known_credentials
 from lib.log import get_logger, log_event, log_fields
 from lib.storage.commit_events import publish_committed_events, publish_committed_operation
 from lib.storage.deadline_policy import observe_storage_service
@@ -301,7 +302,7 @@ class StorageV2Client:
         """
         return self._open_session(timeout)
 
-    def _open_session(self, timeout: float | None = None) -> StorageV2Session:
+    def _open_session(self, timeout: float | None = None, *, cancellation=None) -> StorageV2Session:
         timeout = self._timeout if timeout is None else timeout
         session = StorageV2Session(
             self._host,
@@ -312,6 +313,7 @@ class StorageV2Client:
             schema_ids=(STORAGE_SCHEMA_VERSION,),
             timeout=timeout,
             response_admission=self._response_frame_admission,
+            **({'cancellation': cancellation} if cancellation is not None else {}),
         )
         # Pooled sessions rely on the caller to re-arm the per-attempt
         # budget via set_timeout before each request; sessions owned by a
@@ -618,7 +620,8 @@ class StorageV2Client:
         broken = held is not None
         try:
             if session is None:
-                session = self._pool.acquire(timeout)
+                session = (self._pool.acquire(timeout) if cancellation is None else
+                           self._pool.acquire(timeout, cancellation=cancellation))
             remaining = stop_at - time.monotonic()
             if remaining <= 0:
                 raise StorageError('database_timeout',
@@ -911,8 +914,9 @@ class StorageV2Client:
         deadline: float | None = None,
     ) -> Any:
         result = self._call(
-            'command', operation, payload, deadline=deadline,
-            command_id=command_id,
+            'command', operation,
+            redact_known_credentials(payload, owner_user_id=self._owner_id),
+            deadline=deadline, command_id=command_id,
         )
         if not isinstance(result, Mapping) or '_storageCommitContract' not in result:
             value = application_result(operation, result)

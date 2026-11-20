@@ -1,0 +1,218 @@
+{
+ "deck": {
+  "deck.pptd": {
+   "pages": [
+    "pages/02.page"
+   ],
+   "size": [
+    959,
+    540
+   ],
+   "theme": {
+    "colors": {
+     "accent": "#C0504D",
+     "bg": "#FFFFFF",
+     "hairline": "#D8D5CE",
+     "ink": "#000000",
+     "muted": "#8A93A3",
+     "primary": "#4F81BD"
+    },
+    "textStyles": {
+     "bignum": {
+      "bold": true,
+      "color": "$accent",
+      "fontSize": 80
+     },
+     "body": {
+      "color": "$ink",
+      "fontFamily": "Calibri",
+      "fontSize": 18,
+      "lineHeight": 1.5
+     },
+     "caption": {
+      "color": "$muted",
+      "fontSize": 12
+     },
+     "title": {
+      "bold": true,
+      "color": "$primary",
+      "fontFamily": "Calibri",
+      "fontSize": 36
+     }
+    }
+   },
+   "title": "pptx_import_fidelity",
+   "version": "v2"
+  },
+  "pages/02.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      36.0,
+      21.6,
+      576.0,
+      72.0
+     ],
+     "content": {
+      "text": "<p>slide 2 &lt;iframe src=\"file:///etc/passwd\"&gt;&lt;/iframe&gt; A&amp;B<a href=\"https://example.com/a?x=1&amp;y=2\">safe link</a>script link</p>"
+     },
+     "elementId": "TextBox 1",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      36.0,
+      144.0,
+      432.0,
+      72.0
+     ],
+     "columnWidths": [
+      0.1667,
+      0.5,
+      0.3333
+     ],
+     "elementId": "Table 2",
+     "elementType": "table",
+     "rowHeights": [
+      0.25,
+      0.75
+     ],
+     "rows": [
+      [
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "方案"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "违约率"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": ""
+       }
+      ],
+      [
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": ""
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "fill": {
+         "color": "#F3F5F8",
+         "type": "solid"
+        },
+        "fontSize": 9.0,
+        "text": "<p><a href=\"https://jobs.example.com/p/1\"><span style=\"font-size:9.0px\">Seed &lt;b&gt;intern&lt;/b&gt;</span></a></p>"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": ""
+       }
+      ]
+     ]
+    },
+    {
+     "bounds": [
+      504.0,
+      144.0,
+      360.0,
+      252.0
+     ],
+     "chartType": "column",
+     "data": {
+      "categories": [
+       "Q1",
+       "Q2",
+       "Q3"
+      ],
+      "series": [
+       {
+        "name": "收入",
+        "values": [
+         1.5,
+         2.25,
+         3.0
+        ]
+       },
+       {
+        "name": "Cost",
+        "values": [
+         1.0,
+         1.25,
+         1.75
+        ]
+       }
+      ]
+     },
+     "elementId": "Chart 3",
+     "elementType": "chart",
+     "options": {
+      "legend": false
+     }
+    }
+   ],
+   "pageType": "content"
+  }
+ },
+ "report": {
+  "pages": 1,
+  "skipped": [],
+  "theme": {
+   "colors": {
+    "accent": "#C0504D",
+    "bg": "#FFFFFF",
+    "hairline": "#D8D5CE",
+    "ink": "#000000",
+    "muted": "#8A93A3",
+    "primary": "#4F81BD"
+   },
+   "textStyles": {
+    "bignum": {
+     "bold": true,
+     "color": "$accent",
+     "fontSize": 80
+    },
+    "body": {
+     "color": "$ink",
+     "fontFamily": "Calibri",
+     "fontSize": 18,
+     "lineHeight": 1.5
+    },
+    "caption": {
+     "color": "$muted",
+     "fontSize": 12
+    },
+    "title": {
+     "bold": true,
+     "color": "$primary",
+     "fontFamily": "Calibri",
+     "fontSize": 36
+    }
+   }
+  }
+ }
+}

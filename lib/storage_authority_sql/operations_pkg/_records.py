@@ -12,6 +12,8 @@ from typing import Any
 import orjson
 
 from lib.log import get_logger
+from lib.swarm.message_contract import NAMESPACE as SWARM_MAILBOX_NAMESPACE
+from lib.swarm.persistence_contract import SWARM_RUN_RESULT_NAMESPACE
 from lib.storage.errors import StorageError
 from lib.task_replay.persistence_projection import (
     project_event_usage_for_storage,
@@ -102,6 +104,9 @@ def _load_record_value(namespace: str, raw_value: Any) -> Any:
 
 def _record_get(session: Session, payload: Mapping[str, Any]) -> Any:
     _guard_dispatch_namespace(payload)
+    if payload.get('namespace') == SWARM_RUN_RESULT_NAMESPACE:
+        from ._swarm_teardown import get_archive
+        return get_archive(session, payload)
     return _record_get_owned(session, payload)
 
 
@@ -720,7 +725,82 @@ def _guard_automation_draft(session,payload,*,writing):
         raise StorageError('database_protocol_error','Published automation definitions require atomic publication')
 
 
+def _device_policy_commit(session: Session, payload: Mapping[str, Any]) -> Any:
+    """Validate registry witnesses and publish policy/lifecycle in one transaction."""
+    owner = _integer(payload, 'owner', minimum=1)
+    version = _integer(payload, 'expected_version', minimum=0)
+    policy = payload.get('value')
+    nodes = payload.get('nodes')
+    if (not isinstance(policy, dict) or type(policy.get('owner')) is not int or policy['owner'] != owner
+            or not isinstance(nodes, list) or not 1 <= len(nodes) <= 2):
+        raise StorageError('database_protocol_error', 'Invalid device policy commit')
+    check_only = payload.get('check_only')
+    if type(check_only) is not bool:
+        raise StorageError('database_protocol_error', 'Invalid device policy commit mode')
+    namespace = 'desktop.node.v1'
+    guards = {}
+    for node in nodes:
+        if not isinstance(node, dict):
+            raise StorageError('database_protocol_error', 'Invalid device policy witness')
+        node_id = _required_text(node, 'id', 128)
+        credential = node.get('credential')
+        if ('credential' not in node or (credential is not None and not isinstance(credential, str))
+                or type(node.get('active')) is not bool):
+            raise StorageError('database_protocol_error', 'Invalid device policy witness')
+        if node_id in guards:
+            raise StorageError('database_protocol_error', 'Duplicate device policy witness')
+        expected = _integer(node, 'version', minimum=0)
+        state = 'active' if node['active'] else None
+        if 'next' in node:
+            next_row = node['next']
+            if check_only:
+                state = 'active' if node['active'] else 'pending'
+                if (expected == 0 or not isinstance(next_row, dict) or next_row.get('state') != state
+                        or (state == 'active' and (credential is None or next_row.get('credentialId') != credential))):
+                    raise StorageError('database_protocol_error', 'Policy-preserving command cannot change active incarnation')
+            if next_row is None:
+                if expected == 0:
+                    raise StorageError('database_protocol_error', 'Invalid device transition')
+            elif (not isinstance(next_row, dict) or type(next_row.get('owner')) is not int
+                    or next_row['owner'] != owner or next_row.get('nodeId') != node_id):
+                raise StorageError('database_protocol_error', 'Invalid device transition')
+        guards[node_id] = (node, expected, state)
+    for node_id, (node, expected, state) in sorted(guards.items()):
+        key = f'{owner}:{node_id}'
+        session.lock_key('record', f'{namespace}:{key}')
+        row = _record_get_owned(session, {'namespace': namespace, 'key': key})
+        actual = row['version'] if row else 0
+        value = row['value'] if row else {}
+        if (actual != expected or value.get('credentialId') != node.get('credential')
+                or (row and (value.get('owner') != owner or value.get('nodeId') != node_id))
+                or (state is not None and value.get('state') != state)):
+            raise StorageError('database_conflict', 'Device incarnation changed')
+        if 'next' in node:
+            update = {'namespace': namespace, 'key': key, 'expected_version': expected}
+            if node['next'] is None:
+                if not _record_delete_owned(session, update)['deleted']:
+                    raise StorageError('database_conflict', 'Device incarnation changed')
+            else:
+                _record_put_owned(session, {**update, 'value': node['next']})
+    if check_only:
+        policy_namespace = 'desktop.device_policy.v1'
+        session.lock_key('record', f'{policy_namespace}:{owner}')
+        current = _record_get_owned(session, {'namespace': policy_namespace, 'key': str(owner)})
+        if (version != (current['version'] if current else 0)
+                or (current and current['value'].get('owner') != owner)):
+            raise StorageError('database_conflict', 'Device policy changed')
+        return {'version': version}
+    return _record_put_owned(session, {'namespace': 'desktop.device_policy.v1', 'key': str(owner),
+                                       'expected_version': version, 'value': policy})
+
+
 def _record_put(session: Session, payload: Mapping[str, Any]) -> Any:
+    if payload.get("namespace") == SWARM_MAILBOX_NAMESPACE:
+        from ._swarm_teardown import put_mailbox
+        return put_mailbox(session, payload)
+    if payload.get('namespace') == SWARM_RUN_RESULT_NAMESPACE:
+        from ._swarm_teardown import put_archive
+        return put_archive(session, payload)
     _guard_dispatch_namespace(payload)
     _guard_automation_draft(session,payload,writing=True)
     return _record_put_owned(session, payload)
@@ -1398,6 +1478,14 @@ def _record_delete(session: Session, payload: Mapping[str, Any]) -> Any:
 def _record_delete_owned(session: Session, payload: Mapping[str, Any]) -> Any:
     namespace = _required_text(payload, "namespace", 128)
 
+    if namespace == SWARM_MAILBOX_NAMESPACE:
+        raise StorageError('database_protocol_error', 'Mailbox deletion requires its retention owner')
+    if namespace == SWARM_RUN_RESULT_NAMESPACE:
+        session.lock_key('record', f'{namespace}:{_required_text(payload, "key")}')
+        current = _record_get_owned(session, payload)
+        if current and current['value'].get('sealedByTeardown') is True:
+            raise StorageError('database_conflict', 'Swarm archive is sealed')
+
     if namespace == 'task_results':
         from ._invocations import guard_child_record, worker_root_for_task
         key = _required_text(payload, 'key')
@@ -1408,6 +1496,8 @@ def _record_delete_owned(session: Session, payload: Mapping[str, Any]) -> Any:
     if namespace == 'tool_result_private' or namespace in _NATIVE_CHECKPOINT_NAMESPACES:
         raise StorageError('database_protocol_error', 'Reserved storage namespace')
     key = _required_text(payload, "key")
+    if namespace == "desktop.node.v1":
+        session.lock_key("record", f"{namespace}:{key}")
     expected = _expected_version(payload)
     if expected is None:
         count = session.execute(

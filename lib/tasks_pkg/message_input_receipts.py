@@ -15,10 +15,58 @@ and run-target checks, so a rebound task or stopped child never sends.
 from __future__ import annotations
 
 from collections.abc import Mapping
+import re
 
 from lib.agent_core.context_errors import MessageInputScopeError
 from lib.llm.llm_errors import AbortedError
+from lib.log import get_logger
 from lib.tasks_pkg.round_prep_timing import round_prep_lap, round_prep_step
+
+
+logger = get_logger(__name__)
+
+
+def diagnostic_id(value):
+    """Log only bounded opaque identifiers, never arbitrary strings or objects."""
+    if isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,256}', value):
+        return value
+    return '-'
+
+
+class _CarrierScopeError(PermissionError):
+    def __init__(self, category, message):
+        super().__init__(message)
+        self.category = category
+
+
+def _log_scope_rejection(task, error):
+    from lib.conversations.project_messages import ProjectMessageError
+    from lib.swarm.run_messages import RunMessageError
+    from lib.agent_core.storage_errors import StorageError
+
+    binding = task.get('_swarmMessageBinding')
+    binding = binding if isinstance(binding, dict) else {}
+    owner = task.get('_userId')
+    run = None
+    if isinstance(error, (RunMessageError, _CarrierScopeError)):
+        category = error.category
+        if isinstance(error, RunMessageError) or category.startswith('swarm_'):
+            run = binding.get('swarmRunId')
+    elif isinstance(error, ProjectMessageError):
+        category = 'project_scope_or_sender'
+    elif isinstance(error, StorageError):
+        category = 'storage_error'
+    else:
+        category = 'unexpected_validation_error'
+    logger.warning('Mailbox input rejected category=%s', diagnostic_id(category),
+                   extra={'tofu_event_name': 'mailbox_input_rejection',
+                          'tofu_event_fields': {**mailbox_log_fields(owner, task.get('convId'), run),
+                                                'attempt_id': diagnostic_id(task.get('_attemptId'))}})
+
+
+def mailbox_log_fields(owner, conversation, run):
+    return {'user_id': owner if type(owner) is int and 0 < owner < 2**63 else '-',
+            'conversation_id': diagnostic_id(conversation), 'swarm_run_id': diagnostic_id(run)}
 
 
 DISPATCH_ROUND_FIELD = '_messageInputDispatchRound'
@@ -87,6 +135,7 @@ def _validate_input_scope(task: dict, matches: dict) -> None:
     except (AbortedError, MessageInputScopeError):
         raise
     except Exception as error:
+        _log_scope_rejection(task, error)
         raise MessageInputScopeError('Mailbox input scope is no longer available') from error
 
 
@@ -260,22 +309,22 @@ def validate_matches(task: dict, matches: dict) -> None:
         from lib.swarm.run_messages import validate_round_target, RunMessageRepository
         binding = task.get('_swarmMessageBinding')
         if not binding:
-            raise PermissionError('Restored child message has no current run authority')
+            raise _CarrierScopeError('swarm_binding_missing', 'Restored child message has no current run authority')
         validate_round_target(task, binding, round_num=task.get(DISPATCH_ROUND_FIELD))
         key = RunMessageRepository(binding).key
         if any(w.get('mailbox') != key for w in swarm):
-            raise PermissionError('Restored child message belongs to another run')
+            raise _CarrierScopeError('swarm_mailbox_mismatch', 'Restored child message belongs to another run')
     project_carriers = carriers('project')
     if project_carriers:
         from lib.conversations.project_messages import identity, validate_sender, ProjectMailbox
         owner, recipient, project = identity(task)
         repository = ProjectMailbox(owner, project, recipient)
         if any(w.get('mailbox') != repository.key for w in project_carriers):
-            raise PermissionError('Restored project message belongs to another mailbox')
+            raise _CarrierScopeError('project_mailbox_mismatch', 'Restored project message belongs to another mailbox')
         if matches['project']:
             rows = repository.find(matches['project'])
             if set(rows) != set(matches['project']):
-                raise PermissionError('Restored project message has no durable original')
+                raise _CarrierScopeError('project_original_missing', 'Restored project message has no durable original')
             for sender in dict.fromkeys(row['sender'] for row in rows.values()):
                 validate_sender(owner, sender, project, recipient=recipient)
 

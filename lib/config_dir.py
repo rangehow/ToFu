@@ -2,6 +2,8 @@
 
 All persistent config lives in ``<project>/data/config/`` so that
 multiple copies of Tofu on the same machine stay fully isolated.
+The tree is private: ``lib.json_store`` publishes every file under
+``CONFIG_DIR`` owner-only (0600) whatever mode its writer passes.
 
 Contents:
   data/config/server_config.json  — legacy-compatible miscellaneous settings,

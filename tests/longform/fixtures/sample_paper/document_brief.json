@@ -1,6 +1,6 @@
 {
   "type": "paper",
-  "venue": "acl",
+  "venue": "arr",
   "title": "Half an ULP Decides: Predicting Which BF16 Updates Need Stochastic Rounding",
   "authors": "Anonymous",
   "topic": "predicting stale bfloat16 weight updates half ulp selective stochastic rounding without FP32 master weights",

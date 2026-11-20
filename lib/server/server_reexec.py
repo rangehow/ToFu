@@ -42,6 +42,7 @@ class ServerReexecOutcome:
 
     handed_over: bool
     refusals: tuple[tuple[str, str], ...] = ()
+    manager_wait_seconds: float | None = None
 
     @property
     def detail(self) -> str:
@@ -193,7 +194,7 @@ def perform_server_reexec(reason: str, *, frontend_prevalidated: bool = False,
         logger.warning(
             '[Update] Current Supervisor accepted a fresh worker generation '
             '(%s)', reason)
-        return ServerReexecOutcome(True)
+        return ServerReexecOutcome(True, manager_wait_seconds=float(result.get('maxWaitS', 0)))
 
     if refusals[1:]:
         # Every bridge refused BEFORE the shutdown point of no return, so this
@@ -236,6 +237,44 @@ def perform_server_reexec(reason: str, *, frontend_prevalidated: bool = False,
                        _mk_e)
     finish_server_reexec_preparation()
     return ServerReexecOutcome(True, tuple(refusals))
+
+
+def await_managed_restart_failure(outcome: ServerReexecOutcome,
+                                  requested_at: float | None) -> str:
+    """Keep the restart fence until the accepted manager request settles.
+
+    An acknowledgement only queues the restart. The retiring process normally
+    exits while waiting. The exact request epoch prevents an earlier refusal
+    from releasing this attempt's locks.
+    """
+    if not outcome.handed_over:
+        return outcome.detail
+    if outcome.manager_wait_seconds is None or requested_at is None:
+        return ''
+
+    from server_manager import read_restart_outcome
+    from serverctl_pkg.restart_budget import LIFECYCLE_REQUEST_SECONDS
+
+    deadline = time.monotonic() + outcome.manager_wait_seconds + LIFECYCLE_REQUEST_SECONDS
+    while True:
+        status = read_restart_outcome(_restart_project())
+        if status.get('requestedAt') == requested_at:
+            if status.get('outcome') in ('refused', 'paused'):
+                detail = status.get('message') or 'The Supervisor refused the restart.'
+                break
+            if status.get('outcome') == 'spawned':
+                return ''
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            detail = 'The Supervisor did not settle the restart within its lifecycle budget.'
+            break
+        time.sleep(min(1.0, remaining))
+    try:
+        from lib.lifecycle_approval import rollback_restart_stamp
+        rollback_restart_stamp(pid=os.getpid())
+    except Exception:
+        logger.exception('[Update] Restart stamp rollback failed')
+    return detail
 
 
 def install_server_reexec_shutdown_requester(

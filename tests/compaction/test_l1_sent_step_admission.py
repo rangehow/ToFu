@@ -463,3 +463,27 @@ def test_strip_cold_images_reports_route_billed_image_tokens():
 
     assert strip(_MODEL) == 2 * 79
     assert strip('gpt-5.6') == 2 * constants._IMAGE_TOKENS_DEFAULT
+
+def test_restored_checkpoint_protects_cold_results_on_first_round(recorder):
+    from lib.tasks_pkg.compaction._layer1 import micro_compact
+
+    task = _task('restored-tool-history')
+    messages = [
+        {'role': 'user', 'content': 'previous task'},
+        _assistant('old'),
+        _text_result('old', 400),
+        {'role': 'assistant', 'content': 'previous task done'},
+        {'role': 'user', 'content': 'next task'},
+        _assistant('new'),
+        _text_result('new', 400),
+        _assistant('latest'),
+        _text_result('latest', 8),
+    ]
+    task['config']['_modelReplayProtectedCount'] = 4
+    restored = copy.deepcopy(messages[:4])
+    saved = micro_compact(
+        messages, conv_id=task['convId'], task=task,
+        constant_overrides={'MICRO_HOT_TAIL': 0, 'MICRO_HOT_TAIL_TOKENS': 0})
+    assert saved > 0
+    assert messages[:4] == restored
+    assert messages[6]['content'].startswith('[read_files result compacted')

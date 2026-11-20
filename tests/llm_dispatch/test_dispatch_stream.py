@@ -131,6 +131,101 @@ class TestDispatchStreamSuccess:
         assert usage['_dispatch']['queue_wait_measurement'] == \
             'dispatcher_backpressure_only'
 
+    @pytest.mark.parametrize(('has_usage', 'read'), [
+        pytest.param(False, None, id='no-usage'),
+        pytest.param(True, None, id='unknown-read'),
+        pytest.param(True, 0, id='explicit-zero'),
+        pytest.param(True, 75, id='positive-read'),
+    ])
+    def test_responses_retry_records_only_the_serving_attempts_usage(self, monkeypatch, has_usage, read):
+        import json
+        from unittest.mock import Mock
+
+        from lib.cost import observed_cache_read, reported_responses_input_usage
+        from lib.llm._sse_core import SSEAccumulator
+        from lib.llm.responses_outbound import ResponsesSSETranslator
+        from lib.llm_dispatch import api
+        from lib.llm_dispatch.slot import Slot
+        from lib.tasks_pkg.llm_fallback._usage import record_attempt_usage
+
+        slots = [Slot(key_name=key, api_key='', model=wire, logical_model='fixture-logical',
+                      capabilities={'text'}, provider_id='ephemeral-pin',
+                      routing_provider_id=provider, protocol='openai_responses')
+                 for key, wire, provider in (
+                     ('first', 'fixture-first-wire', 'first-provider'),
+                     ('second', 'fixture-serving-wire', 'serving-provider'))]
+        dispatcher = _FakeDispatcher(slots, all_slots=slots)
+        monkeypatch.setattr(api, 'get_dispatcher', lambda: dispatcher)
+        calls = []
+
+        def replay_frames(body, **kwargs):
+            # Feed the parser directly: no provider, HTTP listener, or network.
+            calls.append(body['model'])
+            raw_dumper = Mock(spec=['line', 'dump_anomaly', 'finish'])
+            acc = SSEAccumulator(body, f'fixture-{len(calls)}', raw_dumper,
+                                 ResponsesSSETranslator(), time.time(),
+                                 on_content=kwargs['on_content'])
+            if len(calls) == 1:
+                acc.feed_line('data: ' + json.dumps({
+                    'type': 'response.failed', 'response': {
+                        'status': 'failed', 'error': {'code': 'rate_limit_exceeded'},
+                        'usage': {'input_tokens': 999, 'input_tokens_details': {'cached_tokens': 900}},
+                    },
+                }))
+                pytest.fail('failed fixture did not raise a retryable error')
+            acc.feed_line('data: ' + json.dumps({
+                'type': 'response.output_text.delta', 'delta': 'text',
+            }))
+            terminal = {'output': []}
+            if has_usage:
+                terminal['usage'] = {
+                    'input_tokens': 100, 'output_tokens': 7,
+                    'input_tokens_details': {'cached_tokens': read, 'cache_write_tokens': 8},
+                }
+            acc.feed_line('data: ' + json.dumps({
+                'type': 'response.completed', 'response': terminal,
+            }))
+            return acc.finalize()
+
+        monkeypatch.setattr('lib.llm.stream_chat', replay_frames)
+        result = api.dispatch_stream([{'role': 'user', 'content': 'fixture'}],
+                                     prefer_model='fixture-logical')
+        assert result.is_verified_complete
+        assert calls == ['fixture-first-wire', 'fixture-serving-wire']
+        assert all(slot.inflight == 0 for slot in slots)
+        assert observed_cache_read(result.usage) == read
+        if has_usage:
+            exact = {'input_tokens': 100, 'cache_read': read, 'cache_write': 8, 'status': {
+                'input_tokens': 'observed', 'cache_read': 'null' if read is None else 'observed',
+                'cache_write': 'observed',
+            }}
+        else:
+            fields = ('input_tokens', 'cache_read', 'cache_write')
+            exact = {**dict.fromkeys(fields), 'status': dict.fromkeys(fields, 'missing')}
+        assert reported_responses_input_usage(result.usage) == exact
+        events = []
+        monkeypatch.setattr('lib.tasks_pkg.llm_fallback._usage.append_event',
+                            lambda task, event: events.append(event))
+        rounds = []
+        record_attempt_usage({'id': 'fixture'}, result.usage, 'fixture-logical', 1,
+                             {}, rounds, tag='R1')
+        event, = events
+        row, = rounds
+        for usage in (result.usage, row['usage'], event['usage']):
+            assert usage['trace_id'] == 'fixture-2'
+            dispatch = usage['_dispatch']
+            assert dispatch['provider_id'] == 'serving-provider'
+            assert dispatch['model'] == 'fixture-serving-wire'
+            assert dispatch['protocol'] == 'responses'
+            assert dispatch['429_retries'] == 1
+            assert dispatch['ttft_measurement'] == 'dispatcher_attempt_to_first_output_callback'
+            assert dispatch['ttft_ms'] >= 0
+            assert dispatch['queue_wait_measurement'] == 'dispatcher_backpressure_only'
+            assert dispatch['queue_wait_ms'] >= 0
+        for usage in (row['usage'], event['usage']):
+            assert reported_responses_input_usage(usage) is None
+            assert usage.get('prompt_tokens') == (100 if has_usage else None)
+
     def test_dispatch_total_spans_route_and_provider_work(self, monkeypatch):
         from lib.llm.diagnostic_timing import DiagnosticTiming, bind_timing
         from lib.llm_dispatch import api
@@ -782,7 +877,21 @@ class TestSettleStreamResultHelper:
             _make_slot(), usage, latency=5.0, ttft=None,
             state=self._state(), cache_conv_id='', tag='[t]')
         assert usage['_dispatch']['ttft_ms'] is None
-        assert usage['_dispatch']['ttft_measurement'] == 'measured'
+        assert usage['_dispatch']['ttft_measurement'] == 'unobserved_stream'
+
+    def test_ttft_latches_the_first_callback_not_first_nonempty_text(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from lib.llm_dispatch import _api_stream_state as owner
+
+        now = [100.125]
+        monkeypatch.setattr(owner, 'time', SimpleNamespace(time=lambda: now[0]))
+        offsets, thinking, content, _ = owner._first_output_callbacks(100.0, None, None, None)
+        assert offsets == [None]
+        thinking('')  # This evidence measures the callback, not its text.
+        now[0] = 100.5
+        content('first visible text')
+        assert offsets == [125.0]
 
 
 def test_cooldown_polling_is_not_a_retry_attempt():
@@ -915,6 +1024,19 @@ class TestDispatchQuotaScope:
             'stop the key (2026-07-28 aggregating-gateway contract)')
         assert set(row['exhausted_models']) == {'qwen-plus'}
         assert ks.is_key_enabled('default', 'k1', model='other-model') is True
+
+
+@pytest.mark.unit
+class TestSlotCacheProfile:
+    """One Slot-facing projection feeds the cache settle gate and dispatch."""
+
+    def test_cache_profile_follows_oauth_and_defaults_empty(self):
+        slot = _make_slot()
+        assert slot.cache_profile == ''
+        slot.oauth = 'codex'
+        assert slot.cache_profile == 'codex'
+        slot.oauth = ''
+        assert slot.cache_profile == ''
 
 
 if __name__ == '__main__':

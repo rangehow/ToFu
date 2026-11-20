@@ -156,9 +156,15 @@ def test_async_codex_wait_uses_same_timing(monkeypatch):
 
 
 def _usage(cached: int, wire: list[dict], *, prompt: int = 7301) -> dict:
+    from lib.llm.responses_outbound import responses_response_to_openai
+
+    usage = responses_response_to_openai({'status': 'completed', 'output': [],
+        'usage': {'input_tokens': prompt, 'output_tokens': 1,
+                  'input_tokens_details': {'cached_tokens': cached}},
+    })['usage']
     return {
-        'prompt_tokens': prompt,
-        'prompt_tokens_details': {'cached_tokens': cached},
+        **usage,
+        '_dispatch': {'protocol': 'responses'},
         '_wire_bytes': list(wire),
         '_wire_region': {'system': 'same', 'tools': 'same'},
         '_wire_routing': {'key': 'same', 'beta': '', 'endpoint': 'same'},
@@ -177,6 +183,35 @@ def test_exact_1024_drop_is_named_implicit_breakpoint_fallback():
     assert second['status'] == 'implicit_breakpoint_fallback'
     assert second['drop_tokens'] == 1024
     assert second['wire_append_only'] is True
+
+
+def test_unreported_codex_read_does_not_create_a_miss_or_a_zero_baseline():
+    conv_id = 'conv-unknown-read'
+    cache.observe_codex_cache(conv_id, _usage(5504, [{'h': 'head'}]))
+    # Historical Responses usage may contain normalized aliases but cannot
+    # recover the upstream field's presence (or validity) from them.
+    usage = {
+        'prompt_tokens': 7301,
+        'cache_read_tokens': 0,
+        '_dispatch': {'protocol': 'responses'},
+        '_wire_bytes': [{'h': 'head'}, {'h': 'tail'}],
+        '_wire_region': {'system': 'same', 'tools': 'same'},
+        '_wire_routing': {'key': 'same', 'beta': '', 'endpoint': 'same'},
+    }
+    unknown = cache.observe_codex_cache(conv_id, usage)
+    assert unknown['status'] == 'usage_unknown'
+    assert unknown['cached_tokens'] is None
+    assert unknown['input_tokens'] is None
+    assert unknown['previous_cached_tokens'] == 5504
+    assert unknown['drop_tokens'] is None
+    assert unknown['wire_append_only'] is True
+
+    zero = cache.observe_codex_cache(
+        conv_id, _usage(0, [{'h': 'head'}, {'h': 'tail'}, {'h': 'next'}]))
+    assert zero['status'] == 'observed_without_baseline'
+    assert zero['previous_cached_tokens'] is None
+    assert zero['cached_tokens'] == 0
+    assert zero['drop_tokens'] is None
 
 
 def test_wire_change_is_not_laundered_into_upstream_fallback():

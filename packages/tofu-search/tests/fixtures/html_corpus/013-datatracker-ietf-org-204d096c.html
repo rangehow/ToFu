@@ -1,0 +1,2672 @@
+
+<!DOCTYPE html>
+
+
+
+
+
+
+
+<html data-bs-theme="auto" lang="en">
+    <head>
+        
+        <meta charset="utf-8">
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+        <title>
+            
+                RFC 9110 - HTTP Semantics
+            
+        </title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link href="https://static.ietf.org/fonts/inter/import.css" rel="stylesheet">
+        <link href="https://static.ietf.org/fonts/noto-sans-mono/import.css" rel="stylesheet">
+        
+            <link rel="stylesheet" href="https://static.ietf.org/dt/12.83.2/ietf/css/document_html_referenced.css">
+            
+                <link rel="stylesheet" href="https://static.ietf.org/dt/12.83.2/ietf/css/document_html_txt.css">
+            
+            <script type="module" crossorigin="" src="https://static.ietf.org/dt/12.83.2/assets/embedded-72dc5a5f.js">/* stub */</script>
+<link href="https://static.ietf.org/dt/12.83.2/assets/create-pinia-singleton-4fceef90.js" type="text/javascript" crossorigin="anonymous" rel="modulepreload" as="script" />
+<link href="https://static.ietf.org/dt/12.83.2/assets/Scrollbar-0888439d.js" type="text/javascript" crossorigin="anonymous" rel="modulepreload" as="script" />
+            <script src="https://static.ietf.org/dt/12.83.2/ietf/js/document_html.js">/* stub */</script>
+            <script src="https://static.ietf.org/dt/12.83.2/ietf/js/theme.js">/* stub */</script>
+        
+        <link rel="alternate" type="application/atom+xml" title="Document changes" href="/feed/document-changes/rfc9110/">
+        <meta name="description"
+            
+                content="HTTP Semantics (RFC 9110, )"
+            >
+        
+
+<link rel="apple-touch-icon"
+      sizes="180x180"
+      href="https://static.ietf.org/dt/12.83.2/ietf/images/ietf-logo-nor-180.png">
+<link rel="icon"
+      sizes="32x32"
+      href="https://static.ietf.org/dt/12.83.2/ietf/images/ietf-logo-nor-32.png">
+<link rel="icon"
+      sizes="16x16"
+      href="https://static.ietf.org/dt/12.83.2/ietf/images/ietf-logo-nor-16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon"
+      href="https://static.ietf.org/dt/12.83.2/ietf/images/ietf-logo-nor-mask.svg"
+      color="#ffffff">
+<meta name="msapplication-TileColor"
+      content="#ffffff">
+<meta name="theme-color"
+      content="#ffffff">
+        
+
+
+
+
+<meta property="og:title" content="RFC 9110: HTTP Semantics">
+<meta property="og:url" content="https://datatracker.ietf.org/doc/html/rfc9110">
+
+
+<link rel="canonical" href="https://www.rfc-editor.org/info/rfc9110/">
+
+<meta property="og:site_name" content="IETF Datatracker">
+<meta property="og:description" content="The Hypertext Transfer Protocol (HTTP) is a stateless application-level protocol for distributed, collaborative, hypertext information systems. This document describes the overall architecture of HTTP, establishes common terminology, and defines aspects of the protocol that are shared by all versions. In this definition are core protocol elements, extensibility mechanisms, and the &quot;http&quot; and &quot;https&quot; Uniform Resource Identifier (URI) schemes. This document updates RFC 3864 and obsoletes RFCs 2818, 7231, 7232, 7233, 7235, 7538, 7615, 7694, and portions of 7230.">
+<meta property="og:type" content="article">
+
+<meta property="og:image" content="https://static.ietf.org/dt/12.83.2/ietf/images/ietf-logo-card.png">
+<meta property="og:image:alt" content="Logo of the IETF">
+<meta property="article:section" content="IETF - Internet Engineering Task Force">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+
+<meta property="article:author" content="Roy T. Fielding">
+<meta property="article:author" content="Mark Nottingham">
+<meta property="article:author" content="Julian Reschke">
+
+
+
+        
+        <style>/* stub */</style>
+    </head>
+    <body>
+        
+        <noscript><iframe class="status" title="Site status" src="/status/latest"></iframe></noscript>
+<div class="vue-embed" data-component="Status"></div>
+        <div class="btn-toolbar sidebar-toolbar position-fixed top-0 end-0 m-2 m-lg-3 d-print-none">
+            <div class="dropdown">
+                <button class="btn btn-outline-secondary btn-sm me-1 dropdown-toggle d-flex align-items-center"
+                    id="bd-theme" type="button" aria-expanded="false" data-bs-toggle="dropdown"
+                    aria-label="Toggle theme">
+                        <i class="theme-icon-active bi bi-circle-half"></i>
+                </button>
+
+                <ul class="dropdown-menu" aria-labelledby="bd-theme">
+                    <li>
+                        <button type="button" class="dropdown-item d-flex align-items-center"
+                            data-bs-theme-value="light" aria-pressed="false">
+                            <i class="me-2 opacity-50 theme-icon bi bi-sun-fill"></i>
+                            Light<i class="bi bi-check2 ms-auto d-none"></i>
+                        </button>
+                    </li>
+                    <li>
+                        <button type="button" class="dropdown-item d-flex align-items-center"
+                            data-bs-theme-value="dark" aria-pressed="false">
+                            <i class="me-2 opacity-50 theme-icon bi bi-moon-stars-fill"></i>
+                            Dark<i class="bi bi-check2 ms-auto d-none"></i>
+                        </button>
+                    </li>
+                    <li>
+                        <button type="button" class="dropdown-item d-flex align-items-center active"
+                            data-bs-theme-value="auto" aria-pressed="true">
+                            <i class="me-2 opacity-50 theme-icon bi bi-circle-half"></i>
+                            Auto<i class="bi bi-check2 ms-auto d-none"></i>
+                        </button>
+                    </li>
+                </ul>
+            </div>
+            <button class="btn btn-outline-secondary btn-sm sidebar-toggle"
+                    type="button"
+                    data-bs-toggle="collapse"
+                    data-bs-target="#sidebar"
+                    aria-expanded="true"
+                    aria-controls="sidebar"
+                    aria-label="Toggle metadata sidebar"
+                    title="Toggle metadata sidebar">
+            <i class="bi bi-arrow-bar-left sidebar-shown"></i>
+            <i class="bi bi-arrow-bar-right sidebar-collapsed"></i>
+            </button>
+        </div>
+        <nav class="navbar bg-light-subtle px-1 fixed-top d-print-none d-md-none">
+            <a class="nav-link ps-1"
+               href="/doc/rfc9110/">
+                
+                    RFC 9110
+                
+                <br class="d-sm-none">
+
+                <span class="ms-sm-3 badge rounded-pill badge-std">
+                    
+                        Internet Standard
+                    
+                </span>
+            </a>
+            <button class="navbar-toggler p-1"
+                    type="button"
+                    data-bs-toggle="collapse"
+                    data-bs-target="#docinfo-collapse"
+                    aria-controls="docinfo-collapse"
+                    aria-expanded="false"
+                    aria-label="Show document information">
+                <span class="navbar-toggler-icon small"></span>
+            </button>
+            <div class="navbar-nav navbar-nav-scroll overscroll-none collapse pt-1" id="docinfo-collapse">
+                <div class="bg-light-subtle p-0">
+                    <table class="table table-sm table-borderless small">
+                        <tbody class="meta align-top">
+                            <tr>
+                                <th scope="row"></th>
+                                <th scope="row">Title</th>
+                                <td class="edit"></td>
+                                <td>HTTP Semantics</td>
+                            </tr>
+                        </tbody>
+                        
+
+
+
+
+
+
+
+<tbody class="meta align-top ">
+    <tr>
+        <th scope="row">Document</th>
+        <th scope="row">Document type</th>
+        <td class="edit"></td>
+        <td>
+            
+
+
+
+
+
+<span class="text-success">RFC
+    
+    - Internet Standard
+    
+</span>
+
+            
+                
+                    <br>June 2022
+                
+                <br>
+                
+                    <a class="btn btn-primary btn-sm my-1"
+                       href="https://www.rfc-editor.org/errata_search.php?rfc=9110" title="Click to view errata." rel="nofollow">
+                        View errata
+                    </a>
+                
+                
+                    <a class="btn btn-sm btn-warning"
+                       title="Click to report an error in the document."
+                       href="https://www.rfc-editor.org/errata.php#reportnew"
+                       target="_blank">
+                        Report errata
+                    </a>
+                
+                
+                    <a title="Click to view IPR declarations." class="btn btn-warning btn-sm my-1" href="/ipr/search/?submit=draft&amp;id=rfc9110">IPR</a>
+                
+                
+                
+                <div>Obsoletes <a href="/doc/html/rfc7538" title="The Hypertext Transfer Protocol Status Code 308 (Permanent Redirect)">RFC 7538</a>, <a href="/doc/html/rfc7233" title="Hypertext Transfer Protocol (HTTP/1.1): Range Requests">RFC 7233</a>, <a href="/doc/html/rfc2818" title="HTTP Over TLS">RFC 2818</a>, <a href="/doc/html/rfc7694" title="Hypertext Transfer Protocol (HTTP) Client-Initiated Content-Encoding">RFC 7694</a>, <a href="/doc/html/rfc7232" title="Hypertext Transfer Protocol (HTTP/1.1): Conditional Requests">RFC 7232</a>, <a href="/doc/html/rfc7615" title="HTTP Authentication-Info and Proxy-Authentication-Info Response Header Fields">RFC 7615</a>, <a href="/doc/html/rfc7230" title="Hypertext Transfer Protocol (HTTP/1.1): Message Syntax and Routing">RFC 7230</a>, <a href="/doc/html/rfc7235" title="Hypertext Transfer Protocol (HTTP/1.1): Authentication">RFC 7235</a>, <a href="/doc/html/rfc7231" title="Hypertext Transfer Protocol (HTTP/1.1): Semantics and Content">RFC 7231</a></div>
+                <div>Updates <a href="/doc/html/rfc3864" title="Registration Procedures for Message Header Fields">RFC 3864</a></div>
+                
+                
+                
+                    <div>
+                        Was
+                        <a href="/doc/draft-ietf-httpbis-semantics/19/">draft-ietf-httpbis-semantics</a>
+                        (<a href="/wg/httpbis/about/">httpbis WG</a>)
+                    </div>
+                
+            
+            
+            
+                
+
+
+
+
+    
+
+
+            
+        </td>
+    </tr>
+    
+        <tr>
+            <td></td>
+            <th scope="row">Select version</th>
+            <td class="edit"></td>
+            <td>
+                
+
+
+
+    <ul class="revision-list pagination pagination-sm text-center flex-wrap my-0">
+        
+            
+            
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-httpbis-semantics-00"
+                        rel="nofollow">
+                            00
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-httpbis-semantics-01"
+                        rel="nofollow">
+                            01
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-httpbis-semantics-02"
+                        rel="nofollow">
+                            02
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-httpbis-semantics-03"
+                        rel="nofollow">
+                            03
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-httpbis-semantics-04"
+                        rel="nofollow">
+                            04
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-httpbis-semantics-05"
+                        rel="nofollow">
+                            05
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-httpbis-semantics-06"
+                        rel="nofollow">
+                            06
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-httpbis-semantics-07"
+                        rel="nofollow">
+                            07
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-httpbis-semantics-08"
+                        rel="nofollow">
+                            08
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-httpbis-semantics-09"
+                        rel="nofollow">
+                            09
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-httpbis-semantics-10"
+                        rel="nofollow">
+                            10
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-httpbis-semantics-11"
+                        rel="nofollow">
+                            11
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-httpbis-semantics-12"
+                        rel="nofollow">
+                            12
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-httpbis-semantics-13"
+                        rel="nofollow">
+                            13
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-httpbis-semantics-14"
+                        rel="nofollow">
+                            14
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-httpbis-semantics-15"
+                        rel="nofollow">
+                            15
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-httpbis-semantics-16"
+                        rel="nofollow">
+                            16
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-httpbis-semantics-17"
+                        rel="nofollow">
+                            17
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-httpbis-semantics-18"
+                        rel="nofollow">
+                            18
+                        </a>
+                    </li>
+                
+                    <li class="page-item">
+                        <a class="page-link"
+                        href="/doc/html/draft-ietf-httpbis-semantics-19"
+                        rel="nofollow">
+                            19
+                        </a>
+                    </li>
+                
+            
+            
+            <li class="page-item rfc active">
+                <a class="page-link"
+                href="/doc/html/rfc9110">
+                    RFC 9110
+                </a>
+            </li>
+        
+    </ul>
+
+            </td>
+        </tr>
+        
+            <tr>
+                <td></td>
+                <th scope="row">Compare versions</th>
+                <td class="edit"></td>
+                <td>
+                    
+
+
+
+<form class="form-horizontal diff-form"
+      action="https://author-tools.ietf.org/iddiff"
+      method="get"
+      target="_blank">
+
+            <select class="form-select form-select-sm mb-1 select2-field"
+                    data-max-entries="1"
+                    data-width="resolve"
+                    data-allow-clear="false"
+                    data-minimum-input-length="0"
+                    aria-label="From revision"
+                    name="url1">
+                
+                    <option value="rfc9110">
+                        RFC 9110
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-19" selected>
+                        draft-ietf-httpbis-semantics-19
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-18">
+                        draft-ietf-httpbis-semantics-18
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-17">
+                        draft-ietf-httpbis-semantics-17
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-16">
+                        draft-ietf-httpbis-semantics-16
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-15">
+                        draft-ietf-httpbis-semantics-15
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-14">
+                        draft-ietf-httpbis-semantics-14
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-13">
+                        draft-ietf-httpbis-semantics-13
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-12">
+                        draft-ietf-httpbis-semantics-12
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-11">
+                        draft-ietf-httpbis-semantics-11
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-10">
+                        draft-ietf-httpbis-semantics-10
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-09">
+                        draft-ietf-httpbis-semantics-09
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-08">
+                        draft-ietf-httpbis-semantics-08
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-07">
+                        draft-ietf-httpbis-semantics-07
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-06">
+                        draft-ietf-httpbis-semantics-06
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-05">
+                        draft-ietf-httpbis-semantics-05
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-04">
+                        draft-ietf-httpbis-semantics-04
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-03">
+                        draft-ietf-httpbis-semantics-03
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-02">
+                        draft-ietf-httpbis-semantics-02
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-01">
+                        draft-ietf-httpbis-semantics-01
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-00">
+                        draft-ietf-httpbis-semantics-00
+                        
+                    </option>
+                
+                
+            </select>
+
+            <select class="form-select form-select-sm mb-1 select2-field"
+                    data-max-entries="1"
+                    data-width="resolve"
+                    data-allow-clear="false"
+                    data-minimum-input-length="0"
+                    aria-label="To revision"
+                    name="url2">
+                
+                    <option value="rfc9110" selected>
+                        RFC 9110
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-19">
+                        draft-ietf-httpbis-semantics-19
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-18">
+                        draft-ietf-httpbis-semantics-18
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-17">
+                        draft-ietf-httpbis-semantics-17
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-16">
+                        draft-ietf-httpbis-semantics-16
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-15">
+                        draft-ietf-httpbis-semantics-15
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-14">
+                        draft-ietf-httpbis-semantics-14
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-13">
+                        draft-ietf-httpbis-semantics-13
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-12">
+                        draft-ietf-httpbis-semantics-12
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-11">
+                        draft-ietf-httpbis-semantics-11
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-10">
+                        draft-ietf-httpbis-semantics-10
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-09">
+                        draft-ietf-httpbis-semantics-09
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-08">
+                        draft-ietf-httpbis-semantics-08
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-07">
+                        draft-ietf-httpbis-semantics-07
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-06">
+                        draft-ietf-httpbis-semantics-06
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-05">
+                        draft-ietf-httpbis-semantics-05
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-04">
+                        draft-ietf-httpbis-semantics-04
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-03">
+                        draft-ietf-httpbis-semantics-03
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-02">
+                        draft-ietf-httpbis-semantics-02
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-01">
+                        draft-ietf-httpbis-semantics-01
+                        
+                    </option>
+                
+                    <option value="draft-ietf-httpbis-semantics-00">
+                        draft-ietf-httpbis-semantics-00
+                        
+                    </option>
+                
+                
+            </select>
+
+            <button type="submit"
+                    class="btn btn-primary btn-sm"
+                    value="--html"
+                    name="difftype">
+                Side-by-side
+            </button>
+            
+            <button type="submit"
+                    class="btn btn-primary btn-sm"
+                    value="--hwdiff"
+                    name="difftype">
+                Inline
+            </button>
+
+
+</form>
+
+                </td>
+            </tr>
+        
+    
+    <tr>
+        <td></td>
+        <th scope="row">Authors</th>
+        <td class="edit">
+            
+        </td>
+        <td>
+            
+            
+                <span ><a 
+           title="Datatracker profile of Roy T. Fielding"
+            href="/person/fielding@gbiv.com" >R. Fielding</a> <a 
+               href="mailto:fielding%40gbiv.com"
+               aria-label="Compose email to fielding@gbiv.com"
+               title="Compose email to fielding@gbiv.com">
+                <i class="bi bi-envelope"></i></a></span>,
+            
+                <span ><a 
+           title="Datatracker profile of Mark Nottingham"
+            href="/person/mnot@mnot.net" >M. Nottingham</a> <a 
+               href="mailto:mnot%40mnot.net"
+               aria-label="Compose email to mnot@mnot.net"
+               title="Compose email to mnot@mnot.net">
+                <i class="bi bi-envelope"></i></a></span>,
+            
+                <span ><a 
+           title="Datatracker profile of Julian Reschke"
+            href="/person/julian.reschke@gmx.de" >J. Reschke</a> <a 
+               href="mailto:julian.reschke%40gmx.de"
+               aria-label="Compose email to julian.reschke@gmx.de"
+               title="Compose email to julian.reschke@gmx.de">
+                <i class="bi bi-envelope"></i></a></span>
+            
+            
+                <br>
+                <a class="btn btn-primary btn-sm mt-1" href="mailto:rfc9110@ietf.org?subject=rfc9110" title="Send email to the document authors">Email authors</a>
+            
+        </td>
+    </tr>
+    
+    
+    <tr>
+        <td></td>
+        <th scope="row">
+            RFC stream
+        </th>
+        <td class="edit">
+            
+        </td>
+        <td >
+            
+                
+                
+                    
+                        
+
+
+
+<img alt="IETF Logo"
+     class="d-lm-none w-25 mt-1"
+     
+     
+        
+             src="https://static.ietf.org/dt/12.83.2/ietf/images/ietf-logo-nor-white.svg"
+        
+     
+     >
+
+<img alt="IETF Logo"
+     class="d-dm-none w-25 mt-1"
+     
+     
+        
+             src="https://static.ietf.org/dt/12.83.2/ietf/images/ietf-logo-nor.svg"
+        
+     
+     >
+                    
+                
+                
+            
+        </td>
+    </tr>
+    
+    <tr>
+        <td></td>
+        <th scope="row">
+            Other formats
+        </th>
+        <td class="edit">
+        </td>
+        <td>
+            
+                
+    <div class="buttonlist">
+    
+        
+        <a class="btn btn-primary btn-sm"
+          
+          target="_blank"
+          href="https://www.rfc-editor.org/rfc/rfc9110.txt">
+            
+                <i class="bi bi-file-text"></i> txt
+            
+        </a>
+        
+    
+        
+        <a class="btn btn-primary btn-sm"
+          
+          target="_blank"
+          href="https://www.rfc-editor.org/rfc/rfc9110.html">
+            
+                <i class="bi bi-file-code"></i> html
+            
+        </a>
+        
+    
+        
+        <a class="btn btn-primary btn-sm"
+          
+          target="_blank"
+          href="https://www.rfc-editor.org/rfc/rfc9110.xml">
+            
+                <i class="bi bi-file-code"></i> xml
+            
+        </a>
+        
+    
+        
+        <a class="btn btn-primary btn-sm"
+          
+            download="rfc9110.pdf"
+          
+         
+          target="_blank"
+          href="https://www.rfc-editor.org/rfc/rfc9110.pdf">
+            
+                <i class="bi bi-file-pdf"></i> pdf
+            
+        </a>
+        
+    
+        
+    
+        
+        <a class="btn btn-primary btn-sm"
+          
+          target="_blank"
+          href="https://www.rfc-editor.org/rfc/inline-errata/rfc9110.html">
+            
+                <i class="bi bi-file-diff"></i> w/errata
+            
+        </a>
+        
+    
+        
+        <a class="btn btn-primary btn-sm"
+          
+          target="_blank"
+          href="/doc/rfc9110/bibtex/">
+            
+                <i class="bi bi-file-ruled"></i> bibtex
+            
+        </a>
+        
+    
+</div>
+
+            
+        </td>
+    </tr>
+    
+    
+        
+            <tr>
+                <td>
+                </td>
+                <th scope="row">
+                    Additional resources
+                </th>
+                <td class="edit">
+                    
+                </td>
+                <td>
+                    
+                        
+                        
+                            
+                                <a href="http://lists.w3.org/Archives/Public/ietf-http-wg/">
+                                    Mailing list discussion
+                                </a>
+                            
+                        
+                    
+                </td>
+            </tr>
+        
+    
+</tbody>
+                        <tr>
+                            <th scope="row"></th>
+                            <th scope="row"></th>
+                            <td class="edit"></td>
+                            <td>
+                                <a class="btn btn-sm btn-warning mb-3"
+                                target="_blank"
+                                href="https://github.com/ietf-tools/datatracker/issues/new/choose">
+                                    Report a bug
+                                    <i class="bi bi-bug"></i>
+                                </a>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+        </nav>
+        <div class="row g-0">
+            <div class="col-md-9 d-flex justify-content-center lh-sm"
+                 data-bs-spy="scroll"
+                 data-bs-target="#toc-nav"
+                 data-bs-smooth-scroll="true"
+                 tabindex="0"
+                 id="content">
+                
+                    <div class="rfchtml">
+                        <br class="noprint">
+                        <div>
+<table class="ears">
+<thead><tr>
+<td class="left">RFC 9110</td>
+<td class="center">HTTP Semantics</td>
+<td class="right">June 2022</td>
+</tr></thead>
+<tfoot><tr>
+<td class="left">Fielding, et al.</td>
+<td class="center">Standards Track</td>
+<td class="right">[Page]</td>
+</tr></tfoot>
+</table>
+<div id="external-metadata" class="document-information"></div>
+<div id="internal-metadata" class="document-information">
+<dl id="identifiers">
+<dt class="label-stream">Stream:</dt>
+<dd class="stream">Internet Engineering Task Force (IETF)</dd>
+<dt class="label-rfc">RFC:</dt>
+<dd class="rfc"><a href="https://www.rfc-editor.org/rfc/rfc9110" class="eref">9110</a></dd>
+<dt class="label-std">STD:</dt>
+<dd class="std">97</dd>
+<dt class="label-obsoletes">Obsoletes:</dt>
+<dd class="obsoletes">
+<a href="https://www.rfc-editor.org/rfc/rfc2818" class="eref">2818</a>, <a href="https://www.rfc-editor.org/rfc/rfc7230" class="eref">7230</a>, <a href="https://www.rfc-editor.org/rfc/rfc7231" class="eref">7231</a>, <a href="https://www.rfc-editor.org/rfc/rfc7232" class="eref">7232</a>, <a href="https://www.rfc-editor.org/rfc/rfc7233" class="eref">7233</a>, <a href="https://www.rfc-editor.org/rfc/rfc7235" class="eref">7235</a>, <a href="https://www.rfc-editor.org/rfc/rfc7538" class="eref">7538</a>, <a href="https://www.rfc-editor.org/rfc/rfc7615" class="eref">7615</a>, <a href="https://www.rfc-editor.org/rfc/rfc7694" class="eref">7694</a> </dd>
+<dt class="label-updates">Updates:</dt>
+<dd class="updates">
+<a href="https://www.rfc-editor.org/rfc/rfc3864" class="eref">3864</a> </dd>
+<dt class="label-category">Category:</dt>
+<dd class="category">Standards Track</dd>
+<dt class="label-published">Published:</dt>
+<dd class="published">
+<time datetime="2022-06" class="published">June 2022</time>
+    </dd>
+<dt class="label-issn">ISSN:</dt>
+<dd class="issn">2070-1721</dd>
+<dt class="label-authors">Authors:</dt>
+<dd class="authors">
+<div class="author">
+      <div class="author-name">R. Fielding, <span class="editor">Ed.</span>
+</div>
+<div class="org">Adobe</div>
+</div>
+<div class="author">
+      <div class="author-name">M. Nottingham, <span class="editor">Ed.</span>
+</div>
+<div class="org">Fastly</div>
+</div>
+<div class="author">
+      <div class="author-name">J. Reschke, <span class="editor">Ed.</span>
+</div>
+<div class="org">greenbytes</div>
+</div>
+</dd>
+</dl>
+</div>
+<h1 id="rfcnum">RFC 9110</h1>
+<h1 id="title">HTTP Semantics</h1>
+<section id="section-abstract">
+      <h2 id="abstract"><a href="#abstract" class="selfRef">Abstract</a></h2>
+<p id="section-abstract-1">
+   The Hypertext Transfer Protocol (HTTP) is a stateless application-level
+   protocol for distributed, collaborative, hypertext information systems.
+   This document describes the overall architecture of HTTP, establishes common
+   terminology, and defines aspects of the protocol that are shared by all
+   versions. In this definition are core protocol elements, extensibility
+   mechanisms, and the "http" and "https" Uniform Resource Identifier (URI)
+   schemes.<a href="#section-abstract-1" class="pilcrow">¶</a></p>
+<p id="section-abstract-2">
+   This document updates RFC 3864 and
+   obsoletes RFCs 2818, 7231, 7232, 7233,
+   7235, 7538, 7615, 7694, and portions of 7230.<a href="#section-abstract-2" class="pilcrow">¶</a></p>
+</section>
+<div id="status-of-memo">
+<section id="section-boilerplate.1">
+        <h2 id="name-status-of-this-memo">
+<a href="#name-status-of-this-memo" class="section-name selfRef">Status of This Memo</a>
+        </h2>
+<p id="section-boilerplate.1-1">
+            This is an Internet Standards Track document.<a href="#section-boilerplate.1-1" class="pilcrow">¶</a></p>
+<p id="section-boilerplate.1-2">
+            This document is a product of the Internet Engineering Task Force
+            (IETF).  It represents the consensus of the IETF community.  It has
+            received public review and has been approved for publication by
+            the Internet Engineering Steering Group (IESG).  Further
+            information on Internet Standards is available in Section 2 of 
+            RFC 7841.<a href="#section-boilerplate.1-2" class="pilcrow">¶</a></p>
+<p id="section-boilerplate.1-3">
+            Information about the current status of this document, any
+            errata, and how to provide feedback on it may be obtained at
+            <span><a href="https://www.rfc-editor.org/info/rfc9110">https://www.rfc-editor.org/info/rfc9110</a></span>.<a href="#section-boilerplate.1-3" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="copyright">
+<section id="section-boilerplate.2">
+        <h2 id="name-copyright-notice">
+<a href="#name-copyright-notice" class="section-name selfRef">Copyright Notice</a>
+        </h2>
+<p id="section-boilerplate.2-1">
+            Copyright (c) 2022 IETF Trust and the persons identified as the
+            document authors. All rights reserved.<a href="#section-boilerplate.2-1" class="pilcrow">¶</a></p>
+<p id="section-boilerplate.2-2">
+            This document is subject to BCP 78 and the IETF Trust's Legal
+            Provisions Relating to IETF Documents
+            (<span><a href="https://trustee.ietf.org/license-info">https://trustee.ietf.org/license-info</a></span>) in effect on the date of
+            publication of this document. Please review these documents
+            carefully, as they describe your rights and restrictions with
+            respect to this document. Code Components extracted from this
+            document must include Revised BSD License text as described in
+            Section 4.e of the Trust Legal Provisions and are provided without
+            warranty as described in the Revised BSD License.<a href="#section-boilerplate.2-2" class="pilcrow">¶</a></p>
+<p id="section-boilerplate.2-3">
+            This document may contain material from IETF Documents or IETF
+            Contributions published or made publicly available before November
+            10, 2008. The person(s) controlling the copyright in some of this
+            material may not have granted the IETF Trust the right to allow
+            modifications of such material outside the IETF Standards Process.
+            Without obtaining an adequate license from the person(s)
+            controlling the copyright in such materials, this document may not
+            be modified outside the IETF Standards Process, and derivative
+            works of it may not be created outside the IETF Standards Process,
+            except to format it for publication as an RFC or to translate it
+            into languages other than English.<a href="#section-boilerplate.2-3" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="toc">
+<section id="section-toc.1">
+        <a href="#" onclick="scroll(0,0)" class="toplink">▲</a><h2 id="name-table-of-contents">
+<a href="#name-table-of-contents" class="section-name selfRef">Table of Contents</a>
+        </h2>
+<nav class="toc"><ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.1">
+            <p id="section-toc.1-1.1.1"><a href="#section-1" class="xref">1</a>.  <a href="#name-introduction" class="xref">Introduction</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.1.2.1">
+                <p id="section-toc.1-1.1.2.1.1" class="keepWithNext"><a href="#section-1.1" class="xref">1.1</a>.  <a href="#name-purpose" class="xref">Purpose</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.1.2.2">
+                <p id="section-toc.1-1.1.2.2.1" class="keepWithNext"><a href="#section-1.2" class="xref">1.2</a>.  <a href="#name-history-and-evolution" class="xref">History and Evolution</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.1.2.3">
+                <p id="section-toc.1-1.1.2.3.1" class="keepWithNext"><a href="#section-1.3" class="xref">1.3</a>.  <a href="#name-core-semantics" class="xref">Core Semantics</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.1.2.4">
+                <p id="section-toc.1-1.1.2.4.1"><a href="#section-1.4" class="xref">1.4</a>.  <a href="#name-specifications-obsoleted-by" class="xref">Specifications Obsoleted by This Document</a></p>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.2">
+            <p id="section-toc.1-1.2.1"><a href="#section-2" class="xref">2</a>.  <a href="#name-conformance" class="xref">Conformance</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.2.2.1">
+                <p id="section-toc.1-1.2.2.1.1"><a href="#section-2.1" class="xref">2.1</a>.  <a href="#name-syntax-notation" class="xref">Syntax Notation</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.2.2.2">
+                <p id="section-toc.1-1.2.2.2.1"><a href="#section-2.2" class="xref">2.2</a>.  <a href="#name-requirements-notation" class="xref">Requirements Notation</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.2.2.3">
+                <p id="section-toc.1-1.2.2.3.1"><a href="#section-2.3" class="xref">2.3</a>.  <a href="#name-length-requirements" class="xref">Length Requirements</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.2.2.4">
+                <p id="section-toc.1-1.2.2.4.1"><a href="#section-2.4" class="xref">2.4</a>.  <a href="#name-error-handling" class="xref">Error Handling</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.2.2.5">
+                <p id="section-toc.1-1.2.2.5.1"><a href="#section-2.5" class="xref">2.5</a>.  <a href="#name-protocol-version" class="xref">Protocol Version</a></p>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.3">
+            <p id="section-toc.1-1.3.1"><a href="#section-3" class="xref">3</a>.  <a href="#name-terminology-and-core-concep" class="xref">Terminology and Core Concepts</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.3.2.1">
+                <p id="section-toc.1-1.3.2.1.1"><a href="#section-3.1" class="xref">3.1</a>.  <a href="#name-resources" class="xref">Resources</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.3.2.2">
+                <p id="section-toc.1-1.3.2.2.1"><a href="#section-3.2" class="xref">3.2</a>.  <a href="#name-representations" class="xref">Representations</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.3.2.3">
+                <p id="section-toc.1-1.3.2.3.1"><a href="#section-3.3" class="xref">3.3</a>.  <a href="#name-connections-clients-and-ser" class="xref">Connections, Clients, and Servers</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.3.2.4">
+                <p id="section-toc.1-1.3.2.4.1"><a href="#section-3.4" class="xref">3.4</a>.  <a href="#name-messages" class="xref">Messages</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.3.2.5">
+                <p id="section-toc.1-1.3.2.5.1"><a href="#section-3.5" class="xref">3.5</a>.  <a href="#name-user-agents" class="xref">User Agents</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.3.2.6">
+                <p id="section-toc.1-1.3.2.6.1"><a href="#section-3.6" class="xref">3.6</a>.  <a href="#name-origin-server" class="xref">Origin Server</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.3.2.7">
+                <p id="section-toc.1-1.3.2.7.1"><a href="#section-3.7" class="xref">3.7</a>.  <a href="#name-intermediaries" class="xref">Intermediaries</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.3.2.8">
+                <p id="section-toc.1-1.3.2.8.1"><a href="#section-3.8" class="xref">3.8</a>.  <a href="#name-caches" class="xref">Caches</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.3.2.9">
+                <p id="section-toc.1-1.3.2.9.1"><a href="#section-3.9" class="xref">3.9</a>.  <a href="#name-example-message-exchange" class="xref">Example Message Exchange</a></p>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4">
+            <p id="section-toc.1-1.4.1"><a href="#section-4" class="xref">4</a>.  <a href="#name-identifiers-in-http" class="xref">Identifiers in HTTP</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4.2.1">
+                <p id="section-toc.1-1.4.2.1.1"><a href="#section-4.1" class="xref">4.1</a>.  <a href="#name-uri-references" class="xref">URI References</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4.2.2">
+                <p id="section-toc.1-1.4.2.2.1"><a href="#section-4.2" class="xref">4.2</a>.  <a href="#name-http-related-uri-schemes" class="xref">HTTP-Related URI Schemes</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4.2.2.2.1">
+                    <p id="section-toc.1-1.4.2.2.2.1.1"><a href="#section-4.2.1" class="xref">4.2.1</a>.  <a href="#name-http-uri-scheme" class="xref">http URI Scheme</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4.2.2.2.2">
+                    <p id="section-toc.1-1.4.2.2.2.2.1"><a href="#section-4.2.2" class="xref">4.2.2</a>.  <a href="#name-https-uri-scheme" class="xref">https URI Scheme</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4.2.2.2.3">
+                    <p id="section-toc.1-1.4.2.2.2.3.1"><a href="#section-4.2.3" class="xref">4.2.3</a>.  <a href="#name-https-normalization-and-com" class="xref">http(s) Normalization and Comparison</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4.2.2.2.4">
+                    <p id="section-toc.1-1.4.2.2.2.4.1"><a href="#section-4.2.4" class="xref">4.2.4</a>.  <a href="#name-deprecation-of-userinfo-in-" class="xref">Deprecation of userinfo in http(s) URIs</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4.2.2.2.5">
+                    <p id="section-toc.1-1.4.2.2.2.5.1"><a href="#section-4.2.5" class="xref">4.2.5</a>.  <a href="#name-https-references-with-fragm" class="xref">http(s) References with Fragment Identifiers</a></p>
+</li>
+                </ul>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4.2.3">
+                <p id="section-toc.1-1.4.2.3.1"><a href="#section-4.3" class="xref">4.3</a>.  <a href="#name-authoritative-access" class="xref">Authoritative Access</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4.2.3.2.1">
+                    <p id="section-toc.1-1.4.2.3.2.1.1"><a href="#section-4.3.1" class="xref">4.3.1</a>.  <a href="#name-uri-origin" class="xref">URI Origin</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4.2.3.2.2">
+                    <p id="section-toc.1-1.4.2.3.2.2.1"><a href="#section-4.3.2" class="xref">4.3.2</a>.  <a href="#name-http-origins" class="xref">http Origins</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4.2.3.2.3">
+                    <p id="section-toc.1-1.4.2.3.2.3.1"><a href="#section-4.3.3" class="xref">4.3.3</a>.  <a href="#name-https-origins" class="xref">https Origins</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4.2.3.2.4">
+                    <p id="section-toc.1-1.4.2.3.2.4.1"><a href="#section-4.3.4" class="xref">4.3.4</a>.  <a href="#name-https-certificate-verificat" class="xref">https Certificate Verification</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4.2.3.2.5">
+                    <p id="section-toc.1-1.4.2.3.2.5.1"><a href="#section-4.3.5" class="xref">4.3.5</a>.  <a href="#name-ip-id-reference-identity" class="xref">IP-ID Reference Identity</a></p>
+</li>
+                </ul>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.5">
+            <p id="section-toc.1-1.5.1"><a href="#section-5" class="xref">5</a>.  <a href="#name-fields" class="xref">Fields</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.5.2.1">
+                <p id="section-toc.1-1.5.2.1.1"><a href="#section-5.1" class="xref">5.1</a>.  <a href="#name-field-names" class="xref">Field Names</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.5.2.2">
+                <p id="section-toc.1-1.5.2.2.1"><a href="#section-5.2" class="xref">5.2</a>.  <a href="#name-field-lines-and-combined-fi" class="xref">Field Lines and Combined Field Value</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.5.2.3">
+                <p id="section-toc.1-1.5.2.3.1"><a href="#section-5.3" class="xref">5.3</a>.  <a href="#name-field-order" class="xref">Field Order</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.5.2.4">
+                <p id="section-toc.1-1.5.2.4.1"><a href="#section-5.4" class="xref">5.4</a>.  <a href="#name-field-limits" class="xref">Field Limits</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.5.2.5">
+                <p id="section-toc.1-1.5.2.5.1"><a href="#section-5.5" class="xref">5.5</a>.  <a href="#name-field-values" class="xref">Field Values</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.5.2.6">
+                <p id="section-toc.1-1.5.2.6.1"><a href="#section-5.6" class="xref">5.6</a>.  <a href="#name-common-rules-for-defining-f" class="xref">Common Rules for Defining Field Values</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.5.2.6.2.1">
+                    <p id="section-toc.1-1.5.2.6.2.1.1"><a href="#section-5.6.1" class="xref">5.6.1</a>.  <a href="#name-lists-rule-abnf-extension" class="xref">Lists (#rule ABNF Extension)</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.5.2.6.2.1.2.1">
+                        <p id="section-toc.1-1.5.2.6.2.1.2.1.1"><a href="#section-5.6.1.1" class="xref">5.6.1.1</a>.  <a href="#name-sender-requirements" class="xref">Sender Requirements</a></p>
+</li>
+                      <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.5.2.6.2.1.2.2">
+                        <p id="section-toc.1-1.5.2.6.2.1.2.2.1"><a href="#section-5.6.1.2" class="xref">5.6.1.2</a>.  <a href="#name-recipient-requirements" class="xref">Recipient Requirements</a></p>
+</li>
+                    </ul>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.5.2.6.2.2">
+                    <p id="section-toc.1-1.5.2.6.2.2.1"><a href="#section-5.6.2" class="xref">5.6.2</a>.  <a href="#name-tokens" class="xref">Tokens</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.5.2.6.2.3">
+                    <p id="section-toc.1-1.5.2.6.2.3.1"><a href="#section-5.6.3" class="xref">5.6.3</a>.  <a href="#name-whitespace" class="xref">Whitespace</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.5.2.6.2.4">
+                    <p id="section-toc.1-1.5.2.6.2.4.1"><a href="#section-5.6.4" class="xref">5.6.4</a>.  <a href="#name-quoted-strings" class="xref">Quoted Strings</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.5.2.6.2.5">
+                    <p id="section-toc.1-1.5.2.6.2.5.1"><a href="#section-5.6.5" class="xref">5.6.5</a>.  <a href="#name-comments" class="xref">Comments</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.5.2.6.2.6">
+                    <p id="section-toc.1-1.5.2.6.2.6.1"><a href="#section-5.6.6" class="xref">5.6.6</a>.  <a href="#name-parameters" class="xref">Parameters</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.5.2.6.2.7">
+                    <p id="section-toc.1-1.5.2.6.2.7.1"><a href="#section-5.6.7" class="xref">5.6.7</a>.  <a href="#name-date-time-formats" class="xref">Date/Time Formats</a></p>
+</li>
+                </ul>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6">
+            <p id="section-toc.1-1.6.1"><a href="#section-6" class="xref">6</a>.  <a href="#name-message-abstraction" class="xref">Message Abstraction</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6.2.1">
+                <p id="section-toc.1-1.6.2.1.1"><a href="#section-6.1" class="xref">6.1</a>.  <a href="#name-framing-and-completeness" class="xref">Framing and Completeness</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6.2.2">
+                <p id="section-toc.1-1.6.2.2.1"><a href="#section-6.2" class="xref">6.2</a>.  <a href="#name-control-data" class="xref">Control Data</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6.2.3">
+                <p id="section-toc.1-1.6.2.3.1"><a href="#section-6.3" class="xref">6.3</a>.  <a href="#name-header-fields" class="xref">Header Fields</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6.2.4">
+                <p id="section-toc.1-1.6.2.4.1"><a href="#section-6.4" class="xref">6.4</a>.  <a href="#name-content" class="xref">Content</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6.2.4.2.1">
+                    <p id="section-toc.1-1.6.2.4.2.1.1"><a href="#section-6.4.1" class="xref">6.4.1</a>.  <a href="#name-content-semantics" class="xref">Content Semantics</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6.2.4.2.2">
+                    <p id="section-toc.1-1.6.2.4.2.2.1"><a href="#section-6.4.2" class="xref">6.4.2</a>.  <a href="#name-identifying-content" class="xref">Identifying Content</a></p>
+</li>
+                </ul>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6.2.5">
+                <p id="section-toc.1-1.6.2.5.1"><a href="#section-6.5" class="xref">6.5</a>.  <a href="#name-trailer-fields" class="xref">Trailer Fields</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6.2.5.2.1">
+                    <p id="section-toc.1-1.6.2.5.2.1.1"><a href="#section-6.5.1" class="xref">6.5.1</a>.  <a href="#name-limitations-on-use-of-trail" class="xref">Limitations on Use of Trailers</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6.2.5.2.2">
+                    <p id="section-toc.1-1.6.2.5.2.2.1"><a href="#section-6.5.2" class="xref">6.5.2</a>.  <a href="#name-processing-trailer-fields" class="xref">Processing Trailer Fields</a></p>
+</li>
+                </ul>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6.2.6">
+                <p id="section-toc.1-1.6.2.6.1"><a href="#section-6.6" class="xref">6.6</a>.  <a href="#name-message-metadata" class="xref">Message Metadata</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6.2.6.2.1">
+                    <p id="section-toc.1-1.6.2.6.2.1.1"><a href="#section-6.6.1" class="xref">6.6.1</a>.  <a href="#name-date" class="xref">Date</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6.2.6.2.2">
+                    <p id="section-toc.1-1.6.2.6.2.2.1"><a href="#section-6.6.2" class="xref">6.6.2</a>.  <a href="#name-trailer" class="xref">Trailer</a></p>
+</li>
+                </ul>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.7">
+            <p id="section-toc.1-1.7.1"><a href="#section-7" class="xref">7</a>.  <a href="#name-routing-http-messages" class="xref">Routing HTTP Messages</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.7.2.1">
+                <p id="section-toc.1-1.7.2.1.1"><a href="#section-7.1" class="xref">7.1</a>.  <a href="#name-determining-the-target-reso" class="xref">Determining the Target Resource</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.7.2.2">
+                <p id="section-toc.1-1.7.2.2.1"><a href="#section-7.2" class="xref">7.2</a>.  <a href="#name-host-and-authority" class="xref">Host and :authority</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.7.2.3">
+                <p id="section-toc.1-1.7.2.3.1"><a href="#section-7.3" class="xref">7.3</a>.  <a href="#name-routing-inbound-requests" class="xref">Routing Inbound Requests</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.7.2.3.2.1">
+                    <p id="section-toc.1-1.7.2.3.2.1.1"><a href="#section-7.3.1" class="xref">7.3.1</a>.  <a href="#name-to-a-cache" class="xref">To a Cache</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.7.2.3.2.2">
+                    <p id="section-toc.1-1.7.2.3.2.2.1"><a href="#section-7.3.2" class="xref">7.3.2</a>.  <a href="#name-to-a-proxy" class="xref">To a Proxy</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.7.2.3.2.3">
+                    <p id="section-toc.1-1.7.2.3.2.3.1"><a href="#section-7.3.3" class="xref">7.3.3</a>.  <a href="#name-to-the-origin" class="xref">To the Origin</a></p>
+</li>
+                </ul>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.7.2.4">
+                <p id="section-toc.1-1.7.2.4.1"><a href="#section-7.4" class="xref">7.4</a>.  <a href="#name-rejecting-misdirected-reque" class="xref">Rejecting Misdirected Requests</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.7.2.5">
+                <p id="section-toc.1-1.7.2.5.1"><a href="#section-7.5" class="xref">7.5</a>.  <a href="#name-response-correlation" class="xref">Response Correlation</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.7.2.6">
+                <p id="section-toc.1-1.7.2.6.1"><a href="#section-7.6" class="xref">7.6</a>.  <a href="#name-message-forwarding" class="xref">Message Forwarding</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.7.2.6.2.1">
+                    <p id="section-toc.1-1.7.2.6.2.1.1"><a href="#section-7.6.1" class="xref">7.6.1</a>.  <a href="#name-connection" class="xref">Connection</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.7.2.6.2.2">
+                    <p id="section-toc.1-1.7.2.6.2.2.1"><a href="#section-7.6.2" class="xref">7.6.2</a>.  <a href="#name-max-forwards" class="xref">Max-Forwards</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.7.2.6.2.3">
+                    <p id="section-toc.1-1.7.2.6.2.3.1"><a href="#section-7.6.3" class="xref">7.6.3</a>.  <a href="#name-via" class="xref">Via</a></p>
+</li>
+                </ul>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.7.2.7">
+                <p id="section-toc.1-1.7.2.7.1"><a href="#section-7.7" class="xref">7.7</a>.  <a href="#name-message-transformations" class="xref">Message Transformations</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.7.2.8">
+                <p id="section-toc.1-1.7.2.8.1"><a href="#section-7.8" class="xref">7.8</a>.  <a href="#name-upgrade" class="xref">Upgrade</a></p>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8">
+            <p id="section-toc.1-1.8.1"><a href="#section-8" class="xref">8</a>.  <a href="#name-representation-data-and-met" class="xref">Representation Data and Metadata</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8.2.1">
+                <p id="section-toc.1-1.8.2.1.1"><a href="#section-8.1" class="xref">8.1</a>.  <a href="#name-representation-data" class="xref">Representation Data</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8.2.2">
+                <p id="section-toc.1-1.8.2.2.1"><a href="#section-8.2" class="xref">8.2</a>.  <a href="#name-representation-metadata" class="xref">Representation Metadata</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8.2.3">
+                <p id="section-toc.1-1.8.2.3.1"><a href="#section-8.3" class="xref">8.3</a>.  <a href="#name-content-type" class="xref">Content-Type</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8.2.3.2.1">
+                    <p id="section-toc.1-1.8.2.3.2.1.1"><a href="#section-8.3.1" class="xref">8.3.1</a>.  <a href="#name-media-type" class="xref">Media Type</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8.2.3.2.2">
+                    <p id="section-toc.1-1.8.2.3.2.2.1"><a href="#section-8.3.2" class="xref">8.3.2</a>.  <a href="#name-charset" class="xref">Charset</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8.2.3.2.3">
+                    <p id="section-toc.1-1.8.2.3.2.3.1"><a href="#section-8.3.3" class="xref">8.3.3</a>.  <a href="#name-multipart-types" class="xref">Multipart Types</a></p>
+</li>
+                </ul>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8.2.4">
+                <p id="section-toc.1-1.8.2.4.1"><a href="#section-8.4" class="xref">8.4</a>.  <a href="#name-content-encoding" class="xref">Content-Encoding</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8.2.4.2.1">
+                    <p id="section-toc.1-1.8.2.4.2.1.1"><a href="#section-8.4.1" class="xref">8.4.1</a>.  <a href="#name-content-codings" class="xref">Content Codings</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8.2.4.2.1.2.1">
+                        <p id="section-toc.1-1.8.2.4.2.1.2.1.1"><a href="#section-8.4.1.1" class="xref">8.4.1.1</a>.  <a href="#name-compress-coding" class="xref">Compress Coding</a></p>
+</li>
+                      <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8.2.4.2.1.2.2">
+                        <p id="section-toc.1-1.8.2.4.2.1.2.2.1"><a href="#section-8.4.1.2" class="xref">8.4.1.2</a>.  <a href="#name-deflate-coding" class="xref">Deflate Coding</a></p>
+</li>
+                      <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8.2.4.2.1.2.3">
+                        <p id="section-toc.1-1.8.2.4.2.1.2.3.1"><a href="#section-8.4.1.3" class="xref">8.4.1.3</a>.  <a href="#name-gzip-coding" class="xref">Gzip Coding</a></p>
+</li>
+                    </ul>
+</li>
+                </ul>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8.2.5">
+                <p id="section-toc.1-1.8.2.5.1"><a href="#section-8.5" class="xref">8.5</a>.  <a href="#name-content-language" class="xref">Content-Language</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8.2.5.2.1">
+                    <p id="section-toc.1-1.8.2.5.2.1.1"><a href="#section-8.5.1" class="xref">8.5.1</a>.  <a href="#name-language-tags" class="xref">Language Tags</a></p>
+</li>
+                </ul>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8.2.6">
+                <p id="section-toc.1-1.8.2.6.1"><a href="#section-8.6" class="xref">8.6</a>.  <a href="#name-content-length" class="xref">Content-Length</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8.2.7">
+                <p id="section-toc.1-1.8.2.7.1"><a href="#section-8.7" class="xref">8.7</a>.  <a href="#name-content-location" class="xref">Content-Location</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8.2.8">
+                <p id="section-toc.1-1.8.2.8.1"><a href="#section-8.8" class="xref">8.8</a>.  <a href="#name-validator-fields" class="xref">Validator Fields</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8.2.8.2.1">
+                    <p id="section-toc.1-1.8.2.8.2.1.1"><a href="#section-8.8.1" class="xref">8.8.1</a>.  <a href="#name-weak-versus-strong" class="xref">Weak versus Strong</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8.2.8.2.2">
+                    <p id="section-toc.1-1.8.2.8.2.2.1"><a href="#section-8.8.2" class="xref">8.8.2</a>.  <a href="#name-last-modified" class="xref">Last-Modified</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8.2.8.2.2.2.1">
+                        <p id="section-toc.1-1.8.2.8.2.2.2.1.1"><a href="#section-8.8.2.1" class="xref">8.8.2.1</a>.  <a href="#name-generation" class="xref">Generation</a></p>
+</li>
+                      <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8.2.8.2.2.2.2">
+                        <p id="section-toc.1-1.8.2.8.2.2.2.2.1"><a href="#section-8.8.2.2" class="xref">8.8.2.2</a>.  <a href="#name-comparison" class="xref">Comparison</a></p>
+</li>
+                    </ul>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8.2.8.2.3">
+                    <p id="section-toc.1-1.8.2.8.2.3.1"><a href="#section-8.8.3" class="xref">8.8.3</a>.  <a href="#name-etag" class="xref">ETag</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8.2.8.2.3.2.1">
+                        <p id="section-toc.1-1.8.2.8.2.3.2.1.1"><a href="#section-8.8.3.1" class="xref">8.8.3.1</a>.  <a href="#name-generation-2" class="xref">Generation</a></p>
+</li>
+                      <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8.2.8.2.3.2.2">
+                        <p id="section-toc.1-1.8.2.8.2.3.2.2.1"><a href="#section-8.8.3.2" class="xref">8.8.3.2</a>.  <a href="#name-comparison-2" class="xref">Comparison</a></p>
+</li>
+                      <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8.2.8.2.3.2.3">
+                        <p id="section-toc.1-1.8.2.8.2.3.2.3.1"><a href="#section-8.8.3.3" class="xref">8.8.3.3</a>.  <a href="#name-example-entity-tags-varying" class="xref">Example: Entity Tags Varying on Content-Negotiated Resources</a></p>
+</li>
+                    </ul>
+</li>
+                </ul>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.9">
+            <p id="section-toc.1-1.9.1"><a href="#section-9" class="xref">9</a>.  <a href="#name-methods" class="xref">Methods</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.9.2.1">
+                <p id="section-toc.1-1.9.2.1.1"><a href="#section-9.1" class="xref">9.1</a>.  <a href="#name-overview" class="xref">Overview</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.9.2.2">
+                <p id="section-toc.1-1.9.2.2.1"><a href="#section-9.2" class="xref">9.2</a>.  <a href="#name-common-method-properties" class="xref">Common Method Properties</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.9.2.2.2.1">
+                    <p id="section-toc.1-1.9.2.2.2.1.1"><a href="#section-9.2.1" class="xref">9.2.1</a>.  <a href="#name-safe-methods" class="xref">Safe Methods</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.9.2.2.2.2">
+                    <p id="section-toc.1-1.9.2.2.2.2.1"><a href="#section-9.2.2" class="xref">9.2.2</a>.  <a href="#name-idempotent-methods" class="xref">Idempotent Methods</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.9.2.2.2.3">
+                    <p id="section-toc.1-1.9.2.2.2.3.1"><a href="#section-9.2.3" class="xref">9.2.3</a>.  <a href="#name-methods-and-caching" class="xref">Methods and Caching</a></p>
+</li>
+                </ul>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.9.2.3">
+                <p id="section-toc.1-1.9.2.3.1"><a href="#section-9.3" class="xref">9.3</a>.  <a href="#name-method-definitions" class="xref">Method Definitions</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.9.2.3.2.1">
+                    <p id="section-toc.1-1.9.2.3.2.1.1"><a href="#section-9.3.1" class="xref">9.3.1</a>.  <a href="#name-get" class="xref">GET</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.9.2.3.2.2">
+                    <p id="section-toc.1-1.9.2.3.2.2.1"><a href="#section-9.3.2" class="xref">9.3.2</a>.  <a href="#name-head" class="xref">HEAD</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.9.2.3.2.3">
+                    <p id="section-toc.1-1.9.2.3.2.3.1"><a href="#section-9.3.3" class="xref">9.3.3</a>.  <a href="#name-post" class="xref">POST</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.9.2.3.2.4">
+                    <p id="section-toc.1-1.9.2.3.2.4.1"><a href="#section-9.3.4" class="xref">9.3.4</a>.  <a href="#name-put" class="xref">PUT</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.9.2.3.2.5">
+                    <p id="section-toc.1-1.9.2.3.2.5.1"><a href="#section-9.3.5" class="xref">9.3.5</a>.  <a href="#name-delete" class="xref">DELETE</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.9.2.3.2.6">
+                    <p id="section-toc.1-1.9.2.3.2.6.1"><a href="#section-9.3.6" class="xref">9.3.6</a>.  <a href="#name-connect" class="xref">CONNECT</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.9.2.3.2.7">
+                    <p id="section-toc.1-1.9.2.3.2.7.1"><a href="#section-9.3.7" class="xref">9.3.7</a>.  <a href="#name-options" class="xref">OPTIONS</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.9.2.3.2.8">
+                    <p id="section-toc.1-1.9.2.3.2.8.1"><a href="#section-9.3.8" class="xref">9.3.8</a>.  <a href="#name-trace" class="xref">TRACE</a></p>
+</li>
+                </ul>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.10">
+            <p id="section-toc.1-1.10.1"><a href="#section-10" class="xref">10</a>. <a href="#name-message-context" class="xref">Message Context</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.10.2.1">
+                <p id="section-toc.1-1.10.2.1.1"><a href="#section-10.1" class="xref">10.1</a>.  <a href="#name-request-context-fields" class="xref">Request Context Fields</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.10.2.1.2.1">
+                    <p id="section-toc.1-1.10.2.1.2.1.1"><a href="#section-10.1.1" class="xref">10.1.1</a>.  <a href="#name-expect" class="xref">Expect</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.10.2.1.2.2">
+                    <p id="section-toc.1-1.10.2.1.2.2.1"><a href="#section-10.1.2" class="xref">10.1.2</a>.  <a href="#name-from" class="xref">From</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.10.2.1.2.3">
+                    <p id="section-toc.1-1.10.2.1.2.3.1"><a href="#section-10.1.3" class="xref">10.1.3</a>.  <a href="#name-referer" class="xref">Referer</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.10.2.1.2.4">
+                    <p id="section-toc.1-1.10.2.1.2.4.1"><a href="#section-10.1.4" class="xref">10.1.4</a>.  <a href="#name-te" class="xref">TE</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.10.2.1.2.5">
+                    <p id="section-toc.1-1.10.2.1.2.5.1"><a href="#section-10.1.5" class="xref">10.1.5</a>.  <a href="#name-user-agent" class="xref">User-Agent</a></p>
+</li>
+                </ul>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.10.2.2">
+                <p id="section-toc.1-1.10.2.2.1"><a href="#section-10.2" class="xref">10.2</a>.  <a href="#name-response-context-fields" class="xref">Response Context Fields</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.10.2.2.2.1">
+                    <p id="section-toc.1-1.10.2.2.2.1.1"><a href="#section-10.2.1" class="xref">10.2.1</a>.  <a href="#name-allow" class="xref">Allow</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.10.2.2.2.2">
+                    <p id="section-toc.1-1.10.2.2.2.2.1"><a href="#section-10.2.2" class="xref">10.2.2</a>.  <a href="#name-location" class="xref">Location</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.10.2.2.2.3">
+                    <p id="section-toc.1-1.10.2.2.2.3.1"><a href="#section-10.2.3" class="xref">10.2.3</a>.  <a href="#name-retry-after" class="xref">Retry-After</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.10.2.2.2.4">
+                    <p id="section-toc.1-1.10.2.2.2.4.1"><a href="#section-10.2.4" class="xref">10.2.4</a>.  <a href="#name-server" class="xref">Server</a></p>
+</li>
+                </ul>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.11">
+            <p id="section-toc.1-1.11.1"><a href="#section-11" class="xref">11</a>. <a href="#name-http-authentication" class="xref">HTTP Authentication</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.11.2.1">
+                <p id="section-toc.1-1.11.2.1.1"><a href="#section-11.1" class="xref">11.1</a>.  <a href="#name-authentication-scheme" class="xref">Authentication Scheme</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.11.2.2">
+                <p id="section-toc.1-1.11.2.2.1"><a href="#section-11.2" class="xref">11.2</a>.  <a href="#name-authentication-parameters" class="xref">Authentication Parameters</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.11.2.3">
+                <p id="section-toc.1-1.11.2.3.1"><a href="#section-11.3" class="xref">11.3</a>.  <a href="#name-challenge-and-response" class="xref">Challenge and Response</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.11.2.4">
+                <p id="section-toc.1-1.11.2.4.1"><a href="#section-11.4" class="xref">11.4</a>.  <a href="#name-credentials" class="xref">Credentials</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.11.2.5">
+                <p id="section-toc.1-1.11.2.5.1"><a href="#section-11.5" class="xref">11.5</a>.  <a href="#name-establishing-a-protection-s" class="xref">Establishing a Protection Space (Realm)</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.11.2.6">
+                <p id="section-toc.1-1.11.2.6.1"><a href="#section-11.6" class="xref">11.6</a>.  <a href="#name-authenticating-users-to-ori" class="xref">Authenticating Users to Origin Servers</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.11.2.6.2.1">
+                    <p id="section-toc.1-1.11.2.6.2.1.1"><a href="#section-11.6.1" class="xref">11.6.1</a>.  <a href="#name-www-authenticate" class="xref">WWW-Authenticate</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.11.2.6.2.2">
+                    <p id="section-toc.1-1.11.2.6.2.2.1"><a href="#section-11.6.2" class="xref">11.6.2</a>.  <a href="#name-authorization" class="xref">Authorization</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.11.2.6.2.3">
+                    <p id="section-toc.1-1.11.2.6.2.3.1"><a href="#section-11.6.3" class="xref">11.6.3</a>.  <a href="#name-authentication-info" class="xref">Authentication-Info</a></p>
+</li>
+                </ul>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.11.2.7">
+                <p id="section-toc.1-1.11.2.7.1"><a href="#section-11.7" class="xref">11.7</a>.  <a href="#name-authenticating-clients-to-p" class="xref">Authenticating Clients to Proxies</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.11.2.7.2.1">
+                    <p id="section-toc.1-1.11.2.7.2.1.1"><a href="#section-11.7.1" class="xref">11.7.1</a>.  <a href="#name-proxy-authenticate" class="xref">Proxy-Authenticate</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.11.2.7.2.2">
+                    <p id="section-toc.1-1.11.2.7.2.2.1"><a href="#section-11.7.2" class="xref">11.7.2</a>.  <a href="#name-proxy-authorization" class="xref">Proxy-Authorization</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.11.2.7.2.3">
+                    <p id="section-toc.1-1.11.2.7.2.3.1"><a href="#section-11.7.3" class="xref">11.7.3</a>.  <a href="#name-proxy-authentication-info" class="xref">Proxy-Authentication-Info</a></p>
+</li>
+                </ul>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.12">
+            <p id="section-toc.1-1.12.1"><a href="#section-12" class="xref">12</a>. <a href="#name-content-negotiation" class="xref">Content Negotiation</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.12.2.1">
+                <p id="section-toc.1-1.12.2.1.1"><a href="#section-12.1" class="xref">12.1</a>.  <a href="#name-proactive-negotiation" class="xref">Proactive Negotiation</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.12.2.2">
+                <p id="section-toc.1-1.12.2.2.1"><a href="#section-12.2" class="xref">12.2</a>.  <a href="#name-reactive-negotiation" class="xref">Reactive Negotiation</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.12.2.3">
+                <p id="section-toc.1-1.12.2.3.1"><a href="#section-12.3" class="xref">12.3</a>.  <a href="#name-request-content-negotiation" class="xref">Request Content Negotiation</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.12.2.4">
+                <p id="section-toc.1-1.12.2.4.1"><a href="#section-12.4" class="xref">12.4</a>.  <a href="#name-content-negotiation-field-f" class="xref">Content Negotiation Field Features</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.12.2.4.2.1">
+                    <p id="section-toc.1-1.12.2.4.2.1.1"><a href="#section-12.4.1" class="xref">12.4.1</a>.  <a href="#name-absence" class="xref">Absence</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.12.2.4.2.2">
+                    <p id="section-toc.1-1.12.2.4.2.2.1"><a href="#section-12.4.2" class="xref">12.4.2</a>.  <a href="#name-quality-values" class="xref">Quality Values</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.12.2.4.2.3">
+                    <p id="section-toc.1-1.12.2.4.2.3.1"><a href="#section-12.4.3" class="xref">12.4.3</a>.  <a href="#name-wildcard-values" class="xref">Wildcard Values</a></p>
+</li>
+                </ul>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.12.2.5">
+                <p id="section-toc.1-1.12.2.5.1"><a href="#section-12.5" class="xref">12.5</a>.  <a href="#name-content-negotiation-fields" class="xref">Content Negotiation Fields</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.12.2.5.2.1">
+                    <p id="section-toc.1-1.12.2.5.2.1.1"><a href="#section-12.5.1" class="xref">12.5.1</a>.  <a href="#name-accept" class="xref">Accept</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.12.2.5.2.2">
+                    <p id="section-toc.1-1.12.2.5.2.2.1"><a href="#section-12.5.2" class="xref">12.5.2</a>.  <a href="#name-accept-charset" class="xref">Accept-Charset</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.12.2.5.2.3">
+                    <p id="section-toc.1-1.12.2.5.2.3.1"><a href="#section-12.5.3" class="xref">12.5.3</a>.  <a href="#name-accept-encoding" class="xref">Accept-Encoding</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.12.2.5.2.4">
+                    <p id="section-toc.1-1.12.2.5.2.4.1"><a href="#section-12.5.4" class="xref">12.5.4</a>.  <a href="#name-accept-language" class="xref">Accept-Language</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.12.2.5.2.5">
+                    <p id="section-toc.1-1.12.2.5.2.5.1"><a href="#section-12.5.5" class="xref">12.5.5</a>.  <a href="#name-vary" class="xref">Vary</a></p>
+</li>
+                </ul>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.13">
+            <p id="section-toc.1-1.13.1"><a href="#section-13" class="xref">13</a>. <a href="#name-conditional-requests" class="xref">Conditional Requests</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.13.2.1">
+                <p id="section-toc.1-1.13.2.1.1"><a href="#section-13.1" class="xref">13.1</a>.  <a href="#name-preconditions" class="xref">Preconditions</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.13.2.1.2.1">
+                    <p id="section-toc.1-1.13.2.1.2.1.1"><a href="#section-13.1.1" class="xref">13.1.1</a>.  <a href="#name-if-match" class="xref">If-Match</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.13.2.1.2.2">
+                    <p id="section-toc.1-1.13.2.1.2.2.1"><a href="#section-13.1.2" class="xref">13.1.2</a>.  <a href="#name-if-none-match" class="xref">If-None-Match</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.13.2.1.2.3">
+                    <p id="section-toc.1-1.13.2.1.2.3.1"><a href="#section-13.1.3" class="xref">13.1.3</a>.  <a href="#name-if-modified-since" class="xref">If-Modified-Since</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.13.2.1.2.4">
+                    <p id="section-toc.1-1.13.2.1.2.4.1"><a href="#section-13.1.4" class="xref">13.1.4</a>.  <a href="#name-if-unmodified-since" class="xref">If-Unmodified-Since</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.13.2.1.2.5">
+                    <p id="section-toc.1-1.13.2.1.2.5.1"><a href="#section-13.1.5" class="xref">13.1.5</a>.  <a href="#name-if-range" class="xref">If-Range</a></p>
+</li>
+                </ul>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.13.2.2">
+                <p id="section-toc.1-1.13.2.2.1"><a href="#section-13.2" class="xref">13.2</a>.  <a href="#name-evaluation-of-preconditions" class="xref">Evaluation of Preconditions</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.13.2.2.2.1">
+                    <p id="section-toc.1-1.13.2.2.2.1.1"><a href="#section-13.2.1" class="xref">13.2.1</a>.  <a href="#name-when-to-evaluate" class="xref">When to Evaluate</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.13.2.2.2.2">
+                    <p id="section-toc.1-1.13.2.2.2.2.1"><a href="#section-13.2.2" class="xref">13.2.2</a>.  <a href="#name-precedence-of-preconditions" class="xref">Precedence of Preconditions</a></p>
+</li>
+                </ul>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.14">
+            <p id="section-toc.1-1.14.1"><a href="#section-14" class="xref">14</a>. <a href="#name-range-requests" class="xref">Range Requests</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.14.2.1">
+                <p id="section-toc.1-1.14.2.1.1"><a href="#section-14.1" class="xref">14.1</a>.  <a href="#name-range-units" class="xref">Range Units</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.14.2.1.2.1">
+                    <p id="section-toc.1-1.14.2.1.2.1.1"><a href="#section-14.1.1" class="xref">14.1.1</a>.  <a href="#name-range-specifiers" class="xref">Range Specifiers</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.14.2.1.2.2">
+                    <p id="section-toc.1-1.14.2.1.2.2.1"><a href="#section-14.1.2" class="xref">14.1.2</a>.  <a href="#name-byte-ranges" class="xref">Byte Ranges</a></p>
+</li>
+                </ul>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.14.2.2">
+                <p id="section-toc.1-1.14.2.2.1"><a href="#section-14.2" class="xref">14.2</a>.  <a href="#name-range" class="xref">Range</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.14.2.3">
+                <p id="section-toc.1-1.14.2.3.1"><a href="#section-14.3" class="xref">14.3</a>.  <a href="#name-accept-ranges" class="xref">Accept-Ranges</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.14.2.4">
+                <p id="section-toc.1-1.14.2.4.1"><a href="#section-14.4" class="xref">14.4</a>.  <a href="#name-content-range" class="xref">Content-Range</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.14.2.5">
+                <p id="section-toc.1-1.14.2.5.1"><a href="#section-14.5" class="xref">14.5</a>.  <a href="#name-partial-put" class="xref">Partial PUT</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.14.2.6">
+                <p id="section-toc.1-1.14.2.6.1"><a href="#section-14.6" class="xref">14.6</a>.  <a href="#name-media-type-multipart-bytera" class="xref">Media Type multipart/byteranges</a></p>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15">
+            <p id="section-toc.1-1.15.1"><a href="#section-15" class="xref">15</a>. <a href="#name-status-codes" class="xref">Status Codes</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.1">
+                <p id="section-toc.1-1.15.2.1.1"><a href="#section-15.1" class="xref">15.1</a>.  <a href="#name-overview-of-status-codes" class="xref">Overview of Status Codes</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.2">
+                <p id="section-toc.1-1.15.2.2.1"><a href="#section-15.2" class="xref">15.2</a>.  <a href="#name-informational-1xx" class="xref">Informational 1xx</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.2.2.1">
+                    <p id="section-toc.1-1.15.2.2.2.1.1"><a href="#section-15.2.1" class="xref">15.2.1</a>.  <a href="#name-100-continue" class="xref">100 Continue</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.2.2.2">
+                    <p id="section-toc.1-1.15.2.2.2.2.1"><a href="#section-15.2.2" class="xref">15.2.2</a>.  <a href="#name-101-switching-protocols" class="xref">101 Switching Protocols</a></p>
+</li>
+                </ul>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.3">
+                <p id="section-toc.1-1.15.2.3.1"><a href="#section-15.3" class="xref">15.3</a>.  <a href="#name-successful-2xx" class="xref">Successful 2xx</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.3.2.1">
+                    <p id="section-toc.1-1.15.2.3.2.1.1"><a href="#section-15.3.1" class="xref">15.3.1</a>.  <a href="#name-200-ok" class="xref">200 OK</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.3.2.2">
+                    <p id="section-toc.1-1.15.2.3.2.2.1"><a href="#section-15.3.2" class="xref">15.3.2</a>.  <a href="#name-201-created" class="xref">201 Created</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.3.2.3">
+                    <p id="section-toc.1-1.15.2.3.2.3.1"><a href="#section-15.3.3" class="xref">15.3.3</a>.  <a href="#name-202-accepted" class="xref">202 Accepted</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.3.2.4">
+                    <p id="section-toc.1-1.15.2.3.2.4.1"><a href="#section-15.3.4" class="xref">15.3.4</a>.  <a href="#name-203-non-authoritative-infor" class="xref">203 Non-Authoritative Information</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.3.2.5">
+                    <p id="section-toc.1-1.15.2.3.2.5.1"><a href="#section-15.3.5" class="xref">15.3.5</a>.  <a href="#name-204-no-content" class="xref">204 No Content</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.3.2.6">
+                    <p id="section-toc.1-1.15.2.3.2.6.1"><a href="#section-15.3.6" class="xref">15.3.6</a>.  <a href="#name-205-reset-content" class="xref">205 Reset Content</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.3.2.7">
+                    <p id="section-toc.1-1.15.2.3.2.7.1"><a href="#section-15.3.7" class="xref">15.3.7</a>.  <a href="#name-206-partial-content" class="xref">206 Partial Content</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.3.2.7.2.1">
+                        <p id="section-toc.1-1.15.2.3.2.7.2.1.1"><a href="#section-15.3.7.1" class="xref">15.3.7.1</a>.  <a href="#name-single-part" class="xref">Single Part</a></p>
+</li>
+                      <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.3.2.7.2.2">
+                        <p id="section-toc.1-1.15.2.3.2.7.2.2.1"><a href="#section-15.3.7.2" class="xref">15.3.7.2</a>.  <a href="#name-multiple-parts" class="xref">Multiple Parts</a></p>
+</li>
+                      <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.3.2.7.2.3">
+                        <p id="section-toc.1-1.15.2.3.2.7.2.3.1"><a href="#section-15.3.7.3" class="xref">15.3.7.3</a>.  <a href="#name-combining-parts" class="xref">Combining Parts</a></p>
+</li>
+                    </ul>
+</li>
+                </ul>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.4">
+                <p id="section-toc.1-1.15.2.4.1"><a href="#section-15.4" class="xref">15.4</a>.  <a href="#name-redirection-3xx" class="xref">Redirection 3xx</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.4.2.1">
+                    <p id="section-toc.1-1.15.2.4.2.1.1"><a href="#section-15.4.1" class="xref">15.4.1</a>.  <a href="#name-300-multiple-choices" class="xref">300 Multiple Choices</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.4.2.2">
+                    <p id="section-toc.1-1.15.2.4.2.2.1"><a href="#section-15.4.2" class="xref">15.4.2</a>.  <a href="#name-301-moved-permanently" class="xref">301 Moved Permanently</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.4.2.3">
+                    <p id="section-toc.1-1.15.2.4.2.3.1"><a href="#section-15.4.3" class="xref">15.4.3</a>.  <a href="#name-302-found" class="xref">302 Found</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.4.2.4">
+                    <p id="section-toc.1-1.15.2.4.2.4.1"><a href="#section-15.4.4" class="xref">15.4.4</a>.  <a href="#name-303-see-other" class="xref">303 See Other</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.4.2.5">
+                    <p id="section-toc.1-1.15.2.4.2.5.1"><a href="#section-15.4.5" class="xref">15.4.5</a>.  <a href="#name-304-not-modified" class="xref">304 Not Modified</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.4.2.6">
+                    <p id="section-toc.1-1.15.2.4.2.6.1"><a href="#section-15.4.6" class="xref">15.4.6</a>.  <a href="#name-305-use-proxy" class="xref">305 Use Proxy</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.4.2.7">
+                    <p id="section-toc.1-1.15.2.4.2.7.1"><a href="#section-15.4.7" class="xref">15.4.7</a>.  <a href="#name-306-unused" class="xref">306 (Unused)</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.4.2.8">
+                    <p id="section-toc.1-1.15.2.4.2.8.1"><a href="#section-15.4.8" class="xref">15.4.8</a>.  <a href="#name-307-temporary-redirect" class="xref">307 Temporary Redirect</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.4.2.9">
+                    <p id="section-toc.1-1.15.2.4.2.9.1"><a href="#section-15.4.9" class="xref">15.4.9</a>.  <a href="#name-308-permanent-redirect" class="xref">308 Permanent Redirect</a></p>
+</li>
+                </ul>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.5">
+                <p id="section-toc.1-1.15.2.5.1"><a href="#section-15.5" class="xref">15.5</a>.  <a href="#name-client-error-4xx" class="xref">Client Error 4xx</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.5.2.1">
+                    <p id="section-toc.1-1.15.2.5.2.1.1"><a href="#section-15.5.1" class="xref">15.5.1</a>.  <a href="#name-400-bad-request" class="xref">400 Bad Request</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.5.2.2">
+                    <p id="section-toc.1-1.15.2.5.2.2.1"><a href="#section-15.5.2" class="xref">15.5.2</a>.  <a href="#name-401-unauthorized" class="xref">401 Unauthorized</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.5.2.3">
+                    <p id="section-toc.1-1.15.2.5.2.3.1"><a href="#section-15.5.3" class="xref">15.5.3</a>.  <a href="#name-402-payment-required" class="xref">402 Payment Required</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.5.2.4">
+                    <p id="section-toc.1-1.15.2.5.2.4.1"><a href="#section-15.5.4" class="xref">15.5.4</a>.  <a href="#name-403-forbidden" class="xref">403 Forbidden</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.5.2.5">
+                    <p id="section-toc.1-1.15.2.5.2.5.1"><a href="#section-15.5.5" class="xref">15.5.5</a>.  <a href="#name-404-not-found" class="xref">404 Not Found</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.5.2.6">
+                    <p id="section-toc.1-1.15.2.5.2.6.1"><a href="#section-15.5.6" class="xref">15.5.6</a>.  <a href="#name-405-method-not-allowed" class="xref">405 Method Not Allowed</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.5.2.7">
+                    <p id="section-toc.1-1.15.2.5.2.7.1"><a href="#section-15.5.7" class="xref">15.5.7</a>.  <a href="#name-406-not-acceptable" class="xref">406 Not Acceptable</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.5.2.8">
+                    <p id="section-toc.1-1.15.2.5.2.8.1"><a href="#section-15.5.8" class="xref">15.5.8</a>.  <a href="#name-407-proxy-authentication-re" class="xref">407 Proxy Authentication Required</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.5.2.9">
+                    <p id="section-toc.1-1.15.2.5.2.9.1"><a href="#section-15.5.9" class="xref">15.5.9</a>.  <a href="#name-408-request-timeout" class="xref">408 Request Timeout</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.5.2.10">
+                    <p id="section-toc.1-1.15.2.5.2.10.1"><a href="#section-15.5.10" class="xref">15.5.10</a>. <a href="#name-409-conflict" class="xref">409 Conflict</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.5.2.11">
+                    <p id="section-toc.1-1.15.2.5.2.11.1"><a href="#section-15.5.11" class="xref">15.5.11</a>. <a href="#name-410-gone" class="xref">410 Gone</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.5.2.12">
+                    <p id="section-toc.1-1.15.2.5.2.12.1"><a href="#section-15.5.12" class="xref">15.5.12</a>. <a href="#name-411-length-required" class="xref">411 Length Required</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.5.2.13">
+                    <p id="section-toc.1-1.15.2.5.2.13.1"><a href="#section-15.5.13" class="xref">15.5.13</a>. <a href="#name-412-precondition-failed" class="xref">412 Precondition Failed</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.5.2.14">
+                    <p id="section-toc.1-1.15.2.5.2.14.1"><a href="#section-15.5.14" class="xref">15.5.14</a>. <a href="#name-413-content-too-large" class="xref">413 Content Too Large</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.5.2.15">
+                    <p id="section-toc.1-1.15.2.5.2.15.1"><a href="#section-15.5.15" class="xref">15.5.15</a>. <a href="#name-414-uri-too-long" class="xref">414 URI Too Long</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.5.2.16">
+                    <p id="section-toc.1-1.15.2.5.2.16.1"><a href="#section-15.5.16" class="xref">15.5.16</a>. <a href="#name-415-unsupported-media-type" class="xref">415 Unsupported Media Type</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.5.2.17">
+                    <p id="section-toc.1-1.15.2.5.2.17.1"><a href="#section-15.5.17" class="xref">15.5.17</a>. <a href="#name-416-range-not-satisfiable" class="xref">416 Range Not Satisfiable</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.5.2.18">
+                    <p id="section-toc.1-1.15.2.5.2.18.1"><a href="#section-15.5.18" class="xref">15.5.18</a>. <a href="#name-417-expectation-failed" class="xref">417 Expectation Failed</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.5.2.19">
+                    <p id="section-toc.1-1.15.2.5.2.19.1"><a href="#section-15.5.19" class="xref">15.5.19</a>. <a href="#name-418-unused" class="xref">418 (Unused)</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.5.2.20">
+                    <p id="section-toc.1-1.15.2.5.2.20.1"><a href="#section-15.5.20" class="xref">15.5.20</a>. <a href="#name-421-misdirected-request" class="xref">421 Misdirected Request</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.5.2.21">
+                    <p id="section-toc.1-1.15.2.5.2.21.1"><a href="#section-15.5.21" class="xref">15.5.21</a>. <a href="#name-422-unprocessable-content" class="xref">422 Unprocessable Content</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.5.2.22">
+                    <p id="section-toc.1-1.15.2.5.2.22.1"><a href="#section-15.5.22" class="xref">15.5.22</a>. <a href="#name-426-upgrade-required" class="xref">426 Upgrade Required</a></p>
+</li>
+                </ul>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.6">
+                <p id="section-toc.1-1.15.2.6.1"><a href="#section-15.6" class="xref">15.6</a>.  <a href="#name-server-error-5xx" class="xref">Server Error 5xx</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.6.2.1">
+                    <p id="section-toc.1-1.15.2.6.2.1.1"><a href="#section-15.6.1" class="xref">15.6.1</a>.  <a href="#name-500-internal-server-error" class="xref">500 Internal Server Error</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.6.2.2">
+                    <p id="section-toc.1-1.15.2.6.2.2.1"><a href="#section-15.6.2" class="xref">15.6.2</a>.  <a href="#name-501-not-implemented" class="xref">501 Not Implemented</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.6.2.3">
+                    <p id="section-toc.1-1.15.2.6.2.3.1"><a href="#section-15.6.3" class="xref">15.6.3</a>.  <a href="#name-502-bad-gateway" class="xref">502 Bad Gateway</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.6.2.4">
+                    <p id="section-toc.1-1.15.2.6.2.4.1"><a href="#section-15.6.4" class="xref">15.6.4</a>.  <a href="#name-503-service-unavailable" class="xref">503 Service Unavailable</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.6.2.5">
+                    <p id="section-toc.1-1.15.2.6.2.5.1"><a href="#section-15.6.5" class="xref">15.6.5</a>.  <a href="#name-504-gateway-timeout" class="xref">504 Gateway Timeout</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15.2.6.2.6">
+                    <p id="section-toc.1-1.15.2.6.2.6.1"><a href="#section-15.6.6" class="xref">15.6.6</a>.  <a href="#name-505-http-version-not-suppor" class="xref">505 HTTP Version Not Supported</a></p>
+</li>
+                </ul>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.16">
+            <p id="section-toc.1-1.16.1"><a href="#section-16" class="xref">16</a>. <a href="#name-extending-http" class="xref">Extending HTTP</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.16.2.1">
+                <p id="section-toc.1-1.16.2.1.1"><a href="#section-16.1" class="xref">16.1</a>.  <a href="#name-method-extensibility" class="xref">Method Extensibility</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.16.2.1.2.1">
+                    <p id="section-toc.1-1.16.2.1.2.1.1"><a href="#section-16.1.1" class="xref">16.1.1</a>.  <a href="#name-method-registry" class="xref">Method Registry</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.16.2.1.2.2">
+                    <p id="section-toc.1-1.16.2.1.2.2.1"><a href="#section-16.1.2" class="xref">16.1.2</a>.  <a href="#name-considerations-for-new-meth" class="xref">Considerations for New Methods</a></p>
+</li>
+                </ul>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.16.2.2">
+                <p id="section-toc.1-1.16.2.2.1"><a href="#section-16.2" class="xref">16.2</a>.  <a href="#name-status-code-extensibility" class="xref">Status Code Extensibility</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.16.2.2.2.1">
+                    <p id="section-toc.1-1.16.2.2.2.1.1"><a href="#section-16.2.1" class="xref">16.2.1</a>.  <a href="#name-status-code-registry" class="xref">Status Code Registry</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.16.2.2.2.2">
+                    <p id="section-toc.1-1.16.2.2.2.2.1"><a href="#section-16.2.2" class="xref">16.2.2</a>.  <a href="#name-considerations-for-new-stat" class="xref">Considerations for New Status Codes</a></p>
+</li>
+                </ul>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.16.2.3">
+                <p id="section-toc.1-1.16.2.3.1"><a href="#section-16.3" class="xref">16.3</a>.  <a href="#name-field-extensibility" class="xref">Field Extensibility</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.16.2.3.2.1">
+                    <p id="section-toc.1-1.16.2.3.2.1.1"><a href="#section-16.3.1" class="xref">16.3.1</a>.  <a href="#name-field-name-registry" class="xref">Field Name Registry</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.16.2.3.2.2">
+                    <p id="section-toc.1-1.16.2.3.2.2.1"><a href="#section-16.3.2" class="xref">16.3.2</a>.  <a href="#name-considerations-for-new-fiel" class="xref">Considerations for New Fields</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.16.2.3.2.2.2.1">
+                        <p id="section-toc.1-1.16.2.3.2.2.2.1.1"><a href="#section-16.3.2.1" class="xref">16.3.2.1</a>.  <a href="#name-considerations-for-new-field" class="xref">Considerations for New Field Names</a></p>
+</li>
+                      <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.16.2.3.2.2.2.2">
+                        <p id="section-toc.1-1.16.2.3.2.2.2.2.1"><a href="#section-16.3.2.2" class="xref">16.3.2.2</a>.  <a href="#name-considerations-for-new-field-" class="xref">Considerations for New Field Values</a></p>
+</li>
+                    </ul>
+</li>
+                </ul>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.16.2.4">
+                <p id="section-toc.1-1.16.2.4.1"><a href="#section-16.4" class="xref">16.4</a>.  <a href="#name-authentication-scheme-exten" class="xref">Authentication Scheme Extensibility</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.16.2.4.2.1">
+                    <p id="section-toc.1-1.16.2.4.2.1.1"><a href="#section-16.4.1" class="xref">16.4.1</a>.  <a href="#name-authentication-scheme-regis" class="xref">Authentication Scheme Registry</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.16.2.4.2.2">
+                    <p id="section-toc.1-1.16.2.4.2.2.1"><a href="#section-16.4.2" class="xref">16.4.2</a>.  <a href="#name-considerations-for-new-auth" class="xref">Considerations for New Authentication Schemes</a></p>
+</li>
+                </ul>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.16.2.5">
+                <p id="section-toc.1-1.16.2.5.1"><a href="#section-16.5" class="xref">16.5</a>.  <a href="#name-range-unit-extensibility" class="xref">Range Unit Extensibility</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.16.2.5.2.1">
+                    <p id="section-toc.1-1.16.2.5.2.1.1"><a href="#section-16.5.1" class="xref">16.5.1</a>.  <a href="#name-range-unit-registry" class="xref">Range Unit Registry</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.16.2.5.2.2">
+                    <p id="section-toc.1-1.16.2.5.2.2.1"><a href="#section-16.5.2" class="xref">16.5.2</a>.  <a href="#name-considerations-for-new-rang" class="xref">Considerations for New Range Units</a></p>
+</li>
+                </ul>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.16.2.6">
+                <p id="section-toc.1-1.16.2.6.1"><a href="#section-16.6" class="xref">16.6</a>.  <a href="#name-content-coding-extensibilit" class="xref">Content Coding Extensibility</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.16.2.6.2.1">
+                    <p id="section-toc.1-1.16.2.6.2.1.1"><a href="#section-16.6.1" class="xref">16.6.1</a>.  <a href="#name-content-coding-registry" class="xref">Content Coding Registry</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.16.2.6.2.2">
+                    <p id="section-toc.1-1.16.2.6.2.2.1"><a href="#section-16.6.2" class="xref">16.6.2</a>.  <a href="#name-considerations-for-new-cont" class="xref">Considerations for New Content Codings</a></p>
+</li>
+                </ul>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.16.2.7">
+                <p id="section-toc.1-1.16.2.7.1"><a href="#section-16.7" class="xref">16.7</a>.  <a href="#name-upgrade-token-registry" class="xref">Upgrade Token Registry</a></p>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.17">
+            <p id="section-toc.1-1.17.1"><a href="#section-17" class="xref">17</a>. <a href="#name-security-considerations" class="xref">Security Considerations</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.17.2.1">
+                <p id="section-toc.1-1.17.2.1.1"><a href="#section-17.1" class="xref">17.1</a>.  <a href="#name-establishing-authority" class="xref">Establishing Authority</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.17.2.2">
+                <p id="section-toc.1-1.17.2.2.1"><a href="#section-17.2" class="xref">17.2</a>.  <a href="#name-risks-of-intermediaries" class="xref">Risks of Intermediaries</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.17.2.3">
+                <p id="section-toc.1-1.17.2.3.1"><a href="#section-17.3" class="xref">17.3</a>.  <a href="#name-attacks-based-on-file-and-p" class="xref">Attacks Based on File and Path Names</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.17.2.4">
+                <p id="section-toc.1-1.17.2.4.1"><a href="#section-17.4" class="xref">17.4</a>.  <a href="#name-attacks-based-on-command-co" class="xref">Attacks Based on Command, Code, or Query Injection</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.17.2.5">
+                <p id="section-toc.1-1.17.2.5.1"><a href="#section-17.5" class="xref">17.5</a>.  <a href="#name-attacks-via-protocol-elemen" class="xref">Attacks via Protocol Element Length</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.17.2.6">
+                <p id="section-toc.1-1.17.2.6.1"><a href="#section-17.6" class="xref">17.6</a>.  <a href="#name-attacks-using-shared-dictio" class="xref">Attacks Using Shared-Dictionary Compression</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.17.2.7">
+                <p id="section-toc.1-1.17.2.7.1"><a href="#section-17.7" class="xref">17.7</a>.  <a href="#name-disclosure-of-personal-info" class="xref">Disclosure of Personal Information</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.17.2.8">
+                <p id="section-toc.1-1.17.2.8.1"><a href="#section-17.8" class="xref">17.8</a>.  <a href="#name-privacy-of-server-log-infor" class="xref">Privacy of Server Log Information</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.17.2.9">
+                <p id="section-toc.1-1.17.2.9.1"><a href="#section-17.9" class="xref">17.9</a>.  <a href="#name-disclosure-of-sensitive-inf" class="xref">Disclosure of Sensitive Information in URIs</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.17.2.10">
+                <p id="section-toc.1-1.17.2.10.1"><a href="#section-17.10" class="xref">17.10</a>. <a href="#name-application-handling-of-fie" class="xref">Application Handling of Field Names</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.17.2.11">
+                <p id="section-toc.1-1.17.2.11.1"><a href="#section-17.11" class="xref">17.11</a>. <a href="#name-disclosure-of-fragment-afte" class="xref">Disclosure of Fragment after Redirects</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.17.2.12">
+                <p id="section-toc.1-1.17.2.12.1"><a href="#section-17.12" class="xref">17.12</a>. <a href="#name-disclosure-of-product-infor" class="xref">Disclosure of Product Information</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.17.2.13">
+                <p id="section-toc.1-1.17.2.13.1"><a href="#section-17.13" class="xref">17.13</a>. <a href="#name-browser-fingerprinting" class="xref">Browser Fingerprinting</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.17.2.14">
+                <p id="section-toc.1-1.17.2.14.1"><a href="#section-17.14" class="xref">17.14</a>. <a href="#name-validator-retention" class="xref">Validator Retention</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.17.2.15">
+                <p id="section-toc.1-1.17.2.15.1"><a href="#section-17.15" class="xref">17.15</a>. <a href="#name-denial-of-service-attacks-u" class="xref">Denial-of-Service Attacks Using Range</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.17.2.16">
+                <p id="section-toc.1-1.17.2.16.1"><a href="#section-17.16" class="xref">17.16</a>. <a href="#name-authentication-consideratio" class="xref">Authentication Considerations</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.17.2.16.2.1">
+                    <p id="section-toc.1-1.17.2.16.2.1.1"><a href="#section-17.16.1" class="xref">17.16.1</a>.  <a href="#name-confidentiality-of-credenti" class="xref">Confidentiality of Credentials</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.17.2.16.2.2">
+                    <p id="section-toc.1-1.17.2.16.2.2.1"><a href="#section-17.16.2" class="xref">17.16.2</a>.  <a href="#name-credentials-and-idle-client" class="xref">Credentials and Idle Clients</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.17.2.16.2.3">
+                    <p id="section-toc.1-1.17.2.16.2.3.1"><a href="#section-17.16.3" class="xref">17.16.3</a>.  <a href="#name-protection-spaces" class="xref">Protection Spaces</a></p>
+</li>
+                  <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.17.2.16.2.4">
+                    <p id="section-toc.1-1.17.2.16.2.4.1"><a href="#section-17.16.4" class="xref">17.16.4</a>.  <a href="#name-additional-response-fields" class="xref">Additional Response Fields</a></p>
+</li>
+                </ul>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.18">
+            <p id="section-toc.1-1.18.1"><a href="#section-18" class="xref">18</a>. <a href="#name-iana-considerations" class="xref">IANA Considerations</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.18.2.1">
+                <p id="section-toc.1-1.18.2.1.1"><a href="#section-18.1" class="xref">18.1</a>.  <a href="#name-uri-scheme-registration" class="xref">URI Scheme Registration</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.18.2.2">
+                <p id="section-toc.1-1.18.2.2.1"><a href="#section-18.2" class="xref">18.2</a>.  <a href="#name-method-registration" class="xref">Method Registration</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.18.2.3">
+                <p id="section-toc.1-1.18.2.3.1"><a href="#section-18.3" class="xref">18.3</a>.  <a href="#name-status-code-registration" class="xref">Status Code Registration</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.18.2.4">
+                <p id="section-toc.1-1.18.2.4.1"><a href="#section-18.4" class="xref">18.4</a>.  <a href="#name-field-name-registration" class="xref">Field Name Registration</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.18.2.5">
+                <p id="section-toc.1-1.18.2.5.1"><a href="#section-18.5" class="xref">18.5</a>.  <a href="#name-authentication-scheme-regist" class="xref">Authentication Scheme Registration</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.18.2.6">
+                <p id="section-toc.1-1.18.2.6.1"><a href="#section-18.6" class="xref">18.6</a>.  <a href="#name-content-coding-registration" class="xref">Content Coding Registration</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.18.2.7">
+                <p id="section-toc.1-1.18.2.7.1"><a href="#section-18.7" class="xref">18.7</a>.  <a href="#name-range-unit-registration" class="xref">Range Unit Registration</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.18.2.8">
+                <p id="section-toc.1-1.18.2.8.1"><a href="#section-18.8" class="xref">18.8</a>.  <a href="#name-media-type-registration" class="xref">Media Type Registration</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.18.2.9">
+                <p id="section-toc.1-1.18.2.9.1"><a href="#section-18.9" class="xref">18.9</a>.  <a href="#name-port-registration" class="xref">Port Registration</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.18.2.10">
+                <p id="section-toc.1-1.18.2.10.1"><a href="#section-18.10" class="xref">18.10</a>. <a href="#name-upgrade-token-registration" class="xref">Upgrade Token Registration</a></p>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.19">
+            <p id="section-toc.1-1.19.1"><a href="#section-19" class="xref">19</a>. <a href="#name-references" class="xref">References</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.19.2.1">
+                <p id="section-toc.1-1.19.2.1.1"><a href="#section-19.1" class="xref">19.1</a>.  <a href="#name-normative-references" class="xref">Normative References</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.19.2.2">
+                <p id="section-toc.1-1.19.2.2.1"><a href="#section-19.2" class="xref">19.2</a>.  <a href="#name-informative-references" class="xref">Informative References</a></p>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.20">
+            <p id="section-toc.1-1.20.1"><a href="#appendix-A" class="xref">Appendix A</a>.  <a href="#name-collected-abnf" class="xref">Collected ABNF</a></p>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.21">
+            <p id="section-toc.1-1.21.1"><a href="#appendix-B" class="xref">Appendix B</a>.  <a href="#name-changes-from-previous-rfcs" class="xref">Changes from Previous RFCs</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.21.2.1">
+                <p id="section-toc.1-1.21.2.1.1"><a href="#appendix-B.1" class="xref">B.1</a>.  <a href="#name-changes-from-rfc-2818" class="xref">Changes from RFC 2818</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.21.2.2">
+                <p id="section-toc.1-1.21.2.2.1"><a href="#appendix-B.2" class="xref">B.2</a>.  <a href="#name-changes-from-rfc-7230" class="xref">Changes from RFC 7230</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.21.2.3">
+                <p id="section-toc.1-1.21.2.3.1"><a href="#appendix-B.3" class="xref">B.3</a>.  <a href="#name-changes-from-rfc-7231" class="xref">Changes from RFC 7231</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.21.2.4">
+                <p id="section-toc.1-1.21.2.4.1"><a href="#appendix-B.4" class="xref">B.4</a>.  <a href="#name-changes-from-rfc-7232" class="xref">Changes from RFC 7232</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.21.2.5">
+                <p id="section-toc.1-1.21.2.5.1"><a href="#appendix-B.5" class="xref">B.5</a>.  <a href="#name-changes-from-rfc-7233" class="xref">Changes from RFC 7233</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.21.2.6">
+                <p id="section-toc.1-1.21.2.6.1"><a href="#appendix-B.6" class="xref">B.6</a>.  <a href="#name-changes-from-rfc-7235" class="xref">Changes from RFC 7235</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.21.2.7">
+                <p id="section-toc.1-1.21.2.7.1"><a href="#appendix-B.7" class="xref">B.7</a>.  <a href="#name-changes-from-rfc-7538" class="xref">Changes from RFC 7538</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.21.2.8">
+                <p id="section-toc.1-1.21.2.8.1"><a href="#appendix-B.8" class="xref">B.8</a>.  <a href="#name-changes-from-rfc-7615" class="xref">Changes from RFC 7615</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.21.2.9">
+                <p id="section-toc.1-1.21.2.9.1"><a href="#appendix-B.9" class="xref">B.9</a>.  <a href="#name-changes-from-rfc-7694" class="xref">Changes from RFC 7694</a></p>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.22">
+            <p id="section-toc.1-1.22.1"><a href="#appendix-C" class="xref"></a><a href="#name-acknowledgements" class="xref">Acknowledgements</a></p>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.23">
+            <p id="section-toc.1-1.23.1"><a href="#appendix-D" class="xref"></a><a href="#name-index" class="xref">Index</a></p>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.24">
+            <p id="section-toc.1-1.24.1"><a href="#appendix-E" class="xref"></a><a href="#name-authors-addresses" class="xref">Authors' Addresses</a></p>
+</li>
+        </ul>
+</nav>
+</section>
+</div>
+<div id="introduction">
+<section id="section-1">
+      <h2 id="name-introduction">
+<a href="#section-1" class="section-number selfRef">1. </a><a href="#name-introduction" class="section-name selfRef">Introduction</a>
+      </h2>
+<div id="purpose">
+<section id="section-1.1">
+        <h3 id="name-purpose">
+<a href="#section-1.1" class="section-number selfRef">1.1. </a><a href="#name-purpose" class="section-name selfRef">Purpose</a>
+        </h3>
+<p id="section-1.1-1">
+   The Hypertext Transfer Protocol (HTTP) is a family of stateless,
+   application-level, request/response protocols that share a generic interface,
+   extensible semantics, and self-descriptive messages to enable flexible
+   interaction with network-based hypertext information systems.<a href="#section-1.1-1" class="pilcrow">¶</a></p>
+<p id="section-1.1-2">
+   HTTP hides the details of how a service is implemented by presenting a
+   uniform interface to clients that is independent of the types of resources
+   provided. Likewise, servers do not need to be aware of each client's
+   purpose: a request can be considered in isolation rather than being
+   associated with a specific type of client or a predetermined sequence of
+   application steps. This allows general-purpose implementations to be used
+   effectively in many different contexts, reduces interaction complexity, and
+   enables independent evolution over time.<a href="#section-1.1-2" class="pilcrow">¶</a></p>
+<p id="section-1.1-3">
+   HTTP is also designed for use as an intermediation protocol, wherein
+   proxies and gateways can translate non-HTTP information systems into a
+   more generic interface.<a href="#section-1.1-3" class="pilcrow">¶</a></p>
+<p id="section-1.1-4">
+   One consequence of this flexibility is that the protocol cannot be
+   defined in terms of what occurs behind the interface. Instead, we
+   are limited to defining the syntax of communication, the intent
+   of received communication, and the expected behavior of recipients.
+   If the communication is considered in isolation, then successful
+   actions ought to be reflected in corresponding changes to the
+   observable interface provided by servers. However, since multiple
+   clients might act in parallel and perhaps at cross-purposes, we
+   cannot require that such changes be observable beyond the scope
+   of a single response.<a href="#section-1.1-4" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="history.and.evolution">
+<section id="section-1.2">
+        <h3 id="name-history-and-evolution">
+<a href="#section-1.2" class="section-number selfRef">1.2. </a><a href="#name-history-and-evolution" class="section-name selfRef">History and Evolution</a>
+        </h3>
+<p id="section-1.2-1">
+   HTTP has been the primary information transfer protocol for the World   
+   Wide Web since its introduction in 1990.  It began as a trivial
+   mechanism for low-latency requests, with a single method (GET) to 
+   request transfer of a presumed hypertext document identified by a given pathname.
+   As the Web grew, HTTP was extended to enclose requests and responses within
+   messages, transfer arbitrary data formats using MIME-like media types, and
+   route requests through intermediaries. These protocols were eventually
+   defined as HTTP/0.9 and HTTP/1.0 (see <span>[<a href="#HTTP10" class="xref">HTTP/1.0</a>]</span>).<a href="#section-1.2-1" class="pilcrow">¶</a></p>
+<p id="section-1.2-2">
+   HTTP/1.1 was designed to refine the protocol's features while retaining
+   compatibility with the existing text-based messaging syntax, improving
+   its interoperability, scalability, and robustness across the Internet.
+   This included length-based data delimiters for both fixed and dynamic
+   (chunked) content, a consistent framework for content negotiation,
+   opaque validators for conditional requests, cache controls for better
+   cache consistency, range requests for partial updates, and default
+   persistent connections. HTTP/1.1 was introduced in 1995 and published on
+   the Standards Track in 1997 <span>[<a href="#RFC2068" class="xref">RFC2068</a>]</span>, revised in
+   1999 <span>[<a href="#RFC2616" class="xref">RFC2616</a>]</span>, and revised again in 2014
+   (<span>[<a href="#RFC7230" class="xref">RFC7230</a>]</span> through <span>[<a href="#RFC7235" class="xref">RFC7235</a>]</span>).<a href="#section-1.2-2" class="pilcrow">¶</a></p>
+<p id="section-1.2-3">
+   HTTP/2 (<span>[<a href="#HTTP2" class="xref">HTTP/2</a>]</span>) introduced a multiplexed session layer
+   on top of the existing TLS and TCP protocols for exchanging concurrent
+   HTTP messages with efficient field compression and server push.
+   HTTP/3 (<span>[<a href="#HTTP3" class="xref">HTTP/3</a>]</span>) provides greater independence for concurrent
+   messages by using QUIC as a secure multiplexed transport over UDP instead of
+   TCP.<a href="#section-1.2-3" class="pilcrow">¶</a></p>
+<p id="section-1.2-4">
+   All three major versions of HTTP rely on the semantics defined by
+   this document. They have not obsoleted each other because each one has
+   specific benefits and limitations depending on the context of use.
+   Implementations are expected to choose the most appropriate transport and
+   messaging syntax for their particular context.<a href="#section-1.2-4" class="pilcrow">¶</a></p>
+<p id="section-1.2-5">
+   This revision of HTTP separates the definition of semantics (this document)
+   and caching (<span>[<a href="#CACHING" class="xref">CACHING</a>]</span>) from the current HTTP/1.1 messaging
+   syntax (<span>[<a href="#HTTP11" class="xref">HTTP/1.1</a>]</span>) to allow each major protocol version
+   to progress independently while referring to the same core semantics.<a href="#section-1.2-5" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="core.semantics">
+<section id="section-1.3">
+        <h3 id="name-core-semantics">
+<a href="#section-1.3" class="section-number selfRef">1.3. </a><a href="#name-core-semantics" class="section-name selfRef">Core Semantics</a>
+        </h3>
+<p id="section-1.3-1">
+   HTTP provides a uniform interface for interacting with a resource
+   (<a href="#resources" class="xref">Section 3.1</a>) -- regardless of its type, nature, or
+   implementation -- by sending messages that manipulate or transfer
+   representations (<a href="#representations" class="xref">Section 3.2</a>).<a href="#section-1.3-1" class="pilcrow">¶</a></p>
+<p id="section-1.3-2">
+   Each message is either a request or a response. A client constructs request
+   messages that communicate its intentions and routes those messages toward
+   an identified origin server. A server listens for requests, parses each
+   message received, interprets the message semantics in relation to the
+   identified target resource, and responds to that request with one or more
+   response messages. The client examines received responses to see if its
+   intentions were carried out, determining what to do next based on the
+   status codes and content received.<a href="#section-1.3-2" class="pilcrow">¶</a></p>
+<p id="section-1.3-3">
+   HTTP semantics include the intentions defined by each request method
+   (<a href="#methods" class="xref">Section 9</a>), extensions to those semantics that might be
+   described in request header fields,
+   status codes that describe the response (<a href="#status.codes" class="xref">Section 15</a>), and
+   other control data and resource metadata that might be given in response
+   fields.<a href="#section-1.3-3" class="pilcrow">¶</a></p>
+<p id="section-1.3-4">
+               <span id="iref-content-negotiation-1" class="iref"></span>
+   Semantics also include representation metadata that describe how
+   content is intended to be interpreted by a recipient, request header
+   fields that might influence content selection, and the various selection
+   algorithms that are collectively referred to as
+   "content negotiation" (<a href="#content.negotiation" class="xref">Section 12</a>).<a href="#section-1.3-4" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="specifications.obsoleted.by.this.document">
+<section id="section-1.4">
+        <h3 id="name-specifications-obsoleted-by">
+<a href="#section-1.4" class="section-number selfRef">1.4. </a><a href="#name-specifications-obsoleted-by" class="section-name selfRef">Specifications Obsoleted by This Document</a>
+        </h3>
+<table class="left" id="table-1">
+          <caption><a href="#table-1" class="selfRef">Table 1</a></caption>
+<thead>
+            <tr>
+              <th class="text-left" rowspan="1" colspan="1">Title</th>
+              <th class="text-left" rowspan="1" colspan="1">Reference</th>
+              <th class="text-left" rowspan="1" colspan="1">See</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">HTTP Over TLS</td>
+              <td class="text-left" rowspan="1" colspan="1">
+                <span>[<a href="#RFC2818" class="xref">RFC2818</a>]</span>
+              </td>
+              <td class="text-left" rowspan="1" colspan="1">
+                <a href="#changes.from.rfc.2818" class="xref">B.1</a>
+              </td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">HTTP/1.1 Message Syntax and Routing [*]</td>
+              <td class="text-left" rowspan="1" colspan="1">
+                <span>[<a href="#RFC7230" class="xref">RFC7230</a>]</span>
+              </td>
+              <td class="text-left" rowspan="1" colspan="1">
+                <a href="#changes.from.rfc.7230" class="xref">B.2</a>
+              </td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">HTTP/1.1 Semantics and Content</td>
+              <td class="text-left" rowspan="1" colspan="1">
+                <span>[<a href="#RFC7231" class="xref">RFC7231</a>]</span>
+              </td>
+              <td class="text-left" rowspan="1" colspan="1">
+                <a href="#changes.from.rfc.7231" class="xref">B.3</a>
+              </td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">HTTP/1.1 Conditional Requests</td>
+              <td class="text-left" rowspan="1" colspan="1">
+                <span>[<a href="#RFC7232" class="xref">RFC7232</a>]</span>
+              </td>
+              <td class="text-left" rowspan="1" colspan="1">
+                <a href="#changes.from.rfc.7232" class="xref">B.4</a>
+              </td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">HTTP/1.1 Range Requests</td>
+              <td class="text-left" rowspan="1" colspan="1">
+                <span>[<a href="#RFC7233" class="xref">RFC7233</a>]</span>
+              </td>
+              <td class="text-left" rowspan="1" colspan="1">
+                <a href="#changes.from.rfc.7233" class="xref">B.5</a>
+              </td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">HTTP/1.1 Authentication</td>
+              <td class="text-left" rowspan="1" colspan="1">
+                <span>[<a href="#RFC7235" class="xref">RFC7235</a>]</span>
+              </td>
+              <td class="text-left" rowspan="1" colspan="1">
+                <a href="#changes.from.rfc.7235" class="xref">B.6</a>
+              </td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">HTTP Status Code 308 (Permanent Redirect)</td>
+              <td class="text-left" rowspan="1" colspan="1">
+                <span>[<a href="#RFC7538" class="xref">RFC7538</a>]</span>
+              </td>
+              <td class="text-left" rowspan="1" colspan="1">
+                <a href="#changes.from.rfc.7538" class="xref">B.7</a>
+              </td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">HTTP Authentication-Info and Proxy-Authentication-Info
+          Response Header Fields</td>
+              <td class="text-left" rowspan="1" colspan="1">
+                <span>[<a href="#RFC7615" class="xref">RFC7615</a>]</span>
+              </td>
+              <td class="text-left" rowspan="1" colspan="1">
+                <a href="#changes.from.rfc.7615" class="xref">B.8</a>
+              </td>
+            </tr>
+            <tr>
+              <td class="text-left" rowspan="1" colspan="1">HTTP Client-Initiated Content-Encoding</td>
+              <td class="text-left" rowspan="1" colspan="1">
+                <span>[<a href="#RFC7694" class="xref">RFC7694</a>]</span>
+              </td>
+              <td class="text-left" rowspan="1" colspan="1">
+                <a href="#changes.from.rfc.7694" class="xref">B.9</a>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+<p id="section-1.4-2">
+   [*] This document only obsoletes the portions of
+   <a href="#RFC7230" class="xref">RFC 7230</a> that are independent of
+   the HTTP/1.1 messaging syntax and connection management; the remaining
+   bits of <a href="#RFC7230" class="xref">RFC 7230</a> are
+   obsoleted by "HTTP/1.1" <span>[<a href="#HTTP11" class="xref">HTTP/1.1</a>]</span>.<a href="#section-1.4-2" class="pilcrow">¶</a></p>
+</section>
+</div>
+</section>
+</div>
+<div id="conformance">
+<section id="section-2">
+      <h2 id="name-conformance">
+<a href="#section-2" class="section-number selfRef">2. </a><a href="#name-conformance" class="section-name selfRef">Conformance</a>
+      </h2>
+<div id="notation">
+<section id="section-2.1">
+        <h3 id="name-syntax-notation">
+<a href="#section-2.1" class="section-number selfRef">2.1. </a><a href="#name-syntax-notation" class="section-name selfRef">Syntax Notation</a>
+        </h3>
+<span id="iref-grammar-alpha-2" class="iref"></span>
+        <span id="iref-grammar-cr-3" class="iref"></span>
+        <span id="iref-grammar-crlf-4" class="iref"></span>
+        <span id="iref-grammar-ctl-5" class="iref"></span>
+        <span id="iref-grammar-digit-6" class="iref"></span>
+        <span id="iref-grammar-dquote-7" class="iref"></span>
+        <span id="iref-grammar-hexdig-8" class="iref"></span>
+        <span id="iref-grammar-htab-9" class="iref"></span>
+        <span id="iref-grammar-lf-10" class="iref"></span>
+        <span id="iref-grammar-octet-11" class="iref"></span>
+        <span id="iref-grammar-sp-12" class="iref"></span>
+        <span id="iref-grammar-vchar-13" class="iref"></span>
+        <p id="section-2.1-1">
+   This specification uses the Augmented Backus-Naur Form (ABNF) notation of
+   <span>[<a href="#RFC5234" class="xref">RFC5234</a>]</span>, extended with the notation for case-sensitivity
+   in strings defined in <span>[<a href="#RFC7405" class="xref">RFC7405</a>]</span>.<a href="#section-2.1-1" class="pilcrow">¶</a></p>
+<p id="section-2.1-2">
+   It also uses a list extension, defined in <a href="#abnf.extension" class="xref">Section 5.6.1</a>,
+   that allows for compact definition of comma-separated lists using a "#"
+   operator (similar to how the "*" operator indicates repetition). <a href="#collected.abnf" class="xref">Appendix A</a> shows the collected grammar with all list
+   operators expanded to standard ABNF notation.<a href="#section-2.1-2" class="pilcrow">¶</a></p>
+<p id="section-2.1-3">
+   As a convention, ABNF rule names prefixed with "obs-" denote
+   obsolete grammar rules that appear for historical reasons.<a href="#section-2.1-3" class="pilcrow">¶</a></p>
+<div id="core.rules">
+<p id="section-2.1-4">
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  The following core rules are included by
+  reference, as defined in <span><a href="https://www.rfc-editor.org/rfc/rfc5234#appendix-B.1" class="relref">Appendix B.1</a> of [<a href="#RFC5234" class="xref">RFC5234</a>]</span>:
+  ALPHA (letters), CR (carriage return), CRLF (CR LF), CTL (controls),
+  DIGIT (decimal 0-9), DQUOTE (double quote),
+  HEXDIG (hexadecimal 0-9/A-F/a-f), HTAB (horizontal tab), LF (line feed),
+  OCTET (any 8-bit sequence of data), SP (space), and
+  VCHAR (any visible US-ASCII character).<a href="#section-2.1-4" class="pilcrow">¶</a></p>
+</div>
+<p id="section-2.1-5">
+               <a href="#fields.components" class="xref">Section 5.6</a> defines some generic syntactic
+   components for field values.<a href="#section-2.1-5" class="pilcrow">¶</a></p>
+<p id="section-2.1-6">
+   This specification uses the terms
+   "character",
+   "character encoding scheme",
+   "charset", and
+   "protocol element"
+   as they are defined in <span>[<a href="#RFC6365" class="xref">RFC6365</a>]</span>.<a href="#section-2.1-6" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="requirements.notation">
+<section id="section-2.2">
+        <h3 id="name-requirements-notation">
+<a href="#section-2.2" class="section-number selfRef">2.2. </a><a href="#name-requirements-notation" class="section-name selfRef">Requirements Notation</a>
+        </h3>
+<p id="section-2.2-1">
+    The key words "<span class="bcp14">MUST</span>", "<span class="bcp14">MUST NOT</span>",
+    "<span class="bcp14">REQUIRED</span>", "<span class="bcp14">SHALL</span>", "<span class="bcp14">SHALL NOT</span>",
+    "<span class="bcp14">SHOULD</span>", "<span class="bcp14">SHOULD NOT</span>",
+    "<span class="bcp14">RECOMMENDED</span>", "<span class="bcp14">NOT RECOMMENDED</span>",
+    "<span class="bcp14">MAY</span>", and "<span class="bcp14">OPTIONAL</span>" in this document are to be
+    interpreted as described in BCP 14 <span>[<a href="#RFC2119" class="xref">RFC2119</a>]</span> <span>[<a href="#RFC8174" class="xref">RFC8174</a>]</span> when, and only when, they appear in all capitals, as
+    shown here.<a href="#section-2.2-1" class="pilcrow">¶</a></p>
+<p id="section-2.2-2">
+   This specification targets conformance criteria according to the role of
+   a participant in HTTP communication.  Hence, requirements are placed
+   on senders, recipients, clients, servers, user agents, intermediaries,
+   origin servers, proxies, gateways, or caches, depending on what behavior
+   is being constrained by the requirement. Additional requirements
+   are placed on implementations, resource owners, and protocol element
+   registrations when they apply beyond the scope of a single communication.<a href="#section-2.2-2" class="pilcrow">¶</a></p>
+<p id="section-2.2-3">
+   The verb "generate" is used instead of "send" where a requirement applies
+   only to implementations that create the protocol element, rather than an
+   implementation that forwards a received element downstream.<a href="#section-2.2-3" class="pilcrow">¶</a></p>
+<p id="section-2.2-4">
+   An implementation is considered conformant if it complies with all of the
+   requirements associated with the roles it partakes in HTTP.<a href="#section-2.2-4" class="pilcrow">¶</a></p>
+<p id="section-2.2-5">
+   A sender <span class="bcp14">MUST NOT</span> generate protocol elements that do not match the grammar
+   defined by the corresponding ABNF rules.
+   Within a given message, a sender <span class="bcp14">MUST NOT</span> generate protocol elements or
+   syntax alternatives that are only allowed to be generated by participants in
+   other roles (i.e., a role that the sender does not have for that message).<a href="#section-2.2-5" class="pilcrow">¶</a></p>
+<p id="section-2.2-6">
+   Conformance to HTTP includes both conformance to the particular messaging
+   syntax of the protocol version in use and conformance to the semantics of
+   protocol elements sent. For example, a client that claims conformance to
+   HTTP/1.1 but fails to recognize the features required of HTTP/1.1
+   recipients will fail to interoperate with servers that adjust their
+   responses in accordance with those claims.
+   Features that reflect user choices, such as content negotiation and
+   user-selected extensions, can impact application behavior beyond the
+   protocol stream; sending protocol elements that inaccurately reflect a
+   user's choices will confuse the user and inhibit choice.<a href="#section-2.2-6" class="pilcrow">¶</a></p>
+<p id="section-2.2-7">
+   When an implementation fails semantic conformance, recipients of that
+   implementation's messages will eventually develop workarounds to adjust
+   their behavior accordingly. A recipient <span class="bcp14">MAY</span> employ such workarounds while
+   remaining conformant to this protocol if the workarounds are limited to the
+   implementations at fault. For example, servers often scan portions of the
+   User-Agent field value, and user agents often scan the Server field value,
+   to adjust their own behavior with respect to known bugs or poorly chosen
+   defaults.<a href="#section-2.2-7" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="length.requirements">
+<section id="section-2.3">
+        <h3 id="name-length-requirements">
+<a href="#section-2.3" class="section-number selfRef">2.3. </a><a href="#name-length-requirements" class="section-name selfRef">Length Requirements</a>
+        </h3>
+<p id="section-2.3-1">
+   A recipient <span class="bcp14">SHOULD</span> parse a received protocol element defensively, with
+   only marginal expectations that the element will conform to its ABNF
+   grammar and fit within a reasonable buffer size.<a href="#section-2.3-1" class="pilcrow">¶</a></p>
+<p id="section-2.3-2">
+   HTTP does not have specific length limitations for many of its protocol
+   elements because the lengths that might be appropriate will vary widely,
+   depending on the deployment context and purpose of the implementation.
+   Hence, interoperability between senders and recipients depends on shared
+   expectations regarding what is a reasonable length for each protocol
+   element. Furthermore, what is commonly understood to be a reasonable length
+   for some protocol elements has changed over the course of the past three
+   decades of HTTP use and is expected to continue changing in the future.<a href="#section-2.3-2" class="pilcrow">¶</a></p>
+<p id="section-2.3-3">
+   At a minimum, a recipient <span class="bcp14">MUST</span> be able to parse and process protocol
+   element lengths that are at least as long as the values that it generates
+   for those same protocol elements in other messages. For example, an origin
+   server that publishes very long URI references to its own resources needs
+   to be able to parse and process those same references when received as a
+   target URI.<a href="#section-2.3-3" class="pilcrow">¶</a></p>
+<p id="section-2.3-4">
+   Many received protocol elements are only parsed to the extent necessary to
+   identify and forward that element downstream. For example, an intermediary
+   might parse a received field into its field name and field value components,
+   but then forward the field without further parsing inside the field value.<a href="#section-2.3-4" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="error.handling">
+<section id="section-2.4">
+        <h3 id="name-error-handling">
+<a href="#section-2.4" class="section-number selfRef">2.4. </a><a href="#name-error-handling" class="section-name selfRef">Error Handling</a>
+        </h3>
+<p id="section-2.4-1">
+   A recipient <span class="bcp14">MUST</span> interpret a received protocol element according to the
+   semantics defined for it by this specification, including extensions to
+   this specification, unless the recipient has determined (through experience
+   or configuration) that the sender incorrectly implements what is implied by
+   those semantics.
+   For example, an origin server might disregard the contents of a received
+   <a href="#field.accept-encoding" class="xref">Accept-Encoding</a> header field if inspection of the
+   <a href="#field.user-agent" class="xref">User-Agent</a> header field indicates a specific implementation
+   version that is known to fail on receipt of certain content codings.<a href="#section-2.4-1" class="pilcrow">¶</a></p>
+<p id="section-2.4-2">
+   Unless noted otherwise, a recipient <span class="bcp14">MAY</span> attempt to recover a usable
+   protocol element from an invalid construct.  HTTP does not define
+   specific error handling mechanisms except when they have a direct impact
+   on security, since different applications of the protocol require
+   different error handling strategies.  For example, a Web browser might
+   wish to transparently recover from a response where the
+   <a href="#field.location" class="xref">Location</a> header field doesn't parse according to the ABNF,
+   whereas a systems control client might consider any form of error recovery
+   to be dangerous.<a href="#section-2.4-2" class="pilcrow">¶</a></p>
+<p id="section-2.4-3">
+   Some requests can be automatically retried by a client in the event of
+   an underlying connection failure, as described in
+   <a href="#idempotent.methods" class="xref">Section 9.2.2</a>.<a href="#section-2.4-3" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="protocol.version">
+<section id="section-2.5">
+        <h3 id="name-protocol-version">
+<a href="#section-2.5" class="section-number selfRef">2.5. </a><a href="#name-protocol-version" class="section-name selfRef">Protocol Version</a>
+        </h3>
+<p id="section-2.5-1">
+   HTTP's version number consists of two decimal digits separated by a "."
+   (period or decimal point). The first digit (major version) indicates the
+   messaging syntax, whereas the second digit (minor version)
+   indicates the highest minor version within that major version to which the
+   sender is conformant (able to understand for future communication).<a href="#section-2.5-1" class="pilcrow">¶</a></p>
+<p id="section-2.5-2">
+   While HTTP's core semantics don't change between protocol versions, their
+   expression "on the wire" can change, and so the
+   HTTP version number changes when incompatible changes are made to the wire
+   format. Additionally, HTTP allows incremental, backwards-compatible
+   changes to be made to the protocol without changing its version through
+   the use of defined extension points (<a href="#extending" class="xref">Section 16</a>).<a href="#section-2.5-2" class="pilcrow">¶</a></p>
+<p id="section-2.5-3">
+   The protocol version as a whole indicates the sender's conformance with
+   the set of requirements laid out in that version's corresponding
+   specification(s).
+   For example, the version "HTTP/1.1" is defined by the combined
+   specifications of this document, "HTTP Caching" <span>[<a href="#CACHING" class="xref">CACHING</a>]</span>,
+   and "HTTP/1.1" <span>[<a href="#HTTP11" class="xref">HTTP/1.1</a>]</span>.<a href="#section-2.5-3" class="pilcrow">¶</a></p>
+<p id="section-2.5-4">
+   HTTP's major version number is incremented when an incompatible message
+   syntax is introduced. The minor number is incremented when changes made to
+   the protocol have the effect of adding to the message semantics or
+   implying additional capabilities of the sender.<a href="#section-2.5-4" class="pilcrow">¶</a></p>
+<p id="section-2.5-5">
+   The minor version advertises the sender's communication capabilities even
+   when the sender is only using a backwards-compatible subset of the
+   protocol, thereby letting the recipient know that more advanced features
+   can be used in response (by servers) or in future requests (by clients).<a href="#section-2.5-5" class="pilcrow">¶</a></p>
+<p id="section-2.5-6">
+   When a major version of HTTP does not define any minor versions, the minor
+   version "0" is implied. The "0" is used when referring to that protocol
+   within elements that require a minor version identifier.<a href="#section-2.5-6" class="pilcrow">¶</a></p>
+</section>
+</div>
+</section>
+</div>
+<div id="terminology">
+<section id="section-3">
+      <h2 id="name-terminology-and-core-concep">
+<a href="#section-3" class="section-number selfRef">3. </a><a href="#name-terminology-and-core-concep" class="section-name selfRef">Terminology and Core Concepts</a>
+      </h2>
+<p id="section-3-1">
+   HTTP was created for the World Wide Web (WWW) architecture
+   and has evolved over time to support the scalability needs of a worldwide
+   hypertext system. Much of that architecture is reflected in the terminology
+   used to define HTTP.<a href="#section-3-1" class="pilcrow">¶</a></p>
+<div id="resources">
+<section id="section-3.1">
+        <h3 id="name-resources">
+<a href="#section-3.1" class="section-number selfRef">3.1. </a><a href="#name-resources" class="section-name selfRef">Resources</a>
+        </h3>
+<span id="iref-resource-14" class="iref"></span>
+        <p id="section-3.1-1">
+   The target of an HTTP request is called a "resource".
+   HTTP does not limit the nature of a resource; it merely
+   defines an interface that might be used to interact with resources.
+   Most resources are identified by a Uniform Resource Identifier (URI), as
+   described in <a href="#uri" class="xref">Section 4</a>.<a href="#section-3.1-1" class="pilcrow">¶</a></p>
+<p id="section-3.1-2">
+   One design goal of HTTP is to separate resource identification from
+   request semantics, which is made possible by vesting the request
+   semantics in the request method (<a href="#methods" class="xref">Section 9</a>) and a few
+   request-modifying header fields.
+   A resource cannot treat a request in a manner inconsistent with the
+   semantics of the method of the request. For example, though the URI of a
+   resource might imply semantics that are not safe, a client can expect the
+   resource to avoid actions that are unsafe when processing a request with a
+   safe method (see <a href="#safe.methods" class="xref">Section 9.2.1</a>).<a href="#section-3.1-2" class="pilcrow">¶</a></p>
+<p id="section-3.1-3">
+   HTTP relies upon the Uniform Resource Identifier (URI)
+   standard <span>[<a href="#URI" class="xref">URI</a>]</span> to indicate the target resource
+   (<a href="#target.resource" class="xref">Section 7.1</a>) and relationships between resources.<a href="#section-3.1-3" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="representations">
+<section id="section-3.2">
+        <h3 id="name-representations">
+<a href="#section-3.2" class="section-number selfRef">3.2. </a><a href="#name-representations" class="section-name selfRef">Representations</a>
+        </h3>
+<span id="iref-representation-15" class="iref"></span>
+        <p id="section-3.2-1">
+   A "representation" is information
+   that is intended to reflect a past, current, or desired state of a given
+   resource, in a format that can be readily communicated via the protocol.
+   A representation consists of a set of representation metadata and a
+   potentially unbounded stream of representation data
+   (<a href="#representation.data.and.metadata" class="xref">Section 8</a>).<a href="#section-3.2-1" class="pilcrow">¶</a></p>
+<p id="section-3.2-2">
+   HTTP allows "information hiding" behind its uniform interface by defining
+   communication with respect to a transferable representation of the resource
+   state, rather than transferring the resource itself. This allows the
+   resource identified by a URI to be anything, including temporal functions
+   like "the current weather in Laguna Beach", while potentially providing
+   information that represents that resource at the time a message is
+   generated <span>[<a href="#REST" class="xref">REST</a>]</span>.<a href="#section-3.2-2" class="pilcrow">¶</a></p>
+<p id="section-3.2-3">
+   The uniform interface is similar to a window through which one can observe
+   and act upon a thing only through the communication of messages to an
+   independent actor on the other side. A shared abstraction is needed to
+   represent ("take the place of") the current or desired state of that thing
+   in our communications. When a representation is hypertext, it can provide
+   both a representation of the resource state and processing instructions
+   that help guide the recipient's future interactions.<a href="#section-3.2-3" class="pilcrow">¶</a></p>
+<div id="selected.representation">
+<p id="section-3.2-4">
+               <span id="iref-selected-representation-16" class="iref"></span>
+   A <a href="#target.resource" class="xref">target resource</a> might be provided with, or be capable of
+   generating, multiple representations that are each intended to reflect the
+   resource's current state. An algorithm, usually based on
+   <a href="#content.negotiation" class="xref">content negotiation</a> (<a href="#content.negotiation" class="xref">Section 12</a>),
+   would be used to select one of those representations as being most
+   applicable to a given request.
+   This "selected representation" provides the data and metadata
+   for evaluating conditional requests (<a href="#conditional.requests" class="xref">Section 13</a>)
+   and constructing the content for <a href="#status.200" class="xref">200 (OK)</a>,
+   <a href="#status.206" class="xref">206 (Partial Content)</a>, and
+   <a href="#status.304" class="xref">304 (Not Modified)</a> responses to GET (<a href="#GET" class="xref">Section 9.3.1</a>).<a href="#section-3.2-4" class="pilcrow">¶</a></p>
+</div>
+</section>
+</div>
+<div id="connections">
+<section id="section-3.3">
+        <h3 id="name-connections-clients-and-ser">
+<a href="#section-3.3" class="section-number selfRef">3.3. </a><a href="#name-connections-clients-and-ser" class="section-name selfRef">Connections, Clients, and Servers</a>
+        </h3>
+<span id="iref-client-17" class="iref"></span>
+        <span id="iref-server-18" class="iref"></span>
+        <span id="iref-connection-19" class="iref"></span>
+        <p id="section-3.3-1">
+   HTTP is a client/server protocol that operates over a reliable
+   transport- or session-layer "connection".<a href="#section-3.3-1" class="pilcrow">¶</a></p>
+<p id="section-3.3-2">
+   An HTTP "client" is a program that establishes a connection
+   to a server for the purpose of sending one or more HTTP requests.
+   An HTTP "server" is a program that accepts connections
+   in order to service HTTP requests by sending HTTP responses.<a href="#section-3.3-2" class="pilcrow">¶</a></p>
+<p id="section-3.3-3">
+   The terms client and server refer only to the roles that
+   these programs perform for a particular connection.  The same program
+   might act as a client on some connections and a server on others.<a href="#section-3.3-3" class="pilcrow">¶</a></p>
+<p id="section-3.3-4">
+   HTTP is defined as a stateless protocol, meaning that each request message's semantics
+   can be understood in isolation, and that the relationship between connections
+   and messages on them has no impact on the interpretation of those messages.
+   For example, a CONNECT request (<a href="#CONNECT" class="xref">Section 9.3.6</a>) or a request with
+   the Upgrade header field (<a href="#field.upgrade" class="xref">Section 7.8

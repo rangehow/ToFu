@@ -316,9 +316,7 @@ def test_native_batch_form_persists_through_real_turn_command_and_reload(browser
         submit = form.get_by_role('button', name='Submit answer')
         assert submit.is_disabled()
         form.locator('select').select_option('Training')
-        # The choice question also carries a hidden own-answer input (fbfe760105).
-        hours = form.locator('[data-rich-control="form-field-1"]')
-        hours.fill('24')
+        form.locator('input').fill('24')
         with page.expect_response(lambda response: response.request.method == 'POST' and response.url.endswith('/attempts')) as saved:
             submit.click()
         assert saved.value.status == 200, saved.value.text()
@@ -328,7 +326,7 @@ def test_native_batch_form_persists_through_real_turn_command_and_reload(browser
         form.get_by_text('Answer saved', exact=True).wait_for()
         page.reload()
         form.get_by_text('Answer saved', exact=True).wait_for()
-        assert hours.input_value() == '24'
+        assert form.locator('input').input_value() == '24'
         assert form.locator('select').input_value() == 'Training'
         assert submit.is_disabled()
     finally:

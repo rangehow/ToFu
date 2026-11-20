@@ -65,7 +65,7 @@ TODO_WRITE_TOOL = {
 }
 
 
-def _normalize_todos(raw, *, restoring: bool = False) -> list[dict]:
+def _normalize_todos(raw, *, restoring: bool = False, board_projection: bool = False) -> list[dict]:
     """Validate before copying. Malformed lists never mean an empty plan.
 
     Old IDs are intentionally discarded. Migration preserves all statuses,
@@ -76,7 +76,7 @@ def _normalize_todos(raw, *, restoring: bool = False) -> list[dict]:
     limit = TODO_MAX_RESTORED_ITEMS if restoring else TODO_MAX_ITEMS
     if not isinstance(raw, list):
         raise ValueError('todos must be an array')
-    if len(raw) > limit:
+    if not board_projection and len(raw) > limit:
         raise ValueError(f'todos may contain at most {limit} items')
     rows = []
     for item in raw:
@@ -85,7 +85,7 @@ def _normalize_todos(raw, *, restoring: bool = False) -> list[dict]:
         content, status = item.get('content'), item.get('status')
         if not isinstance(content, str) or not content.strip():
             raise ValueError('todo content must be a non-empty string')
-        if len(content) > TODO_MAX_CONTENT_CHARS:
+        if not board_projection and len(content) > TODO_MAX_CONTENT_CHARS:
             raise ValueError(f'todo content exceeds {TODO_MAX_CONTENT_CHARS} characters')
         if not isinstance(status, str) or status not in VALID_STATUSES:
             raise ValueError('todo status must be pending, in_progress, blocked, or completed')
@@ -136,6 +136,8 @@ def _normalise_state(raw, legacy_todos=None) -> dict:
         raise ValueError('todo update_count must be a non-negative integer')
     state['update_count'] = count
     if version == TODO_STATE_VERSION:
+        if 'boardRef' in raw:
+            return _board_projection(state, raw['todos'], raw['explanation'], raw['boardRef'])
         explanation = raw.get('explanation', '')
         if not isinstance(explanation, str) or len(explanation) > TODO_MAX_EXPLANATION_CHARS:
             raise ValueError('todo explanation must be text of at most 2048 characters')
@@ -154,6 +156,25 @@ def _normalise_state(raw, legacy_todos=None) -> dict:
         rows.extend(frame['todos'])
     state['todos'] = _normalize_todos(rows, restoring=True)
     return state
+
+
+def _board_projection(state, todos, explanation, reference):
+    if (not isinstance(reference, dict) or set(reference) != {'bindingRevision', 'revision'}
+            or any(type(value) is not int or value < 1 for value in reference.values())):
+        raise ValueError('boardRef must pin a positive bindingRevision and revision')
+    if not isinstance(explanation, str) or not explanation.strip():
+        raise ValueError('task board summary must be nonblank text')
+    return {**state, 'boardRef': dict(reference), 'explanation': explanation,
+            'todos': _normalize_todos(todos, restoring=True, board_projection=True)}
+
+
+def board_todo_state(state, todos, explanation, *, binding_revision, revision):
+    """Project a committed board into the recoverable UI checklist, without re-admitting its content."""
+    projected = _board_projection(state, todos, explanation,
+                                  {'bindingRevision': binding_revision, 'revision': revision})
+    if projected != state:
+        projected['update_count'] += 1
+    return projected
 
 
 def public_todo_state(raw) -> dict:
@@ -292,7 +313,11 @@ def apply_todo_operation(current_state: dict | None, fn_args: dict | None) -> di
 
 
 def render_todo_snapshot(state: dict, *, explanation_label: str = 'Explanation') -> str:
-    """Render accepted fields separately; labels must never rewrite item text."""
+    """Render model context; a canonical board is recoverable without echoing every row."""
+    if reference := state.get('boardRef'):
+        return (f"Task board revision {reference['revision']} (binding {reference['bindingRevision']}), "
+                f"{len(state['todos'])} checklist items. Read the current state with "
+                'update_task_progress(read={}); use changes to leave unrelated tasks intact.')
     body = render_todo_list(state.get('todos')) or 'The accepted todo list is empty.'
     explanation = state.get('explanation') or ''
     return body + (f'\n{explanation_label}: {explanation}' if explanation else '')
@@ -336,35 +361,30 @@ def apply_todo_write_to_task(task: dict, fn_args: dict | None, *,
     ValueError it raises rejects the write and leaves both unchanged.
     """
     with todo_lock(task):
-        outcome = apply_todo_operation(todo_state_from_task(task), fn_args)
+        before = todo_state_from_task(task)
+        outcome = apply_todo_operation(before, fn_args)
         if publish is not None and not outcome['rejected'] and not outcome['no_op']:
             try:
-                outcome['publication'] = publish(copy.deepcopy(outcome['state']))
+                publication = publish(copy.deepcopy(outcome['state']))
+                projected = publication.pop('projectedState', None)
+                if projected is not None:
+                    outcome = _outcome(projected, no_op=projected == before)
+                outcome['publication'] = publication
             except ValueError as exc:
-                outcome = _outcome(todo_state_from_task(task), reason=str(exc))
+                outcome = _outcome(before, reason=str(exc))
         if not outcome['rejected']:
             task['_todoState'] = copy.deepcopy(outcome['state'])
             task['_todos'] = copy.deepcopy(outcome['todos'])
     return outcome['todos'], _result_text(outcome), outcome
 
 
-def adopt_todo_projection(task: dict, todos, explanation: str) -> dict:
-    """Adopt a plan another owner accepted (a Coordinator's task board) as this task's progress.
-
-    Rows are validated like a todo_write; an unchanged plan keeps its update count.
-    """
-    rows = _normalize_todos(todos)
-    if not isinstance(explanation, str) or len(explanation) > TODO_MAX_EXPLANATION_CHARS:
-        raise ValueError(f'explanation must be text of at most {TODO_MAX_EXPLANATION_CHARS} characters')
-    explanation = explanation.strip()
+def adopt_todo_projection(task: dict, todos, explanation: str, *, binding_revision, revision) -> dict:
+    """Adopt the committed board as this task's recoverable checklist."""
     with todo_lock(task):
-        state = todo_state_from_task(task)
-        if not (state['update_count'] > 0 and rows == state['todos']
-                and explanation == state['explanation']):
-            state = {'version': TODO_STATE_VERSION, 'todos': rows,
-                     'explanation': explanation, 'update_count': state['update_count'] + 1}
+        state = board_todo_state(todo_state_from_task(task), todos, explanation,
+                                 binding_revision=binding_revision, revision=revision)
         task['_todoState'] = copy.deepcopy(state)
-        task['_todos'] = copy.deepcopy(rows)
+        task['_todos'] = copy.deepcopy(state['todos'])
     return state
 
 

@@ -13,7 +13,8 @@ from typing import Any
 
 
 def request_json(method: str, url: str, *, headers: dict[str, str] | None = None,
-                 body: Any = None, timeout: float | None = None) -> tuple[int, dict[str, Any]]:
+                 body: Any = None, timeout: float | None = None,
+                 require_object: bool = False) -> tuple[int, dict[str, Any]]:
     from lib.http_transport.client import http_request
     kwargs: dict[str, Any] = {'headers': dict(headers or {}), 'allow_redirects': False}
     if body is not None:
@@ -23,11 +24,13 @@ def request_json(method: str, url: str, *, headers: dict[str, str] | None = None
         kwargs['timeout'] = timeout
     response = http_request(method, url, **kwargs)
     try:
-        payload = response.json() if response.content else {}
+        payload = response.json() if response.content else None
     except ValueError:
-        payload = {}
+        payload = None
     finally:
         response.close()
+    if require_object and response.status_code == 200 and not isinstance(payload, dict):
+        raise ValueError('Invalid bot API response object')
     return response.status_code, payload if isinstance(payload, dict) else {}
 
 

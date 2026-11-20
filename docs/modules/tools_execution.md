@@ -115,7 +115,7 @@ especially in mixed CJK text. **Decision:** `lib.tools.contracts` classifies
 bounded string arguments. Display-only text, shown to people and keyed by
 nothing (`DISPLAY_TEXT_PARAMS`: `delegate_project_work.title`,
 `create_conversation.title`, `report_to_user.title`,
-`update_task_progress.summary`, `edit_file.description`), is shortened at the
+`edit_file.description`), is shortened at the
 shared input boundary (`shorten_display_text`: never inside a combining or
 joined character sequence or, when an earlier boundary exists, inside a word;
 ends in "…"), for direct calls and `execute_tools` children alike. The
@@ -125,8 +125,10 @@ field and both lengths: a JSON-object result gains only that key, so result
 parsers are unaffected, and `execute_tools` puts the note on the child
 receipt's repair. Shortening is deterministic, so an idempotent retry sends
 the same value. Identity keys keep exact refusal ("got N chars; allowed 1–M",
-with the overflow in the next action): task-board task titles are keyed with
-`due` by continuation commitments. Content whose limit comes from storage or
+with the overflow in the next action) when a bound exists. The task-board tool
+instead keeps summaries, notes and exact titles without editorial caps; the
+[board owns its write and read forms](../PROJECT_COORDINATION.md#one-progress-source-owner-decision-2026-11-08).
+Content whose limit comes from storage or
 delivery (`LONG_CONTENT_PARAMS`: `send_project_message.content` 4,096 from the
 message segment layout, `report_to_user.message` 4,000) is still refused, and
 the refusal says how to send it (split, or write a file and send its path).
@@ -350,6 +352,26 @@ Each call settles once. Side-effect retries require idempotency, call IDs remain
 
 **Well-formed result text.** Problem: producers can hand over unpaired UTF-16 surrogates. pymupdf4llm table extraction of an arXiv PDF clipped a Mathematical Alphanumeric letter to its high half (TB2.1 Tofu r1, constraints-scheduling); JSON `\udXXX` escapes and JavaScript string slicing do the same. UTF-8 cannot encode them, so sizing the program input crashed the turn (`program_results.retain_program_result`), and the store wire, artifact repository and provider request encoder all refuse them: a settled tool message holding one would fail every later model request of the conversation. Decision: `lib/tools/result_value.py::well_formed_text` is the one repair. Each unpaired code unit becomes U+FFFD, as `String.prototype.toWellFormed` does; a pair split across two code points is rejoined; clean text is returned unchanged, ASCII without a scan. `ResultPart` (text and metadata strings) and `TrustedResultText` apply it at construction, so canonical evidence and every settled model projection stay encodable whichever producer built them. The JavaScript bridge applies it to guest strings ([gateway contract](../contracts/TOOL_SEARCH_EXECUTION_GATEWAY.md#isolated-full-javascript-adapter)). Coverage is unchanged, since an unpaired surrogate encodes no character, and repositories keep refusing invalid text. Alternatives rejected: a try/except at each strict encoder (program retention, artifact chunks, store wire, provider request and more; any new encoder would reopen the crash); refusing or degrading a whole result for one invalid code unit; escaping it as visible `\udXXX` text, which forges content the producer never emitted. Verify `tests/tools/test_well_formed_result_text.py`.
 ## MCP boundary
+
+### Personal Antigravity login
+
+**Settings → Subscription Login → Antigravity** is the first-party UI and requires no MCP setup. The opt-in MCP connector below remains available for existing chat integrations that explicitly need it. Both use the official [Antigravity ACP CLI](https://antigravity.google/docs/ide/extensions/acp); neither creates a Gemini model-provider route.
+
+1. Install the [official Antigravity CLI](https://antigravity.google/docs/install?tab=cli). Run `agy acp --login` **on the Tofu host, as the same OS user**, and choose your personal Google account. Use a personal Antigravity profile, not its Gemini API key or Google Cloud mode. Tofu does not verify the plan tier. Do not paste a login code or token into Tofu.
+2. In **Settings → MCP → Add custom server**, set the name to `antigravity`, transport to **stdio**, and **Command** to the absolute path of this Tofu installation's Python interpreter. Enter the following in **Arguments**, one argument per line, with no surrounding quotes. Leave environment variables blank.
+
+   ```text
+   -m
+   lib.mcp.antigravity_local
+   --agy
+   /absolute/path/to/agy
+   ```
+
+3. With Tool Search on, ask Tofu to use `ask_antigravity` and give it the text to send. Use Manual tool approval to review what is sent to Google. Remove or disconnect the MCP server to stop future Tofu calls; sign out in Antigravity itself to clear its login.
+
+**Decision.** The connector launches `agy acp --sandbox` from a user-configured absolute path, with a fresh temporary working directory and no host MCP, filesystem, or terminal capabilities. It opens one session for one text prompt, declines ACP permission requests, and returns only the session's assistant text or a local error. It never imports OAuth tokens or forwards Tofu credentials. Existing MCP approval, execution, and cancellation apply; `agy` owns authentication, usage, tools, and its conversation history. A scratch directory and sandbox flag do not themselves guarantee isolation: keep restrictive Antigravity policies and use an OS account dedicated to the local instance. The connector requires the private Tofu mode and its personal owner. It does not use paired-device credentials.
+
+**Integration scope.** This MCP connector delegates to the installed agent; it is not a blanket rejection of direct OAuth or HTTP model integration. A direct subscription integration belongs to the existing OAuth, owner-scoped credential, network, and model-routing owners, not to this one-off stdio tool. There is no verified basis here for declaring all direct access a violation of provider terms; any such claim needs specific, current evidence. See the [subscription integration boundary](auth_providers_billing.md#personal-antigravity-subscription-login). Verify `tests/mcp_protocol/test_antigravity_local.py` with a synthetic ACP process; real sign-in requires the owner to complete Google's consent flow. The [native card workflow and its trust boundary](auth_providers_billing.md#personal-antigravity-subscription-login) are documented with Subscription Login.
 
 **MCP tools are search-only (owner decision 2026-11-13).** Problem: connected MCP tools reached the model eagerly on several paths. The registry preselected up to eight native MCP schemas per conversation, froze them into a durable conversation declaration and pinned them direct (`mcpToolExposure=auto`; `inline` shipped the whole catalog, `progressive` three wrapper tools). The composer's `mcp_tools_delta` tail block listed up to eight MCP names with hints every turn, and in Delegate Mode it listed the whole worker catalog. A Worker grant or `spawn_agents` allowlist naming `mcp__` tools made them required-direct in the child, a named `tool_choice` restored an MCP schema, and the `search_tools` namespace hint and `spawn_agents` description named MCP. A default headless run therefore carried MCP names and text in its first request whenever the host had a server connected, which the owner ruled out (11-13 06:40 CST): “The MCP tools have not been disabled; they are all accessed through tool search. There is no need to let a few slip through, as that would compromise the clean context needed for headless benchmark evaluation.”
 

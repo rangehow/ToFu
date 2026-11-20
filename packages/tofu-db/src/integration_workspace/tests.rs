@@ -1116,3 +1116,67 @@ fn stale_recovery_visits_every_active_index_page_and_commits_the_repaired_queue(
     let key = active_count_key(&tx).unwrap();
     assert_eq!(read_u64(&reopened, &mut tx, &key, "active").unwrap(), 1101);
 }
+fn status_of(
+    database: &mut AuthorityDatabase,
+    owner: u64,
+    project_root: &str,
+) -> io::Result<Value> {
+    let payload = json!({"user_id":owner,"project_root":project_root});
+    let mut tx = database.begin_with_identity_claim_scopes(7, owner)?;
+    let request = Request {
+        operation: "integration.status".into(),
+        payload: payload.as_object().unwrap().clone(),
+        now_ms: 1000,
+    };
+    let result = execute(database, &mut tx, &request)?.unwrap();
+    Ok(serde_json::from_slice(&result).unwrap())
+}
+
+/// The project index holds one current locator per registered workspace, so a
+/// project with more accepted workspaces than the former fixed row cap must
+/// still answer status instead of refusing at the authority.
+#[test]
+fn status_answers_every_registered_workspace_beyond_the_former_row_bound() {
+    let (_vfs, mut database) = prepared();
+    seed_history(&mut database, 1001, true);
+
+    let status = status_of(&mut database, 11, "/repo").unwrap();
+    let rows = status["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 1001);
+    assert_eq!(rows[0]["task_id"], "task-1001");
+    assert_eq!(rows[1000]["task_id"], "task-1");
+    assert!(rows
+        .iter()
+        .all(|row| row["project_root"] == "/repo" && row["state"] == "running"));
+    assert!(status["events"].as_array().unwrap().is_empty());
+}
+
+/// Control: one workspace keeps the exact prior response, and re-registering
+/// the same work item replaces its index row rather than adding one.
+#[test]
+fn status_returns_one_current_row_per_registered_workspace() {
+    let (_vfs, mut database) = prepared();
+    call(
+        &mut database,
+        "register",
+        registration(11, "alpha", "/checkout/alpha"),
+    )
+    .unwrap();
+    call(
+        &mut database,
+        "register",
+        registration(11, "alpha", "/checkout/alpha"),
+    )
+    .unwrap();
+
+    let status = status_of(&mut database, 11, "/repo").unwrap();
+    let rows = status["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["task_id"], "alpha");
+    assert_eq!(rows[0]["workspace_path"], "/checkout/alpha");
+    assert_eq!(rows[0]["state"], "running");
+    assert_eq!(
+        status["events"].as_array().unwrap()[0]["kind"],
+        "registered"
+    );
+}

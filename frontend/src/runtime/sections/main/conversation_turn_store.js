@@ -437,10 +437,6 @@ async function _durableEditedImages(images) {
 }
 
 async function _editNativeTurn(conv, turnId) {
-  const inlineEditor = await loadTurnInlineEditor().catch((error) => {
-    console.warn('[TurnEdit] inline editor unavailable:', error);
-    return null;
-  });
   const resolved = _nativeTurnState(conv, turnId);
   if (!resolved) return;
   const projection = resolved.turn.projection || {};
@@ -451,8 +447,8 @@ async function _editNativeTurn(conv, turnId) {
     projection.images?.length || projection.videos?.length
       || projection.pdfTexts?.length || projection.attachments?.length,
   );
-  if (inlineEditor) {
-    const session = inlineEditor.openTurnInlineEditor({
+  if (typeof openTurnInlineEditor === 'function') {
+    const session = openTurnInlineEditor({
       conversationId: conv.id,
       turnId,
       text: currentText,
@@ -1702,7 +1698,9 @@ const _conversationSurfaceController = createConversationSurfaceController({
     _updateScrollToBottomBtn();
     if (typeof buildTurnNav === 'function') buildTurnNav(conv);
     if (typeof _cvRefreshContextGauge === 'function') _cvRefreshContextGauge();
-    turnInlineEditorModule?.reconcileTurnInlineEditors();
+    if (typeof reconcileTurnInlineEditors === 'function') {
+      reconcileTurnInlineEditors();
+    }
   },
 });
 
@@ -2025,6 +2023,9 @@ runtimeScope.requestAuthoritativeConversationRender = function (
       ? (release) => global.requestAnimationFrame(() =>
           global.requestAnimationFrame(() => release()))
       : undefined,
+    onStopUnconfirmed() {
+      if (typeof showToast === 'function') showToast('停止请求未确认，请重试', 'warning');
+    },
     buildNavigation(conv) {
       _updateScrollToBottomBtn();
       if (typeof buildTurnNav === 'function') buildTurnNav(conv);

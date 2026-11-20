@@ -113,7 +113,7 @@ def test_codex_probe_no_token_is_not_logged_in_never_disable(monkeypatch):
     token first, and with NO token the verdict is the NEUTRAL
     'not_logged_in' — never recommend-disable. (Hermetic: token resolution
     is mocked empty so no real network happens.)"""
-    monkeypatch.setattr('lib.oauth.codex.codex_get_valid_token',
+    monkeypatch.setattr('lib.oauth.codex.codex_get_valid_token_snapshot',
                         lambda **_kwargs: None)
     status, detail = pp.probe_one_cell(
         'https://chatgpt.com/backend-api/codex', 'oauth-managed', 'gpt-5-codex',

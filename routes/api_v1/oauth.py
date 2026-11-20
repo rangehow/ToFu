@@ -20,13 +20,13 @@ from __future__ import annotations
 from quart import Blueprint, request
 
 from lib.api_response import (
-    api_bad_request, api_internal_error, api_ok, api_payload,
+    api_bad_request, api_forbidden, api_internal_error, api_ok, api_payload,
 )
 from lib.log import get_logger
 from lib.openapi import api_meta
-from lib.request_parser import optional_str, parse_body
+from lib.request_parser import BadRequest, async_parse_body, optional_str, parse_body, require_str
 
-from .auth import request_principal, require_auth, require_scope
+from .auth import human_ui_provenance, request_principal, require_auth, require_scope
 
 logger = get_logger(__name__)
 
@@ -244,10 +244,13 @@ def oauth_test():
 )
 def oauth_device_login():
     if request.method == 'GET':
+        if set(request.args) - {'provider'} or len(request.args.getlist('provider')) > 1:
+            raise BadRequest('Unexpected or duplicate OAuth query parameter')
         provider = request.args.get('provider', '')
     else:
-        from lib.request_parser import optional_str, parse_body
-        body = parse_body(force=True, strict=True)
+        if request.args:
+            raise BadRequest('Send OAuth POST parameters in the JSON body')
+        body = parse_body(force=True, strict=True, exact=('provider',))
         provider = optional_str(body, 'provider', default='', max_len=16)
     if provider not in ('codex', 'kimi'):
         return api_bad_request(
@@ -391,5 +394,85 @@ def oauth_egress_agent_set():
     )
     return api_ok({'pinned': pinned})
 
+
+_ANTIGRAVITY_PROMPT_MAX_CHARS = 16384  # Subscription Login text prompt contract.
+
+
+@api_v1_oauth_bp.route('/api/v1/oauth/antigravity', methods=['GET'])
+@require_scope('admin')
+@api_meta(summary='Check the local Antigravity CLI session', tags=['capabilities'], scope='admin',
+          description='Checks ACP session readiness without sending a prompt or returning credentials.')
+async def oauth_antigravity_status():
+    from lib.oauth.antigravity import antigravity_for_owner
+
+    return api_ok(await antigravity_for_owner(request_principal()))
+
+
+@api_v1_oauth_bp.route('/api/v1/oauth/antigravity', methods=['POST'])
+@require_scope('admin')
+@api_meta(
+    summary='Send a text prompt to the local Antigravity agent', tags=['capabilities'], scope='admin',
+    description='Private personal Tofu and same-origin UI session only. Google owns usage and credentials.',
+    request_body={'required': True, 'content': {'application/json': {'schema': {
+        'type': 'object', 'additionalProperties': False, 'required': ['prompt'],
+        'properties': {'prompt': {'type': 'string', 'minLength': 1,
+                                  'maxLength': _ANTIGRAVITY_PROMPT_MAX_CHARS}},
+    }}}},
+)
+async def oauth_antigravity_prompt():
+    from lib.oauth.antigravity import antigravity_for_owner
+
+    try:
+        human_ui_provenance()
+    except PermissionError:
+        return api_forbidden('Send Antigravity prompts from the signed-in Tofu browser.')
+    body = await async_parse_body(strict=True, exact=('prompt',))
+    prompt = require_str(body, 'prompt', strip=False, max_len=_ANTIGRAVITY_PROMPT_MAX_CHARS)
+    if not prompt.strip():
+        return api_bad_request('prompt is required', field='prompt')
+    return api_ok(await antigravity_for_owner(request_principal(), prompt=prompt))
+
+
+@api_v1_oauth_bp.route('/api/v1/oauth/antigravity/login', methods=['POST'])
+@require_scope('admin')
+@api_meta(
+    summary='Start personal Google sign-in through the local Antigravity CLI',
+    tags=['capabilities'], scope='admin', request_body=False,
+    description='Signed-in same-origin Tofu UI only. The CLI opens its own browser and verifies readiness.',
+)
+async def oauth_antigravity_login():
+    from lib.oauth.antigravity import antigravity_for_owner
+
+    try:
+        human_ui_provenance()
+    except PermissionError:
+        return api_forbidden('Start Antigravity sign-in from the signed-in Tofu browser.')
+    return api_ok(await antigravity_for_owner(request_principal(), login=True))
+
+
+@api_v1_oauth_bp.route('/api/v1/oauth/antigravity/install', methods=['POST'])
+@require_scope('admin')
+@api_meta(
+    summary='Install the official Antigravity CLI on the Tofu host',
+    tags=['capabilities'], scope='admin', request_body=False,
+    description=('Same-origin personal-owner UI only. Downloads the Google release manifest '
+                 'and native binary through subscription network policy, verifies SHA512, '
+                 'and atomically installs into ~/.local/bin without running a shell.'),
+)
+async def oauth_antigravity_install():
+    from lib.oauth.subscription_cli_install import install_subscription_cli
+
+    try:
+        human_ui_provenance()
+    except PermissionError:
+        return api_forbidden('Install the Antigravity CLI from the signed-in Tofu browser.')
+    if await request.get_data():
+        return api_bad_request('This operation takes no request body.')
+    return api_ok(await install_subscription_cli('antigravity', request_principal()))
+
+
+from .oauth_accounts import register_accounts
+
+register_accounts(api_v1_oauth_bp)
 
 __all__ = ['api_v1_oauth_bp']

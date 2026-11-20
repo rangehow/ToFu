@@ -1,9 +1,8 @@
 """Public-export publication gate: only code/templates may reach Git."""
 
 import pytest
-from tests.support.export_toolchain import require_export_toolchain
 
-require_export_toolchain()
+pytest.importorskip('export', reason='export.py is not shipped in opensource builds')
 
 pytestmark = pytest.mark.unit
 
@@ -383,3 +382,68 @@ def test_push_accepts_initialized_repository_without_first_commit(tmp_path, monk
     published = subprocess.check_output(
         ['git', 'rev-parse', 'refs/heads/main'], cwd=remote, text=True).strip()
     assert published == local
+
+
+@pytest.mark.parametrize(
+    ('rel', 'category'),
+    [
+        ('data/private.db', 'runtime data root'),
+        ('outputs/report.json', 'runtime data root'),
+        ('uploads/images/private.png', 'attachment or original media store'),
+        ('logs/app.log', 'runtime log store'),
+        ('.chatui/sessions/transcript.json', 'session or transcript store'),
+        ('lib/.project_sessions/s1/modifications.json', 'session or transcript store'),
+        ('.tofu/memories/note.md', 'session or transcript store'),
+        ('config/credentials_vault.json', 'credential, config, or environment file'),
+        ('.env', 'credential, config, or environment file'),
+        ('config/mcp_servers.json', 'credential, config, or environment file'),
+        ('certs/service.pem', 'credential or private key file'),
+        ('models/model.safetensors', 'model weights'),
+        ('models/model.gguf', 'model weights'),
+        ('vendor/pkg/node_modules/left-pad/index.js', 'package cache'),
+        ('vendor/pkg/__pycache__/mod.cpython-311.pyc', 'package cache'),
+        ('cache/history.sqlite3', 'database or SQL dump'),
+    ],
+)
+def test_live_runtime_path_classes_are_refused_with_their_category(tmp_path, rel, category):
+    from export import ExportPublishSafetyError, _publish_path_category, _verify_publish_tree
+
+    assert _publish_path_category(rel) == category
+    target = tmp_path / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text('private\n', encoding='utf-8')
+
+    with pytest.raises(ExportPublishSafetyError) as caught:
+        _verify_publish_tree(tmp_path)
+    message = str(caught.value)
+    assert rel in message
+    assert category in message
+
+
+def test_clean_synthetic_tree_and_similar_looking_source_paths_pass(tmp_path):
+    from export import _publish_path_category, _publish_tree_findings, _verify_publish_tree
+
+    clean = [
+        'lib/feature.py',
+        'docs/usage.md',
+        'docs/logs.md',
+        'docs/sessions.md',
+        'docs/data/overview.md',
+        'lib/models.py',
+        'lib/cache.py',
+        'tests/export/test_package_cache.py',
+        'data/.gitkeep',
+        'data/config/.gitkeep',
+        'uploads/images/.gitkeep',
+        '.env.example',
+    ]
+    for rel in clean:
+        assert _publish_path_category(rel) is None, rel
+        target = tmp_path / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('public source\n', encoding='utf-8')
+
+    forbidden, oversized, _ = _publish_tree_findings(tmp_path)
+    assert forbidden == []
+    assert oversized == []
+    _verify_publish_tree(tmp_path)

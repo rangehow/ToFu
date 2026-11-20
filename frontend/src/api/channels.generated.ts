@@ -148,6 +148,7 @@ export type OutboxAttachmentView = {
   kind: OutboxAttachmentKind;
   renditionOf: number | null;
   state: OutboxAttachmentState;
+  confirmation?: "provider_ack";
   error: string | null;
   project?: string;
 };
@@ -159,6 +160,7 @@ export type OutboxItemView = {
   text: string;
   replyTo: string | null;
   state: OutboxState;
+  deliveryEvidence?: "acceptance_unverified" | "delivery_unconfirmed";
   origin: OutboxOrigin;
   createdAtMs: number;
   updatedAtMs: number;

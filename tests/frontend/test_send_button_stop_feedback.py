@@ -21,6 +21,7 @@ COMPOSER_CONTROLS = os.path.join(
     ROOT, 'frontend', 'src', 'conversation', 'ui',
     'composer-send-controls.ts',
 )
+STOP_FEEDBACK = os.path.join(ROOT, 'frontend', 'src', 'core', 'turn-stop-feedback.ts')
 COMPOSER_CSS = os.path.join(
     ROOT, 'frontend', 'src', 'styles', 'application',
     '02-composer-field.css',
@@ -45,8 +46,10 @@ const fs = require('fs');
 global.window = global;
 global.runtimeScope = global;
 global.console = {log(){}, warn(){}, error(){}, info(){}, debug(){}};
-const timers = [];
-global.setTimeout = (fn) => { timers.push(fn); return timers.length; };
+const timers = new Map();
+let timerId = 0;
+global.setTimeout = (fn) => { timers.set(++timerId, fn); return timerId; };
+global.clearTimeout = (id) => { timers.delete(id); };
 
 class FakeTextArea {
   constructor() {
@@ -130,6 +133,7 @@ const labels = {
   'paper.send':'Send (Enter)',
   'branch.stopGen':'Stop generating',
   'stop.stopping':'Stopping…',
+  'projectCoordination.refresh':'Refresh',
 };
 global.t = (key) => labels[key] || key;
 global.pendingImages = [];
@@ -150,9 +154,25 @@ const hydrated = [];
 global.Api = {chat:{
   abortConv: async () => { abortConvCalls += 1; },
 }};
+(0, eval)(fs.readFileSync(process.argv[4], 'utf8'));
+const stop = createTurnStopFeedback({
+  readState: conv => ({turnsById:Object.fromEntries(
+    ConversationTurnRead.activeAttemptIds(conv).map(attemptId => [attemptId, {
+      status:'running', currentAttemptId:attemptId,
+    }]))}),
+  abortAttempt: attemptId => {
+    abortedAttempts.push(attemptId);
+    return attemptId === 'r1' ? Promise.resolve({ok:true}) : new Promise(() => {});
+  },
+  refresh: conv => hydrated.push(conv.id),
+  changed: (_conv, reason) => {
+    updateSendButton();
+    if (reason) showToast(reason, 'warning');
+  },
+});
 global.ConversationTurnStore = {
-  abortAttempt: async (attemptId) => { abortedAttempts.push(attemptId); },
-  hydrateConversation: async (conv) => { hydrated.push(conv.id); },
+  attemptStopState: stop.state,
+  stopActiveAttempts: stop.request,
 };
 global.ConversationTurnRead = {
   activeAttemptIds(conv) {
@@ -207,7 +227,7 @@ global.ConversationTurnRead = {
   };
   button.onclick();
   const duplicateCount = abortedAttempts.length;
-  timers.shift()();
+  timers.values().next().value();
   await Promise.resolve();
   await Promise.resolve();
 
@@ -249,8 +269,7 @@ global.ConversationTurnRead = {
     aborted: abortedAttempts.slice(),
     stopping,
     duplicateCount,
-    latchReleased: !mainConversation._finishingStream
-      && mainConversation._finishingAttemptId === null,
+    latchReleased: !ConversationTurnStore.attemptStopState(mainConversation),
     authorityPreserved: mainConversation._activeAttemptId === 'a1',
     retry,
     cleared,
@@ -267,8 +286,23 @@ global.ConversationTurnRead = {
   const branch = {
     aborted: abortedAttempts.slice(1),
     stopping: button.className.includes('is-stopping'),
-    latch: current._finishingAttemptId,
   };
+  stop.dispose(current);
+
+  current = {id:'refresh', _activeAttemptId:'r1'};
+  updateSendButton();
+  button.onclick();
+  await Promise.resolve();
+  timers.values().next().value();
+  const refresh = {
+    title:button.title,
+    ariaLabel:button.getAttribute('aria-label'),
+    stopping:button.className.includes('is-stopping'),
+  };
+  button.onclick();
+  refresh.serverAborts = abortedAttempts.filter(id => id === 'r1').length;
+  refresh.reads = hydrated.filter(id => id === 'refresh').length;
+  stop.dispose(current);
 
   let startupAborts = 0;
   current = {id:'startup', _genStartCtrl:{abort(){ startupAborts += 1; }}};
@@ -334,7 +368,7 @@ global.ConversationTurnRead = {
   handleKeyDown(keyEvent);
   const keyboard = {calls:keyboardCalls, prevented:keyEvent.prevented};
 
-  process.stdout.write(JSON.stringify({main, branch, startup, translating, unknown, keyboard}));
+  process.stdout.write(JSON.stringify({main, branch, refresh, startup, translating, unknown, keyboard}));
 })().catch((error) => { console.error(error); process.exit(1); });
 """
 
@@ -342,7 +376,7 @@ global.ConversationTurnRead = {
 def test_stop_click_feedback_and_idempotency():
     proc = subprocess.run(
         [_NODE, '-e', _HARNESS, SEND_BUTTON, _composer_controls_bundle(),
-         INPUT_HANDLING],
+         INPUT_HANDLING, native_module_path('turn-stop-feedback.js', STOP_FEEDBACK)],
         capture_output=True,
         text=True,
         timeout=60,
@@ -406,7 +440,13 @@ def test_stop_click_feedback_and_idempotency():
     assert result['branch'] == {
         'aborted': ['b1', 'b2'],
         'stopping': True,
-        'latch': 'b1',
+    }
+    assert result['refresh'] == {
+        'title': 'Stopping… · Refresh',
+        'ariaLabel': 'Stopping… · Refresh',
+        'stopping': True,
+        'serverAborts': 1,
+        'reads': 2,
     }
     assert result['startup'] == {
         'projection': {
@@ -510,7 +550,7 @@ def test_busy_draft_single_stop_control_fits_390px(browser):
         context.close()
 
     assert result == {
-        'state': {'busy': True, 'hasDraft': True, 'splitControls': False},
+        'state': {'busy': True, 'hasDraft': True},
         'toolbarFits': True,
         'pageFits': True,
         'separateStopAbsent': True,
@@ -537,5 +577,5 @@ def test_composer_control_i18n_keys_exist():
                   encoding='utf-8') as handle:
             catalog = json.load(handle)
         for key in ('orch.ai.send', 'paper.send', 'branch.stopGen',
-                    'stop.stopping'):
+                    'stop.stopping', 'projectCoordination.refresh'):
             assert catalog.get(key)

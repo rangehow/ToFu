@@ -1,6 +1,9 @@
 """Conversation transcript and revision-CAS operations."""
 
 from lib.storage_authority_sql import operations as ops
+from lib.storage_authority_sql.operations_pkg._conversation_portable_import import (
+    _conversation_portable_import,
+)
 from lib.storage_authority_sql.operations_pkg._conversation_usage import (
     _conversation_turn_usage,
 )
@@ -33,6 +36,8 @@ OPERATIONS = {
         'command', True, ops._conversation_restore),
     'conversation.clone': ops.OperationSpec(
         'command', True, ops._conversation_clone),
+    'conversation.portable_import': ops.OperationSpec(
+        'command', True, _conversation_portable_import),
     'conversation.purge': ops.OperationSpec(
         'command', True, ops._conversation_purge),
     'conversation.trash.prune': ops.OperationSpec(

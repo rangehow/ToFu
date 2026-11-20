@@ -143,8 +143,8 @@ def rig(context, monkeypatch):
     c.repo.turn_get = evidence_turn_get
 
     resolve_recovery = recovery.recover_conversation_dispatch
-    def recover():
-        return resolve_recovery('recipient', user_id=7,
+    def recover(*, coordinator_only=False):
+        return resolve_recovery('recipient', user_id=7, coordinator_only=coordinator_only,
             conversations=c.conversations,
             repository_factory=(c.repository if c.conversations.rows['recipient']['settings'].get(
                 'projectPath') == '/elsewhere' else (lambda *args: c.repo)),
@@ -153,6 +153,60 @@ def rig(context, monkeypatch):
 
     return SimpleNamespace(c=c, state=state, service=service, assignment=assignment,
                            recover=recover, stopped=stopped)
+
+
+@pytest.mark.parametrize('other_claimed', [False, True])
+def test_stop_after_pair_ack_before_association_settles_unstarted_attempt(rig, monkeypatch, other_claimed):
+    from lib.conversation_sync import command_service
+    from lib.project_dispatch.repository import DispatchGrantRevoked, record_stop
+    r = rig
+    r.state.busy = False
+    bind = r.c.repo.bind_execution
+    failed = []
+
+    def stopped_before_bind(*a, **kw):
+        assert len(r.state.pairs) == 1
+        record_stop(7, 'recipient', 1001, client=r.c.repo.client)
+        if other_claimed:
+            r.state.claimed.add('worker-attempt')
+        return bind(*a, **kw)
+
+    def fail(attempt_id, envelope, *, user_id, only_if_unbound):
+        assert user_id == 7 and only_if_unbound
+        if attempt_id not in r.state.claimed:
+            failed.append(attempt_id)
+            next(iter(r.state.pairs.values()))['attempt']['status'] = 'failed'
+
+    monkeypatch.setattr(r.c.repo, 'bind_execution', stopped_before_bind)
+    monkeypatch.setattr(command_service, 'fail_start', fail)
+    with pytest.raises(DispatchGrantRevoked):
+        r.service.dispatch_authorized(r.c.repo.admission(r.assignment['id']))
+    assert failed == ([] if other_claimed else ['worker-attempt']) and not r.state.starts
+    assert r.c.repo.read(r.assignment['id'])['execution'] is None
+    assert r.recover()['accepted'] == 0 and not r.state.starts
+
+
+def test_uncertain_association_ack_replays_the_same_pending_pair(rig, monkeypatch):
+    from lib.project_dispatch.repository import DispatchContention
+
+    r = rig
+    r.state.busy = False
+    bind = r.c.repo.bind_execution
+
+    def committed_before_timeout(*args, **kwargs):
+        bind(*args, **kwargs)
+        raise DispatchContention('Binding committed; ACK lost')
+
+    monkeypatch.setattr(r.c.repo, 'bind_execution', committed_before_timeout)
+    carrier = r.c.repo.admission(r.assignment['id'])
+    with pytest.raises(DispatchContention, match='ACK lost'):
+        r.service.dispatch_authorized(carrier)
+    attempt = next(iter(r.state.pairs.values()))['attempt']
+    assert attempt['status'] == 'pending' and not attempt.get('taskId')
+    assert not r.state.claimed and not r.state.starts
+    replay = r.service.dispatch_authorized(carrier)
+    assert replay['execution']['attemptId'] == attempt['attemptId']
+    assert len(r.state.births) == len(r.state.starts) == 1
 
 
 def test_restart_resumes_interrupted_assignment_in_place_and_settlement_wakes_coordinator(rig, monkeypatch):
@@ -431,10 +485,11 @@ def _settle_old_turn(rig, monkeypatch, *, human_task=None, applied=True, cancell
         order.append('real-human-first'); return human_task
     monkeypatch.setattr(queue, 'dispatch_next_queued', human)
     monkeypatch.setattr(queue, 'dispatch_completed_background_batch', lambda *a, **kw: None)
-    def recover(conv, *, user_id):
+    def recover(conv, *, user_id, coordinator_only=False):
         assert (conv, user_id) == ('recipient', 7)
         assert committed[-1]['status'] == ('interrupted' if cancelled else 'completed')
-        order.append('trusted-recovery'); return r.recover()
+        order.append('coordinator-recovery' if coordinator_only else 'trusted-recovery')
+        return r.recover(coordinator_only=coordinator_only)
     monkeypatch.setattr(recovery, 'recover_conversation_dispatch', recover)
     if task is None:
         task = {'id': 'old-task', '_attemptId': 'old-attempt', '_turnId': 'old-turn',
@@ -459,7 +514,7 @@ def test_real_shared_settlement_triggers_retry_only_after_durable_commit(rig, mo
 
 def test_real_shared_settlement_prefers_queued_human(rig, monkeypatch):
     result, _, order = _settle_old_turn(rig, monkeypatch, human_task='real-human-task')
-    assert result is True and order == ['durable-settlement', 'real-human-first']
+    assert result is True and order == ['durable-settlement', 'real-human-first', 'coordinator-recovery']
     assert rig.state.starts == []
 
 
@@ -494,7 +549,7 @@ def test_stop_withdrawal_survives_runtime_fence_expiry(context):
     grant = c.repo.authorize(c.request, c.principal, 'before-stop')
     withdrawal = revoke_conversation_dispatch('recipient', user_id=7, occurred_at=1001,
         conversations=c.conversations, repository_factory=lambda owner, project: c.repo,
-        lock_factory=lambda project: nullcontext(), stop_client=c.client)
+        lock_factory=lambda project, *, wait: nullcontext(), stop_client=c.client)
     assert withdrawal == {'revoked': 1, 'withdrawal': 'complete'}
     assert c.repo.read(grant['id'])['grant']['revoked'] is True
     stats = recover_project_dispatch(7, '/project', repository=c.repo,
@@ -544,7 +599,7 @@ def test_stop_before_metadata_restore_blocks_old_grant_even_without_runtime_fenc
     c.conversations.rows['recipient']['settings']['projectPath'] = '/other'
     recovery.revoke_conversation_dispatch('recipient', user_id=7, occurred_at=1001,
         conversations=c.conversations, repository_factory=lambda owner, project: c.repository(7, project),
-        lock_factory=lambda project: nullcontext(), stop_client=c.client)
+        lock_factory=lambda project, *, wait: nullcontext(), stop_client=c.client)
     assert c.repo.read(grant['id'])['grant']['revoked'] is False  # No guessed former project.
     c.conversations.rows['recipient']['settings']['projectPath'] = '/project'
     with pytest.raises(ValueError, match='durable conversation Stop'):
@@ -577,7 +632,7 @@ def _stop(c, *, lock_factory=None):
     from contextlib import nullcontext
     return recovery.revoke_conversation_dispatch('recipient', user_id=7, occurred_at=1001,
         conversations=c.conversations, repository_factory=lambda owner, project: c.repo,
-        lock_factory=lock_factory or (lambda project: nullcontext()), stop_client=c.client)
+        lock_factory=lock_factory or (lambda project, *, wait: nullcontext()), stop_client=c.client)
 
 
 def _contended_after_stop(c):
@@ -586,7 +641,7 @@ def _contended_after_stop(c):
     from lib.project_dispatch.repository import LIMITS
 
     @contextmanager
-    def lock(project):
+    def lock(project, *, wait):
         c.client.forced_conflicts = LIMITS['casAttempts']
         yield
     return lock
@@ -598,7 +653,7 @@ def test_stop_with_no_referenced_grant_never_waits_for_the_repository_lock(conte
     c = context
 
     @contextmanager
-    def held_by_integration(project):
+    def held_by_integration(project, *, wait):
         pytest.fail('Stop waited for the repository lock with no grant to revoke')
         yield
     assert _stop(c, lock_factory=held_by_integration) == {'revoked': 0, 'withdrawal': 'complete'}
@@ -606,6 +661,69 @@ def test_stop_with_no_referenced_grant_never_waits_for_the_repository_lock(conte
     later = c.repo.authorize(c.request, c.principal, 'after-stop')
     assert _stop(c, lock_factory=held_by_integration) == {'revoked': 0, 'withdrawal': 'complete'}
     assert c.repo.read(later['id'])['grant']['revoked'] is False
+
+
+def test_stop_acknowledges_while_publication_holds_the_real_repository_lock(context, monkeypatch, tmp_path):
+    from lib import integration_control
+    from lib.project_dispatch.repository import DispatchGrantRevoked
+
+    c = context
+    grant = c.repo.authorize(c.request, c.principal, 'before-stop')
+    binding = c.repo.admission(grant['id'])
+    monkeypatch.setattr(integration_control, '_control_root', lambda: tmp_path)
+    # The held file lock is real. Fail on any attempt to wait, rather than
+    # relying on a wall-clock deadline to distinguish waiting from returning.
+    monkeypatch.setattr(integration_control, 'time', SimpleNamespace(
+        sleep=lambda _: pytest.fail('Stop waited for publication to release the repository lock')))
+    with integration_control._repo_lock(c.repo.project):
+        outcome = recovery.revoke_conversation_dispatch('recipient', user_id=7, occurred_at=1001,
+            conversations=c.conversations, repository_factory=lambda owner, project: c.repo,
+            stop_client=c.client)
+        assert outcome == {'revoked': 0, 'withdrawal': 'pending_revocation'}
+        assert c.repo.read(grant['id'])['grant']['revoked'] is False
+        with pytest.raises(DispatchGrantRevoked, match='durable conversation Stop'):
+            c.repo.validate(binding)
+
+    stats = recovery.recover_project_dispatch(7, '/project', repository=c.repo,
+        service=SimpleNamespace(dispatch_authorized=lambda binding: pytest.fail('Stopped grant dispatched')),
+        was_aborted_after=lambda *a: False, clock=lambda: 1002)
+    assert stats['aborted'] == 1
+    assert c.repo.read(grant['id'])['grant']['revoked'] is True
+
+
+def test_stop_rereads_the_grant_after_acquiring_publication_lock(context):
+    from contextlib import contextmanager
+
+    c = context
+    grant = c.repo.authorize(c.request, c.principal, 'before-stop')
+
+    @contextmanager
+    def lock(project, *, wait):
+        assert wait is False
+        # Another revoker committed after Stop's preflight read.
+        c.repo.revoke(grant['id'], expected_revision=grant['grant']['revision'])
+        yield
+
+    assert _stop(c, lock_factory=lock) == {'revoked': 0, 'withdrawal': 'complete'}
+    assert c.repo.read(grant['id'])['grant']['revoked'] is True
+
+
+def test_stop_does_not_treat_a_lock_io_failure_as_contention(context, monkeypatch, tmp_path):
+    from lib import integration_control
+    from lib.project_dispatch.repository import stopped_after
+
+    c = context
+    grant = c.repo.authorize(c.request, c.principal, 'before-stop')
+    monkeypatch.setattr(integration_control, '_control_root', lambda: tmp_path)
+
+    def failed_lock_io(handle):
+        raise BlockingIOError('lock I/O failed')
+
+    monkeypatch.setattr(integration_control, '_try_file_lock', failed_lock_io)
+    with pytest.raises(BlockingIOError, match='lock I/O failed'):
+        _stop(c, lock_factory=integration_control._repo_lock)
+    assert stopped_after(7, 'recipient', grant['grant']['createdAt'], client=c.client)
+    assert c.repo.read(grant['id'])['grant']['revoked'] is False
 
 
 @pytest.mark.parametrize('completion', ['recovery', 'repeated_stop'])
@@ -660,7 +778,7 @@ def _attempt_stop(monkeypatch, c, lock):
         return withdraw(conversation_id, user_id=user_id, occurred_at=occurred_at,
             conversations=c.conversations,
             repository_factory=lambda owner, project: c.repo,
-            lock_factory=lambda project: lock[0](project), stop_client=c.client)
+            lock_factory=lambda project, *, wait: lock[0](project, wait=wait), stop_client=c.client)
     monkeypatch.setattr(recovery, 'revoke_conversation_dispatch', stop)
     return SimpleNamespace(row=row, cancelled=cancelled, notified=notified,
                            abort=lambda: turns.abort_attempt('attempt', user_id=7))
@@ -680,7 +798,7 @@ def test_cancelled_attempt_confirms_stop_when_only_grant_revocation_is_contended
     with pytest.raises(DispatchGrantRevoked, match='durable conversation Stop'):
         c.repo.validate(binding)
     stop.row['status'] = 'interrupted'
-    lock[0] = lambda project: nullcontext()
+    lock[0] = lambda project, *, wait: nullcontext()
     assert stop.abort() == {'attemptId': 'attempt', 'status': 'interrupted',
                             'alreadyTerminal': True, 'dispatchWithdrawal': 'complete'}
     assert c.repo.read(grant['id'])['grant']['revoked'] is True
@@ -700,7 +818,7 @@ def test_stop_of_an_ended_attempt_never_withdraws_later_work(context, monkeypatc
     c = context
     first = c.repo.authorize(c.request, c.principal, 'first-grant')
     binding = c.repo.admission(first['id'])
-    stop = _attempt_stop(monkeypatch, c, [lambda project: nullcontext()])
+    stop = _attempt_stop(monkeypatch, c, [lambda project, *, wait: nullcontext()])
     # The human's original Stop settled the attempt; a grant delegated later
     # must not inherit a fresh withdrawal from a repeated Stop of that attempt.
     c.now[0] = 1002
@@ -724,7 +842,7 @@ def test_cancelled_attempt_is_not_confirmed_when_stop_watermark_fails(context, m
     c = context
     grant = c.repo.authorize(c.request, c.principal, 'worker-grant')
     binding = c.repo.admission(grant['id'])
-    stop = _attempt_stop(monkeypatch, c, [lambda project: nullcontext()])
+    stop = _attempt_stop(monkeypatch, c, [lambda project, *, wait: nullcontext()])
     c.client.forced_conflicts = LIMITS['casAttempts']
     with pytest.raises(ProjectDispatchError, match='Stop watermark'):
         stop.abort()
@@ -752,7 +870,7 @@ def test_http_stop_answers_ok_only_once_the_stop_watermark_is_durable(
     grant = c.repo.authorize(c.request, c.principal, 'worker-grant')
     conversation_id = task_id = f'stop-withdrawal-{contended}'
     lock = [_contended_after_stop(c) if contended == 'grant_revocation'
-            else (lambda project: nullcontext())]
+            else (lambda project, *, wait: nullcontext())]
     withdraw = recovery.revoke_conversation_dispatch
 
     def stop(conversation, *, user_id, occurred_at=None):
@@ -761,7 +879,7 @@ def test_http_stop_answers_ok_only_once_the_stop_watermark_is_durable(
         return withdraw('recipient', user_id=7, occurred_at=occurred_at,
             conversations=c.conversations,
             repository_factory=lambda owner, project: c.repo,
-            lock_factory=lambda project: lock[0](project), stop_client=c.client)
+            lock_factory=lambda project, *, wait: lock[0](project, wait=wait), stop_client=c.client)
 
     delete_conversation(conversation_id, user_id=1)
     seed_conversation(conversation_id, user_id=1, title='Stop withdrawal')
@@ -787,7 +905,7 @@ def test_http_stop_answers_ok_only_once_the_stop_watermark_is_durable(
         else:
             assert response.status_code == 500
             assert c.repo.read(grant['id'])['grant']['revoked'] is False
-        lock[0] = lambda project: nullcontext()
+        lock[0] = lambda project, *, wait: nullcontext()
         retry = flask_client.post(f'/api/v4/attempts/{attempt_id}/abort')
         assert retry.status_code == 200
         assert retry.get_json()['dispatchWithdrawal'] == 'complete'

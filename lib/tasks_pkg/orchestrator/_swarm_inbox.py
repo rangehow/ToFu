@@ -91,10 +91,9 @@ def drain_and_inject_inbox(
             # own de-dup / chip semantics; folding them into _swarm_items
             # would render them as <swarm-update> chips, skip the durable
             # message_queue row de-dup, and double-deliver).
-            _swarm_items = _drain_inbox(
-                _swarm_key,
-                exclude_modes=['peer-msg', 'user-steer',
-                               'background-command'])
+            from lib.swarm.delivery import current_result_hints
+            _swarm_items = current_result_hints(_swarm_key, _drain_inbox(
+                _swarm_key, exclude_modes=['peer-msg', 'user-steer', 'background-command']))
             _peer_items = ([] if _peer_owned
                            else _drain_inbox(_peer_key, modes=['peer-msg']))
             # Human steer messages (the operator interjecting into their

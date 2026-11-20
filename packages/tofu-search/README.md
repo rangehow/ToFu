@@ -550,6 +550,72 @@ pip install tofu-search[all]
 
 Or just run `./install.sh` (see below).
 
+## Native text kernels (Rust)
+
+The CPU-bound text kernels have a Rust implementation in `rust/`, exposed as
+the extension module `tofu_search._native`: `tokenize`, `matching_text`,
+`subject_terms` and `query_subject` (`lexical`), `select_relevant_passages`
+(`passages`), snippet grouping and full-content mirror decisions (`dedup`) and
+the BM25 scorer used by `rerank_by_bm25`; `canonical_url_key` (`dedup`);
+`classify_authority`, `host_brand_labels` and `brand_tokens` (`authority`);
+`parse_bibtex`, `parse_references`, `extract_citations_from_text` and
+`extract_identifiers` (`verify.parse`); and everything `extract_html_text`
+derives from the BeautifulSoup tree after trafilatura's article pass (the
+`html.parser` tree, visibility boundary, main region, fallback text,
+table/code/button supplements, ranked page links, rendering signals and the
+budget). When the extension is installed those names are the native
+functions; otherwise the Python implementations run. Both produce identical
+results: each module keeps its Python body in `PYTHON_KERNELS`, and
+`tests/test_native_parity.py` and `tests/test_native_layers_parity.py`
+compare them bit for bit, including CPython's own Unicode, `re` and HTML
+entity tables (exported into the crate by `rust/scripts/gen_unicode_tables.py`
+and `rust/scripts/gen_py_tables.py`). `tests/test_html_extraction_corpus.py`
+checks both paths against recorded output on 64 captured real pages. A
+non-ASCII host in the authority classifier (Python's IDNA 2003 codec) and
+strings holding lone surrogates keep the Python path. The kernels release the
+GIL and start no threads; trafilatura itself stays Python.
+
+The native wheel is the same `tofu-search` distribution (name, version,
+dependencies, extras, `tofu-search-mcp`) plus the extension, built locally:
+
+```bash
+uv tool install maturin
+python rust/scripts/build_wheel.py --out dist   # abi3 wheel, CPython >= 3.10
+```
+
+The pure wheel (`uv build`, setuptools) is unchanged. Network, browser,
+trafilatura, PDF, engines, MCP and orchestration code remains Python.
+
+### Deterministic code-recovery contract
+
+`tests/fixtures/html_code_recovery.json` freezes benign HTML and the collapsed
+article text at the existing post-trafilatura `extract_document` seam. It keeps
+the original literal-backtick, repeated `<pre>` and hidden-code inputs from
+`test_html_fidelity.py`; no extractor dependency is monkeypatched. The test
+compares the complete `(text, rendering)` output and retains the original
+literal-code, non-repetition, four-backtick fence and hidden-content assertions.
+Four negative controls (short fence, duplicate code, leaked hidden text and
+collapsed whitespace) must fail the same checker. Other fidelity tests continue
+to exercise the public `extract_html_text` entry point with real trafilatura.
+
+Run `pytest tests/test_html_fidelity.py -q -rs` from this package using the
+project environment. Python calls `PYTHON_KERNELS['_assemble_document']` directly;
+the separately named native case calls `_native.extract_document` directly and
+skips explicitly when the binding is absent. Each executed case records backend,
+resolved source/binary path and SHA-256 as pytest properties (retain JUnit XML
+when collecting artifact evidence). A Python pass plus native skip is only a
+Python baseline, not native qualification or proof of a full extraction port.
+
+The next native prerequisite is an off-pod, source-pinned wheel for the exact
+checkout being qualified, with the source revision/clean input manifest, locked
+Rust dependencies, generated tables, toolchain/platform/ABI, Python dependency
+versions and wheel/extension SHA-256 retained together. Package version alone
+is not a source pin; the current extension has no embedded source fingerprint.
+Make that attested extension available under this checkout's `tofu_search`
+package (the package test configuration selects the checkout), retain its
+identity properties, and require a non-skipped native golden result. Neither a
+pure wheel nor an unrelated installed wheel satisfies this prerequisite.
+
 ## Install script
 
 ```bash

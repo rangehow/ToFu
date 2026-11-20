@@ -11,7 +11,9 @@ keeps only the OAuth flow + re-export facades for the legacy names
 ``codex_translate_sse_event``).
 """
 
+from dataclasses import dataclass, field
 import base64
+import hashlib
 import json
 import math
 import time
@@ -21,7 +23,7 @@ import requests
 
 from lib.log import get_logger
 from lib.oauth.pkce import generate_pkce_codes
-from lib.oauth.token_store import load_token, save_token, OAuthExchangeError
+from lib.oauth.token_store import live_token_resolution, load_token, save_token, OAuthExchangeError
 from lib.oauth.http import http_post
 
 logger = get_logger(__name__)
@@ -35,6 +37,10 @@ __all__ = [
     'codex_store_token',
     'codex_refresh_token',
     'codex_get_valid_token',
+    'codex_get_valid_token_snapshot',
+    'CodexAccessTokenSnapshot',
+    'account_fingerprint',
+    'codex_access_token_account_id',
     'codex_translate_request',
     'codex_translate_sse_event',
 ]
@@ -181,8 +187,7 @@ def codex_device_request_user_code(user_id: str = '') -> dict:
         raise OAuthExchangeError(
             'Could not reach OpenAI device login: %s' % e, status_code=0) from e
     if not 200 <= resp.status_code < 300:
-        logger.error('[Codex OAuth] device usercode HTTP %d: %.500s',
-                     resp.status_code, resp.text)
+        logger.error('[Codex OAuth] device usercode HTTP %d', resp.status_code)
         raise OAuthExchangeError(
             _explain_exchange_failure(resp.status_code, resp.text, 'codex'),
             status_code=resp.status_code, detail=resp.text[:500])
@@ -198,8 +203,7 @@ def codex_device_request_user_code(user_id: str = '') -> dict:
     # usercode as a fallback) — accept either.
     user_code = (data.get('user_code') or data.get('usercode') or '').strip()
     if not device_auth_id or not user_code:
-        logger.error('[Codex OAuth] device usercode missing fields: %.300s',
-                     resp.text)
+        logger.error('[Codex OAuth] device usercode missing fields')
         raise OAuthExchangeError(
             'OpenAI device login did not return a code',
             status_code=resp.status_code, detail=resp.text[:300])
@@ -209,9 +213,8 @@ def codex_device_request_user_code(user_id: str = '') -> dict:
         parsed = int(str(raw_interval).strip())
         if parsed > 0:
             interval = parsed
-    except (TypeError, ValueError) as e:
-        logger.debug('[Codex OAuth] device interval unparsable (%r): %s',
-                     raw_interval, e)
+    except (TypeError, ValueError):
+        logger.debug('[Codex OAuth] device interval unparsable')
     logger.info('[Codex OAuth] device flow started (interval=%ds)', interval)
     return {'device_auth_id': device_auth_id, 'user_code': user_code,
             'interval': interval}
@@ -241,8 +244,7 @@ def codex_device_poll_token(device_auth_id: str, user_code: str,
     if resp.status_code in (403, 404):
         return None  # still waiting for the user
     if not 200 <= resp.status_code < 300:
-        logger.error('[Codex OAuth] device poll HTTP %d: %.500s',
-                     resp.status_code, resp.text)
+        logger.error('[Codex OAuth] device poll HTTP %d', resp.status_code)
         raise OAuthExchangeError(
             _explain_exchange_failure(resp.status_code, resp.text, 'codex'),
             status_code=resp.status_code, detail=resp.text[:500])
@@ -256,8 +258,7 @@ def codex_device_poll_token(device_auth_id: str, user_code: str,
     code = (data.get('authorization_code') or '').strip()
     verifier = (data.get('code_verifier') or '').strip()
     if not code or not verifier:
-        logger.error('[Codex OAuth] device poll missing fields: %.300s',
-                     resp.text)
+        logger.error('[Codex OAuth] device poll missing fields')
         raise OAuthExchangeError(
             'OpenAI device login did not return an authorization code',
             status_code=resp.status_code, detail=resp.text[:300])
@@ -280,7 +281,7 @@ def _save_login_token(token_data: dict) -> bool:
 
 def codex_exchange_code(code: str, pkce_verifier: str,
                         user_id: str = '',
-                        redirect_uri: str = '') -> dict | None:
+                        redirect_uri: str = '', *, persist: bool = True) -> dict | None:
     """Exchange authorization code for Codex tokens.
 
     Args:
@@ -307,6 +308,8 @@ def codex_exchange_code(code: str, pkce_verifier: str,
                                 user_id=user_id)
 
         if resp.status_code != 200:
+            if not persist:
+                raise OAuthExchangeError('Codex account exchange rejected', status_code=resp.status_code)
             logger.error('[Codex OAuth] Token exchange failed (HTTP %d): %.500s',
                          resp.status_code, resp.text)
             raise OAuthExchangeError(
@@ -341,6 +344,8 @@ def codex_exchange_code(code: str, pkce_verifier: str,
             'expires_in': expires_in,
         }
 
+        if not persist:
+            return token_data
         if not _save_login_token(token_data):
             raise OAuthExchangeError(
                 'OpenAI authorized successfully, but the credentials could '
@@ -355,6 +360,8 @@ def codex_exchange_code(code: str, pkce_verifier: str,
     except OAuthExchangeError:
         raise
     except Exception as e:
+        if not persist:
+            raise OAuthExchangeError('Codex account exchange unavailable') from None
         from lib.desktop.egress import EgressUnavailable
         if isinstance(e, EgressUnavailable):
             logger.error('[Codex OAuth] egress unavailable: %s', e)
@@ -408,6 +415,7 @@ def codex_store_token(data: dict) -> dict:
     return token_data
 
 
+@live_token_resolution()
 def codex_refresh_token(refresh_tok: str = None,
                         user_id: str = '') -> dict | None:
     """Refresh the Codex access token.
@@ -578,8 +586,46 @@ def _codex_refresh_upstream(refresh_tok: str, *, user_id: str = '') -> dict | No
     return None
 
 
+@dataclass(frozen=True, slots=True)
+class CodexAccessTokenSnapshot:
+    """Bearer and account of one credential result, never two store reads."""
+
+    access_token: str = field(repr=False)
+    account_id: str = field(repr=False)
+    bearer_account_id: str = field(default='', repr=False)
+
+
+def account_fingerprint(account_id: str) -> str:
+    """Stable non-wire identity of a Codex grant account."""
+    return (hashlib.sha256(account_id.encode()).hexdigest()
+            if isinstance(account_id, str) and account_id else '')
+
+
+def codex_access_token_account_id(token: str) -> str:
+    """Read only the account claim of this trusted source's exact bearer."""
+    _, account_id, _ = _parse_jwt_claims(token, require_account_claim=True)
+    return account_id if isinstance(account_id, str) else ''
+
+
+def _access_snapshot(stored: dict | None) -> CodexAccessTokenSnapshot | None:
+    token = (stored or {}).get('access_token')
+    if not isinstance(token, str) or not token:
+        return None
+    account = stored.get('account_id')
+    account = account if isinstance(account, str) else ''
+    bearer_account = codex_access_token_account_id(token)
+    return CodexAccessTokenSnapshot(token, account or bearer_account, bearer_account)
+
+
 def codex_get_valid_token(user_id: str = '') -> str | None:
-    """Get a valid Codex access token, refreshing if needed."""
+    """Compatibility accessor for callers not using account identity."""
+    snapshot = codex_get_valid_token_snapshot(user_id=user_id)
+    return snapshot.access_token if snapshot else None
+
+
+@live_token_resolution()
+def codex_get_valid_token_snapshot(user_id: str = '') -> CodexAccessTokenSnapshot | None:
+    """Get the live credential pair, refreshing if needed."""
     stored = load_token('codex')
     if not stored:
         return None
@@ -589,10 +635,10 @@ def codex_get_valid_token(user_id: str = '') -> str | None:
         if local_owner(user_id or None) != stored['codex_shared_reference'].get('owner_user_id'):
             return None
         if stored.get('access_token'):
-            return stored['access_token']
+            return _access_snapshot(stored)
         from lib.oauth.codex_shared_login import recover_bound_access
-        return recover_bound_access(stored['codex_shared_reference'],
-            initial_issue=stored.get('shared_login_issue') or 'credential_unavailable')
+        return _access_snapshot(recover_bound_access(stored['codex_shared_reference'],
+            initial_issue=stored.get('shared_login_issue') or 'credential_unavailable'))
 
     access_token = stored.get('access_token', '')
     try:
@@ -615,7 +661,7 @@ def codex_get_valid_token(user_id: str = '') -> str | None:
             refreshed = codex_refresh_token(stored.get('refresh_token', ''),
                                             user_id=user_id)
             if refreshed:
-                return refreshed.get('access_token')
+                return _access_snapshot(refreshed)
         # Refresh can block across expiry, logout, or a replacement login.
         # Re-read both authority and wall time instead of returning a stale
         # pre-refresh snapshot. A new shared reference needs its owner check
@@ -630,12 +676,12 @@ def codex_get_valid_token(user_id: str = '') -> str | None:
         if math.isfinite(current_expire) and time.time() < current_expire:
             logger.warning('[Codex OAuth] Refresh unavailable; using access '
                            'token only until its recorded expiry')
-            return current.get('access_token') or None
+            return _access_snapshot(current)
         logger.warning('[Codex OAuth] Access token expired and refresh is '
                        'unavailable; sign-in required')
         return None
 
-    return access_token
+    return _access_snapshot(stored)
 
 
 # ══════════════════════════════════════════════════════════
@@ -716,7 +762,7 @@ def _explain_exchange_failure(status: int, body: str, provider: str) -> str:
     return 'Token exchange failed (HTTP %d: %s).' % (status, upstream or 'unknown error')
 
 
-def _parse_jwt_claims(id_token: str) -> tuple[str, str, str]:
+def _parse_jwt_claims(id_token: str, *, require_account_claim=False) -> tuple[str, str, str]:
     """Parse JWT ID token to extract email, account_id and subscription plan.
 
     Returns:
@@ -736,9 +782,9 @@ def _parse_jwt_claims(id_token: str) -> tuple[str, str, str]:
         email = claims.get('email', '')
         # OpenAI stores account info in custom claim
         auth_info = claims.get('https://api.openai.com/auth', {})
-        account_id = auth_info.get('chatgpt_account_id', claims.get('sub', ''))
+        account_id = auth_info.get('chatgpt_account_id', '' if require_account_claim else claims.get('sub', ''))
         plan_type = auth_info.get('chatgpt_plan_type', '')
         return email, account_id, plan_type
     except Exception as e:
-        logger.debug('[Codex OAuth] Failed to parse JWT: %s', e)
+        logger.debug('[Codex OAuth] Failed to parse JWT (%s)', type(e).__name__)
         return '', '', ''

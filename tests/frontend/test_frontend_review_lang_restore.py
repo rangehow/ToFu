@@ -9,7 +9,7 @@ the reopen flow the owner hit:
     state, so ``_loadOrGenerateReport(review)`` hits the server DB cache and
     renders the canonical ENGLISH review.
   • ``_restoreReviewReadingLang`` must then re-apply the persisted Chinese
-    reading view — by TRANSLATING the English review (Babel translate task),
+    reading view — by TRANSLATING the English review (paper text-translation task),
     NEVER by regenerating the English review (no report/start).
 
 Assertions:

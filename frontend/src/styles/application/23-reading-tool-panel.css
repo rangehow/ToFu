@@ -124,9 +124,8 @@
 
 /* A call row also holds its body's own margins (flow-root): a nested
  * receipt's spacing stays inside the row instead of collapsing through it
- * into an unpainted gap in the card's sides. A program-batch member folded
- * under its head stays out of layout (23-reading-tool-summary.css). */
-.conversation-surface .conversation-turn-blocks > .conversation-tool-panel[data-tool-panel-state="open"] ~ .conversation-block[data-turn-zone="process"]:not([hidden], [data-program-batch-folded="true"]) {
+ * into an unpainted gap in the card's sides. */
+.conversation-surface .conversation-turn-blocks > .conversation-tool-panel[data-tool-panel-state="open"] ~ .conversation-block[data-turn-zone="process"]:not([hidden]) {
   display: flow-root;
 }
 
@@ -345,19 +344,11 @@
 }
 
 /* A narrow pointer window cannot afford invisible controls holding width:
- * they leave layout at rest and return on hover or focus. They stay in the
- * tab order (no display:none), so keyboard focus is what brings them back.
- * Touch screens keep them visible (tool-summary's reachability rule). */
+ * they leave layout at rest and return on hover or focus. Touch screens keep
+ * them visible (tool-summary's reachability rule). */
 @media (max-width: 600px) and (hover: hover) {
   .conversation-surface .conversation-tool-panel[data-tool-panel-state="open"] ~ .conversation-block[data-turn-zone="process"] [data-action-summary]:not(:hover, :focus-within) :is(.ptool-row-ctl, .ptool-cmd-fold:not([aria-expanded="true"])) {
-    position: absolute;
-    inline-size: 0;
-    block-size: 0;
-    min-height: 0;
-    padding: 0;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
+    display: none;
   }
 }
 

@@ -25,7 +25,7 @@ use crate::generated_tofudb_ir::{
     INTEGRATION_ROW_SEQUENCE_NAMESPACE, INTEGRATION_STALE_SECONDS,
     INTEGRATION_WORKSPACE_COUNT_NAMESPACE, INTEGRATION_WORKSPACE_NAMESPACE, MAX_ENTITY_RANGE_ROWS,
     MAX_INTEGRATION_EVENTS_PER_PROJECT, MAX_INTEGRATION_PROJECT_ROOT_CHARACTERS,
-    MAX_INTEGRATION_RESPONSE_BYTES, MAX_INTEGRATION_STATUS_EVENTS, MAX_INTEGRATION_STATUS_ROWS,
+    MAX_INTEGRATION_RESPONSE_BYTES, MAX_INTEGRATION_STATUS_EVENTS,
     MAX_INTEGRATION_TASK_ID_CHARACTERS, MAX_INTEGRATION_WORKSPACE_DOCUMENT_BYTES,
 };
 
@@ -308,36 +308,6 @@ fn next_sequence(
     write_u64(database, tx, key, next)?;
     Ok(next)
 }
-fn scan_paged(
-    database: &AuthorityDatabase,
-    tx: &mut AuthorityTransaction,
-    mut start: EntityKey,
-    end: &EntityKey,
-    limit: usize,
-) -> io::Result<Vec<(EntityKey, Vec<u8>)>> {
-    let mut rows = Vec::new();
-    while rows.len() < limit {
-        let page_limit = (limit - rows.len()).min(MAX_ENTITY_RANGE_ROWS);
-        let page = database.entity_scan(tx, &start, end, page_limit)?;
-        if page.is_empty() {
-            break;
-        }
-        let page_len = page.len();
-        let next = page
-            .last()
-            .map(|(key, _)| key.clone().exact_range())
-            .transpose()?;
-        rows.extend(page);
-        if page_len < page_limit || rows.len() == limit {
-            break;
-        }
-        start = next
-            .ok_or_else(|| invalid_data("integration pagination lost continuation"))?
-            .1;
-    }
-    Ok(rows)
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct Locator {
     id: u64,
@@ -1701,22 +1671,27 @@ fn status(
         MAX_INTEGRATION_PROJECT_ROOT_CHARACTERS,
         true,
     )?;
-    let (start, end) = project_updated_range(tx, owner, project_root)?;
-    let workspace_rows = scan_paged(database, tx, start, &end, MAX_INTEGRATION_STATUS_ROWS + 1)?;
-    if workspace_rows.len() > MAX_INTEGRATION_STATUS_ROWS {
-        return Err(crate::resource_exhaustion::domain_bound(
-            "integration status workspace rows exceed their bound",
-        ));
-    }
-    let mut workspaces = Vec::with_capacity(workspace_rows.len());
-    for (_, raw) in workspace_rows {
-        let locator: Locator = decode(&raw, "integration project index")?;
-        let workspace = read_workspace_by_id(database, tx, locator.id)?
-            .ok_or_else(|| invalid_data("integration project index has no workspace"))?;
-        if workspace.owner_user_id != owner || workspace.project_root != project_root {
-            return Err(invalid_data("integration project index leaks owner scope"));
+    // The project index holds exactly one current locator per registered
+    // workspace, and workspace admission has no count quota. Read physical
+    // pages to actual EOF; the declared response ceiling, not an arbitrary
+    // row count, bounds the reply.
+    let (mut start, end) = project_updated_range(tx, owner, project_root)?;
+    let mut workspaces = Vec::new();
+    loop {
+        let page = database.entity_scan(tx, &start, &end, MAX_ENTITY_RANGE_ROWS)?;
+        let Some((last, _)) = page.last() else {
+            break;
+        };
+        start = last.clone().exact_range()?.1;
+        for (_, raw) in page {
+            let locator: Locator = decode(&raw, "integration project index")?;
+            let workspace = read_workspace_by_id(database, tx, locator.id)?
+                .ok_or_else(|| invalid_data("integration project index has no workspace"))?;
+            if workspace.owner_user_id != owner || workspace.project_root != project_root {
+                return Err(invalid_data("integration project index leaks owner scope"));
+            }
+            workspaces.push(workspace_projection(&workspace));
         }
-        workspaces.push(workspace_projection(&workspace));
     }
     let (event_start, event_end) = event_range(tx, owner, project_root)?;
     let event_rows =

@@ -201,7 +201,8 @@ about 99 GiB more. Nothing is capped, refused or recycled, and there is no new
 setting or environment variable.
 
 - `lib/runtime/work_process_priority.work_process_argv` prefixes the argv with
-  `/bin/sh -c '{ echo 1000 >/proc/self/oom_score_adj; } 2>/dev/null; exec "$@"' sh`.
+  `/bin/sh -c '{ echo 1000 >/proc/self/oom_score_adj; } 2>/dev/null; exec /usr/bin/nice -n 19 -- /usr/bin/ionice -t -c 3 -- "$@"' sh`
+  (the CPU and I/O part is the next section).
   The write runs in the new process after its exec, so neither the spawning
   server nor anything sharing its memory map changes. `exec` keeps the PID,
   session, process group and start time, so Stop, group retirement and command
@@ -286,6 +287,92 @@ finished.
   host, and an interpreter start per command costs far more than `/bin/sh`.
 - A process-wide spawn hook in the hosts: implicit, and it would also raise
   server infrastructure and Tofu's own Git.
+
+## Tofu-started work yields CPU and I/O to the servers
+
+**Problem.** Work Tofu starts shares the pod with the API host, the execution
+host and the storage engine. On 2026-11-18 about 14 Worker cargo/clippy fleets,
+evaluation runs (`--jobs 16`), rootless qemu and paper builds ran at nice 0,
+the servers' own priority. From 14:28 the API host logged 10 LoopWatch stalls
+and 11 readiness misses in 17 minutes, and later unready spells of 74, 64 and
+118 s: cheap in-memory routes such as `/api/ready` took 2-3.5 s against the
+manager's 2 s probe deadline. The pod's CFS quota (58 CPUs on a 180-CPU
+cpuset) was exhausted in 12-42% of periods, and the API host's threads waited
+8.4x their CPU time on the run queue.
+
+**Decision.** Started work lowers itself to fixed kernel extremes before it
+runs: nice 19 (the highest value, `setpriority(2)`) and the idle I/O class
+(`ioprio_set(2)`), declared once in `contracts/resource_policy_v1.json`
+`process_priority` (class `fixed`, hardware-independent). Server processes
+keep the inherited values, so whenever both are runnable the scheduler runs
+the servers first. This is priority, not a limit: every accepted job starts
+and runs at full parallelism and uses every CPU the servers leave idle.
+
+- The same `work_process_argv` step and the same adopters as the OOM section
+  apply it: after the `oom_score_adj` write the shell `exec`s
+  `/usr/bin/nice -n 19 -- /usr/bin/ionice -t -c 3 -- <command>`. Each step
+  `exec`s, so the PID, session and start time stay the command's own; the
+  priority is set before the command starts any thread, so every thread and
+  descendant inherits it. An unprivileged process can never lower it again.
+- The tools are resolved in `/usr/bin:/bin`, never in the command's `PATH`.
+  A missing tool is logged once and that part is skipped; `ionice -t` runs
+  the command even where the kernel lacks the I/O class.
+- Running processes keep their priority; the change applies to work started
+  after the execution host and API host run this code. Until then (and for
+  processes Tofu did not start) an operator lowers a running tree in place,
+  thread by thread, without stopping it: `renice -n 19 -p <tid>` and
+  `ionice -c 3 -p <tid>` for every entry of `/proc/<pid>/task`; a plain
+  `renice -p <pid>` changes only the main thread.
+
+**Limits of priority.** CFS bandwidth control throttles the whole pod once
+its quota is spent, regardless of nice: while total runnable demand exceeds
+the quota, the servers still lose the rest of each 100 ms period. Priority
+decides who spends the quota first. Bounding work by CPU count, affinity or
+quota is excluded by "Hardware never limits work"; the remaining lever is
+placement of burst-heavy batch work outside the production pod. Rust builds
+and tests take that path through `scripts/remote_cargo.py`
+([RUST_BUILDS.md](RUST_BUILDS.md)).
+
+Measured on 2026-11-18 (2 s `/api/ready` probe beside the manager's, pod
+`cpu.stat`, `/proc/<pid>/task/*/schedstat`). Renicing every running work tree
+to nice 19 and idle I/O at 15:40 left throttling unchanged (150-243 throttled
+periods per minute from 15:42 to 15:57) because one batch job kept up to 185
+nice-19 threads runnable. After that job moved to a Hope node at 15:57:45:
+
+| 30 min window | 15:28-15:58 | 15:58-16:28 |
+|---|---|---|
+| throttled periods | 2,811 in the 19 sampled minutes (25-40% of periods) | 160 (0-3%) |
+| LoopWatch stalls | 4 | 0 |
+| manager readiness misses | 13 | 1 (5 s, during a 2.1 s storage query) |
+| own probe > 2 s or not 200 | 18 of 410 | 3 of 788 |
+| run-queue wait / CPU, API host and engine | 8.4x and 5.4x (one 20 s sample while the job ran) | 0.03 and 0.02-0.09 |
+
+The event loop itself stays free of the blocking calls the stalls sampled:
+the async dispatcher's slot pick (key-stats store reads, durable quota
+alerts) runs on a worker thread
+(`lib/llm_dispatch/_api_stream._pick_off_loop`), `StorageSupervisor.status()`
+no longer reads the deployment configuration under its lock once a backend is
+ready, and `lib/http_transport/outbound_async.py` resolves httpcore's
+per-request `import sniffio` at boot.
+
+Specification: `tests/project_mod/test_work_process_cpu_io_priority.py`
+(foreground, structured and background commands read nice 19 and the idle
+class in themselves and their children; the spawning process keeps its class;
+arguments, exit status and launch errors are preserved),
+`tests/llm_dispatch/test_async_dispatch_stream.py::TestAsyncDispatchStreamPicksOffTheLoop`,
+`tests/storage/test_storage_supervisor_status_nonblocking.py` and
+`tests/proxy/test_outbound_async_import_ahead.py`.
+
+**Alternatives rejected.**
+
+- A child cgroup with a low `cpu.shares` for work: the pod's cgroup v1
+  hierarchy is mounted read-only, and a child group still draws on the same
+  parent quota, so it protects no better than nice.
+- `SCHED_IDLE`: needs a `chrt` step or `preexec_fn`, and gives no extra
+  protection against quota throttling.
+- `preexec_fn` calling `os.setpriority`: the reasons in the OOM section.
+- Capping work's threads, CPU set or concurrency: forbidden by "Hardware
+  never limits work".
 
 ## Settled task retention
 
@@ -874,7 +961,9 @@ cache. After a `run_command` command that ran uv, uvx or pip finishes
 cache, which retires with the checkout), `schedule_prune` runs, on one
 coalescing background thread per cache root, the tools' own reclamation:
 `uv cache prune` on the commands' uv cache and `pip cache purge` (pip has no
-narrower prune). `UV_LOCK_TIMEOUT=0` makes uv refuse at once instead of
+narrower prune). If the server's virtual environment has no pip, reclamation
+uses its base Python's pip, if available, with the same cache directory. Other
+pip failures are reported without retrying. `UV_LOCK_TIMEOUT=0` makes uv refuse at once instead of
 waiting while another uv process uses the cache, so a prune never waits for,
 delays or blocks a command; the next install retries. Commands get their own uv
 cache, `data/mcp-cache/uv-commands` (`command_uv_cache`), which no launcher

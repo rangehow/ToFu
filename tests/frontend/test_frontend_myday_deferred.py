@@ -83,8 +83,14 @@ def test_static_assets_have_one_typed_lazy_owner():
     assert 'MYDAY_PRESENTATION_ASSETS' not in presenter
     board = GOAL_BOARD_OWNER.read_text(encoding='utf-8')
     assert "from './presentation-assets'" in board
-    assets = PRESENTATION_ASSETS.read_text(encoding='utf-8')
-    assert assets.count('class="myday-empty-tofu"') == 1
+    # The hand-drawn cube mock is deleted for good (owner, 2026-11-19: "this
+    # icon is completely wrong"). The empty state renders the one shipped
+    # mascot through the cache-busted brand helper instead of private art.
+    assert 'emptyIllustration' not in board
+    assert 'emptyIllustration' not in PRESENTATION_ASSETS.read_text(encoding='utf-8')
+    assert 'myday-empty-tofu' in board
+    entry = MYDAY_ENTRY.read_text(encoding='utf-8')
+    assert "getRuntimeService('brandLogoImgAttrs')" in entry
 
 
 def test_myday_main_column_has_a_typed_lazy_owner():

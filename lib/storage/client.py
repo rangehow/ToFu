@@ -12,6 +12,7 @@ import uuid
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from lib.tool_results.credential_redaction import redact_value as redact_known_credentials
 from lib.log import get_logger
 from lib.storage.deadline_policy import observe_storage_service
 from lib.storage.errors import StorageError
@@ -25,6 +26,21 @@ from lib.storage.retry_log import retry_log_throttle
 from lib.storage.session_pool import SessionPool
 
 logger = get_logger(__name__)
+
+
+def _payload_owner(payload) -> int | None:
+    """The owner a storage.v1 command names explicitly, for owner-scoped redaction.
+
+    The SQL channel serves every owner, so the owner is the payload's own
+    ``owner_user_id``/``user_id`` field; a command naming none is redacted
+    with the owner-independent known set only.
+    """
+    if not isinstance(payload, Mapping):
+        return None
+    owner = payload.get('owner_user_id', payload.get('user_id'))
+    if type(owner) is int and owner > 0:
+        return owner
+    return None
 
 
 # Transient classified failures that are safe to replay on a fresh socket.
@@ -319,6 +335,33 @@ class StorageClient:
         raise StorageError(  # unreachable: loop either returns or raises
             'database_internal', 'Storage retry loop exited unexpectedly')
 
+    def check_command_frame(self, operation, payload, *, command_id):
+        """Encode exactly as a normal socket command, without dispatch."""
+        payload = redact_known_credentials(payload, owner_user_id=_payload_owner(payload))
+        encode_frame(self._request_frame('command', validate_operation(operation), payload,
+                                         timeout=self._timeout, command_id=command_id,
+                                         priority='user', deadline_unix_ms=None, pooled=True,
+                                         request_id=uuid.uuid4().hex))
+
+    def _request_frame(self, kind, operation, payload, *, timeout, command_id, priority,
+                       deadline_unix_ms, pooled, request_id):
+        request: dict[str, Any] = {
+            'protocol': PROTOCOL_VERSION,
+            'request_id': request_id,
+            'auth': self._token,
+            'kind': kind,
+            'operation': operation,
+            'payload': wire_payload(payload),
+            'deadline_unix_ms': (int((time.time() + timeout) * 1000)
+                                 if deadline_unix_ms is None else deadline_unix_ms),
+        }
+        if kind == 'command':
+            request['command_id'] = command_id
+            request['priority'] = priority
+        if pooled:
+            request['keep_alive'] = True
+        return request
+
     def _attempt(
         self,
         kind: str,
@@ -340,30 +383,17 @@ class StorageClient:
             self._response_frame_admission.observe_frame('response', size)
             return response_reservation
 
-        request: dict[str, Any] = {
-            'protocol': PROTOCOL_VERSION,
-            'request_id': request_id,
-            'auth': self._token,
-            'kind': kind,
-            'operation': operation,
-            'payload': wire_payload(payload),
-            'deadline_unix_ms': (int((time.time() + timeout) * 1000)
-                                 if deadline_unix_ms is None else deadline_unix_ms),
-        }
-        if kind == 'command':
-            request['command_id'] = command_id
-            request['priority'] = priority
-        # A cancellable watch shuts its socket down from another thread, so it
-        # keeps a private connection that is never reused.
         pooled = cancellation is None
-        if pooled:
-            request['keep_alive'] = True
+        request = self._request_frame(kind, operation, payload, timeout=timeout,
+                                      command_id=command_id, priority=priority,
+                                      deadline_unix_ms=deadline_unix_ms, pooled=pooled,
+                                      request_id=request_id)
         try:
             if pooled:
                 response = self._pooled_exchange(
                     request, timeout, admit_response_frame)
             else:
-                with create_connection(self.endpoint, timeout=timeout) as sock:
+                with create_connection(self.endpoint, timeout=timeout, cancellation=cancellation) as sock:
                     with cancellation.bind(lambda: sock.shutdown(socket.SHUT_RDWR)):
                         sock.settimeout(timeout + _SOCKET_GRACE_S)
                         send_frame(sock, request)
@@ -559,8 +589,9 @@ class StorageClient:
         deadline: float | None = None,
     ) -> Any:
         result = self._call(
-            'command', operation, payload, deadline=deadline,
-            command_id=command_id, priority=priority,
+            'command', operation,
+            redact_known_credentials(payload, owner_user_id=_payload_owner(payload)),
+            deadline=deadline, command_id=command_id, priority=priority,
         )
         if not isinstance(result, Mapping) or '_storageCommitContract' not in result:
             publish_committed_operation(operation)

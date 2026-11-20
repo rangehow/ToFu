@@ -90,13 +90,12 @@ def _enabled_tool_summary(bridge) -> dict:
     tags=['mcp'],
 )
 def list_servers_v1():
-    # The API host manages its own connections (breaker, credential health).
-    from lib.mcp.client import local_bridge
+    from lib.mcp import get_bridge
     from lib.mcp.config import load_mcp_config
     from lib.mcp.transport import header_env_keys, redact_config
 
     config = load_mcp_config(user_id=request_user_id())
-    bridge = local_bridge(request_user_id())
+    bridge = get_bridge(request_user_id())
     connected_servers = {
         row['name']: row for row in bridge.list_servers()
     }
@@ -411,13 +410,12 @@ def set_server_tools_v1(name):
     tags=['mcp'],
 )
 def get_catalog_v1():
-    # The API host manages its own connections (breaker, credential health).
-    from lib.mcp.client import local_bridge
+    from lib.mcp import get_bridge
     from lib.mcp.config import load_mcp_config
     from lib.mcp.registry import get_catalog
 
     config = load_mcp_config(user_id=request_user_id())
-    bridge = local_bridge(request_user_id())
+    bridge = get_bridge(request_user_id())
     connected_servers = {
         row['name']: row for row in bridge.list_servers()
     }

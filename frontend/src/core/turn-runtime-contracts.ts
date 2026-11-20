@@ -2,10 +2,11 @@
  * No runtime side effects. Existing callers import public types from turn-runtime.
  */
 import type {
-  AppendSettledTurnRequest, ConnectionHealth, ConversationSyncSnapshot,
+  AbortAttemptResponse, AppendSettledTurnRequest, ConnectionHealth, ConversationSyncSnapshot,
   ConversationTurnPage, ConversationRoundDirectory, ConversationRoundEntry,
 } from '../api/conversation-sync.generated';
 import type { ProjectedConversation } from './turn-projection';
+import type { AttemptStopState } from './turn-stop-feedback';
 import type { presentTurnFinish, resumeTurnOptions } from './turn-presentation';
 import type { TurnRenderer } from './turn-render';
 import type { ConversationSyncConnection } from './conversation-sync';
@@ -50,6 +51,7 @@ export interface TurnRuntimeOptions extends TurnRenderObservationOptions {
   disposeRenderedState?(conversationId: string): void;
 
   deferTerminalRelease?(release: () => void): void;
+  onStopUnconfirmed?(): void;
   buildNavigation?(conversation: RuntimeConversation): void;
   renderConversationList?(): void;
   updateSendButton?(): void;
@@ -191,7 +193,9 @@ export interface TurnRuntime {
   ): void;
   markCommandFailed(conversation: RuntimeConversation, turnId: string): void;
   abortConversation(conversation: RuntimeConversation): Promise<unknown>;
-  abortAttempt(attemptId: string): Promise<unknown>;
+  abortAttempt(attemptId: string): Promise<AbortAttemptResponse | null>;
+  stopActiveAttempts(conversation: RuntimeConversation): void;
+  attemptStopState(conversation: RuntimeConversation): AttemptStopState;
   readRuntimeState(conversationId: string): TurnState | null;
 
   /** Called only AFTER DOM commit; accepted/scheduled renders are not evidence. */

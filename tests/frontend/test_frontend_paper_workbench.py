@@ -22,7 +22,7 @@ Object.assign(window, { workbench: owner });
     script = r"""
 const fs=require('fs'), {JSDOM}=require(process.argv[1]+'/node_modules/jsdom');
 const dom=new JSDOM('<div id="paperModeContainer"><div class="paper-tabs"></div>'+
-  ['qa','report','review','translate','podcast','video'].map(id=>`<section class="paper-tab-panel" data-tab="${id}"></section>`).join('')+'</div>');
+  ['qa','report','review','fulltext','podcast','video'].map(id=>`<section class="paper-tab-panel" data-tab="${id}"></section>`).join('')+'</div>');
 global.window=dom.window;global.document=dom.window.document;
 const w=window;w.t=k=>k;w.paperMode=true;w._paperActiveTab='overview';
 w._activePaperId='a';w._paperHash='hash-a';w._paperFileName='<Source A>';

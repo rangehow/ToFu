@@ -71,10 +71,8 @@ class AnthropicTranslateTest(unittest.TestCase):
         self.assertEqual(resp['role'], 'assistant')
         self.assertEqual(resp['model'], 'claude')
         self.assertEqual(resp['stop_reason'], 'end_turn')
-        # First block is thinking, second is text.
-        self.assertEqual(resp['content'][0]['type'], 'thinking')
-        self.assertEqual(resp['content'][1]['type'], 'text')
-        self.assertEqual(resp['content'][1]['text'], 'Hello')
+        # Reasoning has no dispatch identity and must not be relabelled.
+        self.assertEqual(resp['content'], [{'type': 'text', 'text': 'Hello'}])
         self.assertEqual(resp['usage']['input_tokens'], 12)
         self.assertEqual(resp['usage']['output_tokens'], 7)
 

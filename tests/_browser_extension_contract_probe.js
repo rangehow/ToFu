@@ -151,6 +151,35 @@ const context = vm.createContext({
   atob: (value) => Buffer.from(value, 'base64').toString('binary'),
 });
 
+let releaseInitialIdentity;
+const initialLifecycleRequests = [];
+if (['popupServerLifecycle:invalidHydration', 'popupServerLifecycle:failedHydration',
+     'popupServerLifecycle:readFailedHydration',
+     'popupServerLifecycle:coldCanonical'].includes(mode)) {
+  chrome.storage.local.get = (keys, callback) => {
+    if (keys.length === 4) {
+      const data = {clientId: 'synthetic-stable-device', profileName: 'Synthetic profile',
+        serverUrl: 'https://bridge.invalid/proxy/15000' + (mode.endsWith('coldCanonical') ? '' : '/#/chat')};
+      releaseInitialIdentity = () => callback(data);
+      if (mode.endsWith('coldCanonical')) callback(data);
+    } else if (callback) callback(mode.endsWith('coldCanonical')
+      ? {serverUrl: 'https://bridge.invalid/proxy/15000'} : {});
+    return Promise.resolve({serverUrl: 'https://bridge.invalid/proxy/15000'});
+  };
+  if (mode.endsWith('coldCanonical')) {
+    context.setTimeout = () => 1;
+    context.clearTimeout = () => {};
+    context.fetch = async url => {
+      if (url === 'bridge_preseed.json') return {ok: false};
+      initialLifecycleRequests.push(url);
+      return {ok: true, json: async () => url.endsWith('/api/health')
+        ? {ok: true, version: 'synthetic'} : {commands: []}};
+    };
+    chrome.storage.local.set = async values => {
+      if (values.serverUrl) throw new Error('redundant write refused');
+    };
+  }
+}
 require('./support/browser_worker_loader.cjs').loadBrowserWorker(context, backgroundPath);
 
 // Observe receipt behavior without exposing or mutating the outbox's storage.
@@ -1806,8 +1835,115 @@ async function serverAddressProbe() {
     probedBases: healthHits.map(u => u.slice(0, -'/api/health'.length))};
 }
 
+async function concurrentIdentityInitProbe() {
+  const callbacks = [], writes = [];
+  chrome.storage.local.get = (keys, callback) => {
+    if (keys.includes('clientId')) callbacks.push(callback);
+    else if (callback) callback({});
+    return Promise.resolve({});
+  };
+  chrome.storage.local.set = async values => {
+    if (values.clientId) writes.push(values.clientId);
+  };
+  chrome.tabs.query = (_q, callback) => callback([]);
+  vm.runInContext('CLIENT_ID = ""; init(); init();', context);
+  for (const callback of callbacks) callback({});
+  for (let i = 0; i < 30; i++) await Promise.resolve();
+  return {writes, clientId: workerStatus().clientId};
+}
+
+async function preseedAddressProbe() {
+  vm.runInContext('stopPolling();', context);
+  const timers = new Map();
+  let nextTimer = 0;
+  context.setTimeout = (callback, delay) => {
+    const id = ++nextTimer;
+    timers.set(id, {callback, delay});
+    return id;
+  };
+  context.clearTimeout = id => timers.delete(id);
+  const invalid = mode === 'preseedAddress:invalid';
+  const prefix = mode === 'preseedAddress:prefixConfigured' || mode === 'preseedAddress:prefixPreseed';
+  const configured = mode === 'preseedAddress:configured' || mode === 'preseedAddress:prefixConfigured';
+  const base = prefix ? 'http://localhost:19091/api/team/static/proxy/19091'
+    : 'https://gateway.example.test/proxy/15000';
+  const pasted = invalid ? 'https://demo:fixture-only@gateway.example.test/proxy/15000'
+    : (prefix ? base : `  ${base}/?view=1#/chat  `);
+  const stored = configured ? {serverUrl: prefix ? base : `${base}/#/chat`} : {};
+  const writes = [];
+  const healthHits = [];
+  const pollHits = [];
+  const logs = [];
+  context.console = {log: (...args) => logs.push(args.join(' ')),
+    warn: (...args) => logs.push(args.join(' '))};
+  chrome.storage.local.set = async values => {
+    if (values.serverUrl) {
+      writes.push(values.serverUrl);
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    Object.assign(stored, values);
+  };
+  chrome.storage.local.get = (_keys, callback) => {
+    const snapshot = {...stored};
+    if (callback) callback(snapshot);
+    return Promise.resolve(snapshot);
+  };
+  chrome.tabs.query = (_query, callback) => callback([]);
+  context.fetch = async url => {
+    if (url === 'bridge_preseed.json') {
+      const serverUrl = configured ? 'https://ignored.example.test' : pasted;
+      return {ok: true, json: async () => ({serverUrl})};
+    }
+    if (url.endsWith('/api/health')) healthHits.push(url);
+    if (url === `${base}/api/health`) return {ok: true, json: async () => ({ok: true, version: '1'})};
+    if (url.endsWith('/api/browser/poll')) {
+      pollHits.push(url);
+      return {ok: true, json: async () => ({commands: []})};
+    }
+    return {ok: false, status: 404};
+  };
+  chrome.runtime.onStartup.emit();
+  for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve));
+  const initialPollHits = [...pollHits];
+  if (!invalid) {
+    const next = [...timers.entries()].find(([, timer]) =>
+      timer.delay === vm.runInContext('POLL_INTERVAL', context));
+    if (!next) throw new Error('startup next poll not scheduled');
+    timers.delete(next[0]);
+    next[1].callback();
+    for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve));
+  }
+  const drivenPollHits = pollHits.slice(initialPollHits.length);
+  pollHits.splice(initialPollHits.length);
+  vm.runInContext('stopPolling();', context);
+  let popup = null, refused = null, afterRefusal = null, refusedHealthHits = null;
+  if (prefix) {
+    popup = await new Promise(resolve => chrome.runtime.onMessage.emit(
+      {type: 'setServer', url: `${base}/#/chat`}, {}, resolve));
+    vm.runInContext('stopPolling();', context);
+    const before = healthHits.length;
+    refused = await new Promise(resolve => chrome.runtime.onMessage.emit(
+      {type: 'setServer', url: 'http://localhost:19091/api/other/#/chat'}, {}, resolve));
+    refusedHealthHits = healthHits.length - before;
+    afterRefusal = vm.runInContext('SERVER_URL', context);
+  }
+  return {writes, healthHits, pollHits, drivenPollHits, logs, popup, refused, afterRefusal, refusedHealthHits};
+}
+
 const probes = {
+  ...Object.fromEntries(['proxy', 'bare', 'startupRead', 'startupResolve', 'pendingSave',
+    'initPreseed', 'initAbsent', 'initPending', 'storedBoolean', 'hydration', 'newEdit', 'invalidHydration',
+    'storageHold', 'storageReject', 'storageSuperseded', 'storageReplacementReject',
+    'coldCanonical', 'failedHydration', 'readFailedHydration', 'readRecovery'].map(variant => [
+    `popupServerLifecycle:${variant}`, () => require('./support/browser_popup_server_lifecycle.cjs')(
+      {context, chrome, vm, backgroundPath, variant, releaseInitialIdentity, initialLifecycleRequests})])),
+  concurrentIdentityInit: concurrentIdentityInitProbe,
   serverAddress: serverAddressProbe,
+  'preseedAddress:valid': preseedAddressProbe,
+  'preseedAddress:invalid': preseedAddressProbe,
+  'preseedAddress:configured': preseedAddressProbe,
+  'preseedAddress:prefixConfigured': preseedAddressProbe,
+  'preseedAddress:prefixPreseed': preseedAddressProbe,
   frameAuthority: () => require('./support/browser_frame_authority_probe.cjs')({context, chrome, vm}),
   authBackoff: authBackoffProbe,
   pollCommandResourceFailure: pollCommandResourceFailureProbe,

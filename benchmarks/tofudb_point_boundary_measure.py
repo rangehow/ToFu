@@ -23,7 +23,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.tofudb_perf_compare import RawSqliteEngine, TofuDbEngine, _MINIMUM_TAIL_SAMPLES, _percentile, _record_value, _workloads, _SCALES, _SEARCH_TS
+from scripts.tofudb_perf_compare import RawSqliteEngine, TofuDbEngine, _MINIMUM_TAIL_SAMPLES, _record_value, _workloads, _SCALES, _SEARCH_TS
+from scripts.tofudb_workloads.latency import _percentile
 from scripts.tofudb_profile_report import analyze_window
 
 

@@ -47,8 +47,10 @@ def test_creation_is_an_idempotent_committed_repository(root):
     assert _git(home, 'rev-parse', 'HEAD') == head
 
 
-def test_resource_registry_seeded_once_and_never_overwritten(root):
+def test_resource_registry_seeded_from_its_documented_source_and_never_overwritten(root):
     from lib.router.home import owner_resources, router_home_location
+    import json
+    from pathlib import Path
 
     def read(home):
         return owner_resources(7, content=True)
@@ -66,10 +68,15 @@ def test_resource_registry_seeded_once_and_never_overwritten(root):
     assert seed.startswith('# Owner resource registry')
     assert 'Never store a secret here' in seed
     assert 'how to obtain' in seed
-    # The registry is names and how to obtain them, never a credential value.
-    # (Its agreement with the private Hope patrol's queue list is
-    # tests/router/test_router_home_hope_seed.py, which stays private with
-    # scripts/hope_patrol/.)
+    # The in-tree YourProvider bundle supplies this seed (router_home/RESOURCES.md).
+    # Every queue the patrol's documented seed names is in the registry; the
+    # registry is names and how to obtain them, never a credential value.
+    patrol = json.loads(Path('scripts/hope_patrol/queues.json').read_text())
+    for queue in patrol['queues']:
+        assert f'`{queue}`' in seed
+    for source in ('scripts/hope_patrol/queues.json', 'references/queues.md',
+                   'references/rsi-queues-2026q4.md'):
+        assert source in seed
     for forbidden in ('ghp_', 'github_pat_', 'pypi-', 'BEGIN', 'Bearer '):
         assert forbidden not in seed
     # The seed matches the committed baseline byte for byte, so a home left at
@@ -83,6 +90,65 @@ def test_resource_registry_seeded_once_and_never_overwritten(root):
         stream.write(edited)
     router_home_path(7)
     assert read(home)['content'] == edited
+
+
+def test_hope_queue_policy_is_seeded_beside_the_registry_and_never_overwritten(root):
+    # R16: the submit guards read <router home>/HOPE_QUEUE_POLICY.json. A home
+    # recreated on a new host had no file, so every guard ran on its built-in
+    # fallback while the owner's documented source was absent.
+    from lib.tools.hope_queue_contract import schema
+    from lib.tools.hope_queue_policy import POLICY_FILENAME, load_policy
+    from lib.tools.hope_queue_policy_launcher import policy_path
+    import json
+
+    home = router_home_path(7)
+    path = policy_path(7)
+    assert path == os.path.join(home, POLICY_FILENAME)
+    assert POLICY_FILENAME in set(_git(home, 'ls-files').splitlines())
+    assert _git(home, 'status', '--porcelain') == ''
+    with open(path, encoding='utf-8') as stream:
+        assert json.load(stream) == schema()['x-fail-safe-default']
+    policy = load_policy(path)
+    assert policy.source == 'file'
+    assert [entry['id'] for entry in policy.applicable('/any/project')] == ['m17']
+
+    os.unlink(path)
+    router_home_path(7)
+    assert load_policy(path).source == 'file'
+
+    edited = {'version': 1, 'off_limits': [
+        *schema()['x-fail-safe-default']['off_limits'],
+        {'id': 'x1', 'queue': 'root.example.queue', 'since': '2026-11-18T00:00:00+08:00',
+         'reason': 'owner decision'}]}
+    with open(path, 'w', encoding='utf-8') as stream:
+        json.dump(edited, stream)
+    router_home_path(7)
+    with open(path, encoding='utf-8') as stream:
+        assert json.load(stream) == edited
+
+
+def test_policy_seed_leaves_an_existing_file_byte_identical(root):
+    # A published policy (here the Global Router's compact 207-byte form) must not be
+    # rewritten, reformatted or touched by later opens of the home.
+    from lib.tools.hope_queue_policy import POLICY_FILENAME
+    home = router_home_path(7)
+    path = os.path.join(home, POLICY_FILENAME)
+    published = ('{"version":1,"off_limits":[{"id":"m17","queue":'
+                 '"root.hldy_training_cluster.your-user.h910c_m17_public",'
+                 '"since":"2026-11-13T11:01+08:00","reason":"owner decision"}]}').encode()
+    with open(path, 'wb') as stream:
+        stream.write(published)
+    os.utime(path, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+    before = os.stat(path)
+
+    router_home_path(7)
+    router_home_path(7)
+
+    after = os.stat(path)
+    with open(path, 'rb') as stream:
+        assert stream.read() == published
+    assert (after.st_ino, after.st_mtime_ns, after.st_size) == (
+        before.st_ino, before.st_mtime_ns, before.st_size)
 
 
 def test_resource_registry_seed_without_a_bundle_names_no_resources(root, monkeypatch):

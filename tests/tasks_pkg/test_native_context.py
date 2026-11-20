@@ -399,3 +399,52 @@ def test_background_preparation_explicitly_borrows_token_host_without_app_contex
         await host.close()
         assert backend.closed
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('stale_round', [None, 19], ids=['fresh', 'stale-stamp'])
+def test_checklist_note_uses_issued_native_model_round(stale_round):
+    from lib.tasks_pkg.conv_message_builder._toolcalls import _reconstruct_tool_call_messages
+    from lib.tasks_pkg.segments import INJECTED_NOTES_FIELD, assemble_segments
+
+    owner_task = task()
+    owner_task.update(content='', thinking='', _attemptId='native-attempt',
+                      _todos=[{'content': 'Check retained ordering', 'status': 'in_progress'}])
+    if stale_round is not None:
+        owner_task['_activeRoundNum'] = stale_round
+    owner_task['toolRounds'] = [
+        {'toolName': 'read_files', 'toolCallId': f'read-{index}',
+         'toolArgs': {}, 'toolContent': f'evidence {index}', 'status': 'completed',
+         'roundNum': index + 1, 'llmRound': 6,
+         'attemptId': 'native-attempt', 'taskId': owner_task['id']}
+        for index in range(4)]
+    messages = [{'role': 'user', 'content': 'Continue checking the ordering'}]
+    messages.extend(_reconstruct_tool_call_messages(owner_task['toolRounds']))
+
+    async def run(executor):
+        policy = NativeContextPolicy(principal=principal(), task=owner_task, executor=executor)
+        policy.bind_route(metadata(), {'max_tokens': 1024}, {})
+        try:
+            request = RoundRequest(principal(), owner_task['id'], 'request', 7,
+                                   len(messages), messages)
+            with patch('lib.tasks_pkg.orchestrator._round_message_hygiene.run_compaction_pipeline'):
+                prepared = await policy.prepare(request)
+            assert prepared == messages
+            assert owner_task['_lastPromptAdmission']['action'] == 'admit'
+        finally:
+            policy.close()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        asyncio.run(run(executor))
+    note, = [note for note in owner_task[INJECTED_NOTES_FIELD]
+             if note.get('reason') == 'active_checklist']
+    assert note['llmRound'] == 7
+    owner_task['toolRounds'].append({
+        'toolName': 'read_files', 'toolCallId': 'consuming-round', 'toolArgs': {},
+        'toolContent': 'next evidence', 'status': 'completed', 'roundNum': 5,
+        'llmRound': 7, 'attemptId': 'native-attempt', 'taskId': owner_task['id']})
+    segments = assemble_segments(owner_task)
+    note_index = next(index for index, segment in enumerate(segments)
+                      if segment.get('blockId') == note['blockId'])
+    assert all(segment['llmRound'] == 6 for segment in segments[:note_index]
+               if segment['type'] == 'tool_use')
+    assert segments[note_index + 1]['id'] == 'consuming-round'

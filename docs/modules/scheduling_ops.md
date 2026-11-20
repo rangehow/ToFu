@@ -427,8 +427,43 @@ carrying `scheduler:run`. Personal composition binds that principal to the
 personal owner and may install the four personal built-ins plus run the
 project/peer sweeps. Distributed composition is ownerless: it still claims
 durable task rows and rebuilds a least-privilege principal from each row's
-owner, but it does not invent owner 1, install personal built-ins, or perform
-global project/peer scans.
+owner and the composed worker's tenant, but it does not invent owner 1,
+install personal built-ins, or perform global project/peer scans. Child user
+and maintenance principals retain that tenant while narrowing scopes; provider
+maintenance carries the same owner/tenant boundary into repository reads and CAS.
+
+Daily Detect rows have no independent tenant field. Only the composed,
+owner-bound worker may run them: the row owner must match the worker owner,
+and the `providers` child principal retains the worker tenant. Manual runs
+through the shared scheduler tool require an ordinary Turn admitted by a user
+with `agents:scheduler` (including `admin` under the shared scope rules). The
+[execution identity contract](../../contracts/conversation_execution_identity_v1.json)
+records only the exact Detect action; it still restores an empty principal scope
+set. Turn acceptance atomically binds the grant to the original conversation,
+Turn and Attempt. Durable restore proves the owned Attempt belongs to that Turn
+and is still current; it never rebinds copied or legacy unbound grants. The
+scheduler matches the live carrier against that binding and rechecks the durable
+running Attempt and task ID before checking the row owner and worker tenant.
+Neither raw invocation scopes nor the project row-creation grant authorize
+manual Detect; a legacy owner stamp or tool argument cannot supply the admission.
+An unbound or mismatched run cannot read model-routing authority or queue
+probes. In the managed personal topology, an execution shard sends the exact
+running Attempt and scheduler-row references once to the verified primary
+through [private command control](../../contracts/command_control_v1.json).
+The primary reconstructs the accepted principal from storage, checks current
+Attempt and uncancelled WorkerJob state and applies its own scheduler owner and
+tenant fence. No principal, scopes, or arbitrary scheduler action cross the
+wire. The primary joins the existing probe and returns its result within the
+existing Detect runtime budget; missing acknowledgement is unconfirmed and is
+never replayed. Shard drain withdraws the request through the host stop-entry
+signal and a half-close before worker teardown. The primary observes EOF as
+loss of relay publication authority, not as durable Stop. The primary checks
+withdrawal and durable Stop before probe work and again at dispatch of a
+recommendation commit or scheduler result. A command already dispatched is
+not rolled back. Entered provider I/O is joined under its existing timeouts;
+provider cells do not start another attempt after observing probe abort.
+Probe-cache progress is diagnostic, not a recommendation or scheduler result.
+Shards never install a scheduler principal or attempt local Detect as a fallback.
 
 The billing-reserve built-in is the sole periodic recovery owner and is policy reconciled disabled unless multi-user relay billing is active. The scheduler's durable claim prevents duplicate sweeps; request-worker startup creates no parallel janitor. Daily-report backfill also uses this worker: it runs every six hours, queues a startup hint only when yesterday is absent, and has no second six-hour sleeper. Optimizer and backup built-ins preserve user-controlled enablement during definition reconciliation. The personal backup's finite `max_runtime` derives from the launch-probed recovery-copy budget (30 minutes..6 hours by default, explicit ceiling 24 hours). If retained recovery points make only the transient peak exceed the copy budget, a fastpath run may hard-link and fully publish the new point before budget-retiring older verified backups; it never rotates the unique deep-clean rollback or falls back to a full copy for that exception.
 
@@ -484,6 +519,8 @@ Daily provider detection: see [model registration](../MODEL_REGISTRATION.md#dail
 
 Daily-report readers gather owner-scoped state. Historical extraction bounds candidates before hydration, then derives statistics and its 800-character transcript once with a 128-turn retained prefix; lazy failure drops the day. Calendar/day counts send explicit local intervals; storage projects Turn timestamp scalars, bounds frozen decoding, and returns only distinct counts. The calendar month overview (`lib/daily_report/calendar_overview.py`) runs one shielded computation per owner month: concurrent requests await it, a departed request cancels nothing, and report or cost invalidation detaches it so its result is never cached. Its costs come from the per-Turn usage projection `conversation.turn_usage` ([STORAGE.md](../STORAGE.md#per-turn-usage-projection)), never from transcripts; settled past days persist in `daily_cost`. Reports commit idempotently; the durable owner reconstructs `reports:maintain`. Its reconstructible LLM analysis uses the same strict billing-stop admission; the same finite actual-429 allowance applies. Explicit scheduler prompts, timer/proactive polls, and attended Agent calls do not inherit either narrower policy.
 
+**Problem:** the LLM analysis copies whatever it saw in transcripts, and a stored report carried a full `sk-` provider key in a `tomorrow[].quick_action.prefill`; reports were also created 0644. **Decision:** every report write in `lib/daily_report/storage.py` (manual save, generated save, mutation) passes the payload through the owner's known-credential redactor (`lib/tool_results/credential_redaction.py`: vault, `server_config.json` and the owner's model-routing keys become `[redacted credential: <label>]`), then replaces each remaining bare `sk-` key shape with `[redacted credential: sk-key sha256:<12 hex>]`, and writes `mode=0o600`. **Alternatives rejected:** redacting only the LLM prompt (manual edits and model paraphrase still reach disk); a generic long-token rule (reports legitimately quote commit SHAs and ids, and unknown hex keys such as R2's are caught by the known set instead). Specs: `tests/daily_report/test_daily_report_secret_redaction.py`, `tests/json_store/test_private_config_files.py`.
+
 Daily-report route discovery likewise keeps storage readers, cost aggregation,
 conversation/todo collectors, LLM generation, and scheduler integration
 dormant. The `lib.daily_report` facade resolves each focused owner on the first
@@ -493,6 +530,58 @@ not module-object types, so request adapters retain callable/list contracts
 without eagerly importing every domain owner.
 
 The typed report repository is an owner-scoped, reconstructible read cache: 96 reports of at most 512 KiB plus 24 month overviews of at most 128 KiB bound estimated storage at 51 MiB. Schema v3 discards the former unscoped/unbounded cache instead of migrating it across owners. The idle background feature owns one cache-first digest revalidation and one three-hour reminder timer; its owner/date ledger retains at most 16 entries and `beforeunload` destroys both timers. The retained panel writes only the month cache.
+
+## My Day token costs
+
+The current date shows a compact estimate in the My Day paper-and-ink palette,
+not an invoice. The keyboard-accessible disclosure builds the itemized ledger
+and model comparison only when opened. The calendar usage scan folds original request quotes when present,
+not a new price for the Turn's flattened counters. Request-local token counts
+are disjoint: uncached input, output, input cache reads and input cache writes.
+There is no cached-output counter. Zero-priced requests still contribute usage.
+Repeated receipt identities count once per owner scan. Date placement still
+uses the Turn's date; a call spanning a different calendar day is not yet
+independently windowed. Legacy aggregate-only Turns are estimated; unpriced
+rounds aren't treated as zero-priced requests. See the
+[usage projection contract](../STORAGE.md#per-turn-usage-projection).
+
+Fallback prices and incomplete scans are disclosed; a failed scan does not look
+like an empty day. The live calendar and disclosure accumulate the same original
+CNY components (new Python receipts retain unrounded components; old receipts
+retain only their recorded precision) and round after aggregation. Today's
+conversation counts sum the same four disjoint buckets as the disclosure,
+including free usage. Existing settled past-day snapshots remain unchanged.
+
+The model picker reprices that same observed token/cache mix at the selected
+model's standard catalog rates (first context tier where applicable, no peak
+adjustments). It does not simulate tokenization, cache hits, long-context
+premiums, discounts, or subscription quotas. Applying a context tier to the
+entire day's prompt total was rejected because that would treat the day as one
+request. Selecting a model makes no new request or setting change. The
+calendar's existing single-flight response carries the dated breakdown only
+for today. The browser can paint that day's last estimate from the existing
+owner-scoped month cache while revalidating; IndexedDB does not gate the network
+read, and an unavailable fresh result does not erase a known estimate. No
+per-conversation usage is persisted in the browser. See
+`frontend/src/features/myday/token-costs.ts`.
+
+**Problem:** Once the month response cache expired, every refresh re-read every
+candidate conversation's usage and folded all recorded requests again.
+**Decision:** Keep one volatile live-day snapshot per owner under the calendar's
+existing retention budget. `lib/conversations/usage_snapshot.py` reconciles the
+current owner/day candidate catalog against the previous snapshot. A changed
+revision, attribution header or lane count re-reads only that conversation;
+missing IDs leave the fold. The source catalog must agree across a newly read
+projection for it to be reused. Unchanged projections and pricing revisions
+reuse the completed fold, including model estimates. Calendar flights and
+cached results are date-scoped across midnight; settled history still uses the
+existing backfill. On process restart, the first live scan is cold again.
+**Alternatives rejected:** appending by wall-clock timestamp alone would miss
+same-time corrections and deletions; summing independently cached conversation
+costs would double-count receipts shared by clones. A changed snapshot still
+runs the common receipt-aware day fold over the retained projections. The
+256-conversation regression checks zero usage reads on unchanged refresh and
+one usage read after a single change.
 
 ## My Day goals
 

@@ -107,6 +107,12 @@ def has_model_media(message: Mapping) -> bool:
                 not isinstance(block, dict) or block.get('type') not in ('text', 'input_text', 'output_text')
                 for block in content):
             return True
+    return any(has_nested_model_media(message.get(key))
+               for key in ('_responses_items', '_anthropic_content_blocks'))
+
+
+def has_nested_model_media(value) -> bool:
+    """Detect structured media even inside retained tool results or segments."""
     def media(value):
         if isinstance(value, dict):
             if value.get('type') in ('image', 'image_url', 'input_image', 'document',
@@ -116,4 +122,4 @@ def has_model_media(message: Mapping) -> bool:
         if isinstance(value, list):
             return any(media(item) for item in value)
         return False
-    return any(media(message.get(key)) for key in ('_responses_items', '_anthropic_content_blocks'))
+    return media(value)

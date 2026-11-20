@@ -1,6 +1,6 @@
 """Owner model changes on existing sessions, preserving context, grant and checkout.
 
-The owner (or their delegated Global Router, docs/ROUTER.md R9) answers a
+The owner (or a lead acting under their delegation, docs/ROUTER.md R9) answers a
 provider refusal with a legitimate model change on the SAME session instead of a
 clean replacement: the conversation, dispatch grant, tool checkpoint, work id and
 authorization scope are untouched, and an in-flight attempt keeps its accepted
@@ -16,15 +16,19 @@ attempt; ``_restored_identity`` admits a carrier's model only from durable
 evidence (the grant's model, the session's current choice, or the model its
 bound attempt was accepted with), so a later change never revokes a running
 call and a rewritten carrier gains nothing. Every change
-writes one ``session_model_changed`` record to the existing audit log. The Global
-Router acting under the owner's grant takes the delegated session-control path
+writes one ``session_model_changed`` record to the existing audit log. A lead
+acting under the owner's grant takes the delegated session-control path
 (``lib.router.owner_delegation.delegated_conversation_control``, R9): grant,
 owner trigger and one audit record naming the chosen model precede the same
 ``set_session_model`` call, as for a delegated Continue.
 
+The conversation's configured thinking depth is resolved the same way for each
+new dispatch attempt (``apply_session_policy``): it is the model view the
+owner's composer set, never grant authority.
+
 Entry points: set_session_model (``control_conversation action=set_model``, the
 owner's request or the R9 grant branch), owner_set_session_model (HTTP),
-validate_request (shared argument checks), apply_session_model (admission).
+validate_request (shared argument checks), apply_session_policy (admission).
 Dependencies: conversations.settings_store, conversations.repository,
 project_dispatch.delegation, session_control._target (owner/project scope),
 lib.log.audit_log.
@@ -57,13 +61,34 @@ def session_model(conversation_id: str, *, owner: int) -> str:
     return value if isinstance(value, str) else ''
 
 
-def apply_session_model(conversation_id: str, model: str, *, owner: int) -> str:
-    """The owner's current choice for a session's next attempt; no override keeps the grant's.
+# The conversation's thinking selection: model view, never grant authority.
+REASONING_FIELDS = ('thinkingDepth', 'thinkingEnabled')
 
-    Reading the setting admits no capability: writing it was route-admitted, and
-    an accepted attempt is fenced against the model it was accepted with.
+
+def apply_session_policy(conversation_id: str, config: dict, *, owner: int,
+                         use_composer_model: bool = False) -> dict:
+    """Set model and effort from one owned settings read; return any composer route.
+
+    An explicit session override takes precedence. Coordinator continuations
+    otherwise use the saved composer selection; Worker grants keep their own
+    model. No composer route is inherited when it names a different model.
     """
-    return session_model(conversation_id, owner=owner) or model
+    from lib.conv_config import resolve_conv_config
+    settings = _conversation_settings(conversation_id, owner)
+    resolved = resolve_conv_config(conv_settings=settings, is_active=False)
+    override = settings.get(SETTING)
+    if isinstance(override, str) and override:
+        config['model'] = override
+    elif use_composer_model and resolved['model']:
+        config['model'] = resolved['model']
+    if resolved.get('thinkingDepth'):
+        config.update((key, resolved[key]) for key in REASONING_FIELDS)
+    if not use_composer_model or not resolved['model'] or config['model'] != resolved['model']:
+        return {}
+    route = resolved['modelRef']
+    if route and route.get('model_id', resolved['model']) != resolved['model']:
+        return {'preset': resolved['model']}
+    return {key: resolved[key] for key in ('modelRef', 'preferredProviderId', 'routing', 'preset')}
 
 
 def validate_request(arguments: Mapping) -> tuple[str, str | None, str]:
@@ -77,8 +102,7 @@ def validate_request(arguments: Mapping) -> tuple[str, str | None, str]:
             raise ValueError(f'{name} is required')
     model = arguments.get('model')
     if model is not None and (not isinstance(model, str) or not model.strip() or len(model.strip()) > 256):
-        raise ValueError('model must be a model id of 1–256 characters, or null to return to the '
-                         'session’s original model')
+        raise ValueError('model must be a model id of 1–256 characters, or null to clear the session override')
     if len(arguments['reason']) > 2048:
         raise ValueError('reason exceeds 2048 characters')
     return arguments['conversation_id'], (model or '').strip() or None, arguments['reason']
@@ -115,8 +139,9 @@ def set_session_model(task: dict, scope: dict, principal, arguments: Mapping, *,
 
     The human's current request may route any session in scope (a Coordinator's
     project, any owned session for the Global Router), exactly as
-    control_conversation's Continue does. Synthetic continuations cannot:
-    models never choose models, and a grant's model is not its own to enlarge.
+    control_conversation's Continue does. A synthetic continuation has no direct
+    authority to change the model; delegated calls arrive with the principal
+    issued by the existing owner-delegation gate.
     """
     from .session_control import _target
     conversation_id, model, reason = validate_request(arguments)
@@ -189,5 +214,5 @@ def owner_set_session_model(owner: int, principal, arguments: Mapping) -> dict:
                          'continuation uses this model.'}
 
 
-__all__ = ['SETTING', 'apply_session_model', 'owner_set_session_model', 'session_model',
+__all__ = ['SETTING', 'apply_session_policy', 'owner_set_session_model', 'session_model',
            'set_session_model', 'store_session_model', 'validate_request']

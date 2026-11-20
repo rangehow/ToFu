@@ -129,7 +129,7 @@ class WalCheckpointer:
         if frames is not None:
             with self._lock:
                 self._metrics['max_wal_frames'] = max(self._metrics['max_wal_frames'], frames)
-            if frames < WAL_AUTOCHECKPOINT_FRAMES or (backfilled is not None and backfilled >= frames):
+            if frames < WAL_AUTOCHECKPOINT_FRAMES or backfilled >= frames:
                 return
         started = time.monotonic()
         _busy, _log, checkpointed = self._connection.execute(

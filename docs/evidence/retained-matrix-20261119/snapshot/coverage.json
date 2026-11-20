@@ -1,0 +1,2037 @@
+{
+  "cells": [
+    {
+      "complete_89_task_runs": 0,
+      "harness": "claude-code",
+      "model": "Doubao-Seed-2.0-pro",
+      "n": 4,
+      "passes": 2,
+      "recorded_calls": 166,
+      "recorded_list_cost_usd": 1.8425,
+      "runs": {
+        "a2": 4
+      },
+      "tasks": 4
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "codex",
+      "model": "Doubao-Seed-2.0-pro",
+      "n": 4,
+      "passes": 1,
+      "recorded_calls": 153,
+      "recorded_list_cost_usd": 1.7082,
+      "runs": {
+        "a2": 4
+      },
+      "tasks": 4
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "goose",
+      "model": "Doubao-Seed-2.0-pro",
+      "n": 7,
+      "passes": 3,
+      "recorded_calls": 151,
+      "recorded_list_cost_usd": 1.1583,
+      "runs": {
+        "a2": 4,
+        "r2": 3
+      },
+      "tasks": 7
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "hermes",
+      "model": "Doubao-Seed-2.0-pro",
+      "n": 25,
+      "passes": 9,
+      "recorded_calls": 584,
+      "recorded_list_cost_usd": 7.0142,
+      "runs": {
+        "a2": 4,
+        "hermes-r1": 21
+      },
+      "tasks": 22
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "kimi-code",
+      "model": "Doubao-Seed-2.0-pro",
+      "n": 8,
+      "passes": 3,
+      "recorded_calls": 197,
+      "recorded_list_cost_usd": 3.2777,
+      "runs": {
+        "a2": 4,
+        "r2": 4
+      },
+      "tasks": 8
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "mini-swe-agent",
+      "model": "Doubao-Seed-2.0-pro",
+      "n": 7,
+      "passes": 2,
+      "recorded_calls": 194,
+      "recorded_list_cost_usd": 3.1927,
+      "runs": {
+        "a2": 4,
+        "r2": 3
+      },
+      "tasks": 7
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "oh-my-pi",
+      "model": "Doubao-Seed-2.0-pro",
+      "n": 8,
+      "passes": 3,
+      "recorded_calls": 174,
+      "recorded_list_cost_usd": 2.6391,
+      "runs": {
+        "a2": 4,
+        "r2": 4
+      },
+      "tasks": 8
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "opencode",
+      "model": "Doubao-Seed-2.0-pro",
+      "n": 4,
+      "passes": 0,
+      "recorded_calls": 98,
+      "recorded_list_cost_usd": 1.4201,
+      "runs": {
+        "r2": 4
+      },
+      "tasks": 4
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "qwen-code",
+      "model": "Doubao-Seed-2.0-pro",
+      "n": 8,
+      "passes": 3,
+      "recorded_calls": 229,
+      "recorded_list_cost_usd": 3.0482,
+      "runs": {
+        "a2": 4,
+        "r2": 4
+      },
+      "tasks": 8
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "tofu@948e9b264f",
+      "model": "Doubao-Seed-2.0-pro",
+      "n": 4,
+      "passes": 3,
+      "recorded_calls": 128,
+      "recorded_list_cost_usd": 1.5065,
+      "runs": {
+        "a2": 4
+      },
+      "tasks": 4
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "claude-code",
+      "model": "MiniMax-M2.7",
+      "n": 7,
+      "passes": 2,
+      "recorded_calls": 223,
+      "recorded_list_cost_usd": 0.6913,
+      "runs": {
+        "a1": 7
+      },
+      "tasks": 7
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "codex",
+      "model": "MiniMax-M2.7",
+      "n": 22,
+      "passes": 9,
+      "recorded_calls": 1042,
+      "recorded_list_cost_usd": 2.5197,
+      "runs": {
+        "a1": 7,
+        "a2": 15
+      },
+      "tasks": 22
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "goose",
+      "model": "MiniMax-M2.7",
+      "n": 22,
+      "passes": 10,
+      "recorded_calls": 839,
+      "recorded_list_cost_usd": 1.4323,
+      "runs": {
+        "a1": 8,
+        "a2": 14
+      },
+      "tasks": 22
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "hermes",
+      "model": "MiniMax-M2.7",
+      "n": 21,
+      "passes": 11,
+      "recorded_calls": 911,
+      "recorded_list_cost_usd": 2.2786,
+      "runs": {
+        "a1": 7,
+        "a2": 14
+      },
+      "tasks": 21
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "kimi-code",
+      "model": "MiniMax-M2.7",
+      "n": 23,
+      "passes": 9,
+      "recorded_calls": 1006,
+      "recorded_list_cost_usd": 2.8889,
+      "runs": {
+        "a1": 8,
+        "a2": 15
+      },
+      "tasks": 23
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "mini-swe-agent",
+      "model": "MiniMax-M2.7",
+      "n": 22,
+      "passes": 11,
+      "recorded_calls": 1726,
+      "recorded_list_cost_usd": 3.2083,
+      "runs": {
+        "a1": 8,
+        "a2": 14
+      },
+      "tasks": 22
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "oh-my-pi",
+      "model": "MiniMax-M2.7",
+      "n": 22,
+      "passes": 8,
+      "recorded_calls": 993,
+      "recorded_list_cost_usd": 2.3283,
+      "runs": {
+        "a1": 7,
+        "a2": 15
+      },
+      "tasks": 22
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "qwen-code",
+      "model": "MiniMax-M2.7",
+      "n": 22,
+      "passes": 8,
+      "recorded_calls": 801,
+      "recorded_list_cost_usd": 1.6992,
+      "runs": {
+        "a1": 8,
+        "a2": 14
+      },
+      "tasks": 22
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "tofu@948e9b264f",
+      "model": "MiniMax-M2.7",
+      "n": 40,
+      "passes": 20,
+      "recorded_calls": 1302,
+      "recorded_list_cost_usd": 2.9049,
+      "runs": {
+        "a1": 7,
+        "a2": 15,
+        "a3": 18
+      },
+      "tasks": 40
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "claude-code",
+      "model": "MiniMax-M3",
+      "n": 26,
+      "passes": 17,
+      "recorded_calls": 902,
+      "recorded_list_cost_usd": 5.5649,
+      "runs": {
+        "a1": 9,
+        "a2": 7,
+        "a3": 10
+      },
+      "tasks": 16
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "codex",
+      "model": "MiniMax-M3",
+      "n": 25,
+      "passes": 16,
+      "recorded_calls": 1035,
+      "recorded_list_cost_usd": 5.8489,
+      "runs": {
+        "a1": 9,
+        "a2": 7,
+        "a3": 9
+      },
+      "tasks": 16
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "opencode",
+      "model": "MiniMax-M3",
+      "n": 8,
+      "passes": 5,
+      "recorded_calls": 282,
+      "recorded_list_cost_usd": 1.1538,
+      "runs": {
+        "a1": 8
+      },
+      "tasks": 8
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "pi",
+      "model": "MiniMax-M3",
+      "n": 9,
+      "passes": 7,
+      "recorded_calls": 353,
+      "recorded_list_cost_usd": 1.273,
+      "runs": {
+        "a1": 9
+      },
+      "tasks": 9
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "tofu@948e9b264f",
+      "model": "MiniMax-M3",
+      "n": 24,
+      "passes": 15,
+      "recorded_calls": 928,
+      "recorded_list_cost_usd": 5.9072,
+      "runs": {
+        "a1": 9,
+        "a2": 6,
+        "a3": 9
+      },
+      "tasks": 16
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "claude-code",
+      "model": "deepseek-v4-flash",
+      "n": 20,
+      "passes": 17,
+      "recorded_calls": 408,
+      "recorded_list_cost_usd": 0.3964,
+      "runs": {
+        "a1": 14,
+        "a3": 6
+      },
+      "tasks": 20
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "codex",
+      "model": "deepseek-v4-flash",
+      "n": 19,
+      "passes": 17,
+      "recorded_calls": 419,
+      "recorded_list_cost_usd": 0.3758,
+      "runs": {
+        "a1": 14,
+        "a3": 5
+      },
+      "tasks": 19
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "opencode",
+      "model": "deepseek-v4-flash",
+      "n": 14,
+      "passes": 12,
+      "recorded_calls": 299,
+      "recorded_list_cost_usd": 0.1994,
+      "runs": {
+        "a1": 14
+      },
+      "tasks": 14
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "pi",
+      "model": "deepseek-v4-flash",
+      "n": 14,
+      "passes": 10,
+      "recorded_calls": 271,
+      "recorded_list_cost_usd": 0.2156,
+      "runs": {
+        "a1": 14
+      },
+      "tasks": 14
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "tofu",
+      "model": "deepseek-v4-flash",
+      "n": 13,
+      "passes": 13,
+      "recorded_calls": 323,
+      "recorded_list_cost_usd": 0.2586,
+      "runs": {
+        "a1": 13
+      },
+      "tasks": 13
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "tofu",
+      "model": "gemini-3.5-flash",
+      "n": 34,
+      "passes": 24,
+      "recorded_calls": 1767,
+      "recorded_list_cost_usd": 60.9598,
+      "runs": {
+        "a1": 17,
+        "a2": 17
+      },
+      "tasks": 34
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "claude-code",
+      "model": "glm-5.2",
+      "n": 23,
+      "passes": 16,
+      "recorded_calls": 463,
+      "recorded_list_cost_usd": 22.4301,
+      "runs": {
+        "a1": 7,
+        "a2": 16
+      },
+      "tasks": 23
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "codex",
+      "model": "glm-5.2",
+      "n": 22,
+      "passes": 15,
+      "recorded_calls": 441,
+      "recorded_list_cost_usd": 14.0816,
+      "runs": {
+        "a1": 6,
+        "a2": 16
+      },
+      "tasks": 22
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "opencode",
+      "model": "glm-5.2",
+      "n": 7,
+      "passes": 5,
+      "recorded_calls": 116,
+      "recorded_list_cost_usd": 3.2461,
+      "runs": {
+        "a1": 7
+      },
+      "tasks": 7
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "pi",
+      "model": "glm-5.2",
+      "n": 7,
+      "passes": 6,
+      "recorded_calls": 99,
+      "recorded_list_cost_usd": 1.4621,
+      "runs": {
+        "a1": 7
+      },
+      "tasks": 7
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "tofu",
+      "model": "glm-5.2",
+      "n": 22,
+      "passes": 17,
+      "recorded_calls": 399,
+      "recorded_list_cost_usd": 11.8316,
+      "runs": {
+        "a1": 7,
+        "a2": 15
+      },
+      "tasks": 22
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "claude-code",
+      "model": "grok-4.6",
+      "n": 37,
+      "passes": 23,
+      "recorded_calls": 570,
+      "recorded_list_cost_usd": 57.2719,
+      "runs": {
+        "a1": 14,
+        "a2": 23
+      },
+      "tasks": 23
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "codex",
+      "model": "grok-4.6",
+      "n": 36,
+      "passes": 29,
+      "recorded_calls": 974,
+      "recorded_list_cost_usd": 27.1749,
+      "runs": {
+        "a1": 13,
+        "a2": 23
+      },
+      "tasks": 23
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "opencode",
+      "model": "grok-4.6",
+      "n": 38,
+      "passes": 29,
+      "recorded_calls": 574,
+      "recorded_list_cost_usd": 15.5453,
+      "runs": {
+        "a1": 14,
+        "a2": 24
+      },
+      "tasks": 24
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "pi",
+      "model": "grok-4.6",
+      "n": 38,
+      "passes": 32,
+      "recorded_calls": 671,
+      "recorded_list_cost_usd": 15.3365,
+      "runs": {
+        "a1": 14,
+        "a2": 24
+      },
+      "tasks": 24
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "tofu",
+      "model": "grok-4.6",
+      "n": 38,
+      "passes": 27,
+      "recorded_calls": 629,
+      "recorded_list_cost_usd": 18.3129,
+      "runs": {
+        "a1": 14,
+        "a2": 24
+      },
+      "tasks": 24
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "codex",
+      "model": "kimi-k2.7-code-highspeed",
+      "n": 7,
+      "passes": 6,
+      "recorded_calls": 176,
+      "recorded_list_cost_usd": 1.2205,
+      "runs": {
+        "a1": 7
+      },
+      "tasks": 7
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "kimi-code",
+      "model": "kimi-k2.7-code-highspeed",
+      "n": 14,
+      "passes": 9,
+      "recorded_calls": 358,
+      "recorded_list_cost_usd": 5.6195,
+      "runs": {
+        "a1": 8,
+        "r1": 6
+      },
+      "tasks": 14
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "opencode",
+      "model": "kimi-k2.7-code-highspeed",
+      "n": 13,
+      "passes": 5,
+      "recorded_calls": 355,
+      "recorded_list_cost_usd": 3.9132,
+      "runs": {
+        "a1": 8,
+        "r1": 5
+      },
+      "tasks": 13
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "pi",
+      "model": "kimi-k2.7-code-highspeed",
+      "n": 7,
+      "passes": 6,
+      "recorded_calls": 142,
+      "recorded_list_cost_usd": 0.7787,
+      "runs": {
+        "a1": 7
+      },
+      "tasks": 7
+    },
+    {
+      "complete_89_task_runs": 0,
+      "harness": "tofu@948e9b264f",
+      "model": "kimi-k2.7-code-highspeed",
+      "n": 7,
+      "passes": 6,
+      "recorded_calls": 187,
+      "recorded_list_cost_usd": 1.589,
+      "runs": {
+        "a1": 7
+      },
+      "tasks": 7
+    }
+  ],
+  "comparison": "RETAINED-A10-ISOLATION-METADATA-20261119",
+  "decisions": {
+    "csv_invalid": 5,
+    "eligible": 802,
+    "missing_raw_metadata": 266,
+    "outside_extended_E": 238,
+    "pre_isolation_or_unknown": 5654,
+    "subsequently_invalidated": 7
+  },
+  "isolation_labels": {
+    "isolated": 1075,
+    "pre-isolation": 5897
+  },
+  "matched_pairs": [
+    {
+      "a": "claude-code",
+      "a_passes": 2,
+      "a_recorded_list_cost_usd": 1.8425,
+      "b": "codex",
+      "b_passes": 1,
+      "b_recorded_list_cost_usd": 1.7082,
+      "matched_run_tasks": 4,
+      "matched_tasks": 4,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 1,
+      "a_recorded_list_cost_usd": 1.7877,
+      "b": "goose",
+      "b_passes": 3,
+      "b_recorded_list_cost_usd": 0.8703,
+      "matched_run_tasks": 3,
+      "matched_tasks": 3,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 1,
+      "a_recorded_list_cost_usd": 1.7877,
+      "b": "hermes",
+      "b_passes": 2,
+      "b_recorded_list_cost_usd": 1.4233,
+      "matched_run_tasks": 3,
+      "matched_tasks": 3,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 1,
+      "a_recorded_list_cost_usd": 1.7877,
+      "b": "kimi-code",
+      "b_passes": 2,
+      "b_recorded_list_cost_usd": 1.7363,
+      "matched_run_tasks": 3,
+      "matched_tasks": 3,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 1,
+      "a_recorded_list_cost_usd": 1.7877,
+      "b": "mini-swe-agent",
+      "b_passes": 2,
+      "b_recorded_list_cost_usd": 2.7304,
+      "matched_run_tasks": 3,
+      "matched_tasks": 3,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 1,
+      "a_recorded_list_cost_usd": 1.7877,
+      "b": "oh-my-pi",
+      "b_passes": 2,
+      "b_recorded_list_cost_usd": 1.3549,
+      "matched_run_tasks": 3,
+      "matched_tasks": 3,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 1,
+      "a_recorded_list_cost_usd": 1.7877,
+      "b": "qwen-code",
+      "b_passes": 2,
+      "b_recorded_list_cost_usd": 1.515,
+      "matched_run_tasks": 3,
+      "matched_tasks": 3,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 1,
+      "a_recorded_list_cost_usd": 1.7877,
+      "b": "tofu@948e9b264f",
+      "b_passes": 3,
+      "b_recorded_list_cost_usd": 1.2474,
+      "matched_run_tasks": 3,
+      "matched_tasks": 3,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "codex",
+      "a_passes": 1,
+      "a_recorded_list_cost_usd": 1.6703,
+      "b": "goose",
+      "b_passes": 3,
+      "b_recorded_list_cost_usd": 0.8703,
+      "matched_run_tasks": 3,
+      "matched_tasks": 3,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "codex",
+      "a_passes": 1,
+      "a_recorded_list_cost_usd": 1.6703,
+      "b": "hermes",
+      "b_passes": 2,
+      "b_recorded_list_cost_usd": 1.4233,
+      "matched_run_tasks": 3,
+      "matched_tasks": 3,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "codex",
+      "a_passes": 1,
+      "a_recorded_list_cost_usd": 1.6703,
+      "b": "kimi-code",
+      "b_passes": 2,
+      "b_recorded_list_cost_usd": 1.7363,
+      "matched_run_tasks": 3,
+      "matched_tasks": 3,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "codex",
+      "a_passes": 1,
+      "a_recorded_list_cost_usd": 1.6703,
+      "b": "mini-swe-agent",
+      "b_passes": 2,
+      "b_recorded_list_cost_usd": 2.7304,
+      "matched_run_tasks": 3,
+      "matched_tasks": 3,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "codex",
+      "a_passes": 1,
+      "a_recorded_list_cost_usd": 1.6703,
+      "b": "oh-my-pi",
+      "b_passes": 2,
+      "b_recorded_list_cost_usd": 1.3549,
+      "matched_run_tasks": 3,
+      "matched_tasks": 3,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "codex",
+      "a_passes": 1,
+      "a_recorded_list_cost_usd": 1.6703,
+      "b": "qwen-code",
+      "b_passes": 2,
+      "b_recorded_list_cost_usd": 1.515,
+      "matched_run_tasks": 3,
+      "matched_tasks": 3,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "codex",
+      "a_passes": 1,
+      "a_recorded_list_cost_usd": 1.6703,
+      "b": "tofu@948e9b264f",
+      "b_passes": 3,
+      "b_recorded_list_cost_usd": 1.2474,
+      "matched_run_tasks": 3,
+      "matched_tasks": 3,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "goose",
+      "a_passes": 3,
+      "a_recorded_list_cost_usd": 1.019,
+      "b": "hermes",
+      "b_passes": 2,
+      "b_recorded_list_cost_usd": 1.6343,
+      "matched_run_tasks": 4,
+      "matched_tasks": 4,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "goose",
+      "a_passes": 3,
+      "a_recorded_list_cost_usd": 1.1583,
+      "b": "kimi-code",
+      "b_passes": 2,
+      "b_recorded_list_cost_usd": 2.8684,
+      "matched_run_tasks": 7,
+      "matched_tasks": 7,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "goose",
+      "a_passes": 3,
+      "a_recorded_list_cost_usd": 1.1583,
+      "b": "mini-swe-agent",
+      "b_passes": 2,
+      "b_recorded_list_cost_usd": 3.1927,
+      "matched_run_tasks": 7,
+      "matched_tasks": 7,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "goose",
+      "a_passes": 3,
+      "a_recorded_list_cost_usd": 1.1583,
+      "b": "oh-my-pi",
+      "b_passes": 2,
+      "b_recorded_list_cost_usd": 2.5905,
+      "matched_run_tasks": 7,
+      "matched_tasks": 7,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "goose",
+      "a_passes": 0,
+      "a_recorded_list_cost_usd": 0.1393,
+      "b": "opencode",
+      "b_passes": 0,
+      "b_recorded_list_cost_usd": 1.1466,
+      "matched_run_tasks": 3,
+      "matched_tasks": 3,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "goose",
+      "a_passes": 3,
+      "a_recorded_list_cost_usd": 1.1583,
+      "b": "qwen-code",
+      "b_passes": 2,
+      "b_recorded_list_cost_usd": 2.9026,
+      "matched_run_tasks": 7,
+      "matched_tasks": 7,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "goose",
+      "a_passes": 3,
+      "a_recorded_list_cost_usd": 1.019,
+      "b": "tofu@948e9b264f",
+      "b_passes": 3,
+      "b_recorded_list_cost_usd": 1.5065,
+      "matched_run_tasks": 4,
+      "matched_tasks": 4,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "hermes",
+      "a_passes": 2,
+      "a_recorded_list_cost_usd": 1.6343,
+      "b": "kimi-code",
+      "b_passes": 2,
+      "b_recorded_list_cost_usd": 2.0499,
+      "matched_run_tasks": 4,
+      "matched_tasks": 4,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "hermes",
+      "a_passes": 2,
+      "a_recorded_list_cost_usd": 1.6343,
+      "b": "mini-swe-agent",
+      "b_passes": 2,
+      "b_recorded_list_cost_usd": 2.8546,
+      "matched_run_tasks": 4,
+      "matched_tasks": 4,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "hermes",
+      "a_passes": 2,
+      "a_recorded_list_cost_usd": 1.6343,
+      "b": "oh-my-pi",
+      "b_passes": 2,
+      "b_recorded_list_cost_usd": 1.5849,
+      "matched_run_tasks": 4,
+      "matched_tasks": 4,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "hermes",
+      "a_passes": 2,
+      "a_recorded_list_cost_usd": 1.6343,
+      "b": "qwen-code",
+      "b_passes": 2,
+      "b_recorded_list_cost_usd": 1.7091,
+      "matched_run_tasks": 4,
+      "matched_tasks": 4,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "hermes",
+      "a_passes": 2,
+      "a_recorded_list_cost_usd": 1.6343,
+      "b": "tofu@948e9b264f",
+      "b_passes": 3,
+      "b_recorded_list_cost_usd": 1.5065,
+      "matched_run_tasks": 4,
+      "matched_tasks": 4,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "kimi-code",
+      "a_passes": 2,
+      "a_recorded_list_cost_usd": 2.8684,
+      "b": "mini-swe-agent",
+      "b_passes": 2,
+      "b_recorded_list_cost_usd": 3.1927,
+      "matched_run_tasks": 7,
+      "matched_tasks": 7,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "kimi-code",
+      "a_passes": 3,
+      "a_recorded_list_cost_usd": 3.2777,
+      "b": "oh-my-pi",
+      "b_passes": 3,
+      "b_recorded_list_cost_usd": 2.6391,
+      "matched_run_tasks": 8,
+      "matched_tasks": 8,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "kimi-code",
+      "a_passes": 1,
+      "a_recorded_list_cost_usd": 1.2278,
+      "b": "opencode",
+      "b_passes": 0,
+      "b_recorded_list_cost_usd": 1.4201,
+      "matched_run_tasks": 4,
+      "matched_tasks": 4,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "kimi-code",
+      "a_passes": 3,
+      "a_recorded_list_cost_usd": 3.2777,
+      "b": "qwen-code",
+      "b_passes": 3,
+      "b_recorded_list_cost_usd": 3.0482,
+      "matched_run_tasks": 8,
+      "matched_tasks": 8,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "kimi-code",
+      "a_passes": 2,
+      "a_recorded_list_cost_usd": 2.0499,
+      "b": "tofu@948e9b264f",
+      "b_passes": 3,
+      "b_recorded_list_cost_usd": 1.5065,
+      "matched_run_tasks": 4,
+      "matched_tasks": 4,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "mini-swe-agent",
+      "a_passes": 2,
+      "a_recorded_list_cost_usd": 3.1927,
+      "b": "oh-my-pi",
+      "b_passes": 2,
+      "b_recorded_list_cost_usd": 2.5905,
+      "matched_run_tasks": 7,
+      "matched_tasks": 7,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "mini-swe-agent",
+      "a_passes": 0,
+      "a_recorded_list_cost_usd": 0.3381,
+      "b": "opencode",
+      "b_passes": 0,
+      "b_recorded_list_cost_usd": 1.1466,
+      "matched_run_tasks": 3,
+      "matched_tasks": 3,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "mini-swe-agent",
+      "a_passes": 2,
+      "a_recorded_list_cost_usd": 3.1927,
+      "b": "qwen-code",
+      "b_passes": 2,
+      "b_recorded_list_cost_usd": 2.9026,
+      "matched_run_tasks": 7,
+      "matched_tasks": 7,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "mini-swe-agent",
+      "a_passes": 2,
+      "a_recorded_list_cost_usd": 2.8546,
+      "b": "tofu@948e9b264f",
+      "b_passes": 3,
+      "b_recorded_list_cost_usd": 1.5065,
+      "matched_run_tasks": 4,
+      "matched_tasks": 4,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "oh-my-pi",
+      "a_passes": 1,
+      "a_recorded_list_cost_usd": 1.0542,
+      "b": "opencode",
+      "b_passes": 0,
+      "b_recorded_list_cost_usd": 1.4201,
+      "matched_run_tasks": 4,
+      "matched_tasks": 4,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "oh-my-pi",
+      "a_passes": 3,
+      "a_recorded_list_cost_usd": 2.6391,
+      "b": "qwen-code",
+      "b_passes": 3,
+      "b_recorded_list_cost_usd": 3.0482,
+      "matched_run_tasks": 8,
+      "matched_tasks": 8,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "oh-my-pi",
+      "a_passes": 2,
+      "a_recorded_list_cost_usd": 1.5849,
+      "b": "tofu@948e9b264f",
+      "b_passes": 3,
+      "b_recorded_list_cost_usd": 1.5065,
+      "matched_run_tasks": 4,
+      "matched_tasks": 4,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "opencode",
+      "a_passes": 0,
+      "a_recorded_list_cost_usd": 1.4201,
+      "b": "qwen-code",
+      "b_passes": 1,
+      "b_recorded_list_cost_usd": 1.3391,
+      "matched_run_tasks": 4,
+      "matched_tasks": 4,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "qwen-code",
+      "a_passes": 2,
+      "a_recorded_list_cost_usd": 1.7091,
+      "b": "tofu@948e9b264f",
+      "b_passes": 3,
+      "b_recorded_list_cost_usd": 1.5065,
+      "matched_run_tasks": 4,
+      "matched_tasks": 4,
+      "model": "Doubao-Seed-2.0-pro"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 2,
+      "a_recorded_list_cost_usd": 0.6913,
+      "b": "codex",
+      "b_passes": 3,
+      "b_recorded_list_cost_usd": 0.6295,
+      "matched_run_tasks": 7,
+      "matched_tasks": 7,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 2,
+      "a_recorded_list_cost_usd": 0.6913,
+      "b": "goose",
+      "b_passes": 2,
+      "b_recorded_list_cost_usd": 0.6897,
+      "matched_run_tasks": 7,
+      "matched_tasks": 7,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 2,
+      "a_recorded_list_cost_usd": 0.6724,
+      "b": "hermes",
+      "b_passes": 3,
+      "b_recorded_list_cost_usd": 0.7614,
+      "matched_run_tasks": 6,
+      "matched_tasks": 6,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 2,
+      "a_recorded_list_cost_usd": 0.6913,
+      "b": "kimi-code",
+      "b_passes": 3,
+      "b_recorded_list_cost_usd": 0.5903,
+      "matched_run_tasks": 7,
+      "matched_tasks": 7,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 2,
+      "a_recorded_list_cost_usd": 0.6913,
+      "b": "mini-swe-agent",
+      "b_passes": 3,
+      "b_recorded_list_cost_usd": 1.0781,
+      "matched_run_tasks": 7,
+      "matched_tasks": 7,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 2,
+      "a_recorded_list_cost_usd": 0.6913,
+      "b": "oh-my-pi",
+      "b_passes": 2,
+      "b_recorded_list_cost_usd": 0.9153,
+      "matched_run_tasks": 7,
+      "matched_tasks": 7,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 2,
+      "a_recorded_list_cost_usd": 0.6913,
+      "b": "qwen-code",
+      "b_passes": 2,
+      "b_recorded_list_cost_usd": 0.8046,
+      "matched_run_tasks": 7,
+      "matched_tasks": 7,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 2,
+      "a_recorded_list_cost_usd": 0.6913,
+      "b": "tofu@948e9b264f",
+      "b_passes": 3,
+      "b_recorded_list_cost_usd": 0.376,
+      "matched_run_tasks": 7,
+      "matched_tasks": 7,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "codex",
+      "a_passes": 8,
+      "a_recorded_list_cost_usd": 2.5152,
+      "b": "goose",
+      "b_passes": 9,
+      "b_recorded_list_cost_usd": 1.423,
+      "matched_run_tasks": 21,
+      "matched_tasks": 21,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "codex",
+      "a_passes": 8,
+      "a_recorded_list_cost_usd": 2.4489,
+      "b": "hermes",
+      "b_passes": 10,
+      "b_recorded_list_cost_usd": 2.2582,
+      "matched_run_tasks": 20,
+      "matched_tasks": 20,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "codex",
+      "a_passes": 9,
+      "a_recorded_list_cost_usd": 2.5197,
+      "b": "kimi-code",
+      "b_passes": 8,
+      "b_recorded_list_cost_usd": 2.8712,
+      "matched_run_tasks": 22,
+      "matched_tasks": 22,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "codex",
+      "a_passes": 8,
+      "a_recorded_list_cost_usd": 2.5152,
+      "b": "mini-swe-agent",
+      "b_passes": 10,
+      "b_recorded_list_cost_usd": 3.1962,
+      "matched_run_tasks": 21,
+      "matched_tasks": 21,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "codex",
+      "a_passes": 9,
+      "a_recorded_list_cost_usd": 2.5197,
+      "b": "oh-my-pi",
+      "b_passes": 8,
+      "b_recorded_list_cost_usd": 2.3283,
+      "matched_run_tasks": 22,
+      "matched_tasks": 22,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "codex",
+      "a_passes": 8,
+      "a_recorded_list_cost_usd": 2.5152,
+      "b": "qwen-code",
+      "b_passes": 7,
+      "b_recorded_list_cost_usd": 1.6812,
+      "matched_run_tasks": 21,
+      "matched_tasks": 21,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "codex",
+      "a_passes": 9,
+      "a_recorded_list_cost_usd": 2.5197,
+      "b": "tofu@948e9b264f",
+      "b_passes": 12,
+      "b_recorded_list_cost_usd": 1.548,
+      "matched_run_tasks": 22,
+      "matched_tasks": 22,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "goose",
+      "a_passes": 10,
+      "a_recorded_list_cost_usd": 1.3819,
+      "b": "hermes",
+      "b_passes": 11,
+      "b_recorded_list_cost_usd": 2.2786,
+      "matched_run_tasks": 21,
+      "matched_tasks": 21,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "goose",
+      "a_passes": 10,
+      "a_recorded_list_cost_usd": 1.4323,
+      "b": "kimi-code",
+      "b_passes": 8,
+      "b_recorded_list_cost_usd": 2.8782,
+      "matched_run_tasks": 22,
+      "matched_tasks": 22,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "goose",
+      "a_passes": 10,
+      "a_recorded_list_cost_usd": 1.4323,
+      "b": "mini-swe-agent",
+      "b_passes": 11,
+      "b_recorded_list_cost_usd": 3.2083,
+      "matched_run_tasks": 22,
+      "matched_tasks": 22,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "goose",
+      "a_passes": 9,
+      "a_recorded_list_cost_usd": 1.423,
+      "b": "oh-my-pi",
+      "b_passes": 8,
+      "b_recorded_list_cost_usd": 2.3226,
+      "matched_run_tasks": 21,
+      "matched_tasks": 21,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "goose",
+      "a_passes": 10,
+      "a_recorded_list_cost_usd": 1.4323,
+      "b": "qwen-code",
+      "b_passes": 8,
+      "b_recorded_list_cost_usd": 1.6992,
+      "matched_run_tasks": 22,
+      "matched_tasks": 22,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "goose",
+      "a_passes": 9,
+      "a_recorded_list_cost_usd": 1.423,
+      "b": "tofu@948e9b264f",
+      "b_passes": 11,
+      "b_recorded_list_cost_usd": 1.5418,
+      "matched_run_tasks": 21,
+      "matched_tasks": 21,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "hermes",
+      "a_passes": 11,
+      "a_recorded_list_cost_usd": 2.2786,
+      "b": "kimi-code",
+      "b_passes": 8,
+      "b_recorded_list_cost_usd": 2.7555,
+      "matched_run_tasks": 21,
+      "matched_tasks": 21,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "hermes",
+      "a_passes": 11,
+      "a_recorded_list_cost_usd": 2.2786,
+      "b": "mini-swe-agent",
+      "b_passes": 11,
+      "b_recorded_list_cost_usd": 2.9019,
+      "matched_run_tasks": 21,
+      "matched_tasks": 21,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "hermes",
+      "a_passes": 10,
+      "a_recorded_list_cost_usd": 2.2582,
+      "b": "oh-my-pi",
+      "b_passes": 8,
+      "b_recorded_list_cost_usd": 2.2295,
+      "matched_run_tasks": 20,
+      "matched_tasks": 20,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "hermes",
+      "a_passes": 11,
+      "a_recorded_list_cost_usd": 2.2786,
+      "b": "qwen-code",
+      "b_passes": 8,
+      "b_recorded_list_cost_usd": 1.6357,
+      "matched_run_tasks": 21,
+      "matched_tasks": 21,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "hermes",
+      "a_passes": 10,
+      "a_recorded_list_cost_usd": 2.2582,
+      "b": "tofu@948e9b264f",
+      "b_passes": 11,
+      "b_recorded_list_cost_usd": 1.5346,
+      "matched_run_tasks": 20,
+      "matched_tasks": 20,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "kimi-code",
+      "a_passes": 8,
+      "a_recorded_list_cost_usd": 2.8782,
+      "b": "mini-swe-agent",
+      "b_passes": 11,
+      "b_recorded_list_cost_usd": 3.2083,
+      "matched_run_tasks": 22,
+      "matched_tasks": 22,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "kimi-code",
+      "a_passes": 8,
+      "a_recorded_list_cost_usd": 2.8712,
+      "b": "oh-my-pi",
+      "b_passes": 8,
+      "b_recorded_list_cost_usd": 2.3283,
+      "matched_run_tasks": 22,
+      "matched_tasks": 22,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "kimi-code",
+      "a_passes": 8,
+      "a_recorded_list_cost_usd": 2.8782,
+      "b": "qwen-code",
+      "b_passes": 8,
+      "b_recorded_list_cost_usd": 1.6992,
+      "matched_run_tasks": 22,
+      "matched_tasks": 22,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "kimi-code",
+      "a_passes": 8,
+      "a_recorded_list_cost_usd": 2.8712,
+      "b": "tofu@948e9b264f",
+      "b_passes": 12,
+      "b_recorded_list_cost_usd": 1.548,
+      "matched_run_tasks": 22,
+      "matched_tasks": 22,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "mini-swe-agent",
+      "a_passes": 10,
+      "a_recorded_list_cost_usd": 3.1962,
+      "b": "oh-my-pi",
+      "b_passes": 8,
+      "b_recorded_list_cost_usd": 2.3226,
+      "matched_run_tasks": 21,
+      "matched_tasks": 21,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "mini-swe-agent",
+      "a_passes": 11,
+      "a_recorded_list_cost_usd": 3.2083,
+      "b": "qwen-code",
+      "b_passes": 8,
+      "b_recorded_list_cost_usd": 1.6992,
+      "matched_run_tasks": 22,
+      "matched_tasks": 22,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "mini-swe-agent",
+      "a_passes": 10,
+      "a_recorded_list_cost_usd": 3.1962,
+      "b": "tofu@948e9b264f",
+      "b_passes": 11,
+      "b_recorded_list_cost_usd": 1.5418,
+      "matched_run_tasks": 21,
+      "matched_tasks": 21,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "oh-my-pi",
+      "a_passes": 8,
+      "a_recorded_list_cost_usd": 2.3226,
+      "b": "qwen-code",
+      "b_passes": 7,
+      "b_recorded_list_cost_usd": 1.6812,
+      "matched_run_tasks": 21,
+      "matched_tasks": 21,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "oh-my-pi",
+      "a_passes": 8,
+      "a_recorded_list_cost_usd": 2.3283,
+      "b": "tofu@948e9b264f",
+      "b_passes": 12,
+      "b_recorded_list_cost_usd": 1.548,
+      "matched_run_tasks": 22,
+      "matched_tasks": 22,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "qwen-code",
+      "a_passes": 7,
+      "a_recorded_list_cost_usd": 1.6812,
+      "b": "tofu@948e9b264f",
+      "b_passes": 11,
+      "b_recorded_list_cost_usd": 1.5418,
+      "matched_run_tasks": 21,
+      "matched_tasks": 21,
+      "model": "MiniMax-M2.7"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 16,
+      "a_recorded_list_cost_usd": 5.3112,
+      "b": "codex",
+      "b_passes": 16,
+      "b_recorded_list_cost_usd": 5.8489,
+      "matched_run_tasks": 25,
+      "matched_tasks": 16,
+      "model": "MiniMax-M3"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 6,
+      "a_recorded_list_cost_usd": 1.0935,
+      "b": "opencode",
+      "b_passes": 5,
+      "b_recorded_list_cost_usd": 1.1538,
+      "matched_run_tasks": 8,
+      "matched_tasks": 8,
+      "model": "MiniMax-M3"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 7,
+      "a_recorded_list_cost_usd": 1.1433,
+      "b": "pi",
+      "b_passes": 7,
+      "b_recorded_list_cost_usd": 1.273,
+      "matched_run_tasks": 9,
+      "matched_tasks": 9,
+      "model": "MiniMax-M3"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 15,
+      "a_recorded_list_cost_usd": 4.8993,
+      "b": "tofu@948e9b264f",
+      "b_passes": 15,
+      "b_recorded_list_cost_usd": 5.9072,
+      "matched_run_tasks": 24,
+      "matched_tasks": 16,
+      "model": "MiniMax-M3"
+    },
+    {
+      "a": "codex",
+      "a_passes": 5,
+      "a_recorded_list_cost_usd": 1.8183,
+      "b": "opencode",
+      "b_passes": 5,
+      "b_recorded_list_cost_usd": 1.1538,
+      "matched_run_tasks": 8,
+      "matched_tasks": 8,
+      "model": "MiniMax-M3"
+    },
+    {
+      "a": "codex",
+      "a_passes": 6,
+      "a_recorded_list_cost_usd": 1.8692,
+      "b": "pi",
+      "b_passes": 7,
+      "b_recorded_list_cost_usd": 1.273,
+      "matched_run_tasks": 9,
+      "matched_tasks": 9,
+      "model": "MiniMax-M3"
+    },
+    {
+      "a": "codex",
+      "a_passes": 15,
+      "a_recorded_list_cost_usd": 5.7623,
+      "b": "tofu@948e9b264f",
+      "b_passes": 15,
+      "b_recorded_list_cost_usd": 5.9072,
+      "matched_run_tasks": 24,
+      "matched_tasks": 16,
+      "model": "MiniMax-M3"
+    },
+    {
+      "a": "opencode",
+      "a_passes": 5,
+      "a_recorded_list_cost_usd": 1.1538,
+      "b": "pi",
+      "b_passes": 6,
+      "b_recorded_list_cost_usd": 1.2454,
+      "matched_run_tasks": 8,
+      "matched_tasks": 8,
+      "model": "MiniMax-M3"
+    },
+    {
+      "a": "opencode",
+      "a_passes": 5,
+      "a_recorded_list_cost_usd": 1.1538,
+      "b": "tofu@948e9b264f",
+      "b_passes": 5,
+      "b_recorded_list_cost_usd": 1.1147,
+      "matched_run_tasks": 8,
+      "matched_tasks": 8,
+      "model": "MiniMax-M3"
+    },
+    {
+      "a": "pi",
+      "a_passes": 7,
+      "a_recorded_list_cost_usd": 1.273,
+      "b": "tofu@948e9b264f",
+      "b_passes": 6,
+      "b_recorded_list_cost_usd": 1.1556,
+      "matched_run_tasks": 9,
+      "matched_tasks": 9,
+      "model": "MiniMax-M3"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 16,
+      "a_recorded_list_cost_usd": 0.3818,
+      "b": "codex",
+      "b_passes": 17,
+      "b_recorded_list_cost_usd": 0.3758,
+      "matched_run_tasks": 19,
+      "matched_tasks": 19,
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 13,
+      "a_recorded_list_cost_usd": 0.294,
+      "b": "opencode",
+      "b_passes": 12,
+      "b_recorded_list_cost_usd": 0.1994,
+      "matched_run_tasks": 14,
+      "matched_tasks": 14,
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 13,
+      "a_recorded_list_cost_usd": 0.294,
+      "b": "pi",
+      "b_passes": 10,
+      "b_recorded_list_cost_usd": 0.2156,
+      "matched_run_tasks": 14,
+      "matched_tasks": 14,
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 12,
+      "a_recorded_list_cost_usd": 0.2316,
+      "b": "tofu",
+      "b_passes": 13,
+      "b_recorded_list_cost_usd": 0.2586,
+      "matched_run_tasks": 13,
+      "matched_tasks": 13,
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "a": "codex",
+      "a_passes": 12,
+      "a_recorded_list_cost_usd": 0.2564,
+      "b": "opencode",
+      "b_passes": 12,
+      "b_recorded_list_cost_usd": 0.1994,
+      "matched_run_tasks": 14,
+      "matched_tasks": 14,
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "a": "codex",
+      "a_passes": 12,
+      "a_recorded_list_cost_usd": 0.2564,
+      "b": "pi",
+      "b_passes": 10,
+      "b_recorded_list_cost_usd": 0.2156,
+      "matched_run_tasks": 14,
+      "matched_tasks": 14,
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "a": "codex",
+      "a_passes": 12,
+      "a_recorded_list_cost_usd": 0.2114,
+      "b": "tofu",
+      "b_passes": 13,
+      "b_recorded_list_cost_usd": 0.2586,
+      "matched_run_tasks": 13,
+      "matched_tasks": 13,
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "a": "opencode",
+      "a_passes": 12,
+      "a_recorded_list_cost_usd": 0.1994,
+      "b": "pi",
+      "b_passes": 10,
+      "b_recorded_list_cost_usd": 0.2156,
+      "matched_run_tasks": 14,
+      "matched_tasks": 14,
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "a": "opencode",
+      "a_passes": 12,
+      "a_recorded_list_cost_usd": 0.1575,
+      "b": "tofu",
+      "b_passes": 13,
+      "b_recorded_list_cost_usd": 0.2586,
+      "matched_run_tasks": 13,
+      "matched_tasks": 13,
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "a": "pi",
+      "a_passes": 10,
+      "a_recorded_list_cost_usd": 0.1704,
+      "b": "tofu",
+      "b_passes": 13,
+      "b_recorded_list_cost_usd": 0.2586,
+      "matched_run_tasks": 13,
+      "matched_tasks": 13,
+      "model": "deepseek-v4-flash"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 15,
+      "a_recorded_list_cost_usd": 21.5161,
+      "b": "codex",
+      "b_passes": 15,
+      "b_recorded_list_cost_usd": 14.0816,
+      "matched_run_tasks": 22,
+      "matched_tasks": 22,
+      "model": "glm-5.2"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 6,
+      "a_recorded_list_cost_usd": 4.9313,
+      "b": "opencode",
+      "b_passes": 5,
+      "b_recorded_list_cost_usd": 3.2461,
+      "matched_run_tasks": 7,
+      "matched_tasks": 7,
+      "model": "glm-5.2"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 6,
+      "a_recorded_list_cost_usd": 4.9313,
+      "b": "pi",
+      "b_passes": 6,
+      "b_recorded_list_cost_usd": 1.4621,
+      "matched_run_tasks": 7,
+      "matched_tasks": 7,
+      "model": "glm-5.2"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 15,
+      "a_recorded_list_cost_usd": 20.5311,
+      "b": "tofu",
+      "b_passes": 17,
+      "b_recorded_list_cost_usd": 11.4899,
+      "matched_run_tasks": 21,
+      "matched_tasks": 21,
+      "model": "glm-5.2"
+    },
+    {
+      "a": "codex",
+      "a_passes": 4,
+      "a_recorded_list_cost_usd": 3.5603,
+      "b": "opencode",
+      "b_passes": 4,
+      "b_recorded_list_cost_usd": 2.1085,
+      "matched_run_tasks": 6,
+      "matched_tasks": 6,
+      "model": "glm-5.2"
+    },
+    {
+      "a": "codex",
+      "a_passes": 4,
+      "a_recorded_list_cost_usd": 3.5603,
+      "b": "pi",
+      "b_passes": 5,
+      "b_recorded_list_cost_usd": 1.1799,
+      "matched_run_tasks": 6,
+      "matched_tasks": 6,
+      "model": "glm-5.2"
+    },
+    {
+      "a": "codex",
+      "a_passes": 15,
+      "a_recorded_list_cost_usd": 11.4105,
+      "b": "tofu",
+      "b_passes": 17,
+      "b_recorded_list_cost_usd": 11.4899,
+      "matched_run_tasks": 21,
+      "matched_tasks": 21,
+      "model": "glm-5.2"
+    },
+    {
+      "a": "opencode",
+      "a_passes": 5,
+      "a_recorded_list_cost_usd": 3.2461,
+      "b": "pi",
+      "b_passes": 6,
+      "b_recorded_list_cost_usd": 1.4621,
+      "matched_run_tasks": 7,
+      "matched_tasks": 7,
+      "model": "glm-5.2"
+    },
+    {
+      "a": "opencode",
+      "a_passes": 4,
+      "a_recorded_list_cost_usd": 2.1085,
+      "b": "tofu",
+      "b_passes": 5,
+      "b_recorded_list_cost_usd": 2.7604,
+      "matched_run_tasks": 6,
+      "matched_tasks": 6,
+      "model": "glm-5.2"
+    },
+    {
+      "a": "pi",
+      "a_passes": 5,
+      "a_recorded_list_cost_usd": 1.1799,
+      "b": "tofu",
+      "b_passes": 5,
+      "b_recorded_list_cost_usd": 2.7604,
+      "matched_run_tasks": 6,
+      "matched_tasks": 6,
+      "model": "glm-5.2"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 22,
+      "a_recorded_list_cost_usd": 55.9921,
+      "b": "codex",
+      "b_passes": 29,
+      "b_recorded_list_cost_usd": 27.1749,
+      "matched_run_tasks": 36,
+      "matched_tasks": 23,
+      "model": "grok-4.6"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 23,
+      "a_recorded_list_cost_usd": 57.2719,
+      "b": "opencode",
+      "b_passes": 28,
+      "b_recorded_list_cost_usd": 14.4513,
+      "matched_run_tasks": 37,
+      "matched_tasks": 23,
+      "model": "grok-4.6"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 23,
+      "a_recorded_list_cost_usd": 57.2719,
+      "b": "pi",
+      "b_passes": 31,
+      "b_recorded_list_cost_usd": 14.5961,
+      "matched_run_tasks": 37,
+      "matched_tasks": 23,
+      "model": "grok-4.6"
+    },
+    {
+      "a": "claude-code",
+      "a_passes": 22,
+      "a_recorded_list_cost_usd": 55.9921,
+      "b": "tofu",
+      "b_passes": 27,
+      "b_recorded_list_cost_usd": 17.3898,
+      "matched_run_tasks": 36,
+      "matched_tasks": 23,
+      "model": "grok-4.6"
+    },
+    {
+      "a": "codex",
+      "a_passes": 29,
+      "a_recorded_list_cost_usd": 27.1749,
+      "b": "opencode",
+      "b_passes": 27,
+      "b_recorded_list_cost_usd": 14.2302,
+      "matched_run_tasks": 36,
+      "matched_tasks": 23,
+      "model": "grok-4.6"
+    },
+    {
+      "a": "codex",
+      "a_passes": 29,
+      "a_recorded_list_cost_usd": 27.1749,
+      "b": "pi",
+      "b_passes": 31,
+      "b_recorded_list_cost_usd": 13.9673,
+      "matched_run_tasks": 36,
+      "matched_tasks": 23,
+      "model": "grok-4.6"
+    },
+    {
+      "a": "codex",
+      "a_passes": 29,
+      "a_recorded_list_cost_usd": 27.1749,
+      "b": "tofu",
+      "b_passes": 27,
+      "b_recorded_list_cost_usd": 17.3898,
+      "matched_run_tasks": 36,
+      "matched_tasks": 23,
+      "model": "grok-4.6"
+    },
+    {
+      "a": "opencode",
+      "a_passes": 29,
+      "a_recorded_list_cost_usd": 15.5453,
+      "b": "pi",
+      "b_passes": 32,
+      "b_recorded_list_cost_usd": 15.3365,
+      "matched_run_tasks": 38,
+      "matched_tasks": 24,
+      "model": "grok-4.6"
+    },
+    {
+      "a": "opencode",
+      "a_passes": 27,
+      "a_recorded_list_cost_usd": 14.2302,
+      "b": "tofu",
+      "b_passes": 27,
+      "b_recorded_list_cost_usd": 17.3898,
+      "matched_run_tasks": 36,
+      "matched_tasks": 23,
+      "model": "grok-4.6"
+    },
+    {
+      "a": "pi",
+      "a_passes": 31,
+      "a_recorded_list_cost_usd": 13.9673,
+      "b": "tofu",
+      "b_passes": 27,
+      "b_recorded_list_cost_usd": 17.3898,
+      "matched_run_tasks": 36,
+      "matched_tasks": 23,
+      "model": "grok-4.6"
+    },
+    {
+      "a": "codex",
+      "a_passes": 6,
+      "a_recorded_list_cost_usd": 1.2205,
+      "b": "kimi-code",
+      "b_passes": 6,
+      "b_recorded_list_cost_usd": 1.4359,
+      "matched_run_tasks": 7,
+      "matched_tasks": 7,
+      "model": "kimi-k2.7-code-highspeed"
+    },
+    {
+      "a": "codex",
+      "a_passes": 6,
+      "a_recorded_list_cost_usd": 1.2205,
+      "b": "opencode",
+      "b_passes": 4,
+      "b_recorded_list_cost_usd": 1.8957,
+      "matched_run_tasks": 7,
+      "matched_tasks": 7,
+      "model": "kimi-k2.7-code-highspeed"
+    },
+    {
+      "a": "codex",
+      "a_passes": 6,
+      "a_recorded_list_cost_usd": 1.2205,
+      "b": "pi",
+      "b_passes": 6,
+      "b_recorded_list_cost_usd": 0.7787,
+      "matched_run_tasks": 7,
+      "matched_tasks": 7,
+      "model": "kimi-k2.7-code-highspeed"
+    },
+    {
+      "a": "codex",
+      "a_passes": 6,
+      "a_recorded_list_cost_usd": 1.2205,
+      "b": "tofu@948e9b264f",
+      "b_passes": 6,
+      "b_recorded_list_cost_usd": 1.589,
+      "matched_run_tasks": 7,
+      "matched_tasks": 7,
+      "model": "kimi-k2.7-code-highspeed"
+    },
+    {
+      "a": "kimi-code",
+      "a_passes": 8,
+      "a_recorded_list_cost_usd": 5.3734,
+      "b": "opencode",
+      "b_passes": 5,
+      "b_recorded_list_cost_usd": 3.9132,
+      "matched_run_tasks": 13,
+      "matched_tasks": 13,
+      "model": "kimi-k2.7-code-highspeed"
+    },
+    {
+      "a": "kimi-code",
+      "a_passes": 6,
+      "a_recorded_list_cost_usd": 1.4359,
+      "b": "pi",
+      "b_passes": 6,
+      "b_recorded_list_cost_usd": 0.7787,
+      "matched_run_tasks": 7,
+      "matched_tasks": 7,
+      "model": "kimi-k2.7-code-highspeed"
+    },
+    {
+      "a": "kimi-code",
+      "a_passes": 6,
+      "a_recorded_list_cost_usd": 1.4359,
+      "b": "tofu@948e9b264f",
+      "b_passes": 6,
+      "b_recorded_list_cost_usd": 1.589,
+      "matched_run_tasks": 7,
+      "matched_tasks": 7,
+      "model": "kimi-k2.7-code-highspeed"
+    },
+    {
+      "a": "opencode",
+      "a_passes": 4,
+      "a_recorded_list_cost_usd": 1.8957,
+      "b": "pi",
+      "b_passes": 6,
+      "b_recorded_list_cost_usd": 0.7787,
+      "matched_run_tasks": 7,
+      "matched_tasks": 7,
+      "model": "kimi-k2.7-code-highspeed"
+    },
+    {
+      "a": "opencode",
+      "a_passes": 4,
+      "a_recorded_list_cost_usd": 1.8957,
+      "b": "tofu@948e9b264f",
+      "b_passes": 6,
+      "b_recorded_list_cost_usd": 1.589,
+      "matched_run_tasks": 7,
+      "matched_tasks": 7,
+      "model": "kimi-k2.7-code-highspeed"
+    },
+    {
+      "a": "pi",
+      "a_passes": 6,
+      "a_recorded_list_cost_usd": 0.7787,
+      "b": "tofu@948e9b264f",
+      "b_passes": 6,
+      "b_recorded_list_cost_usd": 1.589,
+      "matched_run_tasks": 7,
+      "matched_tasks": 7,
+      "model": "kimi-k2.7-code-highspeed"
+    }
+  ],
+  "rows": 6972,
+  "universe": "Historical per_trial.csv; no later attempts merged"
+}

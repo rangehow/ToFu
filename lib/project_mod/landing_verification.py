@@ -82,10 +82,15 @@ _RUN_FLAGS = ('-rfE', '--continue-on-collection-errors')
 # they were what split the evidence into one partition per conversation.
 # Toolchain homes locate host tools installed outside HOME; without them a
 # relocated Cargo is invisible and every Rust-backed suite records only skips.
+# The black-box target selectors name a server the caller already started:
+# tests/blackbox/conftest.py uses TOFU_BLACKBOX_URL verbatim and never boots an
+# in-repo server when it is set, so they state which server the tests target
+# rather than handing the suite the launcher's environment. Unset, they are absent.
 _INHERITED = ('HOME', 'USER', 'LOGNAME', 'HOSTNAME', 'CARGO_HOME', 'RUSTUP_HOME',
               'TOFU_STORAGE_TEST_POSTGRES', 'TOFU_STORAGE_TEST_POSTGRES_DSN_FILE',
               'TOFU_PERSONAL_STORAGE_BACKEND', 'TOFU_CHECKPOINT_SQL_TEST_LIBRARY',
-              'TOFU_CHECKPOINT_SQL_TEST_SHA256', 'TOFU_NATIVE_TERMINAL_TEST_ARCHIVE')
+              'TOFU_CHECKPOINT_SQL_TEST_SHA256', 'TOFU_NATIVE_TERMINAL_TEST_ARCHIVE',
+              'TOFU_BLACKBOX_URL', 'TOFU_BLACKBOX_REFERENCE_URL')
 _SCENARIO_PREFIXES = ('LANDING_', 'EXERCISE_', 'TOFU_TEST_SCENARIO_')
 # Ignored state the warm checkout keeps between landings: caches their tools
 # validate against sources, and the dependency links.
@@ -238,7 +243,7 @@ def _run(python: str, root: Path, selector, tests: list[str], log: Path) -> _Run
     paths = _names(manifest) if manifest.returncode == 0 else None
     (plugin_dir / f'{_PLUGIN_MODULE}.py').write_text(impact_selection.plugin_source(paths),
                                                    encoding='utf-8')
-    env = _test_environment()
+    env = _test_environment(root)
     env.update(PYTHONPATH=os.pathsep.join([str(plugin_dir), str(root)]),
                PYTEST_DISABLE_PLUGIN_AUTOLOAD='1', TOFU_TEST_IMPACT_ROOT=str(root))
     engine, fingerprint = _native_test_engine(root)
@@ -403,7 +408,7 @@ def warm_checkout_path(top) -> Path:
     return _cache_dir(Path(top)) / 'checkout'
 
 
-def _test_environment() -> dict[str, str]:
+def _test_environment(root: Path | None = None) -> dict[str, str]:
     """The test environment and the evidence-key input are one fixed description.
 
     Verification is launched by a conversation's ``make test`` or ``record``,
@@ -427,6 +432,9 @@ def _test_environment() -> dict[str, str]:
     env['PATH'] = os.pathsep.join([*bins, '/usr/local/sbin', '/usr/local/bin',
                                    '/usr/sbin', '/usr/bin', '/sbin', '/bin'])
     apply_tool_paths(env, cache_root=os.path.join(home, '.cache'))
+    if root is not None:
+        from lib.project_mod.toolchains import apply_project_toolchains
+        apply_project_toolchains(env, str(root))
     env.update(LANG='C.UTF-8', LC_ALL='C.UTF-8', TZ='UTC', VIRTUAL_ENV=os.path.dirname(bins[0]),
                PYTEST_DISABLE_PLUGIN_AUTOLOAD='1')
     return env
@@ -474,7 +482,7 @@ def _native_test_engine(root: Path) -> tuple[str, str]:
     return '', fingerprint
 
 
-def _environment_key(python: str) -> str:
+def _environment_key(python: str, root: Path | None = None) -> str:
     """Bind records to the interpreter, distributions and observation semantics."""
     probe = ('import importlib.metadata as m, sys\nprint(sys.version)\n'
              'print(sorted(f"{meta[\'Name\']}=={meta[\'Version\']}" '
@@ -482,7 +490,7 @@ def _environment_key(python: str) -> str:
     listed = subprocess.run([python, '-I', '-c', probe], capture_output=True, text=True)
     if listed.returncode:
         raise OSError('the test interpreter could not identify its installed distributions')
-    context = json.dumps(_test_environment(), sort_keys=True, separators=(',', ':'))
+    context = json.dumps(_test_environment(root), sort_keys=True, separators=(',', ':'))
     return hashlib.sha256(f'{os.path.realpath(python)}\n{listed.returncode}\n'
                           f'{listed.stdout}\n{context}\n{_record_semantics()}\n'
                           f'{impact_selection.plugin_source()}'.encode('utf-8')).hexdigest()[:20]
@@ -511,7 +519,7 @@ def _record_semantics() -> str:
 def _store(top: Path, python: str, cache: Path | None = None) -> impact_selection.ImpactStore | None:
     try:
         return impact_selection.ImpactStore(cache if cache is not None else _cache_dir(top),
-                                             _environment_key(python))
+                                             _environment_key(python, top))
     except (OSError, impact_selection.ImpactCacheError):
         return None  # records are a cache: without them every file is selected statically
 

@@ -284,6 +284,12 @@
         "document_id": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"
+        },
+        "venue_year": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9999,
+          "description": "Conference year this previewed source is for. When present it must equal the year of the pinned venue template the source loads (the submission path's exact-year rule); when absent, an older document asserts no year and previews under that default."
         }
       },
       "allOf": [

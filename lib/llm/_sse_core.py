@@ -57,10 +57,11 @@ from lib.llm.cache import add_cache_breakpoints
 from lib.llm.diagnostics import RawSSEDumper
 from lib.llm.stream_result import (
     ProviderStreamResult,
+    ProviderStreamState,
     classify_provider_stream_state,
     is_gateway_limit_response,
 )
-from lib.cost import canonicalize_usage_cache_keys, normalize_usage
+from lib.cost import RESPONSES_INPUT_USAGE_KEY, canonicalize_usage_cache_keys, normalize_usage
 from lib.context_telemetry import (
     TOOL_SCHEMA_EVIDENCE_KEY,
     record_tool_schema_fingerprint,
@@ -274,6 +275,7 @@ class RequestPlan:
     responses_transport: str = 'sse'
     responses_state_key: str = ''
     responses_profile: str = ''
+    responses_conversation_key: str = ''
     tool_search_backend: str = ''
     programmatic_backend: str = ''
     multi_agent_backend: str = ''
@@ -289,6 +291,14 @@ class RequestPlan:
     raw_archive_capture: Any = None
     # Injected execution policy, retained outside serialized provider JSON.
     model_budget_lease: Any = None
+    on_model_request_dispatching: Any = None
+    on_model_request_dispatched: Any = None
+    # Frozen at preparation: the header-open carrier may run on another thread.
+    physical_model_dispatch_guard: Any = None
+    # Exact bytes this plan's SSE transport sends, hashed at preparation. A
+    # content-encoded body is framed at the send boundary instead (encoded
+    # once there); WebSocket frames replace this with their own socket bytes.
+    sent_frame: Any = None
 
 
 def activate_native_orchestration_fallback(
@@ -350,6 +360,42 @@ def activate_native_orchestration_fallback(
 SUBSCRIPTION_404_MAX_RETRIES = 2
 
 
+def _cache_probe_routing(*, url, base_url, api_key, hdrs, trace_id, attempt,
+                         api_protocol, log_prefix):
+    """Bounded routing evidence for the default-OFF cache byte probe."""
+    try:
+        import hashlib as _hashlib
+        _key_hash = ''
+        if api_key:
+            _key_hash = _hashlib.sha256(
+                ('tofu-cache-probe:' + str(api_key)).encode('utf-8')
+            ).hexdigest()[:12]
+        _sticky = {}
+        try:
+            from lib.llm_dispatch.conv_affinity import get_pick_decision
+            _sticky = get_pick_decision() or {}
+        except Exception as _se:
+            logger.debug('%s cache-probe sticky capture failed: %s', log_prefix, _se)
+        return {
+            'url': url,
+            'base_url': base_url or '',
+            'key_hash': _key_hash,           # salted, truncated — NOT the secret
+            'anthropic_beta': (hdrs.get('anthropic-beta', '')
+                               if isinstance(hdrs, dict) else ''),
+            'trace_id': trace_id,
+            'attempt': attempt,
+            'api_protocol': api_protocol,
+            # Sticky-routing decision (WHY the key is what it is): distinguishes
+            # a soft-fallback-under-cooldown flip (affinity_fell_back=True) from
+            # affinity never engaging. {preferred_key_hash, chosen_key_hash,
+            # affinity_fell_back, cooldown_remaining_s}.
+            'sticky': _sticky,
+        }
+    except Exception as _rfe:
+        logger.debug('%s cache-probe routing capture failed: %s', log_prefix, _rfe)
+        return None
+
+
 def activate_subscription_transient_retry(
     status_code: int,
     *,
@@ -379,7 +425,7 @@ def activate_subscription_transient_retry(
 def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
                     base_url=None, extra_headers=None,
                     api_protocol='openai', oauth='',
-                    owner_user_id=None) -> RequestPlan:
+                    codex_account_fingerprints=(), owner_user_id=None) -> RequestPlan:
     """Identical pre-flight for both transports.
 
     Copies and transforms ``body`` (cache breakpoints, internal-key stripping,
@@ -387,7 +433,7 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
     preserved through OAuth token refresh and desktop-agent routing; it is
     deliberately not inferred in this transport layer.
     """
-    from lib.llm.request import require_wire_protocol
+    from lib.llm.request import current_physical_model_dispatch_guard, require_wire_protocol
     api_protocol = require_wire_protocol(api_protocol)
     if body.get('_reasoning_pending'):
         from lib.llm.reasoning import ReasoningContractError
@@ -405,6 +451,8 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
     _raw_archive_context = body.get('_raw_archive_context')
     _request_activity_sink = body.get('_request_activity_sink')
     _model_budget_admit = body.get('_model_budget_admit')
+    _on_model_request_dispatching = body.get('_on_model_request_dispatching')
+    _on_model_request_dispatched = body.get('_on_model_request_dispatched')
     if not callable(_request_activity_sink):
         _request_activity_sink = None
     _tool_schema_evidence = body.get(TOOL_SCHEMA_EVIDENCE_KEY)
@@ -430,6 +478,7 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
         body.get('_responses_feature_profile')
         or 'compatible').strip().lower()
     _responses_state_key = str(body.get('_task_id') or '')
+    _responses_conversation_key = str(body.get('_conv_id') or '')
 
     from lib.llm.route_features import body_route_profile, route_feature
     _route_inference_profile = body_route_profile(body)
@@ -478,12 +527,36 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
     # Subscription-OAuth slot: swap in a live token + client-identity headers,
     # and (for Claude) prepend the mandatory identity system block — all BEFORE
     # the body translation below reads messages / builds headers.
+    from lib.oauth.account_dispatch import current_account_dispatch
+    scoped_account = current_account_dispatch()
+    dispatch_guard = current_physical_model_dispatch_guard()
+    account_options = {}
+    if scoped_account is not None:
+        from lib.oauth.account_dispatch import require_codex_destination, revalidate_codex_account
+        from lib.llm.responses_outbound import responses_url
+        require_codex_destination(responses_url(base_url))
+        binding, repository = scoped_account
+        account_options = {'account_binding': binding, 'account_repository': repository}
+        previous_guard = dispatch_guard
+
+        def dispatch_guard():
+            if previous_guard is not None:
+                previous_guard()
+            revalidate_codex_account(binding, repository)
+
+    if (codex_account_fingerprints or scoped_account is not None) and (oauth != 'codex' or api_protocol != 'responses'):
+        from lib.llm.llm_errors import SubscriptionCredentialUnavailableError
+        raise SubscriptionCredentialUnavailableError(
+            reason='credential_source_binding', credential_source='tofu_oauth', transient=False)
     if oauth:
         from lib.oauth.outbound import resolve_oauth_request
         from lib.llm._transport import transport_owner_scope
         owner_scope = transport_owner_scope(owner_user_id)
         api_key, extra_headers, body = resolve_oauth_request(
-            oauth, body, extra_headers, user_id=owner_scope)
+            oauth, body, extra_headers, user_id=owner_scope,
+            **account_options,
+            **({'codex_account_fingerprints': codex_account_fingerprints}
+               if codex_account_fingerprints else {}))
 
     # Wire-protocol translation at the HTTP boundary. SINGLE GATE:
     # ``api_protocol`` (provider config; the dispatcher coerces
@@ -497,6 +570,7 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
         canonical_admission_evidence, detach_input, semantic_request_id,
         seal_request, strip_internal_request_fields,
     )
+    from lib.llm.sent_frame import full_sent_frame
     from lib.token_counter.evidence import TEXT_COUNT_VIEW_KEY
     # detach_input deep-copies the count-bearing containers; keep both sides
     # so the request-local schema-evidence identity check can still match when
@@ -639,6 +713,11 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
         local_tokens=_local_tokens,
         semantic_id=_semantic_id, logical_model=_admission_logical_model,
         content_encoding=_request_content_encoding)
+    # Exact sent-frame evidence for this SSE attempt. A content-encoded body is
+    # left to the send boundary, which compresses once and hashes those very
+    # bytes; hashing here would compress the same request twice (codex zstd).
+    _sent_frame = (None if _admitted_request.content_encoding
+                   else full_sent_frame(_admitted_request, transport='sse'))
     # Diagnostics read the request-owned projection whose encode is the sealed
     # payload; decoding those bytes again would only copy every prompt string.
     body = strip_internal_request_fields(body)
@@ -785,7 +864,8 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
             marker_signature, static_prefix_hash, system_fingerprint,
             wire_byte_region,
         )
-        _wire_key = 'messages' if body.get('messages') else 'input'
+        from lib.llm.request_prefix import request_history_field
+        _wire_key = request_history_field(_admitted_request.protocol)
         _wire_items = body.get(_wire_key) or []
         # Byte views hash the sealed per-message slices: no second encode.
         _sealed_items = _admitted_request.sealed_items(_wire_key)
@@ -843,37 +923,10 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
     # Also capture the ROUTING fingerprint — key discriminator / endpoint /
     # final anthropic-beta — so the diff can tell a body-byte flip from a
     # cache-namespace (key/endpoint) change on a byte-identical prefix.
-    _routing = None
-    try:
-        import hashlib as _hashlib
-        _key_hash = ''
-        if api_key:
-            _key_hash = _hashlib.sha256(
-                ('tofu-cache-probe:' + str(api_key)).encode('utf-8')
-            ).hexdigest()[:12]
-        _sticky = {}
-        try:
-            from lib.llm_dispatch.conv_affinity import get_pick_decision
-            _sticky = get_pick_decision() or {}
-        except Exception as _se:
-            logger.debug('%s cache-probe sticky capture failed: %s', log_prefix, _se)
-        _routing = {
-            'url': url,
-            'base_url': base_url or '',
-            'key_hash': _key_hash,           # salted, truncated — NOT the secret
-            'anthropic_beta': (hdrs.get('anthropic-beta', '')
-                               if isinstance(hdrs, dict) else ''),
-            'trace_id': trace_id,
-            'attempt': attempt,
-            'api_protocol': api_protocol,
-            # Sticky-routing decision (WHY the key is what it is): distinguishes
-            # a soft-fallback-under-cooldown flip (affinity_fell_back=True) from
-            # affinity never engaging. {preferred_key_hash, chosen_key_hash,
-            # affinity_fell_back, cooldown_remaining_s}.
-            'sticky': _sticky,
-        }
-    except Exception as _rfe:
-        logger.debug('%s cache-probe routing capture failed: %s', log_prefix, _rfe)
+    _routing = _cache_probe_routing(
+        url=url, base_url=base_url, api_key=api_key, hdrs=hdrs,
+        trace_id=trace_id, attempt=attempt, api_protocol=api_protocol,
+        log_prefix=log_prefix)
 
     # ── ALWAYS-ON cache-namespace routing fingerprint (relayed into usage) ──
     # The byte-probe above is default-OFF, so historically the routing captured
@@ -935,6 +988,7 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
                        t0=t0, responses_transport=_responses_transport,
                        responses_state_key=_responses_state_key,
                        responses_profile=_responses_profile,
+                       responses_conversation_key=_responses_conversation_key,
                        tool_search_backend=_tool_search_backend,
                        programmatic_backend=_ptc_backend,
                        multi_agent_backend=_multi_agent_backend,
@@ -942,7 +996,11 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
                        credential_present=_has_outbound_credential(hdrs),
                        route_output_limit_key=_route_output_limit_key,
                        raw_archive_capture=_raw_archive_capture,
-                       model_budget_lease=_model_budget_lease)
+                       model_budget_lease=_model_budget_lease,
+                       on_model_request_dispatching=_on_model_request_dispatching,
+                       on_model_request_dispatched=_on_model_request_dispatched,
+                       physical_model_dispatch_guard=dispatch_guard,
+                       sent_frame=_sent_frame)
 
 
 def classify_status_error(status_code, err_text, *, body, log_prefix, raw_dumper,
@@ -1004,7 +1062,8 @@ class SSEAccumulator:
                  url='', log_prefix='', on_thinking=None, on_content=None,
                  on_tool_call_ready=None, on_reasoning_progress=None,
                  on_actionable_output=None, progress=None,
-                 route_output_limit_key='', credential_present=False):
+                 route_output_limit_key='', credential_present=False,
+                 sent_frame=None):
         self.body = body
         self.trace_id = trace_id
         from lib.llm.payload_capture import current_payload_capture
@@ -1022,6 +1081,7 @@ class SSEAccumulator:
         self.log_prefix = log_prefix
         self.route_output_limit_key = str(route_output_limit_key or '')
         self.credential_present = bool(credential_present)
+        self.sent_frame = sent_frame
         self.on_thinking = on_thinking
         self.on_content = on_content
         self.on_tool_call_ready = on_tool_call_ready
@@ -1502,7 +1562,11 @@ class SSEAccumulator:
                 f'SSE error: {err_text}',
                 reason=f'HTTP 429: {err_text[:180]}')
         if _is_sse_retryable:
-            _sse_status = int(_sse_http_code) if _sse_http_code.isdigit() else 500
+            # isdigit also accepts superscripts that int() cannot parse.
+            try:
+                _sse_status = int(_sse_http_code) if _sse_http_code.isdecimal() else 500
+            except ValueError:
+                _sse_status = 500
             if _sse_status in _GATEWAY_THROTTLE_STATUS:
                 logger.warning('%s SSE gateway throttle (HTTP %d) — escalating to '
                                'dispatch layer: %s', self.log_prefix, _sse_status,
@@ -1748,7 +1812,7 @@ class SSEAccumulator:
                     _upstream_idx = _raw_upstream_idx
                     _valid_upstream_idx = True
                 elif (isinstance(_raw_upstream_idx, str)
-                        and _raw_upstream_idx.strip().isdigit()):
+                        and _raw_upstream_idx.strip().isdecimal()):
                     _index_digits = (
                         _raw_upstream_idx.strip().lstrip('0') or '0'
                     )
@@ -2035,7 +2099,7 @@ class SSEAccumulator:
         if self.tool_calls_acc:
             self._notify_tool_call_ready(max(self.tool_calls_acc))
 
-    def finalize(self, *, resp_trace=''):
+    def finalize(self, *, resp_trace='', websocket_frame=None, sent_frame=None):
         """Flush buffers, build the assistant msg, emit diagnostics + usage.
 
         Returns a typed, tuple-compatible ``ProviderStreamResult`` with the
@@ -2063,8 +2127,10 @@ class SSEAccumulator:
         # MiniMax: normalize reasoning_tokens into usage
         if self._mm_mode and self.usage and self.thinking_text:
             ctd = self.usage.get('completion_tokens_details', {})
-            rt = ctd.get('reasoning_tokens', 0)
-            if rt > 0 and 'reasoning_tokens' not in self.usage:
+            rt = ctd.get('reasoning_tokens', 0) if isinstance(ctd, dict) else 0
+            # Preserve raw provider usage, but only promote real numeric counts.
+            if (isinstance(rt, (int, float)) and not isinstance(rt, bool)
+                    and rt > 0 and 'reasoning_tokens' not in self.usage):
                 self.usage['reasoning_tokens'] = rt
 
         # Pre-filter count — the tool_calls_no_payload anomaly check below
@@ -2453,6 +2519,9 @@ class SSEAccumulator:
                 self.semantic_progress_timeout_s > 0),
             gateway_limit_response=_gateway_limit_response,
         )
+        # A throttle notice usually arrives without a usage frame.
+        if usage is None:
+            usage = {}
         if _gateway_limit_response:
             usage['_gateway_limit_response'] = True
         _stream_evidence = replace(
@@ -2463,8 +2532,6 @@ class SSEAccumulator:
         )
 
         # Inject metadata into usage
-        if usage is None:
-            usage = {}
         from lib.llm.request_receipt import request_parameter_receipt
         usage['_request_parameters'] = request_parameter_receipt(self.body)
         usage['trace_id'] = self.trace_id
@@ -2473,11 +2540,27 @@ class SSEAccumulator:
         _model_refusal = getattr(self.wire_translator, 'model_refusal', None)
         if isinstance(_model_refusal, dict):
             usage['_model_refusal'] = dict(_model_refusal)
+        _responses_input_usage = getattr(self.wire_translator, 'responses_input_usage', None)
+        if isinstance(_responses_input_usage, dict):
+            usage[RESPONSES_INPUT_USAGE_KEY] = dict(_responses_input_usage)
+        from lib.llm.cache_exchange import CACHE_EXCHANGE_KEY, cache_exchange_receipt
+        # The exact frame this transport sent. Shells pass the frame built at
+        # the send boundary; a WebSocket turn replaces it with its socket
+        # bytes. Without one the receipt reports frame evidence as unknown:
+        # this accumulator never claims bytes it did not hand to a transport.
+        _frame = sent_frame if sent_frame is not None else self.sent_frame
+        exchange = cache_exchange_receipt(
+            self.body, usage,
+            transport='websocket' if websocket_frame is not None else 'sse',
+            verified=stream_state is ProviderStreamState.PROVIDER_FINISHED,
+            frame=_frame, **(websocket_frame or {}))
+        if exchange is not None:
+            usage[CACHE_EXCHANGE_KEY] = exchange
         # ── Relay the post-translation wire fingerprint into `usage` ──
         # Captured in prepare_request (the only point seeing the final wire
-        # bytes) and carried on the RawSSEDumper. detect_cache_break reads these
-        # to distinguish a PROVEN server-side miss (fingerprint identical to
-        # last round) from a client-caused one (names the changed msg.field).
+        # bytes) and carried on the RawSSEDumper. The detector can name a
+        # changed client-side field; equality alone cannot attest upstream
+        # reuse, routing, or a provider-side miss.
         resolution = getattr(self.raw_dumper, 'reasoning_resolution', None)
         if resolution:
             usage['_reasoning_resolution'] = dict(resolution)

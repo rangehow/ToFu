@@ -122,6 +122,11 @@ def test_transport_projection_and_final_usage_share_sealed_context_evidence(prot
     assert usage['_wire_context_lineage'] == evidence
     assert usage['_request_identity'] == evidence['requestIdentity']
     assert usage['trace_id'] == evidence['traceId']
+    exchange = usage['_cache_exchange']
+    assert exchange['transport'] == 'sse' and exchange['protocol'] == protocol
+    assert not exchange['verified']
+    assert exchange['sent_input_items'] == exchange['logical_input_items'] > 0
+    assert exchange['provider_cached_tokens'] is None
     assert '_context_lineage' not in plan.body.payload.decode()
 
 

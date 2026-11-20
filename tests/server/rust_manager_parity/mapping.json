@@ -1,0 +1,939 @@
+{
+  "categories": {
+    "application-owner": "server.py, application, HTTP middleware, launch scripts or shared libraries; not Phase 2.",
+    "parity-harness": "Specifies the parity harness itself (fake project, child environment and launch routes); it exercises neither manager and is not a parity case.",
+    "client-unchanged": "serverctl/lifecycle_approval/deployment client side; the manager protocol is unchanged so the tests still apply.",
+    "parity-and-rust-unit": "Covered by both the parity harness and named Rust unit tests.",
+    "parity-black-box": "Manager behaviour covered by the black-box parity harness running against the Rust manager.",
+    "python-owner-retained": "Tests a Python owner Phase 2 deliberately keeps (reached through a preparation/host child or manager_bridge, or deliberately unused by the Rust manager); the test runs unchanged against that owner.",
+    "rust-unit": "Manager behaviour re-specified by named Rust unit tests in packages/tofu-manager."
+  },
+  "files": {
+    "tests/lifecycle_approval/test_lifecycle_approval.py": {
+      "category": "client-unchanged",
+      "note": "lib/lifecycle_approval approval records and gates; the manager HTTP protocol they drive is unchanged.",
+      "rust": []
+    },
+    "tests/lifecycle_approval/test_lifecycle_persistence.py": {
+      "category": "client-unchanged",
+      "note": "lib/lifecycle_approval persistence; independent of which manager implementation answers.",
+      "rust": []
+    },
+    "tests/lifecycle_approval/test_operator_provenance.py": {
+      "category": "client-unchanged",
+      "note": "serverctl.py and lifecycle_approval operator provenance; client side of an unchanged protocol.",
+      "rust": []
+    },
+    "tests/lifecycle_approval/test_restart_outcome_visible.py": {
+      "category": "client-unchanged",
+      "note": "lifecycle_approval projects lastRestart outcomes; the Rust manager writes the same lastRestart state schema (parity asserts refused/spawned outcomes).",
+      "rust": [
+        "tests/server/rust_manager_parity/test_lifecycle_parity.py::test_frontend_preparation_failure_refuses_before_stop",
+        "tests/server/rust_manager_parity/test_lifecycle_parity.py::test_restart_replaces_the_worker"
+      ]
+    },
+    "tests/lifecycle_approval/test_update_restart_guard.py": {
+      "category": "client-unchanged",
+      "note": "serverctl.py update/restart approval guard; client side that stays in Python.",
+      "rust": []
+    },
+    "tests/server/test_adapter_oauth_routes.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_api_docs_cache_lifecycle.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_api_transport_constrained_proxy.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_api_v1_project_recent_exists.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_application_restart_control.py": {
+      "category": "python-owner-retained",
+      "note": "serverctl_pkg/application_restart.py stays the application restart door owner.",
+      "rust": []
+    },
+    "tests/server/test_asgi_request_ownership.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_bind_lan_default.py": {
+      "category": "application-owner",
+      "note": "Bind default of server.py, restart/guard scripts and desktop app; not the manager.",
+      "rust": []
+    },
+    "tests/server/test_boot_code_fingerprint.py": {
+      "category": "application-owner",
+      "note": "Empty tracked file with no tests; application boot fingerprint area.",
+      "rust": []
+    },
+    "tests/server/test_bootstrap_model_catalog.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_browser_open_extensions_route.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_capabilities_error_boundary.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_chat_routes_scope_gated.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_cli.py": {
+      "category": "application-owner",
+      "note": "hope_mcp CLI wrapper; unrelated to lifecycle management.",
+      "rust": []
+    },
+    "tests/server/test_engine_certification_gate.py": {
+      "category": "parity-and-rust-unit",
+      "rust": [
+        "tests/server/rust_manager_parity/test_manager_policy_parity.py::test_automatic_spawns_never_prepare_the_storage_engine_and_explicit_start_does",
+        "tests/server/rust_manager_parity/test_manager_policy_parity.py::test_a_refused_engine_refuses_the_restart_and_never_retains_storage",
+        "tests/server/rust_manager_parity/test_manager_policy_parity.py::test_an_engine_failure_retains_the_ready_storage_host_and_replaces_the_application",
+        "tests/server/rust_manager_parity/test_lifecycle_parity.py::test_refused_storage_engine_decision_refuses_before_stop",
+        "tests/server/rust_manager_parity/test_lifecycle_parity.py::test_kept_storage_engine_decision_lets_the_restart_proceed",
+        "packages/tofu-manager/src/certification.rs::tests::a_complete_record_certifies_its_engine"
+      ],
+      "note": "Manager rules black-box against both managers (automatic spawns prepare only the frontend, explicit start prepares the engine, a refused engine refuses and never retains storage, an engine failure retains the ready host). Gate decisions themselves stay in serverctl_pkg.native_engine (python-owner), plus certification.rs units."
+    },
+    "tests/server/test_engine_precertify.py": {
+      "category": "python-owner-retained",
+      "note": "serverctl_pkg/engine_precertify.py stays the owner; the Rust manager reaches it through manager_bridge precertify.",
+      "rust": []
+    },
+    "tests/server/test_execution_application.py": {
+      "category": "python-owner-retained",
+      "note": "execution_host/execution_lifespan real application boot with a resident storage host; Python host owners kept in Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_execution_composition.py": {
+      "category": "parity-black-box",
+      "rust": [
+        "tests/server/rust_manager_parity/test_execution_parity.py::test_start_composes_storage_then_execution_and_an_api_role_worker",
+        "tests/server/rust_manager_parity/test_execution_parity.py::test_explicit_topology_keeps_its_own_execution_owner",
+        "tests/server/rust_manager_parity/test_execution_parity.py::test_a_storage_upgrade_joins_execution_before_releasing_storage",
+        "tests/server/rust_manager_parity/test_execution_parity.py::test_an_api_restart_keeps_unchanged_hosts_and_a_new_plan_replaces_only_execution",
+        "tests/server/rust_manager_parity/test_execution_parity.py::test_an_execution_host_whose_close_failed_is_still_replaced",
+        "tests/server/rust_manager_parity/test_execution_parity.py::test_a_departed_executor_is_recovered_without_retiring_the_api",
+        "tests/server/rust_manager_parity/test_execution_parity.py::test_recovery_refuses_changed_code_until_an_explicit_restart",
+        "tests/server/rust_manager_parity/test_manager_policy_parity.py::test_an_engine_failure_retains_the_ready_storage_host_and_replaces_the_application",
+        "tests/server/rust_manager_parity/test_manager_policy_parity.py::test_an_unknown_holder_of_the_storage_lease_is_never_duplicated"
+      ],
+      "note": "Composition, dependency order, explicit topology, storage-upgrade join order, execution-only upgrade, failed-close retirement, departed-executor recovery charged to the failure budget, changed-code refusal and storage retention on engine failure, against both managers. Source-drift re-preparation policy is serverctl_pkg.execution_plan (reached through manager_bridge source-only-change)."
+    },
+    "tests/server/test_execution_drain_during_storage_boot.py": {
+      "category": "python-owner-retained",
+      "note": "execution_host drain during storage attach; Python host owner kept in Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_execution_host_signal_stop.py": {
+      "category": "python-owner-retained",
+      "note": "serverctl_pkg/execution_host.py signal stop; Python host owner kept in Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_execution_lifespan.py": {
+      "category": "python-owner-retained",
+      "note": "serverctl_pkg/execution_lifespan.py; Python host owner kept in Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_execution_plan.py": {
+      "category": "python-owner-retained",
+      "note": "serverctl_pkg/execution_plan.py; the Rust manager calls source_only_change through manager_bridge.",
+      "rust": []
+    },
+    "tests/server/test_execution_plane_qualification.py": {
+      "category": "python-owner-retained",
+      "note": "Equal-work qualification of execution/storage host process loss; exercises Python host owners kept in Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_execution_preparation.py": {
+      "category": "parity-black-box",
+      "rust": [
+        "tests/server/rust_manager_parity/test_execution_parity.py::test_the_installed_interpreter_prepares_and_runs_the_execution_host",
+        "tests/server/rust_manager_parity/test_execution_parity.py::test_an_unusable_marker_keeps_the_manager_interpreter"
+      ],
+      "note": "The installed-environment marker (.tofu_env.json) selects the interpreter that prepares and then runs the execution host; an unusable marker keeps the manager interpreter. Both managers, black-box."
+    },
+    "tests/server/test_execution_service.py": {
+      "category": "parity-black-box",
+      "rust": [
+        "tests/server/rust_manager_parity/test_execution_parity.py::test_start_composes_storage_then_execution_and_an_api_role_worker",
+        "tests/server/rust_manager_parity/test_execution_parity.py::test_an_api_restart_keeps_unchanged_hosts_and_a_new_plan_replaces_only_execution",
+        "tests/server/rust_manager_parity/test_execution_parity.py::test_a_departed_executor_is_recovered_without_retiring_the_api",
+        "tests/server/rust_manager_parity/test_execution_parity.py::test_stop_joins_execution_then_storage_and_the_hosts_exit",
+        "tests/server/rust_manager_parity/test_execution_parity.py::test_the_installed_interpreter_prepares_and_runs_the_execution_host",
+        "tests/server/rust_manager_parity/test_reload_parity.py::test_reload_reexecs_in_place_and_keeps_the_worker_and_storage_host"
+      ],
+      "note": "Manager side of the resident execution service (exact pipe control verified by the host double, retention across API restarts and manager exec, joined stop, failed-close handling, prepared interpreter) black-box against both managers. Exit-record kernel proof stays in lib.process_owner, reached through manager_bridge record-exit."
+    },
+    "tests/server/test_execution_shards.py": {
+      "category": "python-owner-retained",
+      "note": "serverctl_pkg/execution_shards.py runs inside the execution host; not ported.",
+      "rust": []
+    },
+    "tests/server/test_execution_shutdown_failure.py": {
+      "category": "parity-black-box",
+      "rust": [
+        "tests/server/rust_manager_parity/test_execution_parity.py::test_an_execution_host_whose_close_failed_is_still_replaced"
+      ],
+      "note": "A failed (timeout) or unconfirmed (stale) execution close is still replaced by an explicit restart, against both managers. The two other cases specify the Python execution host process itself (python-owner)."
+    },
+    "tests/server/test_expected_unavailable_503_log_level.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_features_needs_restart.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_frontend_folder_not_ready_fail_open.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_frontend_preparation_lock.py": {
+      "category": "python-owner-retained",
+      "note": "serverctl.py prepare-frontend child owns the frontend gate the Rust manager runs as a preparation child.",
+      "rust": [
+        "tests/server/rust_manager_parity/test_lifecycle_parity.py::test_frontend_preparation_failure_refuses_before_stop"
+      ]
+    },
+    "tests/server/test_headless_agent_server.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_health_boot_identity.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_health_build_id.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_health_liveness_decoupled.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_health_local_heterogeneous.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_healthcheck_runtime.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_heartbeat_persistence_isolation.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_http_body_policy.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_http_body_timeout.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_http_client.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_http_compat_middleware.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_http_compression_middleware.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_http_error_handlers.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_http_request_body.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_http_request_lifecycle.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_http_translation_timing.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_hypercorn_connection_shutdown.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_image_fetch_ssrf.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_index_fastpath_placement.py": {
+      "category": "python-owner-retained",
+      "note": "serverctl_pkg/local_placement.py; Python owner kept in Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_legacy_api_removed.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_lifecycle_hardening.py": {
+      "category": "application-owner",
+      "note": "stop.sh/tofu_guard scripts and server.py serve-mode recording; not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_local_kernel_boundary.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_local_kernel_entry.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_local_kernel_listener.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_local_placement.py": {
+      "category": "python-owner-retained",
+      "note": "serverctl_pkg/local_placement.py; Python owner kept in Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_log_pytest_sink_isolation.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_logging_nonblocking_queue.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_logging_retention_bounds.py": {
+      "category": "python-owner-retained",
+      "note": "lib.logging_pkg log retention; the Rust manager reaches it through manager_bridge maintain-logs.",
+      "rust": []
+    },
+    "tests/server/test_logging_shared_rotation.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_loopback_channels_disable_nagle.py": {
+      "category": "parity-black-box",
+      "rust": [
+        "tests/server/rust_manager_parity/test_manager_policy_parity.py::test_manager_control_connections_disable_nagle"
+      ],
+      "note": "Every accepted manager control socket has TCP_NODELAY when the manager closes it, read from the kernel by parity_shim.c in either manager. The browser relay and loopback client cases are application owners."
+    },
+    "tests/server/test_loopback_relay_close.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_loopback_relay_session.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_loopback_transport.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_manager_parity_environment.py": {
+      "category": "parity-harness",
+      "note": "Offline source-slice checks of the parity harness's own environment isolation (_scrubbed_environment, the manager fixture and test_restart_parity._launch): no parity import, no child process and no manager behaviour.",
+      "rust": []
+    },
+    "tests/server/test_manager_state_replace_window.py": {
+      "category": "parity-black-box",
+      "rust": [
+        "tests/server/rust_manager_parity/test_manager_policy_parity.py::test_the_manager_publishes_its_state_under_the_store_lock"
+      ],
+      "note": "Both managers publish server-manager-state.json only under the exclusive <path>.lock (while the lock is held the old content stays and no temp file appears). The reader cases specify Python readers (lib.json_store) that stay Python."
+    },
+    "tests/server/test_mobile_client_apk_url.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_mobile_release_metadata.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_native_engine_identity.py": {
+      "category": "python-owner-retained",
+      "note": "serverctl_pkg/native_engine.py source identity; runs inside the prepare-frontend child.",
+      "rust": []
+    },
+    "tests/server/test_native_engine_isolated.py": {
+      "category": "python-owner-retained",
+      "note": "serverctl_pkg/native_engine.py isolated candidates and admission; Python owner kept in Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_native_engine_manifest_reads.py": {
+      "category": "python-owner-retained",
+      "note": "serverctl_pkg/native_engine.py manifest reads; Python owner kept in Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_native_engine_preparation_process.py": {
+      "category": "python-owner-retained",
+      "note": "serverctl_pkg/native_engine.py preparation process; runs inside the prepare-frontend child.",
+      "rust": [
+        "packages/tofu-manager/src/child.rs::tests::timeout_kills_the_whole_group"
+      ]
+    },
+    "tests/server/test_native_engine_queue_budget.py": {
+      "category": "python-owner-retained",
+      "note": "serverctl_pkg/native_engine.py queue budget; Python owner kept in Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_native_engine_root_inputs.py": {
+      "category": "python-owner-retained",
+      "note": "serverctl_pkg/native_engine.py root inputs; Python owner kept in Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_native_engine_streamed_identity.py": {
+      "category": "python-owner-retained",
+      "note": "serverctl_pkg/native_engine.py streamed identity; Python owner kept in Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_native_engine_update.py": {
+      "category": "python-owner-retained",
+      "note": "serverctl_pkg/native_engine.py engine build/deploy and lib/storage/supervisor admission; run inside the preparation child.",
+      "rust": []
+    },
+    "tests/server/test_native_production_shutdown.py": {
+      "category": "application-owner",
+      "note": "Application shutdown joins native model before storage release; application owner.",
+      "rust": []
+    },
+    "tests/server/test_native_storage_host_logging.py": {
+      "category": "python-owner-retained",
+      "note": "native_storage_host.py and lib/storage/supervisor stderr drain; host program kept in Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_native_storage_host_plan.py": {
+      "category": "python-owner-retained",
+      "note": "native_storage_host.py plan identity; the Rust manager obtains the plan from the host program (--plan).",
+      "rust": []
+    },
+    "tests/server/test_native_storage_host_state.py": {
+      "category": "python-owner-retained",
+      "note": "native_storage_host.py published state and breaker hand-off; host program kept in Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_native_storage_service.py": {
+      "category": "parity-black-box",
+      "rust": [
+        "tests/server/rust_manager_parity/test_manager_policy_parity.py::test_an_unknown_holder_of_the_storage_lease_is_never_duplicated",
+        "tests/server/rust_manager_parity/test_manager_policy_parity.py::test_manager_death_drains_its_storage_host",
+        "tests/server/rust_manager_parity/test_manager_policy_parity.py::test_a_successor_manager_restores_storage_for_the_preserved_worker",
+        "tests/server/rust_manager_parity/test_manager_policy_parity.py::test_project_dotenv_values_reach_the_worker_and_its_hosts",
+        "tests/server/rust_manager_parity/test_storage_rollback_parity.py::test_without_a_known_good_engine_the_failed_host_is_replaced_and_bounded",
+        "tests/server/rust_manager_parity/test_reload_parity.py::test_reload_reexecs_in_place_and_keeps_the_worker_and_storage_host"
+      ],
+      "note": "Manager side of the resident storage policy against both managers: an unknown lease holder is waited out and never duplicated, a failed host needs an explicit budget reset, manager exec retains the host and manager death drains it, a successor restores storage for the preserved worker (unchanged generation) or drains it (changed), relocated TOFU_DATA_DIR reaches the host. Host-internal shutdown publication and native daemon warmth are the Python host (python-owner)."
+    },
+    "tests/server/test_oob_alert.py": {
+      "category": "python-owner-retained",
+      "note": "serverctl_pkg/oob_alert.py reads the manager state file whose schema the Rust manager preserves.",
+      "rust": []
+    },
+    "tests/server/test_oob_dispose.py": {
+      "category": "python-owner-retained",
+      "note": "serverctl_pkg/oob_dispose.py; Python owner kept in Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_oob_relay.py": {
+      "category": "python-owner-retained",
+      "note": "serverctl_pkg/oob_relay.py; Python owner kept in Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_oob_repair.py": {
+      "category": "python-owner-retained",
+      "note": "serverctl_pkg/oob_repair.py; Python owner kept in Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_oob_runtime.py": {
+      "category": "python-owner-retained",
+      "note": "serverctl_pkg/oob_runtime.py; Python owner kept in Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_orchestration_definition_service_http.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_orchestration_openapi.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_orchestration_request_http.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_paper_arxiv_progress_budget.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_platform_download.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_post_ready_catalog_sync.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_proxy_trust.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_push_auth_offloop.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_push_error_and_idle_lifecycle.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_push_shutdown_transport.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_push_socket_generation.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_pytest_storage_isolation.py": {
+      "category": "application-owner",
+      "note": "Test-suite isolation contract (tests/conftest); not the manager.",
+      "rust": []
+    },
+    "tests/server/test_quart_sync.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_restart_always_serves.py": {
+      "category": "parity-black-box",
+      "rust": [
+        "tests/server/rust_manager_parity/test_restart_faults_parity.py::test_a_quota_hit_after_stop_is_retried_instead_of_aborting_the_restart",
+        "tests/server/rust_manager_parity/test_restart_faults_parity.py::test_storage_host_past_its_stop_budget_is_killed_and_replaced",
+        "tests/server/rust_manager_parity/test_lifecycle_parity.py::test_frontend_preparation_failure_refuses_before_stop",
+        "tests/server/rust_manager_parity/test_lifecycle_parity.py::test_unwritable_state_refuses_before_stop",
+        "tests/server/rust_manager_parity/test_native_storage_parity.py::test_unconfirmed_storage_close_still_ends_serving",
+        "tests/server/rust_manager_parity/test_native_storage_parity.py::test_a_resident_host_owned_elsewhere_refuses_before_the_old_server_stops",
+        "tests/server/rust_manager_parity/test_restart_parity.py::test_a_replacement_that_dies_after_stop_is_retried_until_one_serves",
+        "tests/server/rust_manager_parity/test_execution_parity.py::test_an_execution_preparation_refusal_keeps_the_serving_generation"
+      ],
+      "note": "Every case runs black-box against both managers: refusals before stop (frontend, unwritable state, host owned elsewhere, storage boundary violation found by execution preparation), unconfirmed storage close, a replacement dying after stop, a real EDQUOT injected into the manager by parity_shim.c as the old worker exits (found and fixed a Python gap: the planned-exit and stop-outcome saves raised after the commit point), and a storage host ignoring SIGTERM for the full 100 s stop budget, then SIGKILLed and replaced."
+    },
+    "tests/server/test_restart_build_cache.py": {
+      "category": "python-owner-retained",
+      "note": "native_engine/local_placement build cache; runs inside the preparation child.",
+      "rust": []
+    },
+    "tests/server/test_restart_lock_race.py": {
+      "category": "application-owner",
+      "note": "restart.sh flock/relaunch script; not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_restart_precedence.py": {
+      "category": "application-owner",
+      "note": "lib/runtime/protected_steps landing/restart precedence; application owner.",
+      "rust": []
+    },
+    "tests/server/test_restart_preparation_progress.py": {
+      "category": "client-unchanged",
+      "note": "lifecycle_approval projection of restart_preparation_v1 frames; the Rust manager validates the same contract in restart_preparation.rs.",
+      "rust": [
+        "packages/tofu-manager/src/restart_preparation.rs::tests::phases_and_fields_match_the_contract",
+        "packages/tofu-manager/src/restart_preparation.rs::tests::frames_outside_the_contract_are_rejected"
+      ]
+    },
+    "tests/server/test_restart_preparation_safety.py": {
+      "category": "python-owner-retained",
+      "note": "serverctl.py prepare-frontend budgets and descendant cleanup; Rust composes the same budgets and kills the child group.",
+      "rust": [
+        "packages/tofu-manager/src/preparation.rs::tests::budgets_compose_like_restart_budget",
+        "packages/tofu-manager/src/child.rs::tests::timeout_kills_the_whole_group",
+        "packages/tofu-manager/src/child.rs::tests::failure_reports_exit_and_both_streams"
+      ]
+    },
+    "tests/server/test_restart_resume_application.py": {
+      "category": "application-owner",
+      "note": "Application chat resume and router wake across a restart; application owner.",
+      "rust": []
+    },
+    "tests/server/test_restart_storage_rollback.py": {
+      "category": "parity-black-box",
+      "rust": [
+        "tests/server/rust_manager_parity/test_storage_rollback_parity.py::test_a_new_engine_whose_first_start_fails_after_stop_is_rolled_back_and_service_restored",
+        "tests/server/rust_manager_parity/test_storage_rollback_parity.py::test_without_a_known_good_engine_the_failed_host_is_replaced_and_bounded",
+        "tests/server/rust_manager_parity/test_storage_rollback_parity.py::test_a_new_engine_that_cannot_start_on_a_disposable_authority_refuses_before_stop"
+      ],
+      "note": "All three cases black-box against both managers with the real known-good policy (NativeStorageService retain/restore, native_engine.retention_refusal, scripts/deploy_tofudb_engine) on a project whose engine carries a deployment receipt; only the resident host is a double. Settings' latest_restart_recovery reader stays Python (lib.lifecycle_approval)."
+    },
+    "tests/server/test_runtime_replica.py": {
+      "category": "python-owner-retained",
+      "note": "serverctl_pkg/runtime_replica.py selection, build and collection policy; both managers reach it (Rust through manager_bridge prepare-worker-runtime) and the Rust manager holds the leases itself (runtime.rs). Parity: test_runtime_replica_parity.py.",
+      "rust": []
+    },
+    "tests/server/test_runtime_replica_manager.py": {
+      "category": "python-owner-retained",
+      "note": "Python LifecycleManager replica integration; the Rust manager ports it (runtime.rs + manager_bridge) and test_runtime_replica_parity.py specifies the same behaviour black-box for both.",
+      "rust": []
+    },
+    "tests/server/test_server_async.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_server_background_services.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_server_boot_broken_pipe.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_server_boot_report.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_server_config_concurrent_writers.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_server_config_file_mode.py": {
+      "category": "application-owner",
+      "note": "Server configuration file permissions are an application (server.py) concern, not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_server_download_semantics.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_server_entry.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_server_fault_capture.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_server_import_smoke.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_server_import_worker_isolation.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_server_loop_debug.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_server_loop_runtime.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_server_loop_watchdog_lifecycle.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_server_manager.py": {
+      "category": "parity-and-rust-unit",
+      "rust": [
+        "tests/server/rust_manager_parity/test_manager_policy_parity.py::test_a_worker_that_keeps_crashing_latches_crashloop_until_an_explicit_start",
+        "tests/server/rust_manager_parity/test_manager_policy_parity.py::test_a_manual_stop_persists_across_a_manager_replacement",
+        "tests/server/rust_manager_parity/test_manager_policy_parity.py::test_a_foreign_listener_on_the_worker_port_fails_closed",
+        "tests/server/rust_manager_parity/test_manager_policy_parity.py::test_project_dotenv_values_reach_the_worker_and_its_hosts",
+        "tests/server/rust_manager_parity/test_manager_policy_parity.py::test_a_fatal_signal_is_recorded_as_the_worker_exit_and_respawned",
+        "tests/server/rust_manager_parity/test_restart_parity.py::test_a_successor_manager_adopts_the_live_worker",
+        "tests/server/rust_manager_parity/test_lifecycle_parity.py::test_crashed_worker_is_respawned",
+        "tests/server/rust_manager_parity/test_lifecycle_parity.py::test_a_worker_served_over_https_becomes_ready",
+        "packages/tofu-manager/src/envpolicy.rs::tests::production_checkout_refuses_pytest_storage_and_context"
+      ],
+      "note": "Lifecycle policy black-box against both managers: failure budget and crashloop latch, persisted manual stop across manager replacement, foreign listener fail-closed, dotenv layering into worker and hosts, fatal-signal exit accounting, adoption of a live worker in both directions, HTTPS readiness. The production-checkout quarantine of inherited pytest context is an envpolicy.rs unit (a black-box case cannot leave pytest's own namespace, which the rule deliberately allows). Cases that pin Python internals (_atomic_json, monkeypatched clocks, cgroup OOM counters, offline storagectl labels) remain Python specifications of the same contract."
+    },
+    "tests/server/test_server_native_exit.py": {
+      "category": "parity-and-rust-unit",
+      "rust": [
+        "tests/server/rust_manager_parity/test_manager_policy_parity.py::test_a_fatal_signal_is_recorded_as_the_worker_exit_and_respawned",
+        "tests/server/rust_manager_parity/test_reload_parity.py::test_a_worker_spawned_before_the_reexec_is_settled_and_reaped_after_it",
+        "packages/tofu-manager/src/procfs.rs::tests::a_zombie_child_is_dead_and_its_exit_is_observed_unreaped"
+      ],
+      "note": "A fatal signal is recorded as the worker exit (cause fatal_signal, signal and pid, reaped after saving), including a worker spawned before a re-exec, against both managers; zombie observation unit in procfs.rs. The nested frontend canary interpreter case is the Python preparation child."
+    },
+    "tests/server/test_server_network.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_server_python_bytecode_cache.py": {
+      "category": "python-owner-retained",
+      "note": "serverctl_pkg/python_bytecode_cache.py; both managers reach it (Rust through manager_bridge, namespace lease held by runtime.rs). Parity: test_runtime_replica_parity.py.",
+      "rust": []
+    },
+    "tests/server/test_server_reexec.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_server_response_size_log.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_server_runtime_lifecycle.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_server_runtime_probes.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_server_shutdown_lifecycle.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_server_startup_recovery.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_server_thread_snapshot.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_serverctl.py": {
+      "category": "client-unchanged",
+      "note": "serverctl.py CLI (cron ensure, status, manager refresh) talks to whichever manager answers the unchanged HTTP protocol.",
+      "rust": []
+    },
+    "tests/server/test_serverctl_browser_preparation.py": {
+      "category": "client-unchanged",
+      "note": "serverctl.py browser preparation and status reporting; client side.",
+      "rust": []
+    },
+    "tests/server/test_serverctl_start_deadline.py": {
+      "category": "client-unchanged",
+      "note": "serverctl.py lifecycle request deadline; client side of the unchanged protocol.",
+      "rust": []
+    },
+    "tests/server/test_shutdown_hard_deadline.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_shutdown_wall_deadline.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_sql_storage_service.py": {
+      "category": "parity-black-box",
+      "rust": [
+        "tests/server/rust_manager_parity/test_sql_storage_parity.py::test_the_sql_authority_is_hosted_exported_and_outlives_the_api_worker"
+      ],
+      "note": "The real serverctl_pkg.native_storage_host hosting SQLite under each manager: plan without native admission, connection export, storage_authority_sql lease, SQL child relaunch under the same Web owner, retention across an unchanged restart, stop removing the connection and lease. The Postgres variant and StorageSupervisor client internals are Python storage owners (Phase 3)."
+    },
+    "tests/server/test_start_never_acts_on_another_instance.py": {
+      "category": "parity-and-rust-unit",
+      "note": "Manager worker-lock/heartbeat data-root resolution is re-specified in datapaths.rs/lockstatus.rs; the serverctl client cases are unchanged.",
+      "rust": [
+        "packages/tofu-manager/src/datapaths.rs::tests::explicit_data_dir_wins_and_a_populated_checkout_stays_in_tree",
+        "packages/tofu-manager/src/lockstatus.rs::tests::a_live_lock_holder_reports_running_with_identity",
+        "tests/server/rust_manager_parity/test_lifecycle_parity.py::test_foreign_projects_and_unknown_routes_are_refused"
+      ]
+    },
+    "tests/server/test_startup_boundary_diagnostics.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_storage_host_verdict.py": {
+      "category": "python-owner-retained",
+      "note": "native_storage_host record read by the application health payload; host program kept in Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_store_features_preflight.py": {
+      "category": "python-owner-retained",
+      "note": "store_features/native_engine admission; runs inside the preparation child and storage start.",
+      "rust": []
+    },
+    "tests/server/test_supervisor.py": {
+      "category": "parity-black-box",
+      "rust": [
+        "tests/server/rust_manager_parity/test_reload_parity.py::test_reload_reexecs_in_place_and_keeps_the_worker_and_storage_host",
+        "tests/server/rust_manager_parity/test_reload_parity.py::test_a_worker_spawned_before_the_reexec_is_settled_and_reaped_after_it",
+        "tests/server/rust_manager_parity/test_restart_parity.py::test_reload_refuses_a_foreign_fingerprint_and_is_a_noop_when_current",
+        "tests/server/rust_manager_parity/test_restart_parity.py::test_deferred_restart_acknowledges_first_and_admits_one_pending_request",
+        "tests/server/rust_manager_parity/test_lifecycle_parity.py::test_health_reports_the_manager_identity",
+        "tests/server/rust_manager_parity/test_lifecycle_parity.py::test_foreign_projects_and_unknown_routes_are_refused"
+      ],
+      "note": "HTTP door black-box against both managers, including the real /reload re-exec in place (same PID, new generation fingerprint, worker and storage host kept and still controlled) from a private copy of the generation closure. supervisor.sh under TOFU_MANAGER_BINARY is exercised by isolated_instance.py; the refresh client cases are serverctl client-side (client-unchanged)."
+    },
+    "tests/server/test_supervisor_conf.py": {
+      "category": "client-unchanged",
+      "note": "System supervisord deployment renderer/installer that launches the lifecycle owner through supervisor.sh; independent of the manager implementation.",
+      "rust": []
+    },
+    "tests/server/test_supervisor_ownership.py": {
+      "category": "parity-and-rust-unit",
+      "rust": [
+        "tests/server/rust_manager_parity/test_ownership_parity.py::test_a_transiently_replaced_source_is_not_ownership_loss",
+        "tests/server/rust_manager_parity/test_ownership_parity.py::test_a_deleted_checkout_retires_the_manager_and_its_worker",
+        "tests/server/rust_manager_parity/test_ownership_parity.py::test_a_moved_checkout_retires_even_after_its_path_is_recreated",
+        "tests/server/rust_manager_parity/test_restart_parity.py::test_a_manager_whose_owner_exits_retires_its_worker_and_itself",
+        "packages/tofu-manager/src/ownership.rs::tests::a_moved_checkout_is_lost_after_the_short_grace_even_when_recreated",
+        "packages/tofu-manager/src/ownership.rs::tests::an_exited_owner_is_gone"
+      ],
+      "note": "ownership.rs ports SupervisorOwnership exactly (supervisor.py sentinel, 10 s/0.5 s graces, replaced-directory identity, owner start ticks); both managers pass transient replacement, deleted and moved checkouts and owner exit black-box. Owner PID reuse is covered by the start-ticks rule in ownership.rs."
+    },
+    "tests/server/test_supervisor_reexec_children.py": {
+      "category": "parity-black-box",
+      "rust": [
+        "tests/server/rust_manager_parity/test_reload_parity.py::test_a_worker_spawned_before_the_reexec_is_settled_and_reaped_after_it"
+      ],
+      "note": "A worker the previous image spawned is settled (exit recorded with its signal) and reaped by the re-exec'd image, against both managers. Sparing foreign/reused PIDs follows from settlement by recorded process identity (procfs start ticks)."
+    },
+    "tests/server/test_task_registry_discovery.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_tofu_dotenv.py": {
+      "category": "rust-unit",
+      "note": "lib/tofu_dotenv stays the canonical parser; the manager reader (lifecycle_manager_reader_stays_compatible_with_canonical_syntax) is re-specified by envpolicy.rs.",
+      "rust": [
+        "packages/tofu-manager/src/envpolicy.rs::tests::dotenv_follows_the_canonical_parser"
+      ]
+    },
+    "tests/server/test_tofu_guard_reexec_race.py": {
+      "category": "application-owner",
+      "note": "tofu_guard relaunch script; not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_upload_filename_collision.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_upload_resource_limits.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_visual_compaction_viewer.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_visual_continue_compaction.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_webhook_delivery_demand.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_webhook_send_concurrency.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_webhooks_fanout.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_websocket_send_fairness.py": {
+      "category": "application-owner",
+      "note": "Application process, HTTP layer or shared library (server.py/lib); not Phase 2.",
+      "rust": []
+    },
+    "tests/server/test_zombie_liveness_consumers.py": {
+      "category": "application-owner",
+      "note": "Application/storage liveness consumers of zombie processes; not the manager.",
+      "rust": []
+    }
+  },
+  "version": 1
+}

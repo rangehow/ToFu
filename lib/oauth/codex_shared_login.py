@@ -132,7 +132,7 @@ def refresh_bound_reference(reference: dict) -> dict:
         return resolve_reference(reference, refresh=True)
 
 
-def recover_bound_access(reference: dict, *, initial_issue: str) -> str | None:
+def recover_bound_access(reference: dict, *, initial_issue: str) -> dict | None:
     """One pre-ingress recovery, preserving source failures instead of reauth."""
     started = time.monotonic()
     snapshot = refresh_bound_reference(reference)
@@ -148,7 +148,7 @@ def recover_bound_access(reference: dict, *, initial_issue: str) -> str | None:
               auth_issue='' if recovered else issue,
               elapsed_ms=round((time.monotonic() - started) * 1000))
     if recovered:
-        return snapshot['access_token']
+        return snapshot
     if issue in {'codex_access_expired', 'codex_not_signed_in', 'not_chatgpt_login'}:
         return None
     from lib.llm.llm_errors import SubscriptionCredentialUnavailableError

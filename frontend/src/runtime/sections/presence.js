@@ -386,6 +386,10 @@
       return _buildConvItemHTML(c, escapeHtml(_conversationDisplayTitle(c.title, t('chat.newConversation'))), '');
     },
     activeConversationId: activeRouterConversationId,
+    // The sidebar list's existing row-window bound: a project can have
+    // thousands of Workers, and this group must not render them all.
+    pageSize: typeof _CONV_WINDOW_PAGE === 'number' ? _CONV_WINDOW_PAGE : undefined,
+    pagePrefetchPx: typeof _CONV_WINDOW_PREFETCH_PX === 'number' ? _CONV_WINDOW_PREFETCH_PX : undefined,
     refresh: function () { renderConversationList(); },
     refreshActive: function () {
       if (_swapActiveConvItem(activeRouterConversationId())) renderConversationList();
@@ -397,10 +401,6 @@
     status: function (c) {
       return coordinatorWorkerStatus(_convStatusFlags(c),
         !!(runtimeScope.ConversationTurnRead?.ordered?.(c) || []).length);
-    },
-    hasBackground: function (c) {
-      return typeof backgroundConversationActivity !== 'undefined'
-        && backgroundConversationActivity.has(c.id);
     },
   });
   runtimeScope.coordinatorConversationGroups = coordinatorConversationGroups;

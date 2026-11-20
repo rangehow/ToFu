@@ -38,6 +38,20 @@ _token_snapshots: contextvars.ContextVar = contextvars.ContextVar(
     'oauth_token_snapshots', default=None)
 
 
+# A manager-driven login can fence its final write without coupling this
+# storage module to transient OAuth flow state. Refresh has no such scope.
+_login_write_guard = contextvars.ContextVar('oauth_login_write_guard', default=None)
+
+
+@contextlib.contextmanager
+def guarded_login_write(guard):
+    scope = _login_write_guard.set(guard)
+    try:
+        yield
+    finally:
+        _login_write_guard.reset(scope)
+
+
 # ══════════════════════════════════════════════════════════
 #  Refresh singleflight (S2 — CLIProxyAPI codexRefreshGroup parity)
 # ══════════════════════════════════════════════════════════
@@ -150,17 +164,32 @@ def token_path(provider: str) -> str:
 
 
 @contextlib.contextmanager
-def token_snapshot():
+def live_token_resolution():
+    """Credential authority must not read a status projection's cached rows."""
+    scope = _token_snapshots.set(None)
+    try:
+        yield
+    finally:
+        _token_snapshots.reset(scope)
+
+
+@contextlib.contextmanager
+def token_snapshot(*, stored_only: bool = False):
     """Resolve each provider's credential at most once inside this block.
 
     Nested blocks share the outermost snapshot. ``save_token``,
     ``delete_token`` and ``forget_token_snapshot`` invalidate one provider so
     a pass that changes or refreshes a credential re-reads it.
     """
-    if _token_snapshots.get() is not None:
+    if not stored_only and _token_snapshots.get() is not None:
         yield
         return
-    scope = _token_snapshots.set({})
+    # Seed the whole offline projection, including nested catalog/status
+    # reads, without invoking a borrowed-login command or desktop relay.
+    scope = _token_snapshots.set({
+        provider: load_stored_token(provider, strict=True)
+        for provider in sorted(_SUPPORTED_PROVIDERS)
+    } if stored_only else {})
     try:
         yield
     finally:
@@ -200,7 +229,7 @@ def _tighten_mode(path: str, current_mode: int, private_mode: int) -> None:
         logger.warning('[TokenStore] Could not restrict %s: %s', path, e)
 
 
-def load_stored_token(provider: str) -> dict | None:
+def load_stored_token(provider: str, *, strict: bool = False) -> dict | None:
     """Load stored OAuth token for a provider.
 
     Legacy stores are tightened to private modes on read, exactly as
@@ -215,9 +244,11 @@ def load_stored_token(provider: str) -> dict | None:
         with _store_lock(provider):
             try:
                 info = os.stat(path)
-            except OSError:
+            except FileNotFoundError:
                 return None
             if not stat.S_ISREG(info.st_mode):
+                if strict:
+                    raise ValueError('token source is not a regular file')
                 return None
             parent = os.path.dirname(path)
             try:
@@ -228,12 +259,16 @@ def load_stored_token(provider: str) -> dict | None:
             _tighten_mode(path, info.st_mode, 0o600)
             data = read_json(path, default=None)
         if not isinstance(data, dict):
+            if strict:
+                raise ValueError('invalid stored token')
             logger.warning('[TokenStore] Invalid token file for %s (not a dict)', provider)
             return None
         logger.debug('[TokenStore] Loaded token for %s (email=%s)',
                      provider, data.get('email', '?'))
         return data
     except Exception as e:
+        if strict:
+            raise RuntimeError(f'Cannot read local OAuth state for {provider}') from None
         logger.warning('[TokenStore] Failed to load token for %s: %s', provider, e)
         return None
 
@@ -258,7 +293,7 @@ def _resolve_token(provider: str) -> dict | None:
     return {**snapshot, 'codex_shared_reference': reference,
             'credential_source': ('desktop_codex' if reference.get('kind') == 'desktop'
                                   else 'local_codex'),
-            'account_id': reference.get('account_id', '')}
+            'account_id': snapshot.get('account_id') or reference.get('account_id', '')}
 
 
 def save_token(provider: str, token_data: dict) -> bool:
@@ -282,9 +317,13 @@ def save_token(provider: str, token_data: dict) -> bool:
         payload = dict(token_data)
         payload['_saved_at'] = time.strftime(
             '%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+        guard = _login_write_guard.get()
         with _store_lock(provider), locked_path(path):
-            _harden_token_permissions(path)
-            write_json_atomic(path, payload, mode=0o600)
+            with (guard(provider) if guard else contextlib.nullcontext(True)) as allowed:
+                if not allowed:
+                    return False
+                _harden_token_permissions(path)
+                write_json_atomic(path, payload, mode=0o600)
         logger.info('[TokenStore] Saved token for %s (email=%s)',
                     provider, payload.get('email', '?'))
         return True

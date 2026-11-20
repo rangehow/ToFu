@@ -857,7 +857,7 @@ requesting the application preserves the waterfall. Tests: `main.test.ts`,
   Problem: the removal above left pairing, fleet health and permissions with
   no home, and a Settings tab cannot show a fleet. Decision: a top-level
   workspace `#/devices` (`page-host.ts` workspace `devices`,
-  `features/devices.ts`, lazy chunk with `features/devices.css`) holds the Home
+  `features/devices.ts`, lazy chunk with `38-devices.css`) holds the Home
   card, the fleet grouped by kind with live health, the add-device wizard
   (`#/devices/add[/<nodeId>]`: kind → one-shot code/link/one-line headless
   command → confirm the pending node with its fingerprint → name, Home-ceiling
@@ -876,8 +876,74 @@ requesting the application preserves the waterfall. Tests: `main.test.ts`,
   attended turn (`lib/conv_config/_resolve.py`, Home ceiling ∩ device switch).
   The node's `#tofu-agent-relay` deep link starts the browser relay
   (`features/devices/relay.ts`, broker protocol unchanged) and lands on the
-  page. Alternatives rejected: keeping the fleet in Settings (no health at a
-  glance) and a sidebar device list (grows with every device).
+  page. Devices keeps a sticky return-to-chat action that restores the
+  existing chat workspace without writing the landing preference or starting a
+  new conversation. Browser history remains useful: the lazy Devices adapter
+  marks a drawer or wizard opened from the fleet; closing returns to that entry.
+  When loaded from a direct link without that provenance, closing replaces the
+  current entry with the fleet instead of navigating away. Browser navigation
+  tears down any open overlay (including removal confirmation) without writing
+  another route, and the fleet restores focus by launcher identity across live
+  updates. The Home card lists this Home service once; it is not a physical
+  device identity shared with node or browser rows. Grouped rows
+  reflow against the content width; the connection explainer is a collapsed
+  disclosure with a wrapping, readable layout rather than a wide SVG.
+  Alternatives rejected: Settings (no fleet overview), a sidebar fleet (grows
+  with every device), and using unqualified Browser Back as the return action
+  (a directly opened link may have no in-app predecessor). The Devices
+  Playwright journeys exercise return, history, focus and narrow layouts.
+  Drawer ceiling edits queue tier-level intent per node in the shared store,
+  then build each full replacement from the latest acknowledged permissions;
+  parallel replacements from a rendered snapshot can undo a separate reduction.
+  Reads started before a ceiling acknowledgment cannot overwrite it. Settings
+  defaults restore the last acknowledged selection on rejection. A rejected
+  removal shows the error inside the drawer and leaves the drawer open for retry.
+
+  **Physical-device grouping boundary.** Problem: a packaged Home and its
+  local-process node can appear as a Home card and a separate computer row;
+  the owner cannot tell whether these are two services on one physical device.
+  Before: Home health is keyed as `self` with the browser-visible host address
+  and a process boot ID; desktop rows have `node_id` and optional credential ID;
+  browser rows have `client_id`. There is a current classification discrepancy:
+  `lib/bridge_auth.py` assigns the packaged agent the nonempty key ID
+  `process:desktop-agent`, poll registration and the bridge listing retain it,
+  and `routes/api_v1/desktop.py::_node_row` classifies any nonempty key ID as
+  `attachment: paired`, even without a pairing record or stored credential.
+  `attachment: process` requires all three to be absent; that schema-valid
+  example is not the current authenticated packaged-agent listing. Consequently
+  the current frontend does not give that packaged row its `process`-only
+  `inProcess`/local-route presentation. The inert fixture consumes the actual
+  row projector with synthetic inputs and stubbed permission dependencies; it
+  does not import route/auth initialization or authenticate/register a device.
+  The discrepancy is documented, not repaired here, and neither classification
+  proves a shared physical device. The node-side per-Home attachments are not
+  a fleet-side list of service links.
+  After (presentation contract, unchanged wire): keep those exact service rows,
+  statuses and Details destinations separate. Do not equate a label, hostname,
+  address, URI, fingerprint, credential or `process` classification with a
+  shared physical device. Absent/failed reads and missing route/round-trip
+  evidence remain unavailable/unknown, not another service's status.
+  A single physical-device anchor with separately labeled Home/node/browser
+  links needs an authoritative shared device identity and an explicit binding
+  of each existing service identity to it; neither is in the current canonical
+  fleet read model. This is a contract gap, not a request to change producers,
+  protocols, pairing, permission policy or action routing. The inert real-browser
+  fixture `tests/frontend/test_devices_identity_gap_browser.py` validates its
+  producer-derived nodes against `NodeListing` and its complete defaults
+  (all three kinds plus revision) against `DefaultsResponse`. It renders that
+  synthetic read model, which contains no physical binding. Same-machine
+  two-service and distinct-machine same-name assignments are explanatory
+  interpretations only, not independently executed physical topologies or
+  evidence of real colocation. They cannot be distinguished by this view, so
+  no physical merge is justified. At narrow and desktop widths the fixture
+  checks fresh snapshots with each Home/nodes/browsers source failing separately,
+  Home and browsers both failing while the similarly named nodes survive with
+  unchanged identities/statuses, plus all identity sources unavailable. This
+  does not exercise the live store's own-source last-good retention. It
+  exercises only exact Details callbacks, not service actions or connections.
+  Unifying presentation would not physically replace the controlled endpoint
+  or remove a protocol/client: each original service retains its own authority
+  and destination.
 - The browser extension dialog (install, upgrade and connection status of the
   Tofu extension) is the manifest-owned, demand-loaded
   `browser-extension-presenters` runtime behind
@@ -1494,6 +1560,16 @@ feature IDs, never mutate a Turn projection, and declare a disposal or size
 bound. A new feature cannot add a conversation-level mirror merely because a
 legacy endpoint happens to return message-shaped data.
 
+**Composer Stop separates acknowledgement from settlement.** The Stop request
+owns its exact live attempts, not a conversation-wide flag. A durable abort ACK
+suppresses retry for that attempt but does not mark the Turn stopped. If sync
+still shows it active at the feedback deadline, the same composer control can
+refresh its authoritative status without sending another abort. Unconfirmed
+requests can be retried; an old timeout or rejection cannot clear a later
+request. A settled, removed or replaced attempt releases the control only
+after applying the canonical projection. See `frontend/src/core/turn-stop-feedback.ts`
+and `tests/e2e/test_e2e_journeys.py::test_abort_halts_stream_and_keeps_partial`.
+
 Published artifacts form one **related-files list per conversation**, not a
 chip row under each Turn. `runtime/sections/artifacts.js` keeps the active
 conversation's list (latest version per source path, newest first) behind the
@@ -1507,6 +1583,44 @@ conversation block (adds a non-Turn entry to the windowed transcript). The
 per-Turn file-changes receipt stays, because it owns that Turn's undo/redo.
 Executable specifications: `tests/frontend/test_frontend_artifacts_filter.py`
 and `tests/visual/test_visual_terminal_render_convergence.py`.
+A new artifact open synchronously hides and clears the previous version selector
+before awaiting metadata. Otherwise a pending or failed open retains another
+artifact's options; clearing only after a versions read misses metadata failures.
+Only the current metadata's versions read repopulates it. Version-selector
+successes and failures apply only while both artifact identity and the panel's
+navigation epoch still match; returning to the same artifact does not admit an
+earlier preview session's rejection. A current versions error still hides and
+clears the selector without replacing the document. Synthetic component coverage:
+`tests/frontend/test_frontend_artifact_version_race.py`; offline Chromium coverage:
+`tests/visual/test_visual_artifact_version_navigation.py`.
+
+Artifact preview reads are not equivalent materializations: the conversation
+list selects latest-per-path entries, metadata authorizes the selected row and
+supplies current pin/header facts, and `/versions` resolves current visible
+chain membership. A selected row's unchanged `version` certifies neither the
+chain nor current access: publishing a child leaves that row's public metadata
+unchanged. The versions response carries `count` and `versions`, not a chain
+revision or conditional freshness witness. Reusing the selected version instead
+of re-reading the chain would hide newly published children; using the list
+instead loses historical rows. Raw content keeps its per-open access read.
+Only the matching artifact identity and navigation epoch may publish its active
+body cache; an earlier A response cannot overwrite a completed A→B→A revisit.
+Source-view actions reuse that current navigation's body, while every explicit
+open clears it and reads fresh content. Artifact identity alone is insufficient
+because a later navigation may select the same artifact.
+Source and header Pin clicks capture the selected ID and navigation epoch before
+awaiting metadata. A retired click issues no subsequent content read or pin
+mutation; Source also checks ownership after content settles. A Pin already
+issued keeps its original ID, but its late response cannot repaint a later
+navigation, including a same-ID revisit. Reading mutable current identity after
+an await was rejected because it changes the selected action's owner. These
+checks add no reads or caches and leave fresh explicit-open reads unchanged.
+Offline in-memory controls: `tests/frontend/test_frontend_artifact_action_ownership.py`.
+Specs: `tests/artifacts/test_artifacts_versioning.py` exercises this counterexample
+through disposable-storage API reads; `tests/frontend/test_artifact_repeated_open.py`
+counts synthetic two-project reader activation/open hooks and checks revision,
+withdrawal and successful late-response fencing. Its logical API counts and
+local jsdom materialization measurements are not network or online latency proof.
 
 ### Independent appearance and reconciliation
 
@@ -2058,9 +2172,26 @@ New-chat attachments belong only to that draft. Late picker/hydration responses
 cannot overwrite a newer explicit choice; global status enriches only matching
 roots and never selects a project or changes access modes. **Alternative rejected:**
 more synchronization guards around a shared current-project authority.
-Status-only repaints preserve the navigation generation so pending authoritative
-hydration can still update the view; only navigation or an explicit choice
-invalidates that response. A cold-open integration test covers the overlap.
+Status-only repaints capture, without advancing, the shared controller's navigation
+and choice generation so pending authoritative hydration can still update the view.
+Their optional branch response must still match that generation: object identity
+alone incorrectly accepts an earlier A visit after A -> B -> A, or a response from
+before an explicit project choice or clear. The composer-switch harness resolves
+stale responses both before and after the current response; a cold-open integration
+test covers the hydration overlap.
+A warm selection projects its saved roots and starts optional Git context once,
+and that enrichment carries the same per-navigation visit token; an earlier
+visit of the same chat (A -> B -> A) answers as stale, because a conversation ID
+alone cannot distinguish visits. Cold selection still projects the catalog roots
+immediately and restores again after authoritative hydration, which may change
+them. Each accepted enrichment also captures the controller's enrichment revision,
+so the hydrated phase supersedes pre-hydration branch reads without invalidating
+the navigation token. Ineligible old restores cannot advance that revision.
+Status refreshes use the same revision and remain non-advancing for navigation
+and explicit mutation guards. Repeating the warm restore was rejected: it reread
+the same project and duplicated the enrichment. The composer-switch harness covers the A -> B -> A
+ordering, warm single restore and cold authoritative restore; the workspace
+browser journey records DOM observations only, with no timed-gain claim.
 
 Everyday chat has one capability mode. Legacy Air/Pro/Studio selections normalize
 to `chat`; `ui/optional-project-attachment.ts` paints the optional attachment action
@@ -2132,6 +2263,14 @@ projects a synthetic 1 MiB response exactly once and verifies its release while
 the picker remains alive. The same probe verifies that only the newest pending
 catalog survives and that disposal releases it; this is a reference-lifetime
 check, not an RSS claim.
+
+A configured Offering or wire grant is not proof of chat eligibility. The
+composer marks model and provider choices unavailable only when the committed
+response's `reasoning_controls` reports `no_route` for the exact selection.
+GET and successful routing PUT project that verdict from the same server
+compiler; the browser neither reimplements admission nor rewrites a saved
+choice. Missing evidence is not a refusal. The provider matrix displays the
+credential's experiment hold beside its independent wire grants.
 
 `settings/model-routing-authority.ts` owns read/CAS lifetimes and serialized
 persistence; `core-panel.ts` assembles the Settings surface and publishes its
@@ -2713,6 +2852,14 @@ clearing or aborting the shared routing owner on close can disrupt accepted
 writes; per-tab config caches duplicate authority. The common read session
 leaves specialized form/write lifetimes with their existing owners.
 
+### Desktop installer download layout
+
+Desktop installer links share the mobile card styling, but put version, size
+and the recommendation below the installer name. The grid fits columns to
+available card width and lets installer details wrap without clipping them or
+the localized download action. The Chromium specification is
+`tests/visual/test_visual_settings_desktop_downloads.py`.
+
 ### Settings save input and feedback ownership
 
 Problem: Save collected later feature flags, Speech fields and miscellaneous
@@ -2804,7 +2951,59 @@ parameters, shared requests, timer release and retained drafts. Existing OAuth
 gate/exchange/reset/fallback specifications retain their real authorization code;
 classic fragment fixtures explicitly mount the real typed presentation scope.
 `test_settings_oauth_lifecycle_browser.py` verifies close/reopen and device resume
-through actual controls with synthetic intercepted responses.
+through actual controls with synthetic intercepted responses. The same fenced
+read owns the subscription status notice: loading and read failure are not
+rendered as a fresh signed-out result, and a superseded read cannot publish.
+
+`settings/subscription-navigation.ts` owns the subscription directory and one
+selected provider detail. The overview shows brand and existing presenter status
+only; it does not expose account identities, quota, keys, or commands. The
+sign-in roster comes from the settings fragment; the coding-plan roster comes
+from provider templates. Opening a detail focuses its heading; Back restores
+focus and scroll to its tile. Leaving the tab or Settings resets to the directory.
+This replaces the flat stack of unrelated auth controls without adding a new
+status read or moving provider policy into navigation.
+
+The ChatGPT detail separates the existing primary connection and its quota from
+linked Codex accounts. `settings/oauth-accounts.ts` mounts the account inventory
+only on entry to that detail and retires it when leaving. It uses the generated
+revisioned account client. `oauth-account-view.ts` consumes
+only projected aliases, opaque IDs, explicit default and status. Authorized
+means a linked credential, not a route or a quota reading. A conflict refreshes
+the inventory and requires a new explicit action; remove asks for plain-text
+confirmation and never selects a replacement. `oauth-account-flow.ts` binds a
+pasted browser callback to the exact state, or sends explicit device poll
+commands at the provider interval while that mount is active. If the account
+sign-in command reports an unavailable target or flow, Settings refreshes the
+roster and asks for a new sign-in attempt without exposing provider diagnostics.
+The exact flow
+GET can reconcile an ambiguous completion without retrying the write. A
+retired mount cannot paint or start a follow-on command. Treating the singleton
+or the desktop adapter inventory as the common roster was rejected. Verify
+with `test_settings_oauth_account_api_browser.py` (real v4 routes on loopback,
+synthetic upstream and vault) and `test_settings_oauth_accounts_browser.py`
+(isolated widget behavior). The device reconnect specification exercises expired
+and locally cancelled attempts with two synthetic accounts, including keyboard
+focus, stopped polling, a fresh same-account flow, and unchanged default/neighbor
+identity. Local cancellation closes observation; it does not revoke an issuer
+grant. The offline test does not open the provider verification page.
+The ordinary two-tab add-account specification also covers a default change
+before device completion (revision conflict, no account publication or automatic
+retry) and after server completion but before its response reaches the first
+tab (fresh roster preserves the newer default). An explicit fresh attempt can
+finish after conflict. Prepared normal requests retain their exact account and
+credential generation across default changes; the fixture checks their bearer
+and account headers with a fake transport, not a live model call.
+The single-tab default-switch specification in
+`test_settings_oauth_default_delayed_browser.py` seeds two connected local
+accounts without sign-in, delays an older roster response across Back/re-entry,
+and changes the default with the ordinary row buttons. The retired response
+cannot restore an older default or change either row's identity/status. Account
+commands and manual refresh are serialized within one mount; this inventory
+has no independently arriving per-account quota/health results. Rows explicitly
+show quota unavailable rather than borrowing the primary connection's quota.
+There is no per-run subscription-account picker or account-alias run display;
+default selection here is account management, not a new run-execution surface.
 
 ### Domestic subscription cards
 
@@ -2938,11 +3137,10 @@ scene whatever the stored choice (docs/PROJECT_COORDINATION.md, "Lead office"). 
 read on its task board, each task expanding to its own, and both views open a deliverable through the one opener in
 `features/lead-deliverables/open.ts` (docs/PROJECT_COORDINATION.md, "Lead deliverables").
 `01-workspace-dock.css` places the workspace in the shell grid: HUD across the top, the scene under all of
-the rest, and the application's own conversation column docked over the scene's right side by
-`body[data-conversation-dock]` (closed, brief or chat), which the world adapter owns; the camera keeps its
-scale and pans, so docking never re-fits the floor. Every other piece of classic chrome stays hidden. The docked chat
-keeps the theme's own reading surface. The shell suspends the column's transcript transport in the world
-unless the chat is docked, and a turn in the hidden column has no paint opportunity (no perception).
+the rest, and the person panel docked over the scene's right side by `body[data-conversation-dock]`
+(closed or brief), which the world adapter owns; the camera keeps its scale and pans, so docking never
+re-fits the floor. Every piece of classic chrome, the conversation column included, stays hidden: the
+office shows no transcript ("Office brief" below), and the shell suspends transcript transport in the world.
 - `model.ts` projects coordination reads into teams: the Global Router's zone, one zone per bound
   project with its lead at the head desk, the Watchdog at its station by the entrance. A Worker has a
   desk only while an attempt runs (team page `busy`, the task registry's running set) or its newest
@@ -3016,15 +3214,64 @@ unless the chat is docked, and a turn in the hidden column has no paint opportun
 - `art.ts` decodes the atlas, sheets and sprites once per theme; a theme change keeps the previous art
   until the new atlas, sprites and the sheets of everyone on the floor have decoded, then reskins floor,
   furniture and people in the same frame. `.w-office[data-art="ready"]` marks decoded art.
-- `brief.ts` / `panel.ts`: clicking a person or a document opens their panel, which leads with what they
-  did (a Worker's delivered result or current task, a lead's latest report), the evidence (acceptance
-  checks with the lead's verdicts, review, delivered checkpoint; the lead's board) and the decisions waiting
-  on the owner. "Chat" (or "Show in the conversation") opens that person's conversation in the docked
-  classic ConversationSurface and composer, aligned to the Turn the item came from: the same component and
-  authority as the classic UI. The brief itself writes nothing (no read marks); answering a question is
-  the owner's own existing answer command, below.
+- `brief.ts` / `panel.ts` / `journal.ts`: clicking a person or a document opens their brief ("Office
+  brief" below): status, open owner items, where things stand, a progress timeline and files, never the
+  transcript. The brief itself writes nothing (no read marks); answering a question is the owner's own
+  existing answer command, below.
 - Owner questions (owner complaint 2026-11-16, decision below): a lead with open `ask_human` questions
-  leads its panel with one compact question card; the rest of the brief folds behind "Progress".
+  leads its brief with one compact question card showing the whole question; the rest follows unfolded. A
+  non-blocking card adds "按默认确认": one click settles it on its stated default through
+  `POST /api/v4/router/questions/confirm-default` (shell port `confirmDefault`), nothing reaches the lead,
+  and the card reads "已按默认确认" ([ROUTER.md R10](ROUTER.md)). A person's "需要关注" comes only from an
+  owner item (an overdue commitment or a lead's unread blocked report); open Watchdog signals (`alarm`
+  facts) are the Watchdog's own queue and flag nobody. A question card's recorded response or
+  supersession also closes its office decision, even when a tail snapshot has no later human Turn;
+  ordinary progress reports remain reports, not unresolved owner actions.
+
+### Office brief: progress and files, not the transcript (2026-11-18)
+
+**Problem:** the owner found the office panel "still very ugly" (11-18), and opening a person showed the
+classic transcript: a scrolling list of tool calls, worst for leads, in which he could not find the progress
+and files he wanted. He proposed that the office render only progress and files, and the classic view
+everything.
+
+**Decision:** one calm column (design direction "Journal", picked from three rendered on live data:
+output/office-brief-redesign/design/). In order:
+- the header: portrait, name (two lines at most, the whole name in its tooltip), a status chip read from the
+  office projection's facts only (open owner question, exception, running attempt, assigned, idle; it clears
+  the moment a question is answered or confirmed from the card), "Full conversation" (a glyph alone in a
+  narrow column) and close;
+- the decisions waiting on the owner: the question card (whole question, choices, own answer, default) and
+  overdue commitments;
+- now: a lead's board in its displayed language (summary, done/total, the open tasks folded under one
+  disclosure so the timeline stays in view); a Worker's assignment steps (assigned, ran, reported, reviewed,
+  merged, with the review, checks met and checkpoint), its task, the first paragraph of its result (the rest
+  on request) and its acceptance checks with the lead's verdicts;
+- progress: `report_to_user` reports and completed board tasks (each titled by its task, its final note
+  below) and merged results, newest first under local-day headings; each entry opens itself through the
+  shared deliverable opener (report card dialog), each attached file is a chip; older pages on request;
+- files: every file the person delivered (report attachments and published files) with its type glyph,
+  day, time and size, opening in the file viewer, with a download link (`/api/artifacts/<id>/download`);
+- the way to the classic view, the only place tool calls are shown.
+
+The timeline and files are one projection of existing owners: `journal.ts` reads the person's first page
+of `GET /api/v4/project/coordination/deliverables` (docs/PROJECT_COORDINATION.md "Lead deliverables", which
+already joins report Turns, their files and tasks, task history and artifact rows) when the brief opens,
+re-reads it on the project channel's `lead_deliverable` hint, and `brief.ts` projects it with the board,
+questions and assignment rows the office already holds. Nothing is parsed from a transcript in the browser.
+The brief paints at once from the office's own reads (board, latest report as the timeline's first entry,
+questions) while the page loads behind a skeleton: first render 21-77 ms after the click in the preview over
+live data (tofu lead, 64 timeline items); the timeline then waits on the deliverables read (8.3 s on the tofu
+lead on 2026-11-18, being made cheap server-side with the same shape). "Full conversation", "answer in the
+conversation" and a merged result's Turn leave the office for the classic view at that place
+(`WorldShell.openConversation` / `openQuestion`; the office stays the landing view). The brief follows the
+application theme through the `--office-*` tokens (walnut paper in dark, warm paper in light/tofu).
+
+**Alternatives rejected:** keeping the docked classic transcript under a Brief/Chat toggle (the noise the
+owner named); filtering tool rounds out of the transcript in the browser (parses transcripts, a second
+projection of Turns); tabs for progress, tasks and files ("Tabs" direction: the owner could not find his
+files, so nothing hides behind a tab); KPI tiles with a one-line feed ("Digest" direction: more chrome, the
+summaries lost); a composer in the office (a second chat surface; the classic view is one click away).
 
 ### Office art direction (2026-11-17)
 
@@ -3194,6 +3441,7 @@ the entrance while nobody else moved, and the art had decoded at 0.8 s (6.9 s be
 - One room per Worker (Tofu Tower, GAME-UI-1): the owner asked for a shared floor where people sit together.
 - A second chat or form inside the scene: it would compete with the classic surface and its authority. (The
   question card mounts the classic answer control with its existing authority; it is not a second form.)
+  The brief's composer was removed with the docked transcript (2026-11-18, "Office brief" above).
 - Animating tool calls or attempt churn: it is noise, not progress; only presence changes and reports move.
 - PixiJS/three.js: a second engine beside the office game stage.
 
@@ -3206,7 +3454,8 @@ use recorded live shapes (`testing/recorded.ts`); `attention.test.ts`, `world-do
 the scene through attempt churn, new pods, settling, sticky spots and carried reports `scene.test.ts`, the
 grade, room furniture and lights `diorama.test.ts`, the delivery's celebration `actors.test.ts`, the
 stage's spatial focus and view-fit camera `office-game/testing/engine.test.cjs`; the question
-card, answer binding, marker clearing, paging and per-lead questions `question-card.test.ts`;
+card, answer binding, marker and status clearing, paging and per-lead questions `question-card.test.ts`; the office
+brief's timeline, files, hint re-read, Worker steps and classic hand-off `office-brief.test.ts`;
 `conversation/application/question-focus.test.ts`, the question target in `conversation-viewport.test.ts`, the
 real-browser reveal, highlight and reply chip `tests/visual/test_visual_answer_in_conversation.py`; the cold office
 read and loading state through the real transport (`live-office-read.test.ts`, `app.test.ts`); the shell,
@@ -3223,3 +3472,37 @@ for a frontend-only candidate build.
   between attempts never applies, so attempt churn shows as Workers walking out and back.
 - The attention route; reading a report in the brief does not mark it read (read-only until the owner asks
   for an operational layer).
+
+## Devices browser access navigation
+
+Problem: the browser drawer displayed extension capabilities under permission wording
+and directed site grants to the extension instead of their canonical Settings owner.
+Decision: the drawer labels advertised capability as not permission and opens the
+existing `jumpToSetting('search')` route through the awaited feature invocation
+bridge, revealing its existing `browserAccessList` disclosure. No UI navigation key
+is added. The connection summary and grant list remain unfiltered under
+`features/settings/browser-access.ts`; they do not represent a selected grant.
+A transient notice names the drawer's exact browser client/profile and explicitly
+states that exact-browser focus is unavailable. This context is not stored or sent
+as an API selector. Re-entry preserves an already-open Settings editor.
+
+The drawer resolves only the exact client in the current owner-scoped Devices read
+model, rejects missing/duplicate IDs, profile changes, stale browser reads and a
+disconnected Home, and never falls back to the freshest browser. Navigation closes
+the native drawer before opening Settings and performs no grant, device-default,
+registration, relay or other command. Device and browser backend policy is unchanged.
+The mounted overlay entry relinquishes opener-focus restoration when handing off to
+Settings: a list-opened drawer's asynchronous parent history traversal can settle
+after Settings focuses its disclosure. Ordinary dismissal still restores the exact
+opener, and each new overlay starts with that restoration enabled. This is entry
+ownership, not a delayed refocus or a Settings-specific change to the fleet renderer.
+`features/devices/mounted-navigation.test.ts` exercises both history/navigation
+completion orders through the mounted adapter with controlled history delivery.
+
+Alternatives rejected: inventing a browser-access UI key or client/profile filter
+would add an unsupported Settings contract; choosing the freshest client would
+mislabel another browser as the selected one. The existing translated browser-body
+key is corrected in all seven locales offline; no translation service is used.
+Executable specifications live in `features/devices/views.test.ts` (synthetic peers
+and desktop/narrow viewport parameters) and the Devices store/navigation suites.
+These DOM tests do not establish real-browser layout or actual-device behavior.

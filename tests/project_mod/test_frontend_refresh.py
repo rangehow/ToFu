@@ -17,7 +17,6 @@ from lib.project_mod import frontend_refresh
 pytestmark = pytest.mark.unit
 
 REPO = Path(__file__).resolve().parents[2]
-_AUDIT_SYNTHETIC_REPO_PATHS = {'lib/x.py'}
 
 
 def test_only_vite_authoring_inputs_select_a_refresh():

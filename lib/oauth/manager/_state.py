@@ -10,6 +10,7 @@ these at import sites.
 """
 
 import threading
+from contextlib import contextmanager
 from http.server import HTTPServer
 from typing import Any
 
@@ -22,6 +23,22 @@ logger = get_logger(__name__)
 # provider → {flow_id, owner_user_id, state, pkce, status, ...}
 _active_flows: dict[str, dict] = {}
 _flows_lock = threading.Lock()
+
+
+def guard_flow_write(provider: str, flow_id: str, owner_user_id: int):
+    """Serialize the final credential write with flow replacement/cancellation."""
+    @contextmanager
+    def guard(write_provider: str):
+        with _flows_lock:
+            flow = _active_flows.get(provider) or {}
+            cancel = flow.get('cancel_event')
+            yield bool(
+                write_provider == provider and flow_id
+                and flow.get('flow_id') == flow_id
+                and flow.get('owner_user_id') == owner_user_id
+                and (cancel is None or not cancel.is_set())
+            )
+    return guard
 
 
 def _flow_is_current(provider: str, flow_id: str) -> bool:

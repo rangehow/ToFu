@@ -105,10 +105,23 @@ read-only JSON with `node scripts/frontend_api_inventory.mjs`.
 
 `GET /api/openapi.json` describes the actual mount: release-envelope projection,
 canonical bootstrap DTOs, native generated schemas and WebSocket upgrades.
-Construction failures return a typed error rather than an empty catalog. `contracts/api_endpoint_index_v1.json` includes every first-party
-registered HTTP/WebSocket operation, its source owner and declared metadata;
-unknown authorization metadata remains unknown. Regenerate with
-`python3 scripts/gen_api_endpoint_index.py`; `--check` rejects drift.
+Construction failures return a typed error rather than an empty catalog.
+
+`contracts/api_v1.yaml` (OpenAPI 3.1) is the machine-readable authority for the
+whole first-party HTTP/WebSocket surface: every published operation exactly as
+`GET /api/openapi.json` serves it, plus an `x-tofu-route` record (framework
+rule, transport, owner module, handler, scope/public/required-scope metadata),
+and `x-tofu-unpublished-routes` for registered routes outside the published
+document (static assets, documentation UI, the spec itself). Its `/v1` is the
+contract-document version, not the API major. Change it first, then the route:
+`python3 scripts/gen_api_v1_contract.py` fails, printing the fragment
+the code implies, when a route, method, record or operation exists on one side
+only. `make contracts` (`tofu-xtask contracts`, `packages/tofu-xtask`) derives `contracts/api_endpoint_index_v1.json` (every registered
+operation, its source owner and declared metadata; unknown authorization
+metadata remains unknown) and the Rust types in
+`packages/tofu-contracts/src/generated_api_v1.rs`.
+`python3 scripts/gen_api_endpoint_index.py --check` checks that projection
+against route assembly.
 
 **No layer may be bypassed.** A raw `fetch('/api/...')` outside the typed
 transport, a hand-rolled `request.get_json()` dig, or a bare `return jsonify({...})` in a
@@ -671,7 +684,7 @@ success envelopes in lockstep with the contract. Regenerate with
 | Endpoint | Contract |
 |---|---|
 | `GET /api/v4/model-routing` | Returns `{ok, revision, model_routing}`; the document is safe for inspection and contains no credential plaintext. |
-| `PUT /api/v4/model-routing` | Accepts `{expected_revision, model_routing}` and atomically replaces the aggregate. A stale revision is `409 model_routing_revision_conflict`. |
+| `PUT /api/v4/model-routing` | Accepts `{expected_revision, model_routing}` to replace the aggregate, or `{expected_revision, codex_registration_enabled}` to explicitly enable automatic registration for the active Codex account or disable it for this owner's accounts. The two operations cannot be combined. Enabling records an authenticated catalog baseline without granting existing models. Disabling stops future automatic acquisition without removing grants already issued. A stale revision is `409 model_routing_revision_conflict`. |
 | `GET/POST /api/v4/providers` | Lists or creates ProviderAccess bundles inside the same aggregate. |
 | `GET /api/v4/providers/templates` | Lists secret-free onboarding recipes as `{ok, items}`. Recipes are setup hints, not routing authority. |
 | `POST /api/v4/providers/templates/compile` | Accepts `{template_key, selected_model_ids?}` and returns a secret-free v2 ProviderAccess bundle for client-side review/staging; it does not persist. |
@@ -681,6 +694,8 @@ success envelopes in lockstep with the contract. Regenerate with
 | `PUT /api/v4/model-routing/credentials/{credential_id}/secret` | Replaces one encrypted credential secret outside the aggregate and advances its revision. |
 | `POST /api/v4/model-routing/migration/plan` | Produces a redacted, non-writing import plan and entity counts. |
 | `POST /api/v4/model-routing/migration/commit` | Re-plans, validates, stores encrypted secrets, and commits once; failure keeps the old authority inactive and stores a recovery receipt. |
+
+Full-document and provider-bundle edits may omit account-bound Codex grants to preserve them, or submit a subset to revoke automatic access to specific wires for that credential across accounts. They cannot create or widen account-bound grants.
 
 A full-document or Provider bundle write rejects `providers[].models`,
 `aliases`, `request_ids`, configured `routes`, plaintext credentials,
@@ -1363,6 +1378,20 @@ origin conversation; download reads decode the same snapshot, never its source p
 No dependency fetching, directory hosting, storage migration or second lifecycle
 is introduced. Preview/code-consent presentation follows [the render contract](../RENDER_CONTRACT.md#native-rich-responses-and-published-assets).
 
+### 2.22 Full-document paper PDF translation
+
+`GET /api/v4/paper/translate/pdf/status` reports whether a translation
+transport exists (`{configured, reason}`). `POST
+/api/v4/paper/translate/pdf` accepts `{paper_id, paper_hash?, target_language}`
+and submits the authenticated owner's stored PDF to
+`lib.paper.builds.pdf_translation.translate_pdf`. Success is raw
+`application/pdf` (not a JSON envelope) with page/translated/refused/gate
+headers; 409 means no transport is configured, 422 means unusable source or a
+failed translation-mode gate, and 404 means no owner-scoped stored PDF. The
+browser entry never acts on an unconfigured transport. Contract and transport
+binding: [PDF translation render](../PDF_TRANSLATION_RENDER.md#http-entry-point),
+`lib/paper/builds/pdf_translation_transport.py`.
+
 ## 3. Request parsing
 
 * JSON body → `parse_body()` (sync handlers) / `await async_parse_body()`
@@ -1547,7 +1576,10 @@ reporting whether that incarnation confirmed the read (see
    family; raise `BadRequest` for validation. No bare `jsonify`, no
    hand-rolled 500.
 4. Arrays wrapped: `api_ok({'items': …})`, never a bare top-level array.
-5. `@api_meta(...)` so `GET /api/openapi.json` stays truthful.
+5. `@api_meta(...)` so `GET /api/openapi.json` stays truthful, and the same
+   operation (with its `x-tofu-route` record) in `contracts/api_v1.yaml`;
+   `python3 scripts/gen_api_v1_contract.py` prints the exact fragment
+   the route implies, then `make contracts` rederives the index and Rust types.
 6. Streaming → `sse_response(gen, …)`; binary → document the carve-out (§4).
 
 **Frontend**
@@ -1625,6 +1657,16 @@ the router is unbound) and revokes for any authenticated owner request
 The same human-UI rule now applies to `POST
 /api/v4/update/lifecycle-approvals/{id}/decide`: an API key, script or agent
 gets 403 and the request stays pending.
+
+`POST /api/v4/router/questions/confirm-default` (`Idempotency-Key` required,
+body `ownerQuestionConfirmRequest` `{coordinatorId, guidanceId}`) settles one
+of the owner's open non-blocking owner questions on its stated default and
+returns `ownerQuestionConfirmation` `{coordinatorId, guidanceId,
+defaultAcceptedAt, defaultAcceptedBy, card}`; a repeat returns the first
+confirmation. Nothing is sent to the lead ([ROUTER.md R10, "The owner confirms
+a default"](../ROUTER.md#r10-proactive-coordination-owner-request-2026-11-08)).
+A blocking, answered, withdrawn or unknown question answers 409
+`owner_question_not_confirmable`.
 
 `GET /api/v4/router/office` reads the owner's office facts (`officeFacts`,
 [PROJECT_COORDINATION.md "Office team facts"](../PROJECT_COORDINATION.md#office-team-facts-2026-11-13)):

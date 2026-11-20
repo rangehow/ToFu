@@ -40,6 +40,10 @@ logger = get_logger(__name__)
 # We use a late import inside add_specs to break any potential circularity.
 
 
+class SwarmExecutorHandoffError(RuntimeError):
+    """At least one accepted reservation was refused by the executor."""
+
+
 class StreamingScheduler:
     """Dependency-aware streaming agent scheduler.
 
@@ -130,6 +134,9 @@ class StreamingScheduler:
 
         # Internal state — guarded by _lock
         self._lock = threading.Lock()
+        self._wave_lock = threading.Lock()
+        self._closing = False  # guarded by _wave_lock
+        self._worker_start = {}  # spec object identity -> live wave admission callback
         # Not-yet-launched entries keyed by admission sequence (insertion
         # order). Readiness is indexed, not rescanned: each entry counts its
         # distinct prerequisites absent from ``_completed`` and is listed under
@@ -143,8 +150,10 @@ class StreamingScheduler:
         # In-flight submissions include worker handoffs; lifecycle drain and
         # dependency settlement need all of them, not only admitted execution.
         self._running: dict[str, SubTaskSpec] = {}
-        # Notified when ``_running`` becomes empty so shutdown waits on
-        # settlement instead of polling the count.
+        self._recovery_submissions: set[int] = set()
+        self._recovery_submission_refused = False
+        # Wake completion consumers on a result or handoff refusal, and wake
+        # shutdown to recheck whether all entered workers have drained.
         self._running_drained = threading.Condition(self._lock)
         #: id → WALL-CLOCK execution admission (``time.time()``, epoch seconds).
         #: Deliberately NOT ``monotonic()``: this value is surfaced to the
@@ -162,7 +171,8 @@ class StreamingScheduler:
     # ── Public API ───────────────────────────────────
 
     def add_specs(self, specs: list[SubTaskSpec],
-                  inject_deps: bool = True) -> list[SubTaskSpec]:
+                  inject_deps: bool = True, *, before_enqueue=None,
+                  preserve_on_submit_refusal=False) -> list[SubTaskSpec]:
         """Add specs and immediately launch any whose deps are satisfied.
 
         Performs lightweight cycle detection among the new specs +
@@ -191,6 +201,12 @@ class StreamingScheduler:
             logger.error('[Scheduler] Cycle detected when adding specs: %s', e, exc_info=True)
             raise AgentDependencyCycleError(f'Cannot add specs: {e}') from e
 
+        with self._wave_lock:
+            if self._closing:
+                raise AbortedError('Swarm scheduler has closed wave admission')
+            return self._accept_specs(specs, before_enqueue, preserve_on_submit_refusal)
+
+    def _accept_specs(self, specs, before_enqueue, preserve_on_submit_refusal):
         with self._lock:
             # ── Snapshot existing objectives for dedup ──
             seen_objectives: set[str] = set()
@@ -211,7 +227,7 @@ class StreamingScheduler:
                 # A retained assignment is a new turn with prior dialogue,
                 # not redundant one-off work merely because its text repeats.
                 # Its server-minted run identity remains strictly unique.
-                if s.retained_agent_id and s.id in existing_ids:
+                if (before_enqueue is not None or s.retained_agent_id) and s.id in existing_ids:
                     continue
                 if not s.retained_agent_id and obj_norm in seen_objectives and s.id not in existing_ids:
                     logger.debug(
@@ -246,12 +262,28 @@ class StreamingScheduler:
                             '[Scheduler] Spec %s depends on unknown %s, '
                             'ignoring dep', s.id, dep_id)
 
+        # Stop and completion can still take the state lock while persistence
+        # waits. The wave lock excludes idle-close until actual handoff.
+        worker_start = before_enqueue(specs) if before_enqueue is not None else None
+        with self._lock:
+            if before_enqueue is not None and self._abort_check():
+                raise AbortedError('Swarm stopped before enqueue')
             for spec in specs:
+                if preserve_on_submit_refusal:
+                    self._recovery_submissions.add(id(spec))
+                if worker_start is not None:
+                    self._worker_start[id(spec)] = worker_start
                 self._enqueue_locked(spec)
             logger.debug('[Scheduler] After add: pending=%d running=%d completed=%d',
                          len(self._pending), len(self._running), len(self._completed))
             ready = self._reserve_ready_locked()
-        self._submit_ready(ready)
+        refused = (self._submit_ready(ready, preserve_on_refusal=True) if preserve_on_submit_refusal
+                   else self._submit_ready(ready))
+        if ((refused and worker_start is not None)
+                or (preserve_on_submit_refusal and (refused or self._recovery_submission_refused))):
+            # The roster is committed and peers may already be executing. Do
+            # not claim success and do not replay the wave on partial handoff.
+            raise SwarmExecutorHandoffError('Swarm executor refused an accepted handoff')
         return list(specs)
 
     def run_until_idle(self, timeout: float | None = None) -> list[tuple[SubTaskSpec, SubAgentResult]]:
@@ -415,6 +447,7 @@ class StreamingScheduler:
                     logger.debug('[Scheduler] iter_completions: drained %d results before idle check', len(drained))
                 idle = (len(self._pending) == 0
                         and len(self._running) == 0)
+                refused = self._recovery_submission_refused
 
             # Yield outside the lock so callers can call add_specs()
             for item in drained:
@@ -423,10 +456,19 @@ class StreamingScheduler:
                              spec_d.id, result_d.status, len(result_d.final_answer or ''))
                 yield item
 
+            if refused:
+                raise SwarmExecutorHandoffError('Swarm executor refused an accepted handoff')
             if idle and not drained:
-                # Truly idle and no stragglers — done.
-                logger.info('[Scheduler] iter_completions: idle, no more results — stopping')
-                return
+                # Roster commit can be in flight even while no spec is yet
+                # queued. Confirm idle and close admission in one wave epoch.
+                with self._wave_lock, self._lock:
+                    if self._recovery_submission_refused:
+                        continue
+                    if not self._pending and not self._running and self._results_queue.empty():
+                        self._closing = True
+                        logger.info('[Scheduler] iter_completions: idle, no more results — stopping')
+                        return
+                continue
             if idle and drained:
                 # Got items but now idle — loop once more to confirm
                 # nothing new arrived (e.g. from ready reservation
@@ -457,12 +499,12 @@ class StreamingScheduler:
             else:
                 wait_for = poll_interval
 
-            try:
-                item = self._results_queue.get(timeout=wait_for)
-                yield item
-            except queue.Empty:
-                if self._abort_check():
-                    return
+            with self._running_drained:
+                changed = self._running_drained.wait_for(
+                    lambda: self._recovery_submission_refused or not self._results_queue.empty(),
+                    timeout=wait_for)
+            if not changed and self._abort_check():
+                return
 
     def cancel_pending_spec(self, spec_id: str) -> bool:
         """Settle ONE queued spec as cancelled; False when it is not queued.
@@ -489,11 +531,18 @@ class StreamingScheduler:
         """
         with self._lock:
             cancelled = list(self._pending.values())
+            for spec in cancelled:
+                self._worker_start.pop(id(spec), None)
+                self._recovery_submissions.discard(id(spec))
             self._pending.clear()
             self._unmet.clear()
             self._waiters.clear()
             self._ready.clear()
             return cancelled
+
+    def wait_for_worker_quiescence(self, timeout=None):
+        with self._running_drained:
+            return self._running_drained.wait_for(lambda: not self._running, timeout=timeout)
 
     def shutdown(self, wait: bool = True, timeout: float = 30.0, *, require_quiescence: bool = False):
         """Shut the pool down, by default WAITING for in-flight agents.
@@ -515,13 +564,13 @@ class StreamingScheduler:
         then released regardless, matching the old non-blocking behaviour only
         in that genuinely-stuck corner.
         """
+        with self._wave_lock:
+            self._closing = True
         if not wait:
             self._pool.shutdown(wait=False)
             return
-        with self._running_drained:
-            self._running_drained.wait_for(
-                lambda: not self._running, timeout=max(0.0, timeout))
-            still = len(self._running)
+        self.wait_for_worker_quiescence(timeout=max(0.0, timeout))
+        still = self.running_count
         if still:
             logger.warning('[Scheduler] shutdown: %d agent(s) still running '
                            'after %.0fs — releasing pool anyway', still, timeout)
@@ -591,8 +640,8 @@ class StreamingScheduler:
 
         Caller holds _lock.
         """
-        if self._abort_check():
-            logger.debug('[Scheduler] ready reservation skipped — abort flag set')
+        if self._abort_check() or self._recovery_submission_refused:
+            logger.debug('[Scheduler] ready reservation skipped — admission stopped')
             return []
 
         launched = []
@@ -610,7 +659,7 @@ class StreamingScheduler:
 
         return launched
 
-    def _submit_ready(self, ready):
+    def _submit_ready(self, ready, *, preserve_on_refusal=False):
         """Start reserved work without holding the scheduler state lock.
 
         Demand submission includes physical thread startup. Reservations remain
@@ -619,20 +668,63 @@ class StreamingScheduler:
         the same callback/queue path, without retrying or inventing side effects.
         """
         pending = deque(ready)
+        refused = False
         while pending:
             spec = pending.popleft()
+            with self._lock:
+                if self._recovery_submission_refused:
+                    self._drop_unsubmitted_locked((spec, *pending))
+                    return True
             try:
                 self._pool.submit(self._run_one, spec)
             except Exception as exc:
+                refused = True
+                if preserve_on_refusal or id(spec) in self._recovery_submissions:
+                    # Recovery has not made these reservations durable. Do not
+                    # settle or release dependent work for an unentered child.
+                    with self._lock:
+                        self._recovery_submission_refused = True
+                        self._drop_unsubmitted_locked((spec, *pending))
+                    break
                 result = SubAgentResult(
                     status=SubAgentStatus.FAILED.value,
                     error_message=f'{type(exc).__name__}: {exc}',
                 )
                 pending.extend(self._record_completion(spec, result))
+        return refused
+
+    def _drop_unsubmitted_locked(self, specs):
+        for spec in specs:
+            self._running.pop(spec.id, None)
+            self._worker_start.pop(id(spec), None)
+            self._recovery_submissions.discard(id(spec))
+        self._running_drained.notify_all()
+
+    def _discard_refused_preparation(self, spec, *, settling=False):
+        with self._lock:
+            if id(spec) not in self._recovery_submissions:
+                return False
+            if not self._recovery_submission_refused:
+                if settling:
+                    # Claim a real preparation outcome before publishing it.
+                    # A later refusal cannot retroactively revoke this decision.
+                    self._recovery_submissions.discard(id(spec))
+                return False
+            self._drop_unsubmitted_locked((spec,))
+        self._beacon.forget(spec.id)
+        return True
+
+    def _claim_recovery_entry(self, spec):
+        with self._lock:
+            if id(spec) in self._recovery_submissions:
+                if self._recovery_submission_refused:
+                    raise SwarmExecutorHandoffError('Swarm refusal won before worker admission')
+                self._recovery_submissions.discard(id(spec))
 
     def _mark_admitted(self, spec: SubTaskSpec) -> None:
         """Publish physical execution only after cancellation and dependency checks allow it."""
 
+        self._claim_recovery_entry(spec)
         if self._before_admission is not None:
             self._before_admission()
         with self._lock:
@@ -650,9 +742,15 @@ class StreamingScheduler:
         # before the worker receives permission to issue its first request/tool.
         if self._before_admission is not None:
             self._before_admission()
+        with self._lock:
+            worker_start = self._worker_start.get(id(spec))
+        if worker_start is not None:
+            worker_start()
 
     def _run_one(self, spec: SubTaskSpec):
         """Execute one agent with auto-retry.  Runs in pool thread."""
+        if self._discard_refused_preparation(spec):
+            return
         retry_ceiling = swarm_max_retries()
         if spec.max_retries is None:
             requested_retries = self._default_retries
@@ -761,6 +859,8 @@ class StreamingScheduler:
                     result.retry_count = attempt
 
             except Exception as exc:
+                if self._discard_refused_preparation(spec):
+                    return
                 err_msg = f'{type(exc).__name__}: {exc}'
                 if isinstance(exc, AbortedError):
                     # Cancellation is terminal and must NOT be retried: the
@@ -815,6 +915,8 @@ class StreamingScheduler:
 
     def _record_completion(self, spec, result):
         """Publish callback before atomic result/idle visibility; reserve dependents."""
+        if self._discard_refused_preparation(spec, settling=True):
+            return []
         if self._on_complete:
             try:
                 self._on_complete(spec, result)
@@ -835,11 +937,12 @@ class StreamingScheduler:
             # elapsed, so the live start clock is no longer needed (and must
             # not accumulate across a long-lived swarm).
             self._started_at.pop(spec.id, None)
+            self._worker_start.pop(id(spec), None)
+            self._recovery_submissions.discard(id(spec))
             # Same for the liveness record: a settled agent must not keep the
             # swarm-wide "still producing" verdict alive for its siblings.
             self._beacon.forget(spec.id)
-            if not self._running:
-                self._running_drained.notify_all()
+            self._running_drained.notify_all()
             logger.debug('[Scheduler] Queue state after agent=%s: pending=%d running=%d completed=%d',
                          spec.id, len(self._pending),
                          len(self._running), len(self._completed))

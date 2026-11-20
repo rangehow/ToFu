@@ -53,11 +53,16 @@ def create_service(*, client_factory=_storage, registry=None, max_workers=None,
 def ensure_workers_started(app, *, environ=None):
     key = runtime_policy()['extensionKey']
     with _composition_lock:
+        shutdown = app.extensions.get('tofu_shutdown_requested')
+        if shutdown is not None and shutdown.is_set():
+            raise RuntimeError('Cannot start durable workers during shutdown')
         service = app.extensions.get(key)
         if service is None or service.snapshot()['state'] in {'stopped', 'failed'}:
             service = create_service(environ=environ, application=app)
             app.extensions[key] = service
-        return service.start()
+    # Stop must be able to interrupt enrollment while boot awaits its ACK.
+    # If stop wins before start enters, the service is already stopped.
+    return service.start()
 
 
 def stop_workers(app):

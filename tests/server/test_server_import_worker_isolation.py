@@ -8,7 +8,7 @@ import inspect
 
 import pytest
 
-from tests.support.overlay import requires_private_overlay
+from tests.support.overlay import requires_yourprovider_overlay
 
 from tests.support.dx_overlay import requires_dx
 
@@ -239,7 +239,7 @@ def test_background_service_start_is_per_app_idempotent(monkeypatch):
     monkeypatch.setattr(oauth_outbound, 'reconcile_oauth_providers',
                         lambda: calls.append('oauth-reconcile'))
     monkeypatch.setattr(codex_catalog, 'start_codex_catalog_refresher',
-                        lambda: calls.append('codex-catalog') or True)
+                        lambda **_: calls.append('codex-catalog') or True)
     monkeypatch.setattr(plugin_registry, 'run_startup_hooks',
                         lambda app: calls.append('plugin') or 1)
 
@@ -250,12 +250,12 @@ def test_background_service_start_is_per_app_idempotent(monkeypatch):
     assert background_services.start_registered_background_services(app) == 4
     assert background_services.start_registered_background_services(app) == 0
     assert calls == [
-        'scheduler', 'database-panel-maintenance', 'oauth-reconcile',
+        'scheduler', 'database-panel-maintenance',
         'codex-catalog', 'plugin',
     ]
 
 
-@requires_private_overlay
+@requires_yourprovider_overlay
 def test_background_service_shutdown_is_paired_and_idempotent(monkeypatch):
     import lib.channels.bots.supervisor as bot_supervisor
     import tofu_yourprovider.dx.supervisor as channel_supervisor

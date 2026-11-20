@@ -1,0 +1,7123 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="FastAPI framework, high performance, easy to learn, fast to code, ready for production">
+      
+      
+      
+        <link rel="canonical" href="https://fastapi.tiangolo.com/tutorial/first-steps/">
+      
+      
+        <link rel="prev" href="../">
+      
+      
+        <link rel="next" href="../path-params/">
+      
+      
+        
+          <link rel="alternate" href="/" hreflang="en">
+        
+          <link rel="alternate" href="/de/" hreflang="en">
+        
+          <link rel="alternate" href="/es/" hreflang="en">
+        
+          <link rel="alternate" href="/fr/" hreflang="en">
+        
+          <link rel="alternate" href="/hi/" hreflang="en">
+        
+          <link rel="alternate" href="/ja/" hreflang="en">
+        
+          <link rel="alternate" href="/ko/" hreflang="en">
+        
+          <link rel="alternate" href="/pt/" hreflang="en">
+        
+          <link rel="alternate" href="/ru/" hreflang="en">
+        
+          <link rel="alternate" href="/tr/" hreflang="en">
+        
+          <link rel="alternate" href="/uk/" hreflang="en">
+        
+          <link rel="alternate" href="/zh/" hreflang="en">
+        
+          <link rel="alternate" href="/zh-hant/" hreflang="en">
+        
+      
+      
+      <link rel="icon" href="../../img/favicon.png">
+      <meta name="generator" content="zensical-0.0.65">
+    
+    
+      
+        <title>First Steps - FastAPI</title>
+      
+    
+    
+      
+        
+      
+      <link rel="stylesheet" href="../../assets/stylesheets/modern/main.40d3fdbb.min.css">
+      
+        
+          
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/modern/palette.812a03bb.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,500,500i,700,700i%7CJetBrains+Mono:400,400i,700,700i&amp;display=fallback">
+        <style>/* stub */</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../css/termynal.css">
+    
+      <link rel="stylesheet" href="../../css/custom.css">
+    
+    <script>/* stub */</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer" aria-label="Navigation"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#first-steps" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+        <aside class="md-banner">
+          <div class="md-banner__inner md-grid md-typeset">
+            
+            
+<div class="announce-wrapper">
+  <div id="announce-left">
+    <div class="item">
+      <a class="announce-link" href="https://fastapicloud.com" target="_blank">
+        <span class="twemoji">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d=""/></svg>
+        </span> Deploy on <strong>FastAPI Cloud</strong> 🚀
+      </a>
+    </div>
+    <div class="item">
+      <a class="announce-link" href="https://x.com/fastapi" target="_blank">
+        <span class="twemoji">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path fill="currentColor" d=""/></svg>
+        </span> Follow <strong>@fastapi</strong> on <strong>X (Twitter)</strong> to stay updated
+      </a>
+    </div>
+    <div class="item">
+      <a class="announce-link" href="https://www.linkedin.com/company/fastapi" target="_blank">
+        <span class="twemoji linkedin">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path fill="currentColor" d=""/></svg>
+        </span> Follow <strong>FastAPI</strong> on <strong>LinkedIn</strong> to stay updated
+      </a>
+    </div>
+    <div class="item">
+      <a class="announce-link" href="https://fastapi.tiangolo.com/newsletter/">
+        <span class="twemoji">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d=""/></svg>
+        </span> Subscribe to the <strong>FastAPI and friends</strong> newsletter 🎉
+      </a>
+    </div>
+  </div>
+  <div id="announce-right" style="position: relative;">
+    <div class="item">
+  <a title="BlockBee Cryptocurrency Payment Gateway" style="display: block; position: relative;" href="https://blockbee.io?ref=fastapi" target="_blank">
+    <span class="sponsor-badge">sponsor</span>
+    <img class="sponsor-image" src="/img/sponsors/blockbee-banner.png" alt="BlockBee Cryptocurrency Payment Gateway" />
+  </a>
+</div>
+<div class="item">
+  <a title="Auth, user management and more for your B2B product" style="display: block; position: relative;" href="https://www.propelauth.com/?utm_source=fastapi&utm_campaign=1223&utm_medium=topbanner" target="_blank">
+    <span class="sponsor-badge">sponsor</span>
+    <img class="sponsor-image" src="/img/sponsors/propelauth-banner.png" alt="Auth, user management and more for your B2B product" />
+  </a>
+</div>
+<div class="item">
+  <a title="Cut Code Review Time & Bugs in Half with CodeRabbit" style="display: block; position: relative;" href="https://www.coderabbit.ai/?utm_source=fastapi&utm_medium=banner&utm_campaign=fastapi" target="_blank">
+    <span class="sponsor-badge">sponsor</span>
+    <img class="sponsor-image" src="/img/sponsors/coderabbit-banner.png" alt="Cut Code Review Time & Bugs in Half with CodeRabbit" />
+  </a>
+</div>
+<div class="item">
+  <a title="Making Retail Purchases Actionable for Brands and Developers" style="display: block; position: relative;" href="https://subtotal.com/?utm_source=fastapi&utm_medium=sponsorship&utm_campaign=open-source" target="_blank">
+    <span class="sponsor-badge">sponsor</span>
+    <img class="sponsor-image" src="/img/sponsors/subtotal-banner.svg" alt="Making Retail Purchases Actionable for Brands and Developers" />
+  </a>
+</div>
+<div class="item">
+  <a title="Deploy enterprise applications at startup speed" style="display: block; position: relative;" href="https://docs.railway.com/guides/fastapi?utm_medium=integration&utm_source=docs&utm_campaign=fastapi" target="_blank">
+    <span class="sponsor-badge">sponsor</span>
+    <img class="sponsor-image" src="/img/sponsors/railway-banner.png" alt="Deploy enterprise applications at startup speed" />
+  </a>
+</div>
+<div class="item">
+  <a title="SerpApi: Web Search API" style="display: block; position: relative;" href="https://serpapi.com/?utm_source=fastapi_website" target="_blank">
+    <span class="sponsor-badge">sponsor</span>
+    <img class="sponsor-image" src="/img/sponsors/serpapi-banner.png" alt="SerpApi: Web Search API" />
+  </a>
+</div>
+<div class="item">
+  <a title="Greptile: The AI Code Reviewer" style="display: block; position: relative;" href="https://www.greptile.com/?utm_source=fastapi&utm_medium=sponsorship&utm_campaign=fastapi_sponsor_page" target="_blank">
+    <span class="sponsor-badge">sponsor</span>
+    <img class="sponsor-image" src="/img/sponsors/greptile-banner.png" alt="Greptile: The AI Code Reviewer" />
+  </a>
+</div>
+<div class="item">
+  <a title="MicroAuth - Launch an API business in minutes: branded developer portals, rate limiting, and billing for your API" style="display: block; position: relative;" href="https://microauth.com/fastapi?utm_source=fastapi" target="_blank">
+    <span class="sponsor-badge">sponsor</span>
+    <img class="sponsor-image" src="/img/sponsors/microauth-banner.png" alt="MicroAuth - Launch an API business in minutes: branded developer portals, rate limiting, and billing for your API" />
+  </a>
+</div>
+  </div>
+</div>
+
+          </div>
+          
+        </aside>
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="FastAPI" class="md-header__button md-logo" aria-label="FastAPI" data-md-component="logo">
+      
+  <img src="../../img/favicon.png" alt="FastAPI">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer" aria-label="Navigation">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-menu" viewBox="0 0 24 24"><path d=""/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            FastAPI
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              First Steps
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d=""/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="amber"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_2" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d=""/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="amber"  aria-label="Switch to system preference"  type="radio" name="__palette" id="__palette_2">
+    
+      <label class="md-header__button md-icon" title="Switch to system preference" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d=""/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>/* stub */</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="Select language">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-languages" viewBox="0 0 24 24"><path d=""/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="/" hreflang="" class="md-select__link">
+              en - English
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="/de/" hreflang="" class="md-select__link">
+              de - Deutsch
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="/es/" hreflang="" class="md-select__link">
+              es - español
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="/fr/" hreflang="" class="md-select__link">
+              fr - français
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="/hi/" hreflang="" class="md-select__link">
+              hi - हिन्दी
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="/ja/" hreflang="" class="md-select__link">
+              ja - 日本語
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="/ko/" hreflang="" class="md-select__link">
+              ko - 한국어
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="/pt/" hreflang="" class="md-select__link">
+              pt - português
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="/ru/" hreflang="" class="md-select__link">
+              ru - русский язык
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="/tr/" hreflang="" class="md-select__link">
+              tr - Türkçe
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="/uk/" hreflang="" class="md-select__link">
+              uk - українська мова
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="/zh/" hreflang="" class="md-select__link">
+              zh - 简体中文
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="/zh-hant/" hreflang="" class="md-select__link">
+              zh-hant - 繁體中文
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search" aria-label="Search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-search" viewBox="0 0 24 24"><path d=""/><circle cx="11" cy="11" r="8"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog" aria-label="Search">
+  <button type="button" class="md-search__button">
+    Search
+  </button>
+</div>
+      
+    
+    <div class="md-header__source">
+      
+        <a href="https://github.com/fastapi/fastapi" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d=""/></svg>
+  </div>
+  <div class="md-source__repository">
+    fastapi/fastapi
+  </div>
+</a>
+      
+    </div>
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  FastAPI
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../features/" class="md-tabs__link">
+        
+  
+  Features
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../../learn/" class="md-tabs__link">
+          
+  
+  Learn
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../reference/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../resources/" class="md-tabs__link">
+          
+  
+  Resources
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../about/" class="md-tabs__link">
+          
+  
+  About
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../release-notes/" class="md-tabs__link">
+        
+  
+  Release Notes
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="FastAPI" class="md-nav__button md-logo" aria-label="FastAPI" data-md-component="logo">
+      
+  <img src="../../img/favicon.png" alt="FastAPI">
+
+    </a>
+    FastAPI
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/fastapi/fastapi" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d=""/></svg>
+  </div>
+  <div class="md-source__repository">
+    fastapi/fastapi
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  FastAPI
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../features/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Features
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../learn/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Learn
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+            <label class="md-nav__title" for="__nav_3">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../python-types/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Python Types Intro
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../async/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Concurrency and async / await
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_4" checked>
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Tutorial - User Guide
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_4" id="__nav_3_4_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        
+          <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_4_label" aria-expanded="true">
+            <label class="md-nav__title" for="__nav_3_4">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+              
+                
+                  
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  First Steps
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="././" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  First Steps
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+
+<nav class="md-nav md-nav--secondary" aria-label="On this page">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      On this page
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#check-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Check it
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#interactive-api-docs" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Interactive API docs
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#alternative-api-docs" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Alternative API docs
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#openapi" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        OpenAPI
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="OpenAPI">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        "Schema"
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#api-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        API "schema"
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#data-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Data "schema"
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#openapi-and-json-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        OpenAPI and JSON Schema
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#check-the-openapi-json" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Check the <code>openapi.json</code>
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-is-openapi-for" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        What is OpenAPI for
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configure-the-app-entrypoint-in-pyproject-toml" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Configure the app <code>entrypoint</code> in <code>pyproject.toml</code>
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fastapi-dev-with-path-or-with-entrypoint-cli-option" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>fastapi dev</code> with path or with <code>--entrypoint</code> CLI option
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deploy-your-app-optional" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Deploy your app (optional)
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recap-step-by-step" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Recap, step by step
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Recap, step by step">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-1-import-fastapi" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Step 1: import <code>FastAPI</code>
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-2-create-a-fastapi-instance" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Step 2: create a <code>FastAPI</code> "instance"
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-3-create-a-path-operation" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Step 3: create a <em>path operation</em>
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 3: create a path operation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#path" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Path
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#operation" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Operation
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#define-a-path-operation-decorator" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Define a <em>path operation decorator</em>
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-4-define-the-path-operation-function" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Step 4: define the <strong>path operation function</strong>
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-5-return-the-content" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Step 5: return the content
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-6-deploy-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Step 6: Deploy it
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 6: Deploy it">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#about-fastapi-cloud" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        About FastAPI Cloud
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deploy-to-other-cloud-providers" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Deploy to other cloud providers
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recap" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Recap
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../path-params/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Path Parameters
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../query-params/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Query Parameters
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../body/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Request Body
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../query-params-str-validations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Query Parameters and String Validations
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../path-params-numeric-validations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Path Parameters and Numeric Validations
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../query-param-models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Query Parameter Models
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../body-multiple-params/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Body - Multiple Parameters
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../body-fields/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Body - Fields
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../body-nested-models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Body - Nested Models
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../schema-extra-example/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Declare Request Example Data
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../extra-data-types/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Extra Data Types
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cookie-params/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Cookie Parameters
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../header-params/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Header Parameters
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cookie-param-models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Cookie Parameter Models
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../header-param-models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Header Parameter Models
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../response-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Response Model - Return Type
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../extra-models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Extra Models
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../response-status-code/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Response Status Code
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../request-forms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Form Data
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../request-form-models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Form Models
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../request-files/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Request Files
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../request-forms-and-files/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Request Forms and Files
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../handling-errors/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Handling Errors
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../path-operation-configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Path Operation Configuration
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../encoder/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  JSON Compatible Encoder
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../body-updates/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Body - Updates
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_4_29" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../dependencies/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Dependencies
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_4_29" id="__nav_3_4_29_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_4_29_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_3_4_29">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../dependencies/classes-as-dependencies/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Classes as Dependencies
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../dependencies/sub-dependencies/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Sub-dependencies
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../dependencies/dependencies-in-path-operation-decorators/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Dependencies in path operation decorators
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../dependencies/global-dependencies/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Global Dependencies
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../dependencies/dependencies-with-yield/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Dependencies with yield
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_4_30" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../security/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Security
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_4_30" id="__nav_3_4_30_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_4_30_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_3_4_30">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/first-steps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Security - First Steps
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/get-current-user/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Get Current User
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/simple-oauth2/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Simple OAuth2 with Password and Bearer
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/oauth2-jwt/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  OAuth2 with Password (and hashing), Bearer with JWT tokens
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../middleware/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Middleware
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cors/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  CORS (Cross-Origin Resource Sharing)
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sql-databases/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  SQL (Relational) Databases
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../bigger-applications/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Bigger Applications - Multiple Files
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../stream-json-lines/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Stream JSON Lines
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../server-sent-events/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Server-Sent Events (SSE)
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../background-tasks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Background Tasks
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../metadata/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Metadata and Docs URLs
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../frontend/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Frontend
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../static-files/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Static Files
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Testing
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../debugging/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Debugging
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_5" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../advanced/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Advanced User Guide
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_5" id="__nav_3_5_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        
+          <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_5_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_3_5">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/stream-data/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Stream Data
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/path-operation-advanced-configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Path Operation Advanced Configuration
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/additional-status-codes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Additional Status Codes
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/response-directly/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Return a Response Directly
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/custom-response/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Custom Response - HTML, Stream, File, others
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/additional-responses/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Additional Responses in OpenAPI
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/response-cookies/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Response Cookies
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/response-headers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Response Headers
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/response-change-status-code/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Response - Change Status Code
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/advanced-dependencies/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Advanced Dependencies
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_5_12" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../advanced/security/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Advanced Security
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_5_12" id="__nav_3_5_12_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_5_12_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_3_5_12">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/security/oauth2-scopes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  OAuth2 scopes
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/security/http-basic-auth/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  HTTP Basic Auth
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/using-request-directly/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Using the Request Directly
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/dataclasses/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Using Dataclasses
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/middleware/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Advanced Middleware
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/sub-applications/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Sub Applications - Mounts
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/behind-a-proxy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Behind a Proxy
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/templates/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Templates
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/websockets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  WebSockets
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/events/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Lifespan Events
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/opentelemetry/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  OpenTelemetry
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/testing-websockets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Testing WebSockets
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/testing-events/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Testing Events: lifespan and startup - shutdown
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/testing-dependencies/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Testing Dependencies with Overrides
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/async-tests/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Async Tests
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Settings and Environment Variables
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/openapi-callbacks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  OpenAPI Callbacks
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/openapi-webhooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  OpenAPI Webhooks
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/wsgi/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Including WSGI - Flask, Django, others
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/generate-clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Generating SDKs
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/advanced-python-types/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Advanced Python Types
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/json-base64-bytes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  JSON with Bytes as Base64
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced/strict-content-type/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Strict Content-Type Checking
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../fastapi-cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  FastAPI CLI
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../editor-support/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Editor Support
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ai-development/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Develop with AI
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_9" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../deployment/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Deployment
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_9" id="__nav_3_9_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        
+          <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_9_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_3_9">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/versions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  About FastAPI versions
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/fastapicloud/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  FastAPI Cloud
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/https/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  About HTTPS
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/manually/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Run a Server Manually
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/concepts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Deployments Concepts
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/cloud/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Deploy FastAPI on Cloud Providers
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/server-workers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Server Workers - Uvicorn with Workers
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment/docker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  FastAPI in Containers - Docker
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_10" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../how-to/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  How To - Recipes
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3_10" id="__nav_3_10_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        
+          <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_10_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_3_10">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/general/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  General - How To - Recipes
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/migrate-from-pydantic-v1-to-pydantic-v2/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Migrate from Pydantic v1 to Pydantic v2
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/graphql/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  GraphQL
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/custom-request-and-route/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Custom Request and APIRoute class
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/conditional-openapi/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Conditional OpenAPI
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/extending-openapi/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Extending OpenAPI
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/separate-openapi-schemas/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Separate OpenAPI Schemas for Input and Output or Not
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/custom-docs-ui-assets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Custom Docs UI Static Assets (Self-Hosting)
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/configure-swagger-ui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Configure Swagger UI
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/testing-database/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Testing a Database
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/authentication-error-status-code/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Use Old 403 Authentication Error Status Codes
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../reference/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Reference
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_4">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/fastapi/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  FastAPI class
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/parameters/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Request Parameters
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/status/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Status Codes
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/uploadfile/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  UploadFile class
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/exceptions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Exceptions - HTTPException and WebSocketException
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/dependencies/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Dependencies - Depends() and Security()
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/apirouter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  APIRouter class
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/background/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Background Tasks - BackgroundTasks
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/request/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Request class
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/websockets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  WebSockets
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/httpconnection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  HTTPConnection class
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/response/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Response class
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/responses/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Custom Response Classes - File, HTML, Redirect, Streaming, etc.
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/sse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Server-Sent Events - EventSourceResponse and ServerSentEvent
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/middleware/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Middleware
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_17" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../reference/openapi/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  OpenAPI
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4_17" id="__nav_4_17_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        
+          <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_17_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_4_17">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/openapi/docs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  OpenAPI docs
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/openapi/models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  OpenAPI models
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Security Tools
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/encoders/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Encoders - jsonable_encoder
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/staticfiles/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Static Files - StaticFiles
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/templating/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Templating - Jinja2Templates
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/testclient/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Test Client - TestClient
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../resources/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Resources
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../fastapi-people/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  FastAPI People
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../help-fastapi/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Help
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Contributing
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../translations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Translations
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../project-generation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Full Stack FastAPI Template
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../external-links/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  External Links
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../newsletter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  FastAPI and friends newsletter
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../about/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  About
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_6" id="__nav_6_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_6">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../alternatives/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Alternatives, Inspiration and Comparisons
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../history-design-future/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  History, Design and Future
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../benchmarks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Benchmarks
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../management/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Repository Management
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../release-notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Release Notes
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  
+                    
+                    
+                    
+                      
+                    
+                    
+                      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+                      <div class="md-sidebar-button__wrapper">
+                        <label class="md-sidebar-button" for="__toc"></label>
+                      </div>
+                    
+                  
+                  <div class="md-sidebar__inner">
+                    
+
+
+<nav class="md-nav md-nav--secondary" aria-label="On this page">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      On this page
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#check-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Check it
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#interactive-api-docs" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Interactive API docs
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#alternative-api-docs" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Alternative API docs
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#openapi" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        OpenAPI
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="OpenAPI">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        "Schema"
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#api-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        API "schema"
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#data-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Data "schema"
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#openapi-and-json-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        OpenAPI and JSON Schema
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#check-the-openapi-json" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Check the <code>openapi.json</code>
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-is-openapi-for" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        What is OpenAPI for
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configure-the-app-entrypoint-in-pyproject-toml" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Configure the app <code>entrypoint</code> in <code>pyproject.toml</code>
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fastapi-dev-with-path-or-with-entrypoint-cli-option" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>fastapi dev</code> with path or with <code>--entrypoint</code> CLI option
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deploy-your-app-optional" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Deploy your app (optional)
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recap-step-by-step" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Recap, step by step
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Recap, step by step">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-1-import-fastapi" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Step 1: import <code>FastAPI</code>
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-2-create-a-fastapi-instance" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Step 2: create a <code>FastAPI</code> "instance"
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-3-create-a-path-operation" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Step 3: create a <em>path operation</em>
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 3: create a path operation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#path" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Path
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#operation" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Operation
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#define-a-path-operation-decorator" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Define a <em>path operation decorator</em>
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-4-define-the-path-operation-function" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Step 4: define the <strong>path operation function</strong>
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-5-return-the-content" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Step 5: return the content
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-6-deploy-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Step 6: Deploy it
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 6: Deploy it">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#about-fastapi-cloud" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        About FastAPI Cloud
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deploy-to-other-cloud-providers" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Deploy to other cloud providers
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recap" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Recap
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../.." class="md-path__link">
+        
+  
+  <span class="md-ellipsis">
+    FastAPI
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-path__item">
+        <a href="../../learn/" class="md-path__link">
+          
+  
+  <span class="md-ellipsis">
+    Learn
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-path__item">
+        <a href="../" class="md-path__link">
+          
+  
+  <span class="md-ellipsis">
+    Tutorial - User Guide
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+  
+  
+
+
+<h1 id="first-steps">First Steps<a class="headerlink" href="#first-steps" title="Permanent link">&para;</a></h1>
+<details>
+<summary>AI coding agents</summary>
+<p>Use the official FastAPI skill for your installed version. Install it from your project directory:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-0-1">uvx<span class="w"> </span>library-skills
+</span></code></pre></div>
+<p>See <a href="../../ai-development/">Develop with AI</a>.</p>
+</details>
+<p>The simplest FastAPI file could look like this:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-1-1"><span class="kn">from</span><span class="w"> </span><span class="nn">fastapi</span><span class="w"> </span><span class="kn">import</span> <span class="n">FastAPI</span>
+</span><span id="__span-1-2">
+</span><span id="__span-1-3"><span class="n">app</span> <span class="o">=</span> <span class="n">FastAPI</span><span class="p">()</span>
+</span><span id="__span-1-4">
+</span><span id="__span-1-5">
+</span><span id="__span-1-6"><span class="nd">@app</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;/&quot;</span><span class="p">)</span>
+</span><span id="__span-1-7"><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">root</span><span class="p">():</span>
+</span><span id="__span-1-8">    <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;message&quot;</span><span class="p">:</span> <span class="s2">&quot;Hello World&quot;</span><span class="p">}</span>
+</span></code></pre></div>
+<p>Copy that to a file <code>main.py</code>.</p>
+<div class="admonition tip">
+<p class="admonition-title">Tip</p>
+<p>FastAPI has an <a href="https://marketplace.visualstudio.com/items?itemName=FastAPILabs.fastapi-vscode">official extension for VS Code</a> (and Cursor), which provides a lot of features, including a path operation explorer, path operation search, CodeLens navigation in tests (jump to definition from tests), and FastAPI Cloud deployment and logs, all from your editor.</p>
+</div>
+<p>Run the live server:</p>
+<div class="termy">
+
+<div class="highlight"><pre><span></span><code><span id="__span-2-1"><span class="gp">$ </span>&lt;font<span class="w"> </span><span class="nv">color</span><span class="o">=</span><span class="s2">&quot;#4E9A06&quot;</span>&gt;uv<span class="w"> </span>run<span class="w"> </span>fastapi&lt;/font&gt;<span class="w"> </span>dev
+</span><span id="__span-2-2">
+</span><span id="__span-2-3"><span class="go">  &lt;span style=&quot;background-color:#009485&quot;&gt;&lt;font color=&quot;#D3D7CF&quot;&gt; FastAPI &lt;/font&gt;&lt;/span&gt;  Starting development server 🚀</span>
+</span><span id="__span-2-4">
+</span><span id="__span-2-5"><span class="go">             Searching for package file structure from directories</span>
+</span><span id="__span-2-6"><span class="go">             with &lt;font color=&quot;#3465A4&quot;&gt;__init__.py&lt;/font&gt; files</span>
+</span><span id="__span-2-7"><span class="go">             Importing from &lt;font color=&quot;#75507B&quot;&gt;/home/user/code/&lt;/font&gt;&lt;font color=&quot;#AD7FA8&quot;&gt;awesomeapp&lt;/font&gt;</span>
+</span><span id="__span-2-8">
+</span><span id="__span-2-9"><span class="go">   &lt;span style=&quot;background-color:#007166&quot;&gt;&lt;font color=&quot;#D3D7CF&quot;&gt; module &lt;/font&gt;&lt;/span&gt;  🐍 main.py</span>
+</span><span id="__span-2-10">
+</span><span id="__span-2-11"><span class="go">     &lt;span style=&quot;background-color:#007166&quot;&gt;&lt;font color=&quot;#D3D7CF&quot;&gt; code &lt;/font&gt;&lt;/span&gt;  Importing the FastAPI app object from the module with</span>
+</span><span id="__span-2-12"><span class="go">             the following code:</span>
+</span><span id="__span-2-13">
+</span><span id="__span-2-14"><span class="go">             &lt;u style=&quot;text-decoration-style:solid&quot;&gt;from &lt;/u&gt;&lt;u style=&quot;text-decoration-style:solid&quot;&gt;&lt;b&gt;main&lt;/b&gt;&lt;/u&gt;&lt;u style=&quot;text-decoration-style:solid&quot;&gt; import &lt;/u&gt;&lt;u style=&quot;text-decoration-style:solid&quot;&gt;&lt;b&gt;app&lt;/b&gt;&lt;/u&gt;</span>
+</span><span id="__span-2-15">
+</span><span id="__span-2-16"><span class="go">      &lt;span style=&quot;background-color:#007166&quot;&gt;&lt;font color=&quot;#D3D7CF&quot;&gt; app &lt;/font&gt;&lt;/span&gt;  Using import string: &lt;font color=&quot;#3465A4&quot;&gt;main:app&lt;/font&gt;</span>
+</span><span id="__span-2-17">
+</span><span id="__span-2-18"><span class="go">   &lt;span style=&quot;background-color:#007166&quot;&gt;&lt;font color=&quot;#D3D7CF&quot;&gt; server &lt;/font&gt;&lt;/span&gt;  Server started at &lt;font color=&quot;#729FCF&quot;&gt;&lt;u style=&quot;text-decoration-style:solid&quot;&gt;http://127.0.0.1:8000&lt;/u&gt;&lt;/font&gt;</span>
+</span><span id="__span-2-19"><span class="go">   &lt;span style=&quot;background-color:#007166&quot;&gt;&lt;font color=&quot;#D3D7CF&quot;&gt; server &lt;/font&gt;&lt;/span&gt;  Documentation at &lt;font color=&quot;#729FCF&quot;&gt;&lt;u style=&quot;text-decoration-style:solid&quot;&gt;http://127.0.0.1:8000/docs&lt;/u&gt;&lt;/font&gt;</span>
+</span><span id="__span-2-20">
+</span><span id="__span-2-21"><span class="go">      &lt;span style=&quot;background-color:#007166&quot;&gt;&lt;font color=&quot;#D3D7CF&quot;&gt; tip &lt;/font&gt;&lt;/span&gt;  Running in development mode, for production use:</span>
+</span><span id="__span-2-22"><span class="go">             &lt;b&gt;fastapi run&lt;/b&gt;</span>
+</span><span id="__span-2-23">
+</span><span id="__span-2-24"><span class="go">             Logs:</span>
+</span><span id="__span-2-25">
+</span><span id="__span-2-26"><span class="go">     &lt;span style=&quot;background-color:#007166&quot;&gt;&lt;font color=&quot;#D3D7CF&quot;&gt; INFO &lt;/font&gt;&lt;/span&gt;  Will watch for changes in these directories:</span>
+</span><span id="__span-2-27"><span class="go">             &lt;b&gt;[&lt;/b&gt;&lt;font color=&quot;#4E9A06&quot;&gt;&amp;apos;/home/user/code/awesomeapp&amp;apos;&lt;/font&gt;&lt;b&gt;]&lt;/b&gt;</span>
+</span><span id="__span-2-28"><span class="go">     &lt;span style=&quot;background-color:#007166&quot;&gt;&lt;font color=&quot;#D3D7CF&quot;&gt; INFO &lt;/font&gt;&lt;/span&gt;  Uvicorn running on &lt;font color=&quot;#729FCF&quot;&gt;&lt;u style=&quot;text-decoration-style:solid&quot;&gt;http://127.0.0.1:8000&lt;/u&gt;&lt;/font&gt; &lt;b&gt;(&lt;/b&gt;Press CTRL+C</span>
+</span><span id="__span-2-29"><span class="go">             to quit&lt;b&gt;)&lt;/b&gt;</span>
+</span><span id="__span-2-30"><span class="go">     &lt;span style=&quot;background-color:#007166&quot;&gt;&lt;font color=&quot;#D3D7CF&quot;&gt; INFO &lt;/font&gt;&lt;/span&gt;  Started reloader process &lt;b&gt;[&lt;/b&gt;&lt;font color=&quot;#34E2E2&quot;&gt;&lt;b&gt;383138&lt;/b&gt;&lt;/font&gt;&lt;b&gt;]&lt;/b&gt; using WatchFiles</span>
+</span><span id="__span-2-31"><span class="go">     &lt;span style=&quot;background-color:#007166&quot;&gt;&lt;font color=&quot;#D3D7CF&quot;&gt; INFO &lt;/font&gt;&lt;/span&gt;  Started server process &lt;b&gt;[&lt;/b&gt;&lt;font color=&quot;#34E2E2&quot;&gt;&lt;b&gt;383153&lt;/b&gt;&lt;/font&gt;&lt;b&gt;]&lt;/b&gt;</span>
+</span><span id="__span-2-32"><span class="go">     &lt;span style=&quot;background-color:#007166&quot;&gt;&lt;font color=&quot;#D3D7CF&quot;&gt; INFO &lt;/font&gt;&lt;/span&gt;  Waiting for application startup.</span>
+</span><span id="__span-2-33"><span class="go">     &lt;span style=&quot;background-color:#007166&quot;&gt;&lt;font color=&quot;#D3D7CF&quot;&gt; INFO &lt;/font&gt;&lt;/span&gt;  Application startup complete.</span>
+</span></code></pre></div>
+
+</div>
+
+<p>In the output, there's a line with something like:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-3-1">INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+</span></code></pre></div>
+<p>That line shows the URL where your app is being served on your local machine.</p>
+<h3 id="check-it">Check it<a class="headerlink" href="#check-it" title="Permanent link">&para;</a></h3>
+<p>Open your browser at <a href="http://127.0.0.1:8000">http://127.0.0.1:8000</a>.</p>
+<p>You will see the JSON response as:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-4-1"><span class="p">{</span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Hello World&quot;</span><span class="p">}</span>
+</span></code></pre></div>
+<h3 id="interactive-api-docs">Interactive API docs<a class="headerlink" href="#interactive-api-docs" title="Permanent link">&para;</a></h3>
+<p>Now go to <a href="http://127.0.0.1:8000/docs">http://127.0.0.1:8000/docs</a>.</p>
+<p>You will see the automatic interactive API documentation (provided by <a href="https://github.com/swagger-api/swagger-ui">Swagger UI</a>):</p>
+<p><img alt="Swagger UI" src="https://fastapi.tiangolo.com/img/index/index-01-swagger-ui-simple.png" /></p>
+<h3 id="alternative-api-docs">Alternative API docs<a class="headerlink" href="#alternative-api-docs" title="Permanent link">&para;</a></h3>
+<p>And now, go to <a href="http://127.0.0.1:8000/redoc">http://127.0.0.1:8000/redoc</a>.</p>
+<p>You will see the alternative automatic documentation (provided by <a href="https://github.com/Redocly/redoc">ReDoc</a>):</p>
+<p><img alt="ReDoc" src="https://fastapi.tiangolo.com/img/index/index-02-redoc-simple.png" /></p>
+<h3 id="openapi">OpenAPI<a class="headerlink" href="#openapi" title="Permanent link">&para;</a></h3>
+<p><strong>FastAPI</strong> generates a "schema" with all your API using the <strong>OpenAPI</strong> standard for defining APIs.</p>
+<h4 id="schema">"Schema"<a class="headerlink" href="#schema" title="Permanent link">&para;</a></h4>
+<p>A "schema" is a definition or description of something. Not the code that implements it, but just an abstract description.</p>
+<h4 id="api-schema">API "schema"<a class="headerlink" href="#api-schema" title="Permanent link">&para;</a></h4>
+<p>In this case, <a href="https://github.com/OAI/OpenAPI-Specification">OpenAPI</a> is a specification that dictates how to define a schema of your API.</p>
+<p>This schema definition includes your API paths, the possible parameters they take, etc.</p>
+<h4 id="data-schema">Data "schema"<a class="headerlink" href="#data-schema" title="Permanent link">&para;</a></h4>
+<p>The term "schema" might also refer to the shape of some data, like a JSON content.</p>
+<p>In that case, it would mean the JSON attributes, and data types they have, etc.</p>
+<h4 id="openapi-and-json-schema">OpenAPI and JSON Schema<a class="headerlink" href="#openapi-and-json-schema" title="Permanent link">&para;</a></h4>
+<p>OpenAPI defines an API schema for your API. And that schema includes definitions (or "schemas") of the data sent and received by your API using <strong>JSON Schema</strong>, the standard for JSON data schemas.</p>
+<h4 id="check-the-openapi-json">Check the <code>openapi.json</code><a class="headerlink" href="#check-the-openapi-json" title="Permanent link">&para;</a></h4>
+<p>If you are curious about what the raw OpenAPI schema looks like, FastAPI automatically generates a JSON (schema) with the descriptions of all your API.</p>
+<p>You can see it directly at: <a href="http://127.0.0.1:8000/openapi.json">http://127.0.0.1:8000/openapi.json</a>.</p>
+<p>It will show a JSON starting with something like:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-5-1"><span class="p">{</span>
+</span><span id="__span-5-2"><span class="w">    </span><span class="nt">&quot;openapi&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;3.1.0&quot;</span><span class="p">,</span>
+</span><span id="__span-5-3"><span class="w">    </span><span class="nt">&quot;info&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-4"><span class="w">        </span><span class="nt">&quot;title&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;FastAPI&quot;</span><span class="p">,</span>
+</span><span id="__span-5-5"><span class="w">        </span><span class="nt">&quot;version&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;0.1.0&quot;</span>
+</span><span id="__span-5-6"><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-5-7"><span class="w">    </span><span class="nt">&quot;paths&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-8"><span class="w">        </span><span class="nt">&quot;/items/&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-9"><span class="w">            </span><span class="nt">&quot;get&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-10"><span class="w">                </span><span class="nt">&quot;responses&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-11"><span class="w">                    </span><span class="nt">&quot;200&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-12"><span class="w">                        </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Successful Response&quot;</span><span class="p">,</span>
+</span><span id="__span-5-13"><span class="w">                        </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-14"><span class="w">                            </span><span class="nt">&quot;application/json&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-15">
+</span><span id="__span-5-16">
+</span><span id="__span-5-17">
+</span><span id="__span-5-18"><span class="err">...</span>
+</span></code></pre></div>
+<h4 id="what-is-openapi-for">What is OpenAPI for<a class="headerlink" href="#what-is-openapi-for" title="Permanent link">&para;</a></h4>
+<p>The OpenAPI schema is what powers the two interactive documentation systems included.</p>
+<p>And there are dozens of alternatives, all based on OpenAPI. You could easily add any of those alternatives to your application built with <strong>FastAPI</strong>.</p>
+<p>You could also use it to generate code automatically, for clients that communicate with your API. For example, frontend, mobile or IoT applications.</p>
+<h3 id="configure-the-app-entrypoint-in-pyproject-toml">Configure the app <code>entrypoint</code> in <code>pyproject.toml</code><a class="headerlink" href="#configure-the-app-entrypoint-in-pyproject-toml" title="Permanent link">&para;</a></h3>
+<p>You can configure where your app is located in a <code>pyproject.toml</code> file like:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-6-1"><span class="k">[tool.fastapi]</span>
+</span><span id="__span-6-2"><span class="n">entrypoint</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;main:app&quot;</span>
+</span></code></pre></div>
+<p>That <code>entrypoint</code> will tell the <code>fastapi</code> command that it should import the app like:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-7-1"><span class="kn">from</span><span class="w"> </span><span class="nn">main</span><span class="w"> </span><span class="kn">import</span> <span class="n">app</span>
+</span></code></pre></div>
+<p>If your code was structured like:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-8-1">.
+</span><span id="__span-8-2">├── backend
+</span><span id="__span-8-3">│   ├── main.py
+</span><span id="__span-8-4">│   ├── __init__.py
+</span></code></pre></div>
+<p>Then you would set the <code>entrypoint</code> as:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-9-1"><span class="k">[tool.fastapi]</span>
+</span><span id="__span-9-2"><span class="n">entrypoint</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;backend.main:app&quot;</span>
+</span></code></pre></div>
+<p>which would be equivalent to:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-10-1"><span class="kn">from</span><span class="w"> </span><span class="nn">backend.main</span><span class="w"> </span><span class="kn">import</span> <span class="n">app</span>
+</span></code></pre></div>
+<h3 id="fastapi-dev-with-path-or-with-entrypoint-cli-option"><code>fastapi dev</code> with path or with <code>--entrypoint</code> CLI option<a class="headerlink" href="#fastapi-dev-with-path-or-with-entrypoint-cli-option" title="Permanent link">&para;</a></h3>
+<p>You can also pass the file path to the <code>fastapi dev</code> command, and it will guess the FastAPI app object to use:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-11-1"><span class="gp">$ </span>uv<span class="w"> </span>run<span class="w"> </span>fastapi<span class="w"> </span>dev<span class="w"> </span>main.py
+</span></code></pre></div>
+<p>Or, you can also pass the <code>--entrypoint</code> option to the <code>fastapi dev</code> command:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-12-1"><span class="gp">$ </span>uv<span class="w"> </span>run<span class="w"> </span>fastapi<span class="w"> </span>dev<span class="w"> </span>--entrypoint<span class="w"> </span>main:app
+</span></code></pre></div>
+<p>But you would have to remember to pass the correct path\entrypoint every time you call the <code>fastapi</code> command.</p>
+<p>Additionally, other tools might not be able to find it, for example the <a href="../../editor-support/">VS Code Extension</a> or <a href="https://fastapicloud.com">FastAPI Cloud</a>, so it is recommended to use the <code>entrypoint</code> in <code>pyproject.toml</code>.</p>
+<h3 id="deploy-your-app-optional">Deploy your app (optional)<a class="headerlink" href="#deploy-your-app-optional" title="Permanent link">&para;</a></h3>
+<p>You can optionally deploy your FastAPI app to <a href="https://fastapicloud.com">FastAPI Cloud</a> with a single command. 🚀</p>
+<div class="termy">
+
+<div class="highlight"><pre><span></span><code><span id="__span-13-1"><span class="gp">$ </span>uv<span class="w"> </span>run<span class="w"> </span>fastapi<span class="w"> </span>deploy
+</span><span id="__span-13-2">
+</span><span id="__span-13-3"><span class="go">Deploying to FastAPI Cloud...</span>
+</span><span id="__span-13-4">
+</span><span id="__span-13-5"><span class="go">✅ Deployment successful!</span>
+</span><span id="__span-13-6">
+</span><span id="__span-13-7"><span class="go">🐔 Ready the chicken! Your app is ready at https://myapp.fastapicloud.dev</span>
+</span></code></pre></div>
+
+</div>
+
+<p>The CLI will automatically detect your FastAPI application and deploy it to the cloud. If you are not logged in, your browser will open to complete the authentication process.</p>
+<p>That's it! Now you can access your app at that URL. ✨</p>
+<h2 id="recap-step-by-step">Recap, step by step<a class="headerlink" href="#recap-step-by-step" title="Permanent link">&para;</a></h2>
+<h3 id="step-1-import-fastapi">Step 1: import <code>FastAPI</code><a class="headerlink" href="#step-1-import-fastapi" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span id="__span-14-1"><span class="hll"><span class="kn">from</span><span class="w"> </span><span class="nn">fastapi</span><span class="w"> </span><span class="kn">import</span> <span class="n">FastAPI</span>
+</span></span><span id="__span-14-2">
+</span><span id="__span-14-3"><span class="n">app</span> <span class="o">=</span> <span class="n">FastAPI</span><span class="p">()</span>
+</span><span id="__span-14-4">
+</span><span id="__span-14-5">
+</span><span id="__span-14-6"><span class="nd">@app</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;/&quot;</span><span class="p">)</span>
+</span><span id="__span-14-7"><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">root</span><span class="p">():</span>
+</span><span id="__span-14-8">    <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;message&quot;</span><span class="p">:</span> <span class="s2">&quot;Hello World&quot;</span><span class="p">}</span>
+</span></code></pre></div>
+<p><code>FastAPI</code> is a Python class that provides all the functionality for your API.</p>
+<div class="admonition note">
+<p class="admonition-title">Technical Details</p>
+<p><code>FastAPI</code> is a class that inherits directly from <code>Starlette</code>.</p>
+<p>You can use all the <a href="https://starlette.dev/">Starlette</a> functionality with <code>FastAPI</code> too.</p>
+</div>
+<h3 id="step-2-create-a-fastapi-instance">Step 2: create a <code>FastAPI</code> "instance"<a class="headerlink" href="#step-2-create-a-fastapi-instance" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span id="__span-15-1"><span class="kn">from</span><span class="w"> </span><span class="nn">fastapi</span><span class="w"> </span><span class="kn">import</span> <span class="n">FastAPI</span>
+</span><span id="__span-15-2">
+</span><span id="__span-15-3"><span class="hll"><span class="n">app</span> <span class="o">=</span> <span class="n">FastAPI</span><span class="p">()</span>
+</span></span><span id="__span-15-4">
+</span><span id="__span-15-5">
+</span><span id="__span-15-6"><span class="nd">@app</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;/&quot;</span><span class="p">)</span>
+</span><span id="__span-15-7"><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">root</span><span class="p">():</span>
+</span><span id="__span-15-8">    <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;message&quot;</span><span class="p">:</span> <span class="s2">&quot;Hello World&quot;</span><span class="p">}</span>
+</span></code></pre></div>
+<p>Here the <code>app</code> variable will be an "instance" of the class <code>FastAPI</code>.</p>
+<p>This will be the main point of interaction to create all your API.</p>
+<h3 id="step-3-create-a-path-operation">Step 3: create a <em>path operation</em><a class="headerlink" href="#step-3-create-a-path-operation" title="Permanent link">&para;</a></h3>
+<h4 id="path">Path<a class="headerlink" href="#path" title="Permanent link">&para;</a></h4>
+<p>"Path" here refers to the last part of the URL starting from the first <code>/</code>.</p>
+<p>So, in a URL like:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-16-1">https://example.com/items/foo
+</span></code></pre></div>
+<p>...the path would be:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-17-1">/items/foo
+</span></code></pre></div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>A "path" is also commonly called an "endpoint" or a "route".</p>
+</div>
+<p>While building an API, the "path" is the main way to separate "concerns" and "resources".</p>
+<h4 id="operation">Operation<a class="headerlink" href="#operation" title="Permanent link">&para;</a></h4>
+<p>"Operation" here refers to one of the HTTP "methods".</p>
+<p>One of:</p>
+<ul>
+<li><code>POST</code></li>
+<li><code>GET</code></li>
+<li><code>PUT</code></li>
+<li><code>DELETE</code></li>
+</ul>
+<p>...and the more exotic ones:</p>
+<ul>
+<li><code>OPTIONS</code></li>
+<li><code>HEAD</code></li>
+<li><code>PATCH</code></li>
+<li><code>TRACE</code></li>
+</ul>
+<p>In the HTTP protocol, you can communicate to each path using one (or more) of these "methods".</p>
+<hr />
+<p>When building APIs, you normally use these specific HTTP methods to perform a specific action.</p>
+<p>Normally you use:</p>
+<ul>
+<li><code>POST</code>: to create data.</li>
+<li><code>GET</code>: to read data.</li>
+<li><code>PUT</code>: to update data.</li>
+<li><code>DELETE</code>: to delete data.</li>
+</ul>
+<p>So, in OpenAPI, each of the HTTP methods is called an "operation".</p>
+<p>We are going to call them "<strong>operations</strong>" too.</p>
+<h4 id="define-a-path-operation-decorator">Define a <em>path operation decorator</em><a class="headerlink" href="#define-a-path-operation-decorator" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><span id="__span-18-1"><span class="kn">from</span><span class="w"> </span><span class="nn">fastapi</span><span class="w"> </span><span class="kn">import</span> <span class="n">FastAPI</span>
+</span><span id="__span-18-2">
+</span><span id="__span-18-3"><span class="n">app</span> <span class="o">=</span> <span class="n">FastAPI</span><span class="p">()</span>
+</span><span id="__span-18-4">
+</span><span id="__span-18-5">
+</span><span id="__span-18-6"><span class="hll"><span class="nd">@app</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;/&quot;</span><span class="p">)</span>
+</span></span><span id="__span-18-7"><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">root</span><span class="p">():</span>
+</span><span id="__span-18-8">    <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;message&quot;</span><span class="p">:</span> <span class="s2">&quot;Hello World&quot;</span><span class="p">}</span>
+</span></code></pre></div>
+<p>The <code>@app.get("/")</code> tells <strong>FastAPI</strong> that the function right below is in charge of handling requests that go to:</p>
+<ul>
+<li>the path <code>/</code></li>
+<li>using a <dfn title="an HTTP GET method"><code>get</code> operation</dfn></li>
+</ul>
+<div class="admonition note">
+<p class="admonition-title"><code>@decorator</code> Info</p>
+<p>That <code>@something</code> syntax in Python is called a "decorator".</p>
+<p>You put it on top of a function. Like a pretty decorative hat (I guess that's where the term came from).</p>
+<p>A "decorator" takes the function below and does something with it.</p>
+<p>In our case, this decorator tells <strong>FastAPI</strong> that the function below corresponds to the <strong>path</strong> <code>/</code> with an <strong>operation</strong> <code>get</code>.</p>
+<p>It is the "<strong>path operation decorator</strong>".</p>
+</div>
+<p>You can also use the other operations:</p>
+<ul>
+<li><code>@app.post()</code></li>
+<li><code>@app.put()</code></li>
+<li><code>@app.delete()</code></li>
+</ul>
+<p>And the more exotic ones:</p>
+<ul>
+<li><code>@app.options()</code></li>
+<li><code>@app.head()</code></li>
+<li><code>@app.patch()</code></li>
+<li><code>@app.trace()</code></li>
+</ul>
+<div class="admonition tip">
+<p class="admonition-title">Tip</p>
+<p>You are free to use each operation (HTTP method) as you wish.</p>
+<p><strong>FastAPI</strong> doesn't enforce any specific meaning.</p>
+<p>The information here is presented as a guideline, not a requirement.</p>
+<p>For example, when using GraphQL you normally perform all the actions using only <code>POST</code> operations.</p>
+</div>
+<h3 id="step-4-define-the-path-operation-function">Step 4: define the <strong>path operation function</strong><a class="headerlink" href="#step-4-define-the-path-operation-function" title="Permanent link">&para;</a></h3>
+<p>This is our "<strong>path operation function</strong>":</p>
+<ul>
+<li><strong>path</strong>: is <code>/</code>.</li>
+<li><strong>operation</strong>: is <code>get</code>.</li>
+<li><strong>function</strong>: is the function below the "decorator" (below <code>@app.get("/")</code>).</li>
+</ul>
+<div class="highlight"><pre><span></span><code><span id="__span-19-1"><span class="kn">from</span><span class="w"> </span><span class="nn">fastapi</span><span class="w"> </span><span class="kn">import</span> <span class="n">FastAPI</span>
+</span><span id="__span-19-2">
+</span><span id="__span-19-3"><span class="n">app</span> <span class="o">=</span> <span class="n">FastAPI</span><span class="p">()</span>
+</span><span id="__span-19-4">
+</span><span id="__span-19-5">
+</span><span id="__span-19-6"><span class="nd">@app</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;/&quot;</span><span class="p">)</span>
+</span><span id="__span-19-7"><span class="hll"><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">root</span><span class="p">():</span>
+</span></span><span id="__span-19-8">    <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;message&quot;</span><span class="p">:</span> <span class="s2">&quot;Hello World&quot;</span><span class="p">}</span>
+</span></code></pre></div>
+<p>This is a Python function.</p>
+<p>It will be called by <strong>FastAPI</strong> whenever it receives a request to the URL "<code>/</code>" using a <code>GET</code> operation.</p>
+<p>In this case, it is an <code>async</code> function.</p>
+<hr />
+<p>You could also define it as a normal function instead of <code>async def</code>:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-20-1"><span class="kn">from</span><span class="w"> </span><span class="nn">fastapi</span><span class="w"> </span><span class="kn">import</span> <span class="n">FastAPI</span>
+</span><span id="__span-20-2">
+</span><span id="__span-20-3"><span class="n">app</span> <span class="o">=</span> <span class="n">FastAPI</span><span class="p">()</span>
+</span><span id="__span-20-4">
+</span><span id="__span-20-5">
+</span><span id="__span-20-6"><span class="nd">@app</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;/&quot;</span><span class="p">)</span>
+</span><span id="__span-20-7"><span class="hll"><span class="k">def</span><span class="w"> </span><span class="nf">root</span><span class="p">():</span>
+</span></span><span id="__span-20-8">    <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;message&quot;</span><span class="p">:</span> <span class="s2">&quot;Hello World&quot;</span><span class="p">}</span>
+</span></code></pre></div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>If you don't know the difference, check the <a href="../../async/#in-a-hurry">Async: <em>"In a hurry?"</em></a>.</p>
+</div>
+<h3 id="step-5-return-the-content">Step 5: return the content<a class="headerlink" href="#step-5-return-the-content" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span id="__span-21-1"><span class="kn">from</span><span class="w"> </span><span class="nn">fastapi</span><span class="w"> </span><span class="kn">import</span> <span class="n">FastAPI</span>
+</span><span id="__span-21-2">
+</span><span id="__span-21-3"><span class="n">app</span> <span class="o">=</span> <span class="n">FastAPI</span><span class="p">()</span>
+</span><span id="__span-21-4">
+</span><span id="__span-21-5">
+</span><span id="__span-21-6"><span class="nd">@app</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;/&quot;</span><span class="p">)</span>
+</span><span id="__span-21-7"><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">root</span><span class="p">():</span>
+</span><span id="__span-21-8"><span class="hll">    <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;message&quot;</span><span class="p">:</span> <span class="s2">&quot;Hello World&quot;</span><span class="p">}</span>
+</span></span></code></pre></div>
+<p>You can return a <code>dict</code>, <code>list</code>, singular values as <code>str</code>, <code>int</code>, etc.</p>
+<p>You can also return Pydantic models (you'll see more about that later).</p>
+<p>There are many other objects and models that will be automatically converted to JSON (including ORMs, etc). Try using your favorite ones, it's highly probable that they are already supported.</p>
+<h3 id="step-6-deploy-it">Step 6: Deploy it<a class="headerlink" href="#step-6-deploy-it" title="Permanent link">&para;</a></h3>
+<p>Deploy your app to <strong><a href="https://fastapicloud.com">FastAPI Cloud</a></strong> with one command: <code>fastapi deploy</code>. 🎉</p>
+<h4 id="about-fastapi-cloud">About FastAPI Cloud<a class="headerlink" href="#about-fastapi-cloud" title="Permanent link">&para;</a></h4>
+<p><strong><a href="https://fastapicloud.com">FastAPI Cloud</a></strong> is built by the same author and team behind <strong>FastAPI</strong>.</p>
+<p>It streamlines the process of <strong>building</strong>, <strong>deploying</strong>, and <strong>accessing</strong> an API with minimal effort.</p>
+<p>It brings the same <strong>developer experience</strong> of building apps with FastAPI to <strong>deploying</strong> them to the cloud. 🎉</p>
+<p>FastAPI Cloud is the primary sponsor and funding provider for the <em>FastAPI and friends</em> open source projects. ✨</p>
+<h4 id="deploy-to-other-cloud-providers">Deploy to other cloud providers<a class="headerlink" href="#deploy-to-other-cloud-providers" title="Permanent link">&para;</a></h4>
+<p>FastAPI is open source and based on standards. You can deploy FastAPI apps to any cloud provider you choose.</p>
+<p>Follow your cloud provider's guides to deploy FastAPI apps with them. 🤓</p>
+<h2 id="recap">Recap<a class="headerlink" href="#recap" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Import <code>FastAPI</code>.</li>
+<li>Create an <code>app</code> instance.</li>
+<li>Write a <strong>path operation decorator</strong> using decorators like <code>@app.get("/")</code>.</li>
+<li>Define a <strong>path operation function</strong>; for example, <code>def root(): ...</code>.</li>
+<li>Run the development server using the command <code>fastapi dev</code>.</li>
+<li>Optionally deploy your app with <code>fastapi deploy</code>.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>/* stub */</script>
+
+<script>/* stub */</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-circle-arrow-up" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d=""/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../" class="md-footer__link md-footer__link--prev" aria-label="Previous: Tutorial - User Guide">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-arrow-left" viewBox="0 0 24 24"><path d=""/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Tutorial - User Guide
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../path-params/" class="md-footer__link md-footer__link--next" aria-label="Next: Path Parameters">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Path Parameters
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-arrow-right" viewBox="0 0 24 24"><path d=""/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+    <div class="md-copyright__highlight">
+        The FastAPI trademark is owned by <a href="https://tiangolo.com" target="_blank">@tiangolo</a> and is registered in the US and across other regions
+    </div>
+    
+    Made with
+    <a href="https://zensical.org" target="_blank" rel="noopener">
+        Zensical
+    </a>
+    
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/fastapi/fastapi" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d=""/></svg>
+    </a>
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://discord.com/invite/VQjSZaeJmf" target="_blank" rel="noopener" title="discord.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><path fill="currentColor" d=""/></svg>
+    </a>
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://x.com/fastapi" target="_blank" rel="noopener" title="x.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path fill="currentColor" d=""/></svg>
+    </a>
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://bsky.app/profile/fastapi.tiangolo.com" target="_blank" rel="noopener" title="bsky.app" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><path fill="currentColor" d=""/></svg>
+    </a>
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://www.linkedin.com/company/fastapi" target="_blank" rel="noopener" title="www.linkedin.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><path fill="currentColor" d=""/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-progress" data-md-component="progress" role="progressbar"></div>
+    
+    
+    
+      
+      
+      
+      
+        
+        
+      <script id="__config" type="application/json">{"annotate":null,"base":"../..","features":["content.code.annotate","content.code.copy","content.footnote.tooltips","content.tabs.link","content.tooltips","navigation.footer","navigation.indexes","navigation.instant","navigation.instant.prefetch","navigation.instant.progress","navigation.path","navigation.tabs","navigation.tabs.sticky","navigation.top","navigation.tracking","search.highlight","search.share","search.suggest","toc.follow"],"redirect":null,"search":"../../assets/javascripts/workers/search.7d14d953.min.js","tags":null,"translations":{"clipboard.copied":"Copied to clipboard","clipboard.copy":"Copy to clipboard","search.result.more.one":"1 more on this page","search.result.more.other":"# more on this page","search.result.none":"No matching documents","search.result.one":"1 matching document","search.result.other":"# matching documents","search.result.placeholder":"Type to start searching","search.result.term.missing":"Missing","select.version":"Select version"},"version":null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.c04ba553.min.js">/* stub */</script>
+      
+        <script src="../../js/termynal.js">/* stub */</script>
+      
+        <script src="../../js/custom.js">/* stub */</script>
+      
+        <script src="../../js/init_kapa_widget.js">/* stub */</script>
+      
+    
+  <script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "83c63961621f43319d43d493c35d7611"}'>/* stub */</script></body>
+</html>

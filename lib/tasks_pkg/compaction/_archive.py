@@ -43,6 +43,20 @@ def newest_compaction_archives(store, conv_id, *, user_id, count, **scoped) -> l
     return list(reversed(archives[-count:]))
 
 
+def archive_scope_presence(store, conv_id, *, user_id, archive_scope=""):
+    """Observe whether the owned scope has any archive, not whether one matches.
+
+    Absence follows only from an empty unfiltered scope listing. A nonempty
+    listing says nothing about compatibility; authority failures propagate.
+    """
+    rows = store.list_compaction_archives(
+        conv_id, user_id=user_id, archive_scope=archive_scope, limit=1)
+    if not isinstance(rows, list):
+        from lib.storage.errors import StorageError
+        raise StorageError('database_protocol_error', 'Malformed archive scope listing')
+    return 'present' if rows else 'absent'
+
+
 def summary_dispatch_calls(usage) -> list[dict]:
     """Bound observed call identities only; selection is not dispatch proof."""
     if not isinstance(usage, dict):

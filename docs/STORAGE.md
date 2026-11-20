@@ -126,8 +126,33 @@ and external monitors also share the unresponsiveness budget and the
 progress verdict (`_LivenessStreak`, `_liveness_interval`); an external
 attachment detaches at once when
 its published PID/start identity has exited, and one without such an identity
-(a SQL co-container) keeps the plain consecutive-failure verdict. Embedded
-probes use one worker per handle (probe deadline + 2 s join); FFI wedges fence
+(a SQL co-container) keeps the plain consecutive-failure verdict.
+Every attached process runs its own external monitor, so one engine stall
+used to be logged once per attached process (39 identical lines per message
+on 2026-11-18, which multiplied the liveness warning counts 39-fold). One
+process now reports each episode: the holder of `_EpisodeReporterLease`, a
+Linux abstract-namespace socket name keyed by the engine's PID and start
+identity (or its endpoint without one), logs the probe-failed,
+unresponsive, slow, blocked and recovered lines; the other monitors still
+judge and detach their own attachment and log the same lines at DEBUG. The
+lease touches no volume and no `TMPDIR`, and the kernel releases it when its
+holder exits, so a surviving monitor reports the next episode. Only a bind
+`EADDRINUSE` proves another reporter owns the name and demotes episode lines;
+socket creation failures and other bind errors leave the original severity
+visible in every observer. Election remains eligible on later reports, and
+ordinary socket-close errors cannot interrupt monitoring or mask that
+classification. Platforms without this election report from every monitor
+without constructing a Unix-specific name. Treating all bind errors as
+contention was rejected because unavailable election could silence every
+observer without a reporter. Detach and exit lines stay per process because
+each records that process's own action.
+Alternatives rejected: a lock file (on the data volume it stalls with the
+engine; under `TMPDIR` task processes use private directories); deduplicating
+in the log pipeline (the multiplication is already in `app.log`). Verify
+`test_an_engine_stall_is_reported_once_by_all_attached_monitors` and the
+`test_reporter_election_*` / `test_reporter_lease_unavailable_platform_*` cases
+in the same file (injected socket factory; no real sockets or process probes).
+Embedded probes use one worker per handle (probe deadline + 2 s join); FFI wedges fence
 through the driver crash callback because engine state is unknown.
 The runtime restart loop is bounded by a sliding-window breaker
 (`TOFU_STORAGE_RESTART_CRASH_LIMIT`, default 5;
@@ -642,6 +667,48 @@ Turn cutover instead keeps its frozen, potentially non-empty `messages_json`
 as the compatibility transcript until an explicit verified migration; runtime
 writes never replace either shape with a conversation-sized message document.
 
+SQL `conversation.get` defers selecting `messages_json` until no main-lane
+Turns exist. The archive lookup is not a repeated header projection: it serves
+frozen compatibility history while keeping those bytes off ordinary active
+transcript reads. Keep both reads in the enclosing query snapshot rather than
+unconditionally loading archives or retaining cross-request results.
+`tests/storage_authority_sql/test_conversation_point_read_work.py` traces actual
+SQLite statements and projection decodes, checks exact ordinary output and
+owner isolation, and commits a concurrent WAL writer between header and Turn
+reads to verify snapshot consistency.
+
+The SQL legacy message overlay makes one private shallow projection copy, then
+updates that copy with authoritative Turn metadata instead of copying the whole
+projection again into a result dictionary. Compaction decoration still owns its
+existing separate copy; nested values retain the existing shallow aliasing
+contract. It neither mutates the decoded/cache projection nor reuses results
+across reads. `tests/storage_authority_sql/test_legacy_overlay_work.py` compares
+exact full transcripts against the prior overlay and counts removal of one
+full-projection mapping expansion per Turn in mixed-actor and tool/compaction
+cohorts. This is a structural work reduction; representative latency is unknown.
+
+SQL `turn.context.read` retains its owner-scoped target row from admission and
+reuses it if the ordered response page reaches that target. The operation already
+runs in one SQLite read transaction, or PostgreSQL's explicitly repeatable-read
+context transaction, so an identical second target SELECT adds no new evidence.
+The page still reads other selected Turns, walks the same proof headers and
+validates the continuation terminal; cursor checks and byte accounting stay in
+their original order. This is request-local row reuse, not a query cache or a
+change to transaction isolation. Native `turn/model_context.rs::Page::offer`
+already consumes its admitted target once; the native path is unchanged.
+
+Run the standalone fixture probe without application/pytest initialization:
+`env -i PATH=/usr/bin:/bin .venv/bin/python3 -I -S -B tests/storage_authority_sql/probe_model_context_target_read.py`.
+It executes the complete Python context owner behind explicit imported fixture
+ports and an in-memory SQLite session, refusing other file opens, unprepared
+imports, non-memory database connections and external-effect entry points before
+owner loading. It compares the previous page reader against target reuse, checks
+output/order/proof/cursor and absent-versus-null field invariants, and counts
+selected-target SELECTs from two to one. Projection/validation/continuation/resume
+ports are synthetic; page exhaustion uses synthetic prior byte accounting without
+changing the production byte limit. This is not an adapter, codec, concurrency,
+durability, native-runtime or latency verification.
+
 Owner-scoped `conversation.get` exposes mutually explicit full, metadata-only,
 and bounded message projections. A `message_window` is limited to 1..500 and
 may carry a non-negative exclusive `before_sequence`; a cursor without a
@@ -694,8 +761,42 @@ the timestamp scalar. A frozen pre-Turn archive keeps raw message timestamps
 and omits a row only when its timestamp is a non-zero integer outside the
 window. When the title is empty, `title_fallback` is the first message's
 string content truncated to the requested number of characters. The response
-therefore grows with priced Turns, never with transcript bytes; stored `usage`
-and `apiRounds` are only read.
+therefore grows with usage-bearing Turns and recorded requests, never with
+transcript bytes; stored `usage` and `apiRounds` are only read. When an API-round
+ledger carries usage, identity or cost evidence, `apiRounds` projects its positional rows
+with only `usageReceiptId`, `taskId`, `sourceRound`, `round`, `model`,
+`provider_id`, `providerId`, `requestTimestampMs`, `pricingEvidence`, public
+`usage` counters (no private dispatch or wire diagnostics), and recorded `cost`
+when present. Receipt-only Turns return an empty aggregate `usage` object.
+Unpriced rows remain distinct from zero-cost quotes; the scan can
+retain their known token populations without assigning a price. No receipt or
+quote is synthesized by storage.
+MyDay folds the original quote components instead of resolving current rates
+on flattened Turn counters. Within an owner's scan it counts an identifiable
+request only once (including copied clone history), not once per containing
+conversation. Compatible copies fill missing counters field by field before any sum; conflicting
+evidence marks the scan partial. Unallocated Turn-level tokens are disclosed
+separately in the conversation breakdown, never assigned to request buckets.
+When residuals refer to overlapping unknown request sets, the scan reports the
+largest witnessed residual in each connected group as a lower bound, not their sum.
+Anonymous unpriced rows cannot prove disjoint coverage. Their counters are
+not assigned to additive request buckets. Positive anonymous witnesses make
+residual coverage ambiguous: the scan retains the greater of the independently
+named coverage and the largest anonymous witness, not their sum or a claim
+about unique requests. Empty anonymous placeholders do
+not suppress otherwise disjoint named residuals.
+A sampled dispatcher attempt-start wall clock is distinct from an estimated
+start derived from completion minus latency. Native pricing currently reads
+its callback clock during price resolution, not a witnessed transport send
+clock; this does not establish request-time peak pricing for native calls. Legacy rows without an immutable ID (including rows whose task ID was remapped
+by cloning) cannot be safely deduplicated across copies: cost remains a partial
+estimate and must not become a settled day. Clone-level ancestry alone does not
+identify a specific paid round in already-copied history; Turns without a request ledger still use the legacy estimate.
+Unpriced ledger entries are excluded from the priced total and mark the day
+partial. Incomplete scans and legacy aggregate estimates are not pinned as
+new settled history. Backfill sums the stored CNY components, not rounded
+per-request totals. Date windows still use Turn timestamps, not per-request midnight
+attribution. Settled calendar caches are not rewritten by deployment.
 
 Problem: the daily-report calendar priced each message's `usage` by hydrating
 whole transcripts of every candidate conversation, so its memory and storage
@@ -1148,8 +1249,18 @@ reimplement the fence, restart and validation rules.
 - A statement stalled 15 seconds past its deadline is interrupted. Because
   SQLite cannot interrupt a kernel-blocked commit/fsync, a writer still stuck
   60 seconds past its deadline hard-exits only the Sidecar; the supervisor
-  restarts it and WAL recovery preserves the committed prefix. Both bounds are
-  explicit and fail configuration if the hard bound is not greater.
+  restarts it and WAL recovery preserves the committed prefix. The writer-side
+  WAL checkpoint can block the same physical writer after the preceding batch
+  has acknowledged, with no caller deadline. It publishes a separate maintenance
+  `checkpoint` phase and uses the existing default writer transaction budget
+  and the same watchdog bounds. Neither the acknowledged batch nor the next job
+  owns that deadline. The watchdog validates the sampled work and acts under
+  the writer handoff lock, so a delayed watchdog cannot interrupt a successor
+  or restart the Sidecar for work that already retired. The watchdog retains
+  the latest interrupted stall in memory while the process is alive; it does
+  not wait for logging or stack dumps. On a fatal stall the supervisor sees
+  exit code 75; in-process diagnostics may be lost. Both bounds are explicit
+  and fail configuration if the hard bound is not greater.
 - WAL, `synchronous=FULL`, foreign keys, and bounded checkpoints remain on.
 - Personal startup probes the filesystem that actually contains `data/` and
   reserves 1% of its capacity, clamped to 256 MiB..2 GiB. The Sidecar refuses
@@ -1222,7 +1333,9 @@ reimplement the fence, restart and validation rules.
   with `load_extension` (`SQLITE_OK_LOAD_PERMANENTLY`, never the default
   VFS) and opens connections as `file:...?vfs=tofu-wal-coalesce`. On a host
   that cannot build or load it (no compiler, no extension loading, not
-  POSIX, SQLite older than 3.31), connections use stock SQLite.
+  POSIX, SQLite older than 3.31), connections use stock SQLite. The shim
+  installs its SQL-function hook before publishing the named VFS, so a hook
+  registration error leaves the stock VFS untouched and no shim to open.
   `metrics()['wal_coalescing']` reports which, with the reason, and startup
   logs one warning.
   Spec: `tests/storage_authority_sql/test_sqlite_wal_coalesce.py`. A
@@ -1347,10 +1460,6 @@ reimplement the fence, restart and validation rules.
   on demand. Configured sizes retain idle handles, never cap active borrowers;
   startup records server max_connections without deriving a local 80% permit
   budget. Real server refusal and connection errors keep SQLSTATE classification.
-  A refused connect while sibling leases of the same owner are live (the
-  server's own `max_connections`) waits within the caller's deadline for a
-  sibling release and reuses its connection. With no live sibling, the
-  refusal is raised at once.
   Close fences both owners, joins borrowers/preparers and releases caches after
   connection retirement. SQLite and PostgreSQL share one lease lifecycle owner.
 - Pooled JSON/JSONB loaders mark decoded strings so shared codecs never parse them twice; `"true"`, `"null"` and JSON-shaped strings retain their type. Other structured results keep their existing representation and projection byte-evidence checks. Loader configuration is connection-local and covers text/binary results.
@@ -2090,6 +2199,16 @@ authority end to end; cross-Pod takeover is not yet supported.
 
 ## Durable swarm recovery
 
+Exact Swarm lifecycle receipts and teardown are SQL-only. The native Python
+adapter and native semantic dispatcher refuse the exact writer variants before
+legacy handlers can ignore their selectors: `save_mode` on `swarm.session.save`,
+`run_id` on `swarm.session.terminate`, `swarm.agent.save`, `swarm.agent.append`,
+and `swarm.agent.checkpoint.mark`, and `task_id` on `swarm.agents.mark_delivered`.
+The two exact-only operations, `swarm.session.delete_exact` and
+`swarm.session.lifecycle.get`, are not executable natively. These refusals do
+not change legacy operations without those selectors, including `task_id` on a
+legacy session save and on the existing fenced `swarm.agents.acknowledge_results`.
+
 Swarm startup recovery reads only sessions in the ordinary `running` or
 `terminated` lifecycle states. A legacy resumable row without a positive
 owner is default-denied and moved by the dedicated
@@ -2124,17 +2243,7 @@ owned startup control channel. Its existing parent watcher also owns one
 close-on-exec pipe from the application process; EOF releases the Sidecar and
 project lease on parent death or in-place image replacement, including when the
 numeric PID is unchanged. The pipe is bounded to one per child and adds no
-watcher thread. On POSIX the watcher also compares the PPID with the
-supervisor PID, because a `fork()` without `exec` can inherit the pipe's write
-end. On Windows the pipe EOF alone identifies the owner. A venv `python.exe`
-launcher runs the real interpreter as its own child, so there the PPID is the
-launcher and never the supervisor. Windows has no fork that could leak the
-non-inheritable write handle. Process liveness probes go through
-`runtime_guards.pid_is_alive`, which queries the process on Windows: there
-`os.kill(pid, 0)` sends `CTRL_C_EVENT` to the whole console. A refused child
-startup appends the child's exit code and its last stderr lines to the raised
-diagnostic, for example `... [exit_code=2; stderr: ...]`. The error code and
-prefix stay unchanged, so remote logs show the cause. Distributed Pods exchange startup metadata in a mode-0600
+watcher thread. Distributed Pods exchange startup metadata in a mode-0600
 Pod-local memory file and remain independently managed. DSN/Redis credentials
 come from mounted secret files and never appear in argv, repr, logs, or RPC
 payloads.
@@ -2446,7 +2555,8 @@ deadline × attempts, at least 45 s for commands) while supervision still proved
 the authority alive. A starved authority that held its mutex for 121.6 s on
 2026-11-07 therefore surfaced as `storage_unavailable` 503s and failed task
 writes just before it answered, and the window was one more timing knob.
-Decision: a runtime-bound client (`lib/storage/v2_client.py`) waits out
+Decision: a runtime-bound client (`lib/storage/v2_client.py`, and constant for
+constant its Rust counterpart `packages/tofu-storage-client`) waits out
 classified transient failures (`database_timeout`, `database_busy`,
 `database_unavailable`) of replay-safe calls — queries, and commands with their
 unchanged receipt identity — with no aggregate time window. Every replay keeps

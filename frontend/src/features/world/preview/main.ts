@@ -3,9 +3,10 @@
  * The preview never talks to a server beyond loading its fixture file. */
 import '../../../styles/fonts.css';
 import '../../../styles/application/00-design-tokens.css';
+import '../../../styles/application/01-shell-navigation.css';
 import '../../../styles/application/30-ui-kit.css';
 import '../../../styles/application/01-workspace-dock.css';
-import '../world-office.css';
+import '../../../styles/application/27-world-office.css';
 import '../../../styles/application/03-rich-surfaces.css';
 import '../../../styles/application/03-rich-choices.css';
 import { ready, t } from '../../../i18n';
@@ -20,9 +21,11 @@ void Promise.all([ready(), fetch(params.get('fixture') || './live.json').then(re
     const chat = document.querySelector<HTMLElement>('.chat-wrapper')!;
     let source: ReturnType<typeof fixtureLive> | null = null;
     const world = mountWorld(root, {
-      openChat: id => { chat.dataset.conversation = id; },
+      openConversation: id => { chat.dataset.conversation = id; document.body.dataset.classic = 'requested'; },
       openQuestion: (id, question) => { chat.dataset.conversation = id; chat.dataset.question = question.guidanceId; },
+      downloadUrl: id => `#download-${id}`,
       answerPorts: (id, turnId) => source?.answerPorts(id, turnId),
+      confirmDefault: (id, guidanceId) => source ? source.confirmDefault(id, guidanceId) : Promise.reject(new Error('No source')),
       dock: (mode: ConversationDock) => { document.body.dataset.conversationDock = mode; },
       classic: () => { document.body.dataset.classic = 'requested'; },
       push: null,

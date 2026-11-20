@@ -83,6 +83,21 @@ post-handshake timeout setup closes its not-yet-published session. Closed health
 lanes cannot reopen sockets. Local pre-dispatch oversize refusal and complete
 classified server responses retain their existing alignment rules.
 
+Worker and conversation watch cancellation covers cold setup as well as the
+request. Both loopback TCP clients use the same cancellation-aware connect;
+native session creation also binds the exclusive socket during Hello. The
+pool drops failed cold reservations and never lends an interrupted socket.
+Worker shutdown interrupts enrollment and joins it before closing storage;
+no first claim or new timeout is required. Conversation delivery publishes its
+watch owner before enrollment. Stop skips an already-cancelled acquisition or
+wakes its in-flight restart readiness wait using the same token as the watch.
+It waits for both enrollment and the poll thread before storage closes. Failed
+enrollment is removed before its failure is published, so a subsequent start
+can enroll a fresh owner. A controlled native
+TCP peer verifies EOF with Hello unacknowledged, no retained pool session, and
+session reuse and scoped delivery on successful polls. Embedded watches retain
+their existing native cancellation token.
+
 The native accept loop treats `Interrupted`, `ConnectionAborted` and
 `ConnectionReset` as connection-local observations, returning to parent-lease
 checks and readiness polling. Other accept failures remain terminal; authority

@@ -309,10 +309,21 @@ function _loadOAuthStatus(fromRepoll) {
   }, function(result) {
     _autoConfigureOAuthProvider('codex', result, view);
   });
+  var feedback = document.getElementById('oauthStatusFeedback');
   if (!fromRepoll) subscriptionPlans.refresh(_planPorts());
   return view.loadStatus({
     read: function(options) { return Api.oauth.status(options); },
+    loading: function() {
+      if (feedback) feedback.textContent = t('common.loading');
+    },
+    cancelled: function() {
+      if (feedback) feedback.textContent = '';
+    },
+    failed: function() {
+      if (feedback) feedback.textContent = t('settings.oauthTitle') + ' · ' + t('settings.authSourcesLoadFail');
+    },
     publish: function(data) {
+      if (feedback) feedback.textContent = '';
       _updateOAuthCard('claude', data.claude);
       if (view.isCurrent()) _updateOAuthCard('codex', data.codex);
       if (view.isCurrent()) kimiCodeLogin.render(data.kimi, _kimiPorts());

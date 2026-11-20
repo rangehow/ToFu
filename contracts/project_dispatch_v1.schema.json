@@ -759,6 +759,9 @@
         "brief": {
           "$ref": "#/$defs/request/properties/brief"
         },
+        "boardTaskKeys": {
+          "$ref": "#/$defs/boardTaskKeys"
+        },
         "acceptance": {
           "$ref": "#/$defs/request/properties/acceptance"
         },
@@ -793,6 +796,7 @@
         "request": {
           "$ref": "#/$defs/historyRequest"
         },
+        "bindingRevision": {"$ref": "#/$defs/view/properties/bindingRevision"},
         "grantRevision": {
           "$ref": "#/$defs/view/properties/grantRevision"
         },
@@ -848,6 +852,9 @@
         },
         "brief": {
           "$ref": "#/$defs/request/properties/brief"
+        },
+        "boardTaskKeys": {
+          "$ref": "#/$defs/boardTaskKeys"
         },
         "acceptance": {
           "$ref": "#/$defs/request/properties/acceptance"
@@ -1115,6 +1122,34 @@
         }
       }
     },
+    "publicRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projectPath", "coordinatorId", "recipientId", "authorizationSource", "brief", "model", "budget"],
+      "properties": {
+        "projectPath": {"$ref": "#/$defs/request/properties/projectPath"},
+        "coordinatorId": {"$ref": "#/$defs/request/properties/coordinatorId"},
+        "recipientId": {"$ref": "#/$defs/request/properties/recipientId"},
+        "authorizationSource": {"$ref": "#/$defs/request/properties/authorizationSource"},
+        "brief": {"$ref": "#/$defs/request/properties/brief"},
+        "acceptance": {"$ref": "#/$defs/request/properties/acceptance"},
+        "model": {"$ref": "#/$defs/request/properties/model"},
+        "budget": {"$ref": "#/$defs/request/properties/budget"},
+        "profile": {"$ref": "#/$defs/request/properties/profile"},
+        "reworkOf": {"$ref": "#/$defs/request/properties/reworkOf"},
+        "dependencies": {"$ref": "#/$defs/request/properties/dependencies"},
+        "delegation": {"$ref": "#/$defs/request/properties/delegation"},
+        "coordinatorWake": {"$ref": "#/$defs/request/properties/coordinatorWake"},
+        "delegationInputHash": {"$ref": "#/$defs/request/properties/delegationInputHash"},
+        "attachments": {"$ref": "#/$defs/request/properties/attachments"}
+      }
+    },
+    "boardTaskKeys": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+      "description": "Descriptive stable task-history keys of this assignment's owner/project/binding. Many assignments may cover the same keys. Absent means unknown, not inferred from titles; an empty list explicitly names no board tasks. Never grants scope or execution authority."
+    },
     "request": {
       "type": "object",
       "additionalProperties": false,
@@ -1146,6 +1181,9 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 65536
+        },
+        "boardTaskKeys": {
+          "$ref": "#/$defs/boardTaskKeys"
         },
         "acceptance": {
           "type": "array",
@@ -1821,6 +1859,11 @@
         "request": {
           "$ref": "#/$defs/request"
         },
+        "bindingRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Frozen Coordinator binding namespace of this assignment; absent for legacy unpinned evidence. Distinct from grantRevision."
+        },
         "grantRevision": {
           "type": "integer",
           "minimum": 1
@@ -2134,6 +2177,10 @@
         "brief": {
           "$ref": "#/$defs/request/properties/brief"
         },
+        "board_task_keys": {
+          "$ref": "#/$defs/boardTaskKeys",
+          "description": "Optional explicit board coverage: copy stable keys from update_task_progress(read={}).taskKeys, aligned with tasks. Newly supplied keys must appear on this binding's current committed board. Omit for unknown coverage, or on rework to inherit the predecessor's coverage; [] explicitly clears coverage. Descriptive only, never authorizes work."
+        },
         "acceptance": {
           "type": "array",
           "uniqueItems": true,
@@ -2155,6 +2202,47 @@
         },
         "rework_of": {
           "$ref": "#/$defs/reworkOf"
+        },
+        "review": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "reviewers"
+          ],
+          "description": "Independent review loop for this Worker's result (docs/PROJECT_COORDINATION.md, \"Review loops\"). When the Worker finishes, each reviewer is started as its own Worker with no author context; findings of a failed audit go back to this Worker as a follow_up and fresh reviewers re-audit, until every reviewer passes or an impasse is reported. Poll the returned review_loop_id.",
+          "properties": {
+            "reviewers": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "role"
+                ],
+                "properties": {
+                  "role": {
+                    "enum": [
+                      "correctness",
+                      "overclaim",
+                      "references",
+                      "custom"
+                    ],
+                    "description": "correctness: recompute numbers, tables and figures from sources (data audit); overclaim: claims versus evidence; references: citations and cross-references; custom: the audit named in focus."
+                  },
+                  "focus": {
+                    "type": "string",
+                    "maxLength": 2048,
+                    "description": "Extra audit instructions for this reviewer; required for custom."
+                  }
+                }
+              }
+            },
+            "subject": {
+              "$ref": "#/$defs/request/properties/brief",
+              "description": "What the reviewers audit: the artifact paths, the claims and their sources. Defaults to this brief. Reviewers see this, the author's checkpoint and earlier findings, never the author's transcript."
+            }
+          }
         }
       }
     },
@@ -2336,6 +2424,15 @@
         "previousAttemptId": {
           "$ref": "#/$defs/id"
         },
+        "predecessor": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["assignmentId", "grantRevision"],
+          "properties": {
+            "assignmentId": {"$ref": "#/$defs/id"},
+            "grantRevision": {"type": "integer", "minimum": 1}
+          }
+        },
         "frontier": {
           "type": "string",
           "pattern": "^[a-f0-9]{64}$"
@@ -2353,7 +2450,6 @@
         },
         "commitments": {
           "type": "array",
-          "maxItems": 24,
           "description": "Open task-board commitments due at this wake (docs/PROJECT_COORDINATION.md, Commitments on the task board). Also the receipt: a commitment named in an earlier wake is never woken again for the same due time.",
           "items": {
             "type": "object",
@@ -2365,8 +2461,7 @@
             "properties": {
               "title": {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 120
+                "minLength": 1
               },
               "dueAt": {
                 "type": "integer",
@@ -2380,7 +2475,7 @@
     "coordinatorSettlement": {
       "type": "object",
       "additionalProperties": false,
-      "description": "A request's final receipt. Every reason but authority_ended names the report Turn the Coordinator finished with; authority_ended records a Stop, rebinding or changed human source recovery found, which has no report.",
+      "description": "A request's final receipt. Automatic stops commit a report intent before publication. An authority_ended receipt has no report.",
       "required": [
         "sourceAttemptId",
         "turnId",
@@ -2403,11 +2498,13 @@
         }
       },
       "else": {
-        "required": [
-          "reportTurnId"
+        "anyOf": [
+          {"required": ["reportTurnId"]},
+          {"required": ["stopReport"], "properties": {"reason": {"const": "no_progress"}}}
         ]
       },
       "properties": {
+        "stopReport": {"enum": ["no_progress", "automatic_retry_blocked"]},
         "sourceAttemptId": {
           "$ref": "#/$defs/id"
         },

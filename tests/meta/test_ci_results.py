@@ -88,21 +88,6 @@ def run_workflow_gate(command, event, outcomes, profile):
         text=True, capture_output=True, timeout=10)
 
 
-def test_dotfile_artifacts_opt_into_hidden_file_upload():
-    # upload-artifact@v4 (>= 4.4) skips hidden files by default and then reports
-    # "No files were found" for a path such as .coverage.
-    jobs = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text())['jobs']
-    uploads = [step['with'] for job in jobs.values() for step in job.get('steps', [])
-               if str(step.get('uses', '')).startswith('actions/upload-artifact@')]
-    hidden = [upload for upload in uploads
-              if any(part.startswith('.') and part not in {'.', '..'}
-                     for line in str(upload['path']).splitlines()
-                     for part in Path(line.strip()).parts)]
-    assert {upload['name'] for upload in hidden} >= {'coverage-unit-${{ matrix.shard }}', 'coverage-api'}
-    for upload in hidden:
-        assert upload.get('include-hidden-files') is True, upload['name']
-
-
 def test_browser_lane_uses_the_same_journeys_as_local_development():
     jobs = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text())['jobs']
     commands = [step.get('run', '') for step in jobs['e2e']['steps']]
@@ -124,64 +109,3 @@ def test_incremental_and_qualification_jobs_have_explicit_scope_and_receipts():
                step['with'].get('if-no-files-found') == 'error' for step in artifacts)
     for name in ('test-unit', 'test-api', 'test-slow', 'coverage', 'visual-nightly', 'perf-nightly'):
         assert "'full'" in jobs[name]['if']
-
-
-def test_unit_tier_shards_cover_every_file_once_and_gate_all_shard_coverage():
-    jobs = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text())['jobs']
-    unit = jobs['test-unit']
-    shards = unit['strategy']['matrix']['shard']
-    assert unit['strategy']['fail-fast'] is False
-    assert shards == list(range(1, len(shards) + 1))
-    run = next(step['run'] for step in unit['steps'] if 'make test-unit' in step.get('run', ''))
-    assert f'SHARD=${{{{ matrix.shard }}}}/{len(shards)}' in run
-    gate = next(step['run'] for step in jobs['coverage']['steps'] if 'check_coverage.py' in step.get('run', ''))
-    assert 'coverage-unit-*/.coverage' in gate
-
-
-def test_shard_selection_partitions_whole_files():
-    from tests.conftest import _shard_selection
-
-    class Item:
-        def __init__(self, nodeid):
-            self.nodeid = nodeid
-
-    class Hook:
-        def __init__(self):
-            self.deselected = []
-
-        def pytest_deselected(self, items):
-            self.deselected.extend(items)
-
-    class Config:
-        def __init__(self, shard=''):
-            self.hook = Hook()
-            self.shard = shard
-
-        def getoption(self, name, default=None):
-            assert name == '--tofu-shard'
-            return self.shard
-
-    every = [Item(f'tests/area{n % 7}/test_{n}.py::test_{case}') for n in range(60) for case in 'ab']
-    owner = {}
-    for index in (1, 2, 3):
-        items, config = list(every), Config(f'{index}/3')
-        _shard_selection(config, items)
-        assert len(items) + len(config.hook.deselected) == len(every)
-        for item in items:
-            path = item.nodeid.split('::', 1)[0]
-            assert owner.setdefault(path, index) == index
-    assert len(owner) == 60
-    items = list(every)
-    _shard_selection(Config(), items)
-    assert items == every
-    with pytest.raises(pytest.UsageError):
-        _shard_selection(Config('4/3'), list(every))
-
-
-def test_unit_tier_shard_reaches_pytest_only_through_its_command_line():
-    """Pytest sessions that tests spawn inherit the environment; a shard there
-    would deselect their own items, so the Makefile passes an option."""
-    makefile = (ROOT / 'Makefile').read_text()
-    assert 'PYTEST_SHARD = $(if $(SHARD),--tofu-shard=$(SHARD))' in makefile
-    unit_recipes = [line for line in makefile.splitlines() if line.startswith('\t') and '-m "unit and' in line]
-    assert unit_recipes and all('$(PYTEST_SHARD)' in line for line in unit_recipes)

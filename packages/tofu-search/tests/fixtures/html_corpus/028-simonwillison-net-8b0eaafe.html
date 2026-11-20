@@ -1,0 +1,1771 @@
+<!DOCTYPE html>
+<html lang="en-gb">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="canonical" href="https://simonwillison.net/">
+<title>Simon Willison’s Weblog</title>
+<script defer data-domain="simonwillison.net" src="https://plausible.io/js/plausible.js">/* stub */</script>
+<link rel="alternate" type="application/atom+xml" title="Atom" href="/atom/everything/">
+<link rel="stylesheet" type="text/css" href="/static/css/all.720790b1a99c.css">
+<link rel="webmention" href="https://webmention.io/simonwillison.net/webmention">
+<link rel="pingback" href="https://webmention.io/simonwillison.net/xmlrpc">
+<meta name="author" content="Simon Willison">
+<meta property="og:site_name" content="Simon Willison’s Weblog">
+
+<link href="https://github.com/simonw" rel="me">
+<link href="https://twitter.com/simonw" rel="me">
+<link href="https://fedi.simonwillison.net/@simon" rel="me">
+<link rel="authorization_endpoint" href="https://indieauth.com/auth">
+<style>/* stub */</style>
+
+<script>/* stub */</script>
+</head>
+<body class="homepage">
+
+<div id="bighead">
+  <a id="atomfeedlink" href="/atom/everything/" title="My Atom feed"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 256 256"><defs><linearGradient id="a" x1=".1" x2=".9" y1=".1" y2=".9"><stop offset="0" stop-color="#E3702D"/><stop offset=".1" stop-color="#EA7D31"/><stop offset=".4" stop-color="#F69537"/><stop offset=".5" stop-color="#FB9E3A"/><stop offset=".7" stop-color="#EA7C31"/><stop offset=".9" stop-color="#DE642B"/><stop offset="1" stop-color="#D95B29"/></linearGradient></defs><rect width="256" height="256" fill="#CC5D15" rx="55" ry="55"/><rect width="246" height="246" x="5" y="5" fill="#F49C52" rx="50" ry="50"/><rect width="236" height="236" x="10" y="10" fill="url(#a)" rx="47" ry="47"/><circle cx="68" cy="189" r="24" fill="#FFF"/><path fill="#FFF" d=""/><path fill="#FFF" d=""/></svg></a> 
+  <div id="h1-nav-wrapper">
+    <h1>Simon Willison’s Weblog</h1>
+    <nav>
+      <ul>
+        <li><a href="/about/">About</a></li>
+        <li><a href="/newsletters/">Newsletter</a></li>
+        <li><a href="https://til.simonwillison.net/">TILs</a></li>
+        <li><a href="https://tools.simonwillison.net/">Tools</a></li>
+      </ul>
+    </nav>
+  </div>
+  <div id="bigheadcontainer">
+  <p id="currenttags">On <a href="/tags/claude-code/" class="item-tag">claude-code <span>136</span></a> <a href="/tags/datasette-lite/" class="item-tag">datasette-lite <span>27</span></a> <a href="/tags/projects/" class="item-tag">projects <span>566</span></a> <a href="/tags/coding-agents/" class="item-tag">coding-agents <span>267</span></a> <a href="/tags/annotated-release-notes/" class="item-tag">annotated-release-notes <span>63</span></a> <a href="/tags/" class="more">...</a></p>
+  <form action="/search/" method="GET"><div>
+    <input type="search" placeholder="Search this site" class="search-input" name="q" value="" style="max-width: 560px; margin-top: 0.5em">
+    <input type="submit" class="search-submit" value="Search">
+  </div></form>
+  </div>
+</div>
+
+
+<div id="sponsored-banner" class="sponsor-scheme-sky">
+  <div id="sponsored-banner-inner">
+    <strong class="sponsored-label">Sponsored by:</strong> Dynatrace &mdash; Your coding agent can read your code but can’t see how it runs in production. <a href="https://fandf.co/4ipWcGY">Read the blog</a> to see how Dynatrace MCP closes that gap.
+  </div>
+</div>
+
+
+
+<div id="band">&nbsp;</div>
+
+<div id="wrapper">
+<div id="primary">
+
+<h2 class="overband"><span class="overband-nav"><a href="/entries/">Entries</a> <a href="/blogmarks/">Links</a> <a href="/quotations/">Quotes</a> <a href="/notes/">Notes</a> <a href="/guides/">Guides</a> <a href="/elsewhere/" class="elsewhere-link">Elsewhere</a></span></h2>
+
+
+
+
+
+<h3 class="blog-mixed-list-year">Tuesday, 17th November 2026</h3>
+
+
+
+
+
+
+<div class="blogmark segment" data-type="blogmark" data-id="9755">
+  <p><strong><a href="https://blog.primeradiant.com/external-sandboxes-for-coding-agents/">External sandboxes for coding agents</a></strong>.
+    I've been exploring new ways to sandbox code that is executed by agents, with a focus on making it safer to try out local models without worrying that a mistake or prompt injection attack might cause them to take damaging actions on a machine.</p>
+<p>I worked on this project with <a href="https://primeradiant.com">Prime Radiant</a>, the AI research lab behind Superpowers and <a href="https://github.com/orgs/prime-radiant-inc/repositories">other projects</a>.</p>
+<p><a href="https://blog.primeradiant.com/external-sandboxes-for-coding-agents/">My post</a> on the Prime Radiant blog introduces the <strong>external sandbox</strong> pattern, where code executed by the agent runs inside a dedicated sandbox while the agent itself lives outside of that sandbox.</p>
+<p>To demonstrate this pattern we've released three sandbox server implementations:</p>
+<ul>
+<li><a href="https://github.com/prime-radiant-inc/external-sandbox-v86">external-sandbox-v86</a> runs a Node.js server which then uses <a href="https://github.com/copy/v86">v86</a> to run Alpine Linux inside WebAssembly.</li>
+<li><a href="https://github.com/prime-radiant-inc/external-sandbox-container">external-sandbox-container</a> is a Python web server which runs the sandbox in Alpine Linux inside an Apple Containers instance.</li>
+<li><a href="https://github.com/prime-radiant-inc/external-sandbox-quicksand">external-sandbox-quicksand</a> is another Python web server, this time using Microsoft's <a href="https://github.com/microsoft/quicksand">Quicksand</a> sandboxing library, which bundles QEMU <em>and</em> Alpine Linux in a Python package!</li>
+</ul>
+<p>Each of these implementations offers the same localhost API. You can then configure Pi, Claude Code, or Codex to send API calls to that sandbox any time they want to execute code.</p>
+<p>The sandboxes also include an optional HTTP/HTTPS allow-list proxy, so you can control exactly which hosts your agent's code is allowed to communicate with - plus a credential replacement mechanism to make authenticated API calls without sharing a secret with the agent. Here's the UI you can use to reconfigure that proxy while the sandbox is still running:</p>
+<p><img alt="The network policy page with allowed destinations, the policy JSON editor and recent proxy activity" src="https://static.simonwillison.net/static/2026/sandbox-proxy.png" /></p>
+<p>I continue to be fascinated by the challenge of safely running untrusted code. This external sandbox pattern provides a neat way to experiment with different approaches.</p>
+  
+  <p class="date-and-tags">
+    <a href="/2026/Nov/17/external-sandboxes-for-coding-agents/" rel="bookmark">#</a>
+    <a href="/2026/Nov/17/external-sandboxes-for-coding-agents/">10:52 pm</a>
+     / <a href="/tags/sandboxing/">sandboxing</a>, <a href="/tags/security/">security</a>, <a href="/tags/ai/">ai</a>, <a href="/tags/webassembly/">webassembly</a>, <a href="/tags/generative-ai/">generative-ai</a>, <a href="/tags/llms/">llms</a>, <a href="/tags/coding-agents/">coding-agents</a>, <a href="/tags/claude-code/">claude-code</a>, <a href="/tags/codex/">codex</a>, <a href="/tags/pi/">pi</a>
+  </p>
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="blogmark segment" data-type="blogmark" data-id="9756">
+  <p><strong><a href="https://openai.com/index/introducing-gpt-6-2-astra-sol/">GPT‑6.2 Astra and GPT‑6.2 Sol</a></strong>.
+    OpenAI:</p>
+<blockquote>
+<p>We’re introducing GPT‑6.2 Astra, our new frontier model for your hardest projects, and GPT‑6.2 Sol, our efficient, versatile model for everyday work.</p>
+</blockquote>
+<p>They're available in the API as <code>gpt-6.2-astra</code> and <code>gpt-6.2-sol</code>. I shipped <a href="https://llm.datasette.io/en/stable/changelog.html#v0-38">LLM 0.38</a> with support for the new models.</p>
+<p>6.2 Astra is 80% of the price of 6 Astra - $8/MTok input and $40/MTok output, the same price as Claude Fable 5.2 (which was also 80% of its predecessor). 6 Astra and Fable 5 were both $10/$50. The cached price is an even bigger discount - $0.40/million compared to $1/million for the older model. This is great news for longer running agentic sessions.</p>
+<p>GPT-6.2 Sol is the same $2/$10 price as 6.1 Sol and 6 Sol - which are half the price of GPT-5.6 Sol ($4/$20).</p>
+<p>Here are the pelicans <a href="https://tools.simonwillison.net/markdown-svg-renderer?url=https%3A%2F%2Fgist.github.com%2Fsimonw%2Fa940cc2750162ac9edf0ddf881067b83">for GPT-6.2 Sol</a> and <a href="https://tools.simonwillison.net/markdown-svg-renderer?url=https%3A%2F%2Fgist.github.com%2Fsimonw%2Ffe836e13c90c00233c9e9e499a941805">for GPT-6.2 Astra</a>. The 6.2 Astra max pelican looks like this:</p>
+<p><img alt="Good bicycle, good pelican, one wing is on the handlebars with fingers, the other wing is behind. Feet on the correct side of the frame. Nice gradiants. Good pouch, hooked bill." src="https://static.simonwillison.net/static/2026/astra-6-2-max.webp" /></p>
+<p>I have a <a href="https://static.simonwillison.net/static/2026/openai-pelicans-november-2026.html">full comparison grid here</a>, but here's how the high/xhigh/max pelicans compare with the previous Sol and Astra releases:</p>
+<p><img alt="Twelve pastel illustrations compare four models drawing a pelican riding a bicycle at three effort levels. All twelve have a recognizable pelican and bicycle. The clearest differences are in the feather detail and how convincingly the bird steers and pedals. gpt-6.2-astra has the most detailed Max drawing (88.71¢), with layered feathers, a trailing red scarf, and a wing on the handlebars. Xhigh (17.70¢) adds a green cap and keeps the seaside setting. High (11.55¢) simplifies the feathers while keeping the riding pose clear. gpt-6.2-sol shows a convincing pedaling pose at both Max (13.69¢) and Xhigh (6.74¢), with one foot higher than the other and a wing reaching forward. At High (2.41¢), the bird sits lower and the handlebars are harder to distinguish. gpt-6-astra gives the bird a long wing that follows the curve of the handlebars at Max (63.21¢). Xhigh (33.85¢) shows two bent legs on the pedals. At High (18.37¢), one leg stretches almost straight down, making the pose look stiffer. gpt-6.1-sol uses nearly the same long-necked bird with a wing on the bars at Max (13.48¢) and Xhigh (5.39¢). At High (3.66¢), the bird folds its wing against its body and appears to ride hands-free." src="https://static.simonwillison.net/static/2026/gpt-6-2-grid.webp" /></p>
+<p>I also ran my most recent benchmark prompt against the two models, using "Ultra' effort levels in the Codex CLI:</p>
+<blockquote>
+<p><code>Make a three js animation where yonkers stands up as a big mech (cool stand up motion) and stomps around manhattan and queens and Brooklyn, use openstreetmap mapping data</code></p>
+</blockquote>
+<p>Here's <a href="https://static.simonwillison.net/static/2026/yonkers-gpt-6.2-sol-ultra/index.html">Sol</a> and here's <a href="https://static.simonwillison.net/static/2026/yonkers-gpt-6.2-astra-ultra/index.html">Astra</a>. Neither of them did a good enough job of morphing Yonkers into a big mech, at least in comparison to <a href="https://tools.simonwillison.net/yonkers-rises">Claude Fable 5.2</a> and <a href="https://static.simonwillison.net/static/2026/yonkers-mech-standalone.html">Gemini 4 Carbon</a>.</p>
+<p>This video showing the Astra and Sol animations playing out at the same time:</p>
+<video controls playsinline preload="none" width="1080" height="1080" poster="https://static.simonwillison.net/static/2026/yonkers-astra-sol-20s.webp">
+  <source src="https://static.simonwillison.net/static/2026/yonkers-astra-sol-20s-largest.mp4" type="video/mp4">
+</video>
+
+<p>I created that video using GPT-6.2 Astra (Ultra) in the Codex desktop app by prompting:</p>
+<blockquote>
+<p><code>https://static.simonwillison.net/static/2026/yonkers-gpt-6.2-astra-ultra/index.html and https://static.simonwillison.net/static/2026/yonkers-gpt-6.2-sol-ultra/index.html  are two videos of the same thing by two different models</code></p>
+<p><code>I need a video of the first 10 seconds where the top half of the video plays the first and the bottom half plays the second</code></p>
+<p><code>I need an overlaid label of "GPT-6.2 Astra" on the top half and "GPT-6.2 Sol" on the bottom half. These labels should be tastefully positioned.</code></p>
+<p><code>Make the video square and 2000x2000 pixels</code></p>
+</blockquote>
+<p>Then later:</p>
+<blockquote>
+<p><code>OK make it 20s</code></p>
+</blockquote>
+<p>Here's the <a href="https://gist.github.com/simonw/6b44c588a1321b60799dbbfd13db6d23">exported transcript</a>.</p>
+<p>The buzz around these new models is mixed at the moment. Astra 6.2 isn't scoring quite as high as Fable 5.2 on various benchmarks, and I've seen a few complaints that its communication style can be confusing. Theo Browne's <a href="https://twitter.com/theo/status/2122760447103484410">review</a> (in the form of a feedback letter he sent OpenAI during pre-release) has this useful example:</p>
+<blockquote>
+<p>When this model is working on long tasks, it can pull in a lot of subagents and manage them pretty well. It will then proceed to randomly <em>ask you some weird internal implementation detail bullshit that you could not under any earthly circumstance understand, much less have input on</em>.</p>
+<p>I sent "/goal make a new level for Outer Wilds". 2 hours in, it's "blocked" because it wanted to ask me "does r24's reviewer write it's clips to 24_g521.mp4 or 24_p11.mp4?"</p>
+</blockquote></p>
+  
+  <p class="date-and-tags">
+    <a href="/2026/Nov/17/gpt62-astra-and-sol/" rel="bookmark">#</a>
+    <a href="/2026/Nov/17/gpt62-astra-and-sol/">10:38 pm</a>
+     / <a href="/tags/ai/">ai</a>, <a href="/tags/openai/">openai</a>, <a href="/tags/generative-ai/">generative-ai</a>, <a href="/tags/llms/">llms</a>, <a href="/tags/llm-pricing/">llm-pricing</a>, <a href="/tags/pelican-riding-a-bicycle/">pelican-riding-a-bicycle</a>, <a href="/tags/llm-release/">llm-release</a>, <a href="/tags/theo-browne/">theo-browne</a>, <a href="/tags/gpt/">gpt</a>, <a href="/tags/yonkers-rising/">yonkers-rising</a>
+  </p>
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+<div class="entry segment" data-type="entry" data-id="9601">
+  <h3><a href="/2026/Nov/17/datasette-lite/" rel="bookmark">Running the full server-side Datasette Python app in the browser with service workers and Pyodide</a></h3>
+  
+    <div class="card-container">
+      <a href="/2026/Nov/17/datasette-lite/"><img src="https://static.simonwillison.net/static/2026/datasette-lite-diag.webp" alt="Visit Running the full server-side Datasette Python app in the browser with service workers and Pyodide"></a>
+    </div>
+  
+  <p>
+    <p><a href="https://lite.datasette.io/">Datasette Lite</a> is my port of the <a href="https://datasette.io/">Datasette</a> Python application to run directly in the browser using WebAssembly and <a href="https://pyodide.org/">Pyodide</a>. I’ve released a complete rewrite of Datasette Lite using service workers, and it’s now almost indistinguishable from the real server-side application.</p>
+
+    <span style="font-size: 0.9em">[... <a href="/2026/Nov/17/datasette-lite/">1,951 words</a>]</span>
+  </p>
+  <div class="entryFooter">
+  <a href="/2026/Nov/17/datasette-lite/" title="Permalink for &quot;Running the full server-side Datasette Python app in the browser with service workers and Pyodide&quot;">4:48 pm</a> / <a href="/tags/javascript/">javascript</a>, <a href="/tags/projects/">projects</a>, <a href="/tags/python/">python</a>, <a href="/tags/urls/">urls</a>, <a href="/tags/datasette/">datasette</a>, <a href="/tags/webassembly/">webassembly</a>, <a href="/tags/service-workers/">service-workers</a>, <a href="/tags/pyodide/">pyodide</a>, <a href="/tags/datasette-lite/">datasette-lite</a>
+  </div>
+</div> 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="quote segment" data-type="quotation" data-id="2489">
+  <blockquote cite="https://go-proverbs.github.io"><p>A little copying is better than a little dependency.</p></blockquote>
+  <p class="cite">&mdash; <a href="https://go-proverbs.github.io">Go Proverbs</a>, <span class="context"><a href="https://news.ycombinator.com/item?id=50516689#50526408">via</a></span></p>
+  
+  <p class="date-and-tags">
+    <a href="/2026/Nov/17/go-proverbs/" rel="bookmark">#</a>
+    <a href="/2026/Nov/17/go-proverbs/">6:16 am</a>
+     / <a href="/tags/go/">go</a>, <a href="/tags/programming/">programming</a>
+  </p>
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="beat segment beat-sighting" data-type="beat" data-id="5414">
+  <div class="beat-content">
+    <div class="beat-row1">
+      <a class="beat-label sighting" href="/elsewhere/sighting/">Sighting</a>
+      <span class="beat-title"><a href="/2026/Nov/17/sighting-415187174/">5:20 PM – 5:43 PM</a></span>
+      <span class="beat-commit">&mdash; Common Raven, California Sea Lion, in San Mateo County, CA, US</span>
+    </div>
+    <captioned-image-gallery>
+      <figure><a href="https://static.inaturalist.org/photos/764468990/original.jpg"><img src="https://static.inaturalist.org/photos/764468990/small.jpg" alt="Common Raven" loading="lazy" data-width="1365" data-height="2048"></a><figcaption><a href="https://www.inaturalist.org/observations/415187174" title="View observation on iNaturalist">Common Raven</a></figcaption></figure><figure><a href="https://static.inaturalist.org/photos/764469008/original.jpg"><img src="https://static.inaturalist.org/photos/764469008/small.jpg" alt="Common Raven" loading="lazy" data-width="2048" data-height="1365"></a><figcaption><a href="https://www.inaturalist.org/observations/415187174" title="View observation on iNaturalist">Common Raven</a></figcaption></figure><figure><a href="https://static.inaturalist.org/photos/764469038/original.jpg"><img src="https://static.inaturalist.org/photos/764469038/small.jpg" alt="California Sea Lion" loading="lazy" data-width="2048" data-height="1365"></a><figcaption><a href="https://www.inaturalist.org/observations/415187442" title="View observation on iNaturalist">California Sea Lion</a></figcaption></figure>
+    </captioned-image-gallery>
+    
+    <div class="beat-meta beat-row2">
+      <a href="/2026/Nov/17/sighting-415187174/" rel="bookmark">17th Nov 2026</a>
+    </div>
+  </div>
+</div>
+
+
+
+
+
+<h3 class="blog-mixed-list-year">Monday, 16th November 2026</h3>
+
+
+
+
+
+
+
+
+
+
+
+<div class="beat segment" data-type="beat" data-id="5128">
+  
+  <div class="beat-content">
+    <div class="beat-row1">
+      
+        <a class="beat-label release" href="/elsewhere/release/">Release</a>
+      
+      <span class="beat-title"><a href="https://github.com/simonw/llm/releases/tag/0.37.3">llm 0.37.3</a></span>
+      
+    </div>
+    <div class="beat-note blogmark-body"><p>A bug fix release for <a href="https://llm.datasette.io">LLM</a>, mainly to cover a problem with the most recent Homebrew package of the software.</p>
+<p>Homebrew now ships the latest SQLite, <a href="https://www.sqlite.org/releaselog/3_54_1.html">3.54.1</a>, which includes <a href="https://sqlite.org/bugs/info/2026-10-12T13:52:22Z">a fix</a> that <a href="https://github.com/simonw/llm/issues/1879">broke LLM's logging code</a>.</p>
+<p>Short version: in SQLite 3.54.0 the following SQL:</p>
+<pre><code>select json_object('a', (select json_array(1)))
+</code></pre>
+<p>Returns this:</p>
+<pre><code>{"a":[1]}
+</code></pre>
+<p>But in 3.54.1 the same query returns this:</p>
+<pre><code>{"a":"[1]"}
+</code></pre>
+<p>According <a href="https://sqlite.org/forum/forumpost/dff1a343157e422f">to D. Richard Hipp</a>:</p>
+<blockquote>
+<p>That was a bug fix. Per the documentation, (SELECT json_array(...)) returns SQL text, not JSON. Hence the 3.54.1 behavior is correct and 3.54.0 was a bug.</p>
+</blockquote>
+<p>The workaround looks like this:</p>
+<pre><code>select json_object('a', json((select json_array(1))))
+</code></pre></div>
+    <div class="beat-meta beat-row2">
+      <a href="/2026/Nov/16/llm/" rel="bookmark">16th Nov 2026, 11:57 pm</a> &middot; <a href="/tags/llm/">llm</a>, <a href="/tags/webassembly/">webassembly</a>, <a href="/tags/sqlite/">sqlite</a>, <a href="/tags/generative-ai/">generative-ai</a>, <a href="/tags/ai/">ai</a>, <a href="/tags/llms/">llms</a>, <a href="/tags/d-richard-hipp/">d-richard-hipp</a>
+    </div>
+  </div>
+</div>
+
+
+
+
+
+<h3 class="blog-mixed-list-year">Sunday, 15th November 2026</h3>
+
+
+
+
+
+
+
+
+
+
+
+<div class="beat segment" data-type="beat" data-id="5127">
+  
+  <div class="beat-content">
+    <div class="beat-row1">
+      
+        <a class="beat-label release" href="/elsewhere/release/">Release</a>
+      
+      <span class="beat-title"><a href="https://github.com/datasette/datasette-maplibre/releases/tag/0.1a0">datasette-maplibre 0.1a0</a></span>
+      
+    </div>
+    <div class="beat-note blogmark-body"><p>The first new Datasette geospatial plugin in quite a while! This one combines the excellent <a href="https://maplibre.org/maplibre-gl-js/docs/">MapLibre GL</a> library with <a href="https://openfreemap.org">OpenFreeMap</a>, the free vector map server operated by Zsolt Ero (you should <a href="https://github.com/sponsors/hyperknot">sponsor Zsolt on GitHub</a>.)</p>
+<p>I built most of this with a single prompt to Claude Fable 5.2:</p>
+<blockquote>
+<p><code>Look at datasette-cluster-map and datasette-leaflet-geojson plugins, then look at ~/dev/tools/openfreemap-demo.html - then build a brand new Datasette plugin that uses maplibreGL and openfreemap and combines the features of those other two plugins - but be creative and think outside the box for other useful features the plugin might have</code></p>
+</blockquote>
+<p>"Be creative and think outside the box" resulted in a few neat ideas - my favorite is that it displays SVG previews of GeoJSON shapes, then loads a WebGL preview only when they scroll into view.</p>
+<p>I also had Claude build a comprehensive demo which works in the latest Datasette Lite, so you can <a href="https://lite.datasette.io/?install=datasette-maplibre&amp;url=https://gist.githubusercontent.com/simonw/39fa5d399465766039549912e2b3d291/raw/f6dfba99a75cbb8b5d9386223220eb52272767ee/demo.db&amp;metadata=https://gist.githubusercontent.com/simonw/39fa5d399465766039549912e2b3d291/raw/f6dfba99a75cbb8b5d9386223220eb52272767ee/metadata.yml">visit this link</a> to load the plugin and a demo database in your browser via Pyodide and WebAssembly.</p>
+<p>I like <a href="https://lite.datasette.io/?install=datasette-maplibre&amp;url=https://gist.githubusercontent.com/simonw/39fa5d399465766039549912e2b3d291/raw/f6dfba99a75cbb8b5d9386223220eb52272767ee/demo.db&amp;metadata=https://gist.githubusercontent.com/simonw/39fa5d399465766039549912e2b3d291/raw/f6dfba99a75cbb8b5d9386223220eb52272767ee/metadata.yml#/demo/capitals_and_countries%23map=0/4.2/180&amp;color=continent">this demo page</a> showing both GeoJSON shapes and lat/lon points on the same map:</p>
+<p><img alt="Screenshot of a web map interface. Toolbar: &quot;View&quot; set to &quot;Clusters&quot;, &quot;Colour by&quot; set to &quot;continent&quot;, plus &quot;Filter to this area&quot; and &quot;Download GeoJSON&quot; buttons. A world map shows countries outlined and shaded by continent, with coloured dots and numbered cluster circles. A popup for a point in South America reads: capital Caracas, country Venezuela, continent South America, capital_population 2985000, latitude 10.502944, longitude -66.918983. Legend: Africa (52), Asia (45), Europe (39), North America (16), South America (13), Oceania (6). Text: &quot;All 171 rows are on the map&quot;. Below, a table with columns country, continent, capital_population, latitude, longitude, boundary. First row: Afghanistan, Asia, 3277000, 34.518636, 69.181314, with a small map in the boundary column showing Afghanistan outlined and shaded in blue." src="https://static.simonwillison.net/static/cors-allow/2026/datasette-maplibre.webp" /></p></div>
+    <div class="beat-meta beat-row2">
+      <a href="/2026/Nov/15/datasette-maplibre/" rel="bookmark">15th Nov 2026, 11:58 pm</a> &middot; <a href="/tags/visualization/">visualization</a>, <a href="/tags/generative-ai/">generative-ai</a>, <a href="/tags/datasette-lite/">datasette-lite</a>, <a href="/tags/claude-mythos-fable/">claude-mythos-fable</a>, <a href="/tags/ai/">ai</a>, <a href="/tags/llms/">llms</a>, <a href="/tags/geospatial/">geospatial</a>, <a href="/tags/openstreetmap/">openstreetmap</a>, <a href="/tags/datasette/">datasette</a>
+    </div>
+  </div>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="beat segment" data-type="beat" data-id="5122">
+  
+  <div class="beat-content">
+    <div class="beat-row1">
+      
+        <a class="beat-label release" href="/elsewhere/release/">Release</a>
+      
+      <span class="beat-title"><a href="https://github.com/simonw/datasette/releases/tag/1.0a43">datasette 1.0a43</a></span>
+      
+    </div>
+    <div class="beat-note blogmark-body"><p>I've been leaning hard into Claude Fable 5.2 to help knock things off the <a href="https://github.com/simonw/datasette/milestone/37">1.0 milestone</a>, which is now 53% complete.</p>
+<p>The biggest 1.0 item in this release is <a href="https://docs.datasette.io/en/latest/plugin_hooks.html#plugin-register-output-renderer-streaming">streaming support for output renderers</a> - the built-in TSV and CSV export mechanisms now use this as well, and plugins can register themselves as capable of streaming every row in a table in one go via the new <a href="https://docs.datasette.io/en/latest/internals.html#internals-response-stream">Response.stream()</a> method.</p>
+<p>There are a couple of security fixes, one of which I deemed <a href="https://github.com/simonw/datasette/security/advisories/GHSA-mw6v-83vp-7c4c">deserving of a GitHub advisory</a>: private stored queries could be exposed, granting access to the title and SQL of the query (but not allowing that query to be executed).</p>
+<p>There are dozens of smaller improvements. The row page JSON representation <a href="https://docs.datasette.io/en/latest/json_api.html#json-api-row">finally has a design suitable for 1.0</a>. A new <code>&lt;datasette-copy-button&gt;</code> Web Component provides copy-schema in various places. JSON in columns on the row page can be pretty-printed. There's a new <a href="https://docs.datasette.io/en/latest/javascript_plugins.html#javascript-plugins-modal-confirm">DatasetteModal.confirm()</a> JavaScript utility method. Plus dozens of bug fixes, including contributions by <a href="https://github.com/PDGGK">Zihan Dai</a>, <a href="https://github.com/peterolkhov">Peter Olkhovets</a>, <a href="https://github.com/IlyaKhalafi">Ilya Khalafi</a>, and <a href="https://github.com/AnkitaAdvitot">Ankita Advitot</a>.</p>
+<p>The feature I'm most excited about is a pretty tiny one: I've added CSS multi-page view transitions to Datasette! <a href="https://github.com/simonw/datasette/commit/7da8a85ea77786edef975a4066bbadfab0966a0c">Here's the commit</a> - key CSS is as follows:</p>
+<div class="highlight highlight-source-css"><pre><span class="pl-c">/* Enable cross-document view transitions,</span>
+<span class="pl-c">   for anyone without prefers-reduced-motion */</span>
+<span class="pl-k">@media</span> <span class="pl-kos">(</span><span class="pl-c1">prefers-reduced-motion</span><span class="pl-kos">:</span> no-preference<span class="pl-kos">)</span> <span class="pl-kos">{</span>
+    <span class="pl-k">@view-transition</span> <span class="pl-kos">{</span>
+        <span class="pl-c1">navigation</span><span class="pl-kos">:</span> auto<span class="pl-kos">;</span>
+    <span class="pl-kos">}</span>
+<span class="pl-kos">}</span>
+<span class="pl-c">/* .facet-results should morph from old position to new */</span>
+<span class="pl-ent">html</span><span class="pl-kos">:</span><span class="pl-c1">active-view-transition</span> <span class="pl-kos">.</span><span class="pl-c1">content</span> <span class="pl-c1">&gt;</span> <span class="pl-kos">.</span><span class="pl-c1">facet-results</span> <span class="pl-kos">{</span>
+    <span class="pl-c1">view-transition-name</span><span class="pl-kos">:</span> facet-results<span class="pl-kos">;</span>
+<span class="pl-kos">}</span>
+<span class="pl-c">/* So should a .table-wrapper, provided it contains .rows-and-columns */</span>
+<span class="pl-ent">html</span><span class="pl-kos">:</span><span class="pl-c1">active-view-transition</span> <span class="pl-kos">.</span><span class="pl-c1">table-wrapper</span><span class="pl-kos">:</span><span class="pl-c1">has</span><span class="pl-kos">(</span><span class="pl-c1">&gt;</span> <span class="pl-ent">table</span><span class="pl-kos">.</span><span class="pl-c1">rows-and-columns</span><span class="pl-kos">)</span> <span class="pl-kos">{</span>
+    <span class="pl-c1">view-transition-name</span><span class="pl-kos">:</span> rows-table<span class="pl-kos">;</span>
+<span class="pl-kos">}</span></pre></div>
+
+<p>With that in place, navigations within Datasette - still staunchly a multi-page application - feel more like an SPA. This works on Safari and Chrome at the moment and I believe supports for Firefox is due to land in <a href="https://developer.mozilla.org/en-US/docs/Mozilla/Firefox/Releases/162#changes_for_web_developers">Firefox 162</a> on December 8th 2026 (seeing as they are no longer feature-flagged in Firefox Nightly.)</p>
+<video controls playsinline preload="none" width="930" height="720" poster="https://static.simonwillison.net/static/cors-allow/2026/css-transitions-datasette.webp">
+  <source src="https://static.simonwillison.net/static/cors-allow/2026/css-transitions-datasette.mp4" type="video/mp4">
+</video></div>
+    <div class="beat-meta beat-row2">
+      <a href="/2026/Nov/15/datasette/" rel="bookmark">15th Nov 2026, 11:20 pm</a> &middot; <a href="/tags/security/">security</a>, <a href="/tags/datasette/">datasette</a>, <a href="/tags/css/">css</a>, <a href="/tags/browsers/">browsers</a>, <a href="/tags/annotated-release-notes/">annotated-release-notes</a>, <a href="/tags/firefox/">firefox</a>, <a href="/tags/javascript/">javascript</a>, <a href="/tags/safari/">safari</a>, <a href="/tags/chrome/">chrome</a>
+    </div>
+  </div>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="beat segment" data-type="beat" data-id="5123">
+  
+  <div class="beat-content">
+    <div class="beat-row1">
+      
+        <a class="beat-label release" href="/elsewhere/release/">Release</a>
+      
+      <span class="beat-title"><a href="https://github.com/simonw/datasette/releases/tag/0.65.6">datasette 0.65.6</a></span>
+      
+    </div>
+    <div class="beat-note blogmark-body"><p>I backported a minor security fix from 1.0a43:</p>
+<blockquote>
+<p>Fixed a security issue where a database registered using <code>add_database(db, name=..., route=...)</code> with a route that differs from its name could be downloaded from <code>/&lt;route&gt;.db</code> by actors who were denied access to it. [...]</p>
+</blockquote></div>
+    <div class="beat-meta beat-row2">
+      <a href="/2026/Nov/15/datasette-2/" rel="bookmark">15th Nov 2026, 11:18 pm</a> &middot; <a href="/tags/security/">security</a>, <a href="/tags/datasette/">datasette</a>
+    </div>
+  </div>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="beat segment beat-sighting" data-type="beat" data-id="5413">
+  <div class="beat-content">
+    <div class="beat-row1">
+      <a class="beat-label sighting" href="/elsewhere/sighting/">Sighting</a>
+      <span class="beat-title"><a href="/2026/Nov/15/sighting-415220308/">11:56 AM – 12:33 PM</a></span>
+      <span class="beat-commit">&mdash; Yellow-eyed Ensatina, California Newt, Rough-skinned Newt, in San Mateo County, CA, US</span>
+    </div>
+    <captioned-image-gallery>
+      <figure><a href="https://static.inaturalist.org/photos/764538654/original.jpg"><img src="https://static.inaturalist.org/photos/764538654/small.jpg" alt="Yellow-eyed Ensatina" loading="lazy" data-width="2048" data-height="1365"></a><figcaption><a href="https://www.inaturalist.org/observations/415220308" title="View observation on iNaturalist">Yellow-eyed Ensatina</a></figcaption></figure><figure><a href="https://static.inaturalist.org/photos/764538749/original.jpg"><img src="https://static.inaturalist.org/photos/764538749/small.jpg" alt="California Newt" loading="lazy" data-width="2048" data-height="1365"></a><figcaption><a href="https://www.inaturalist.org/observations/415220352" title="View observation on iNaturalist">California Newt</a></figcaption></figure><figure><a href="https://static.inaturalist.org/photos/764538841/original.jpg"><img src="https://static.inaturalist.org/photos/764538841/small.jpg" alt="Rough-skinned Newt" loading="lazy" data-width="2048" data-height="1365"></a><figcaption><a href="https://www.inaturalist.org/observations/415220404" title="View observation on iNaturalist">Rough-skinned Newt</a></figcaption></figure><figure><a href="https://static.inaturalist.org/photos/764538861/original.jpg"><img src="https://static.inaturalist.org/photos/764538861/small.jpg" alt="Rough-skinned Newt" loading="lazy" data-width="2048" data-height="1365"></a><figcaption><a href="https://www.inaturalist.org/observations/415220404" title="View observation on iNaturalist">Rough-skinned Newt</a></figcaption></figure>
+    </captioned-image-gallery>
+    
+    <div class="beat-meta beat-row2">
+      <a href="/2026/Nov/15/sighting-415220308/" rel="bookmark">15th Nov 2026</a>
+    </div>
+  </div>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="beat segment" data-type="beat" data-id="5125">
+  
+  <div class="beat-content">
+    <div class="beat-row1">
+      
+        <a class="beat-label release" href="/elsewhere/release/">Release</a>
+      
+      <span class="beat-title"><a href="https://github.com/datasette/datasette-apps/releases/tag/0.4a0">datasette-apps 0.4a0</a></span>
+      
+    </div>
+    <div class="beat-note blogmark-body"><p>Datasette Apps are sandboxed HTML and JavaScript applications that live inside Datasette - think Claude Artifacts, but these ones can run SQL queries against your data.</p>
+<p>0.4a0 adds support for linking: you can link to an app with <code>#fragments</code> in the URL and the app can see and use those, plus supported URL schemes are reported back to Datasette Agent so it can help write apps that link to each other.</p>
+<p>This means you can have e.g. an app that shows details about a specific record, and a completely separate app that searches those records and links to their representations in the first app.</p></div>
+    <div class="beat-meta beat-row2">
+      <a href="/2026/Nov/15/datasette-apps/" rel="bookmark">15th Nov 2026, 4:02 am</a> &middot; <a href="/tags/datasette-agent/">datasette-agent</a>, <a href="/tags/datasette-apps/">datasette-apps</a>, <a href="/tags/datasette/">datasette</a>, <a href="/tags/urls/">urls</a>
+    </div>
+  </div>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="beat segment" data-type="beat" data-id="5124">
+  
+  <div class="beat-content">
+    <div class="beat-row1">
+      
+        <a class="beat-label release" href="/elsewhere/release/">Release</a>
+      
+      <span class="beat-title"><a href="https://github.com/datasette/datasette-agent/releases/tag/0.6a0">datasette-agent 0.6a0</a></span>
+      
+    </div>
+    <div class="beat-note blogmark-body"><p>Accumulated small fixes for Datasette Agent, my agent plugin for Datasette that lets you ask questions about your data. Most notably, it now adds an agent prompt directly to the Datasette homepage, with support for hash-mentions of tables and queries:</p>
+<p><img alt="Datasette homepage. Below the search box is a Datasette Agent heading with a text input and an ask button. User has typed: Tell me about #re - the box is showing autocomplete results for the repos and releases tables." src="https://static.simonwillison.net/static/cors-allow/2026/datasette-agent-homepage.webp" /></p></div>
+    <div class="beat-meta beat-row2">
+      <a href="/2026/Nov/15/datasette-agent/" rel="bookmark">15th Nov 2026, 3:49 am</a> &middot; <a href="/tags/datasette-agent/">datasette-agent</a>, <a href="/tags/llm/">llm</a>, <a href="/tags/datasette/">datasette</a>, <a href="/tags/llms/">llms</a>, <a href="/tags/ai/">ai</a>, <a href="/tags/generative-ai/">generative-ai</a>
+    </div>
+  </div>
+</div>
+
+
+
+
+
+<h3 class="blog-mixed-list-year">Saturday, 14th November 2026</h3>
+
+
+
+
+
+
+
+
+
+
+
+<div class="beat segment" data-type="beat" data-id="5120">
+  
+  <div class="beat-content">
+    <div class="beat-row1">
+      
+        <a class="beat-label release" href="/elsewhere/release/">Release</a>
+      
+      <span class="beat-title"><a href="https://github.com/datasette/datasette-llm/releases/tag/0.1a11">datasette-llm 0.1a11</a></span>
+      
+    </div>
+    <div class="beat-note blogmark-body"><p><code>datasette-llm</code> is the intermediate plugin for Datasette that supports configuring LLMs for use with other Datasette plugins.</p>
+<p>This release adds support for OpenAI-compatible endpoints, so you can configure Datasette to use an LLM hosted anywhere that talks the OpenAI pseudo-standard web protocol.</p>
+<p>This means that if you're running local models with <a href="https://lmstudio.ai">LM Studio</a> or <a href="https://ollama.com">Ollama</a> or <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> (which just hit <a href="https://huggingface.co/blog/ggml-org/llama-cpp-v1">v1.0.0</a>) you can run Datasette via <code>uvx</code> like this:</p>
+<div class="highlight highlight-source-shell"><pre>wget https://datasette.io/content.db
+
+uvx --with datasette-agent datasette \
+  --root --secret 1 \
+  -s plugins.datasette-llm.default_model <span class="pl-s"><span class="pl-pds">'</span>{</span>
+<span class="pl-s">    "model": "lmstudio-qwen",</span>
+<span class="pl-s">    "model_name": "qwen/qwen3.8-27b",</span>
+<span class="pl-s">    "api_base": "http://localhost:1234/v1"</span>
+<span class="pl-s">  }<span class="pl-pds">'</span></span> content.db</pre></div>
+
+<p>And you'll get a local server running a Datasette Agent instance powered by your local model!</p>
+<p><img alt="Screenshot of a chat interface. Header bar reads &quot;home&quot; on the left and &quot;root&quot; with a hamburger menu icon on the right. Below is a back arrow, the heading &quot;Chat&quot;, a model label &quot;lmstudio-qwen&quot; and an &quot;EXPORT&quot; button. A blue user message bubble says &quot;how many repos and how many releases are there?&quot; Below it is a collapsed tool call &quot;list_databases_and_tables&quot; and an expanded tool call &quot;sql_query&quot;. Its REQUEST section shows database &quot;content&quot;, display &quot;both&quot; and the SQL: SELECT (SELECT COUNT(*) FROM repos) AS repo_count, (SELECT COUNT(*) FROM releases) AS release_count. Its RESPONSE section shows columns repo_count and release_count with a single row of 200 and 1889. Below that is a table with columns repo_count and release_count and one row: 200, 1889, followed by a &quot;View SQL query&quot; button. The assistant reply reads &quot;There are 200 repos and 1,889 releases in the content database.&quot; At the bottom is a text input with placeholder &quot;Type a message... (# to tag a table or query)&quot; and a blue &quot;Send&quot; button." src="https://static.simonwillison.net/static/2026/lmstudio-datasette-agent.webp" /></p></div>
+    <div class="beat-meta beat-row2">
+      <a href="/2026/Nov/14/datasette-llm/" rel="bookmark">14th Nov 2026, 11:59 pm</a> &middot; <a href="/tags/uv/">uv</a>, <a href="/tags/datasette-agent/">datasette-agent</a>, <a href="/tags/llm/">llm</a>, <a href="/tags/datasette/">datasette</a>, <a href="/tags/llms/">llms</a>, <a href="/tags/ai/">ai</a>, <a href="/tags/generative-ai/">generative-ai</a>
+    </div>
+  </div>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="beat segment beat-sighting" data-type="beat" data-id="5412">
+  <div class="beat-content">
+    <div class="beat-row1">
+      <a class="beat-label sighting" href="/elsewhere/sighting/">Sighting</a>
+      <span class="beat-title"><a href="/2026/Nov/14/sighting-414803040/">3:03 PM</a></span>
+      <span class="beat-commit">&mdash; Brown-headed Cowbird, in Monterey Bay National Marine Sanctuary, CA, US, CA</span>
+    </div>
+    <captioned-image-gallery>
+      <figure><a href="https://static.inaturalist.org/photos/763684094/original.jpg"><img src="https://static.inaturalist.org/photos/763684094/small.jpg" alt="Brown-headed Cowbird" loading="lazy" data-width="1365" data-height="2048"></a><figcaption><a href="https://www.inaturalist.org/observations/414803040" title="View observation on iNaturalist">Brown-headed Cowbird</a></figcaption></figure><figure><a href="https://static.inaturalist.org/photos/763684119/original.jpg"><img src="https://static.inaturalist.org/photos/763684119/small.jpg" alt="Brown-headed Cowbird" loading="lazy" data-width="2048" data-height="1365"></a><figcaption><a href="https://www.inaturalist.org/observations/414803040" title="View observation on iNaturalist">Brown-headed Cowbird</a></figcaption></figure>
+    </captioned-image-gallery>
+    
+    <div class="beat-meta beat-row2">
+      <a href="/2026/Nov/14/sighting-414803040/" rel="bookmark">14th Nov 2026</a>
+    </div>
+  </div>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="beat segment" data-type="beat" data-id="5119">
+  
+  <div class="beat-content">
+    <div class="beat-row1">
+      
+        <a class="beat-label release" href="/elsewhere/release/">Release</a>
+      
+      <span class="beat-title"><a href="https://github.com/simonw/datasette-vega/releases/tag/0.7">datasette-vega 0.7</a></span>
+      
+    </div>
+    <div class="beat-note blogmark-body"><p>A new release of Datasette's longest untouched plugin, for rendering charts (using <a href="https://vega.github.io/vega-lite/">Vega-Lite</a>) against data in a table or custom query. The last release was in July 2018!</p>
+<p>I finally bumped it for compatibility with the latest Datasette alphas, plus some cosmetic tweaks to make it work better with <a href="https://lite.datasette.io/">Datasette Lite</a>.</p>
+<p>(Datasette Lite just gained the ability to run JavaScript plugins like this! I'll write more about that soon.)</p>
+<p>Since it works with Datasette Lite, the live demo in the README now <a href="https://lite.datasette.io/?install=datasette-vega&amp;csv=https%3A%2F%2Fraw.githubusercontent.com%2Ffivethirtyeight%2Fdata%2Fmaster%2Fairline-safety%2Fairline-safety.csv#/data/airline-safety?_size=max#g.mark=bar&amp;g.x_column=airline&amp;g.x_type=ordinal&amp;g.y_column=fatalities_00_14&amp;g.y_type=quantitative">links to this demo on Datasette Lite</a>.</p>
+<p><img alt="Screenshot of a charting tool. A panel headed &quot;Charting options&quot; has radio buttons for &quot;Bar&quot; (selected), &quot;Line&quot; and &quot;Scatter&quot;. Below are select menus: &quot;X column&quot; set to &quot;airline&quot; with &quot;Type&quot; set to &quot;Label&quot;, and &quot;Y column&quot; set to &quot;fatalities_00_14&quot; with &quot;Type&quot; set to &quot;Numeric&quot;. A &quot;Swap X and Y&quot; button sits beneath those, followed by &quot;Color&quot; and &quot;Size&quot; menus both set to &quot;-- none --&quot;. Underneath the panel is a blue bar chart with airline names along the X axis and fatalities_00_14 on the Y axis, running from 0 to 550 - most airlines have no bar, a handful have bars, and Malaysia Airlines is the tallest." src="https://static.simonwillison.net/static/2026/datasette-vega.webp" /></p></div>
+    <div class="beat-meta beat-row2">
+      <a href="/2026/Nov/14/datasette-vega/" rel="bookmark">14th Nov 2026, 5:09 pm</a> &middot; <a href="/tags/datasette/">datasette</a>, <a href="/tags/datasette-lite/">datasette-lite</a>
+    </div>
+  </div>
+</div>
+
+
+
+
+
+<h3 class="blog-mixed-list-year">Friday, 13th November 2026</h3>
+
+
+
+
+
+
+
+
+
+
+
+<div class="beat segment" data-type="beat" data-id="5117">
+  
+  <div class="beat-content">
+    <div class="beat-row1">
+      
+        <a class="beat-label release" href="/elsewhere/release/">Release</a>
+      
+      <span class="beat-title"><a href="https://github.com/simonw/datasette-cluster-map/releases/tag/0.19">datasette-cluster-map 0.19</a></span>
+      
+    </div>
+    <div class="beat-note blogmark-body"><p>One of the oldest Datasette plugins, and still one of my favorites. It now works with Datasette 1.0a42, and depends on <a href="https://simonwillison.net/2026/Nov/13/datasette-leaflet/">the new datasette-leaflet</a> to ensure OpenStreetMap tiles are requested with a referrer header.</p>
+<p>Here's <a href="https://datasette.io/global-power-plants/global-power-plants?owner=Pacific+Gas+%26+Electric+Co.">a map of power plants owned by California's PG&amp;E</a>, also demonstrating Datasette's recently <a href="https://github.com/simonw/datasette/pull/3032">redesigned facets</a>:</p>
+<p><img alt="Screenshot of a faceted map interface. Three facet panels at the top: &quot;country_long 1&quot; with United States of America 81 selected; &quot;owner 1&quot; with Pacific Gas &amp; Electric Co. 81 selected; &quot;primary_fuel 5&quot; listing Hydro 63, Solar 10, Gas 5, Storage 2, Nuclear 1. Each primary_fuel row has a pale blue horizontal bar behind its label, sized in proportion to its count: Hydro's bar fills most of the row width, Solar's is a short sliver, Gas's is shorter still, and Storage and Nuclear have only a thin strip at the left edge. Below is a Leaflet map with + and − zoom controls showing California and Nevada, with marker clusters across northern and central California: 9 near Redding, 21 near Chico, 2 to the west of Chico, 13 northeast of Sacramento, 7 east of Stockton, 6 at Oakland, 10 at Fresno, 9 west of Visalia, 2 north of Bakersfield, plus two individual blue pin markers on the coast, one in the far north and one north of Santa Maria. Attribution: Leaflet | © OpenStreetMap contributors" src="https://static.simonwillison.net/static/2026/power-plants-pge.webp" /></p></div>
+    <div class="beat-meta beat-row2">
+      <a href="/2026/Nov/13/datasette-cluster-map/" rel="bookmark">13th Nov 2026, 11:02 pm</a> &middot; <a href="/tags/datasette/">datasette</a>, <a href="/tags/geospatial/">geospatial</a>, <a href="/tags/openstreetmap/">openstreetmap</a>
+    </div>
+  </div>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="beat segment" data-type="beat" data-id="5118">
+  
+  <div class="beat-content">
+    <div class="beat-row1">
+      
+        <a class="beat-label release" href="/elsewhere/release/">Release</a>
+      
+      <span class="beat-title"><a href="https://github.com/simonw/datasette-leaflet/releases/tag/0.3">datasette-leaflet 0.3</a></span>
+      
+    </div>
+    <div class="beat-note blogmark-body"><p>OpenStreetMap have a very reasonable policy that hits to their hosted tile server <a href="https://wiki.openstreetmap.org/wiki/Referer">should send a referrer header</a>. Datasette table pages used the <code>Referrer-Policy: no-referrer</code> HTTP header, causing plugins that loaded tiles from OpenStreetMap to violate that policy.</p>
+<p><code>datasette-leaflet</code> is the plugin that loads a bundled Leaflet so other Datasette plugins can depend on it. It now sets the referrer policy on the tile requests themselves to <code>strict-origin-when-cross-origin</code>, passing the host but not the full path to the page.</p></div>
+    <div class="beat-meta beat-row2">
+      <a href="/2026/Nov/13/datasette-leaflet/" rel="bookmark">13th Nov 2026, 10:30 pm</a> &middot; <a href="/tags/leaflet/">leaflet</a>, <a href="/tags/datasette/">datasette</a>, <a href="/tags/openstreetmap/">openstreetmap</a>
+    </div>
+  </div>
+</div>
+
+
+
+
+
+<h3 class="blog-mixed-list-year">Thursday, 12th November 2026</h3>
+
+
+
+
+
+
+
+
+
+
+
+<div class="beat segment" data-type="beat" data-id="5116">
+  
+  <div class="beat-content">
+    <div class="beat-row1">
+      
+        <a class="beat-label release" href="/elsewhere/release/">Release</a>
+      
+      <span class="beat-title"><a href="https://github.com/simonw/llm-gemini/releases/tag/0.37">llm-gemini 0.37</a></span>
+      
+    </div>
+    <div class="beat-note blogmark-body"><p>Google launched <a href="https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-4-hydrogen/">Gemini 4 Hydrogen</a> today - the lowest cost member of the Gemini 4 family.</p>
+<p>It's actually not too far off the price of its much bigger siblings, Carbon and Argon. I'm finding Gemini 4's pricing <em>really</em> confusing. Here's the pricing scheme:</p>
+<center><table>
+  <thead>
+    <tr>
+      <th>Model</th>
+      <th>Dates</th>
+      <th>Input ($/M)</th>
+      <th>Cached input</th>
+      <th>Output</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td rowspan="2">Gemini 4 Carbon</td>
+      <td>Through Nov 30, 2026</td>
+      <td>$2.00</td>
+      <td>$0.10</td>
+      <td>$10.00</td>
+    </tr>
+    <tr>
+      <td>From Dec 1, 2026</td>
+      <td>$4.00</td>
+      <td>$0.20</td>
+      <td>$20.00</td>
+    </tr>
+    <tr>
+      <td rowspan="2">Gemini 4 Argon</td>
+      <td>Through Nov 30, 2026</td>
+      <td>$2.00</td>
+      <td>$0.10</td>
+      <td>$10.00</td>
+    </tr>
+    <tr>
+      <td>From Dec 1, 2026</td>
+      <td>$4.00</td>
+      <td>$0.20</td>
+      <td>$20.00</td>
+    </tr>
+    <tr>
+      <td>Gemini 4 Hydrogen</td>
+      <td>&nbsp;</td>
+      <td>$1.50</td>
+      <td>$0.075</td>
+      <td>$7.50</td>
+    </tr>
+  </tbody>
+</table></center>
+
+<p>Carbon and Argon are <em>the same price</em>, and both are scheduled to double in price on December 1st. If they're the same price, why have two different models? <a href="https://aistudio.google.com/docs/pricing">Google says</a> that Argon "delivers Gemini 4 intelligence with faster responses and lower token spend per turn compared to Gemini 4 Carbon" - so it may be priced the same, but it will use less tokens per task.</p>
+<p>Hydrogen, supposedly the cheap model, is currently only a 25% discount on its more capable peers. The Hydrogen price will make more sense after December 1st, when it will represent a 75% discount. It's still considerably more expensive than Claude Haiku 5.5 and GPT-6 Luna - they're both $0.10/$0.50, so Hydrogen is 15x that.</p>
+<p>I had Hydrogen <a href="https://tools.simonwillison.net/markdown-svg-renderer?url=https%3A%2F%2Fgist.github.com%2Fsimonw%2Fce357e95149cd16f65ec7e7106ed4fed">generate some pelicans</a>. Here's a <a href="https://static.simonwillison.net/static/2026/gemini-4-pelicans.html">full comparison grid</a> showing the pelicans for all three members of the Gemini 4 family at their three supported effort levels:</p>
+<p><img alt="Comparison grid of nine SVG-style illustrations of a pelican riding a bicycle, three models across by three thinking levels down. Column headers: Thinking, gemini-4-carbon, gemini-4-argon, gemini-4-hydrogen. Row HIGH: gemini-4-carbon draws a detailed pelican in a sailor cap riding a red cruiser bicycle with fenders and a wicker basket holding a fish, along a beach road with sea, sun, clouds and birds, captioned 40 input tokens, 20,305 output = 20.31 cents · 4m 11s; gemini-4-argon draws a pelican in a red cap and a streaming teal striped scarf on a red bicycle with a blue fish peeking out of the basket, on a seaside promenade with a pale sun, captioned 40 input tokens, 17,158 output = 17.17 cents · 2m 29s; gemini-4-hydrogen draws a much simpler plain white pelican on a basic red bicycle against a pale blue sky with two clouds, speed lines and flat green ground, captioned 40 input tokens, 5,311 output = 3.99 cents · 19s. Row MEDIUM: gemini-4-carbon draws a pelican in a sailor cap and red striped scarf on a red bicycle with cream fenders and a basket, on a sandy beach with a rope fence and sea, captioned 40 input tokens, 11,020 output = 11.03 cents · 1m 53s; gemini-4-argon draws a pelican with an enormous orange beak, sailor cap and flowing red scarf on a teal bicycle with a basket, on a boardwalk under a purple and pink sunset sky with a large pink sun, captioned 40 input tokens, 11,090 output = 11.10 cents · 1m 32s; gemini-4-hydrogen draws a simple cream pelican on a plain red bicycle with sparse spokes, two clouds and flat green ground, captioned 40 input tokens, 3,964 output = 2.98 cents · 17s. Row LOW: gemini-4-carbon draws a pelican in a sailor cap and red and white striped scarf on a red bicycle with fenders and a basket, passing a white seaside railing on a grey road, captioned 40 input tokens, 9,153 output = 9.16 cents · 1m 34s; gemini-4-argon draws a large, chubby pelican with a sailor cap and huge orange beak on a red bicycle with a basket, gripping the handlebars with a dark blue wing, in front of an orange setting sun and a grey road, captioned 40 input tokens, 10,177 output = 10.18 cents · 1m 21s; gemini-4-hydrogen draws the simplest image, a plain white pelican on a thin red bicycle over a single green line with no scenery, captioned 40 input tokens, 2,996 output = 2.25 cents · 10s. Overall, carbon and argon produce rich, accessorised seaside scenes at every thinking level, while hydrogen produces far plainer pelicans at a fraction of the cost and time, and detail decreases for all three models as thinking drops from high to low." src="https://static.simonwillison.net/static/2026/gemini-4-pelicans.webp" /></p>
+<p>Considering how close they are in price, the difference in pelican quality for Hydrogen is quite stark.</p>
+<p>Here's <a href="https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-4-hydrogen/">how Google describe</a> Hydrogen's intended position in their mix of models:</p>
+<blockquote>
+<p>In real-world software development, while teams rely on frontier models like Carbon and Argon for deep architectural judgment when designing systems or untangling subtle bugs, they still need a fast, disciplined execution model for writing code, running tests, and verifying changes. Hydrogen is built to stand on its own as a model for everyday work — or to pair with Carbon and Argon as the high-efficiency execution engine in multi-model workflows.</p>
+</blockquote>
+<p>Most notably, Hydrogen is the new free tier model, and is the model that will power AI features in Google Search.</p></div>
+    <div class="beat-meta beat-row2">
+      <a href="/2026/Nov/12/llm-gemini/" rel="bookmark">12th Nov 2026, 10:55 pm</a> &middot; <a href="/tags/gemini/">gemini</a>, <a href="/tags/llm/">llm</a>, <a href="/tags/google/">google</a>, <a href="/tags/pelican-riding-a-bicycle/">pelican-riding-a-bicycle</a>, <a href="/tags/llm-pricing/">llm-pricing</a>, <a href="/tags/ai/">ai</a>, <a href="/tags/llms/">llms</a>
+    </div>
+  </div>
+</div>
+
+
+
+
+
+<h3 class="blog-mixed-list-year">Wednesday, 11th November 2026</h3>
+
+
+
+
+
+
+<div class="blogmark segment" data-type="blogmark" data-id="9736">
+  <p><strong><a href="https://blog.google/innovation-and-ai/technology/developers-tools/gemini-decisions-api/">Gemini Decisions API</a></strong>
+    (<a href="https://news.ycombinator.com/item?id=50456791" title="Hacker News">via</a>)
+    Google join <a href="https://simonwillison.net/2026/Sep/21/jev/">Jev</a> and <a href="https://simonwillison.net/2026/Oct/6/llm-openai-decisions/">OpenAI</a> in the decision model category with "Gemini Decision 1". This new model API is almost identical to Jev: it supports the same three types of questions (yes/no, choice, and rubric-scoring) and even reuses Jev's term "Noul" for a yes/no question.</p>
+<p>It's priced the same as the GPT-6 Luna decision model: 10 cents per million input tokens, and output is free. Jev remains the cheapest of the three, at 4.2 cents per million.</p>
+<p>Jev is text (and JSON) only. OpenAI can handle text and images. Gemini Decision 1 is fully multi-model: it covers text, images, audio, video, and PDFs.</p>
+<p>I tested it against video by passing these questions to it along with my <a href="https://simonwillison.net/2026/Nov/10/yonkers-rises/">Yonkers stomping robot</a> video file:</p>
+<pre><code>dragon: Does this video have a dragon in it?
+robot: Does this video have a robot in it?
+france: Is this video set in France?
+usa: Is this video set in the USA?
+</code></pre>
+<p>Jev and OpenAI both return 1.0 or 0.0 for yes/no questions, but Gemini insists on being a little less confident than that:</p>
+<div class="highlight highlight-source-json"><pre>{
+  <span class="pl-ent">"dragon"</span>: {
+    <span class="pl-ent">"type"</span>: <span class="pl-s"><span class="pl-pds">"</span>yes_no<span class="pl-pds">"</span></span>,
+    <span class="pl-ent">"probability"</span>: <span class="pl-c1">0.04976021841520312</span>
+  },
+  <span class="pl-ent">"robot"</span>: {
+    <span class="pl-ent">"type"</span>: <span class="pl-s"><span class="pl-pds">"</span>yes_no<span class="pl-pds">"</span></span>,
+    <span class="pl-ent">"probability"</span>: <span class="pl-c1">0.9234055387792485</span>
+  },
+  <span class="pl-ent">"france"</span>: {
+    <span class="pl-ent">"type"</span>: <span class="pl-s"><span class="pl-pds">"</span>yes_no<span class="pl-pds">"</span></span>,
+    <span class="pl-ent">"probability"</span>: <span class="pl-c1">0.08329171353166241</span>
+  },
+  <span class="pl-ent">"usa"</span>: {
+    <span class="pl-ent">"type"</span>: <span class="pl-s"><span class="pl-pds">"</span>yes_no<span class="pl-pds">"</span></span>,
+    <span class="pl-ent">"probability"</span>: <span class="pl-c1">0.9230459995157706</span>
+  }
+}</pre></div></p>
+  
+  <p class="date-and-tags">
+    <a href="/2026/Nov/11/gemini-decisions-api/" rel="bookmark">#</a>
+    <a href="/2026/Nov/11/gemini-decisions-api/">10:03 pm</a>
+     / <a href="/tags/ai/">ai</a>, <a href="/tags/generative-ai/">generative-ai</a>, <a href="/tags/gemini/">gemini</a>, <a href="/tags/llm-release/">llm-release</a>, <a href="/tags/jev/">jev</a>, <a href="/tags/decision-models/">decision-models</a>
+  </p>
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="blogmark segment" data-type="blogmark" data-id="9735">
+  <p><strong><a href="https://github.com/aws/aws-emulator">aws-emulator</a></strong>.
+    Finally, an official emulator from AWS to run tests against a local clone of their many different services without having to provision a paid API key to do so.</p>
+<p>It's written in Rust by a huge swarm of agents - 29,684 commits in the first three weeks of the project. Swaminathan (Swami) Sivasubramanian wrote about <a href="https://www.allthingsdistributed.com/2026/11/aws-emulator-and-the-engineers-job-when-agents-write-the-code.html">how it came to be</a> in a guest post on Werner Vogels' blog.</p>
+<p>It currently requires Docker to run on macOS or Windows. I'm hoping they fix that in the future - it would be great if you could download a single binary and use that as part of a standard test suite in other languages and on other platforms.</p>
+  
+  <p class="date-and-tags">
+    <a href="/2026/Nov/11/aws-emulator/" rel="bookmark">#</a>
+    <a href="/2026/Nov/11/aws-emulator/">9:18 pm</a>
+     / <a href="/tags/amazon/">amazon</a>, <a href="/tags/amazon-web-services/">amazon-web-services</a>, <a href="/tags/testing/">testing</a>, <a href="/tags/werner-vogels/">werner-vogels</a>, <a href="/tags/ai/">ai</a>, <a href="/tags/rust/">rust</a>, <a href="/tags/docker/">docker</a>, <a href="/tags/generative-ai/">generative-ai</a>, <a href="/tags/llms/">llms</a>, <a href="/tags/agentic-engineering/">agentic-engineering</a>
+  </p>
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="blogmark segment" data-type="blogmark" data-id="9734">
+  <p><strong><a href="https://tools.simonwillison.net/#tags">Browse tools.simonwillison.net by tag</a></strong>.
+    I've been wanting a better way to browse my <a href="">collection of vibe-coded tools</a> (244 and counting) for a while. I had a few Fable 5.2 credits left over before my weekly reset so I set it to work using <a href="https://github.com/tree-sitter/py-tree-sitter">tree-sitter</a> to analyze the code for JavaScript APIs, libraries, and web API hosts used by each tool.</p>
+<p>The homepage now features tag clouds for browsing by each of those categories of tag:</p>
+<p><a href="https://tools.simonwillison.net/#tags"><img alt="Screenshot of two tag cloud sections where tags are sized by count. Browse by JavaScript libraries - Libraries loaded from a CDN by two or more tools. Select a tag to list its tools. @google/generative-ai 3, @jsquash/avif 3, @jsquash/webp 4, Babel 2, Chart.js 2, Cropper.js 2, D3 2, DOMPurify 7, js-yaml 3, JSZip 3, Leaflet 4, markdown-it 4, Marked 12, pako 2, PDF.js 3, Pyodide 11, React 3, Tesseract.js 2, three.js 3. Browse by browser APIs - Web platform features used by each tool's own code. Select a tag to list its tools. &lt;dialog&gt; 5, AbortController 6, Blob URLs 38, BroadcastChannel 1, Built-in AI 1, Camera / microphone 9, Canvas 2D 44, Clipboard API 69, Compression Streams 3, createImageBitmap 2, crypto random values 4, DOMParser 8, Drag and drop 30, Dynamic import() 12, ES modules 92" src="https://static.simonwillison.net/static/2026/tools-tag-cloud.webp" /></a></p>
+  
+  <p class="date-and-tags">
+    <a href="/2026/Nov/11/tools-tags/" rel="bookmark">#</a>
+    <a href="/2026/Nov/11/tools-tags/">6:42 pm</a>
+     / <a href="/tags/javascript/">javascript</a>, <a href="/tags/tools/">tools</a>, <a href="/tags/ai/">ai</a>, <a href="/tags/generative-ai/">generative-ai</a>, <a href="/tags/llms/">llms</a>, <a href="/tags/claude/">claude</a>, <a href="/tags/vibe-coding/">vibe-coding</a>
+  </p>
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="beat segment" data-type="beat" data-id="5107">
+  
+  <div class="beat-content">
+    <div class="beat-row1">
+      
+        <a class="beat-label release" href="/elsewhere/release/">Release</a>
+      
+      <span class="beat-title"><a href="https://github.com/simonw/llm/releases/tag/0.37.2">llm 0.37.2</a></span>
+      
+    </div>
+    <div class="beat-note blogmark-body"><p>Fixes a security issue reported by <a href="https://github.com/BluePlexus">Daniel de Araujo</a> in <a href="https://github.com/simonw/llm/security/advisories/GHSA-v9h7-jj4g-f862">GHSA-v9h7-jj4g-f862</a> and <a href="https://github.com/simonw/llm/security/advisories/GHSA-r639-rr7r-x72w">GHSA-r639-rr7r-x72w</a>.</p>
+<p>LLM has a mechanism called <a href="https://llm.datasette.io/en/stable/other-models.html#configure-an-openai-compatible-model">extra-openai-models.yaml</a> - now managed by the new-in-0.37 <a href="https://llm.datasette.io/en/stable/other-models.html#openai-endpoint-add">llm openai endpoint add</a> command - for using LLM with OpenAI-compatible API endpoints from other providers.</p>
+<p>Daniel reported two ways this could accidentally send your configured OpenAI API key to one of those providers: if the key named by <code>api_key_name</code> had never been stored, or if a <code>responses: true</code> model was run with <code>-o chat_completions 1</code>.</p></div>
+    <div class="beat-meta beat-row2">
+      <a href="/2026/Nov/11/llm/" rel="bookmark">11th Nov 2026, 5:19 pm</a> &middot; <a href="/tags/projects/">projects</a>, <a href="/tags/security/">security</a>, <a href="/tags/llm/">llm</a>, <a href="/tags/releases/">releases</a>
+    </div>
+  </div>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="blogmark segment" data-type="blogmark" data-id="9733">
+  <p><strong><a href="https://ipo.anthropic.com/us/#roadshow-video">Anthropic’s IPO roadshow video</a></strong>.
+    Anthropic kicked off their IPO roadshow yesterday, and their roadshow video has some previously unreleased information about how their business works.</p>
+<p>The section on "Approach to compute" with co-founder Tom Brown is particularly interesting, describing how Anthropic train and serve Claude across AWS Trainium, Google TPUs, NVIDIA GPUs, and AMD GPUs.</p>
+<p>I'm not sure why there's no official video transcript, but here's <a href="https://gist.github.com/simonw/9806757fe8acec6221cb0a5cce4d720d">one that I extracted</a> using MacWhisper. Highlights below:</p>
+<blockquote>
+<p>We train and serve Claude now across all four major chip families. That's only possible because early on we made an unconventional bet on a multi-chip strategy. At the time, many people thought that running AI models on different chips wasn't worth the effort. Each chip needs its own tailored software stack and inference stack, which is expensive and difficult to build. We've now been doing it for years, and we've gotten incredibly good at it. [...]</p>
+<p>As an example, this year, we started working with AMD GPUs for the first time. In the past, bringing on a new chip platform took dozens of engineers months of work <strong>This time, we had Mythos try it out. It got Claude running on AMD in just three days, with basically no human intervention</strong>. Claude ported or wrote almost 100% of the kernels. [...]</p>
+<p>The second driver of our compute advantage is our rate of discovery of compute multipliers. We focus on total effective compute, which is the multiplicative product of physical capacity times the compute multipliers that we discover. Each one we discover makes our pool of total effective compute bigger. For example, say you need 100 units of compute to train a model of a certain intelligence. A 4x compute multiplier means you can use 25 units of compute to train the exact same model. Or you can use those hundred physical units to train an even more intelligent model that would have previously required 400 units.</p>
+<p>Compute multipliers create a competitive advantage for us that's hard to replicate. They build on each other. Each new multiplier we discover has a positive effect on the multipliers before it. They stack. <strong>We believe that this can accelerate even further as we approach recursive self-improvement. Claude will be able to discover compute multipliers entirely by itself</strong>, allowing the number of compute multipliers to grow faster and faster.</p>
+</blockquote>
+<p>We got a hint at Anthropic's multi-chip strategy last September in their <a href="https://www.anthropic.com/research/a-postmortem-of-three-recent-issues">postmortem of three recent issues</a>, where they described bugs that affected just their TPU deployments.</p>
+  
+  <p class="date-and-tags">
+    <a href="/2026/Nov/11/anthropic-ipo-roadshow/" rel="bookmark">#</a>
+    <a href="/2026/Nov/11/anthropic-ipo-roadshow/">3:11 pm</a>
+     / <a href="/tags/ai/">ai</a>, <a href="/tags/generative-ai/">generative-ai</a>, <a href="/tags/llms/">llms</a>, <a href="/tags/anthropic/">anthropic</a>, <a href="/tags/gpus/">gpus</a>, <a href="/tags/claude-mythos-fable/">claude-mythos-fable</a>, <a href="/tags/recursive-self-improvement/">recursive-self-improvement</a>
+  </p>
+
+</div>
+
+
+
+
+
+
+
+
+<h3 class="blog-mixed-list-year">Tuesday, 10th November 2026</h3>
+
+
+
+
+
+
+
+
+
+
+
+<div class="beat segment" data-type="beat" data-id="5106">
+  
+  <div class="beat-content">
+    <div class="beat-row1">
+      
+        <a class="beat-label release" href="/elsewhere/release/">Release</a>
+      
+      <span class="beat-title"><a href="https://github.com/simonw/llm-gemini/releases/tag/0.36">llm-gemini 0.36</a></span>
+      
+    </div>
+    <div class="beat-note blogmark-body"><p>Gemini 4 Carbon was announced <a href="https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-4-carbon/">two weeks ago</a> for "a subset of cyber defenders", but today it's <a href="https://blog.google/innovation-and-ai/models-and-research/gemini-models/gemini-4-carbon-now-available/">available to everyone else</a>.</p>
+<p>This is Google's best ever Gemini, priced at $2/million input and $10/million output at launch (that's GPT-6.1 Sol / Claude Sonnet 5.5 prices) but scheduled to double in price to $4/$20 on December 1st (same as Opus 5.5).</p>
+<p>Here are <a href="https://tools.simonwillison.net/markdown-svg-renderer?url=https%3A%2F%2Fgist.github.com%2Fsimonw%2Fe5bf860633fc12e8f926f305c4c3190c">three pelicans</a> for the low, medium and high thinking efforts (it defaults to medium). This is the pelican I got for high:</p>
+<p><img alt="A lovely pelican. Looks like it has a monocle on. Nice elegant sailor hat with a blue bow. Basket and fish. Funky but workable bicycle design. Pleasing use of gradients." src="https://static.simonwillison.net/static/2026/carbon-pelican.webp" /></p>
+<p>Gemini pelicans have all been great for a while now, so I also tested it out using Google's Antigravity IDE with a prompt I first tried <a href="https://simonwillison.net/2026/Nov/10/yonkers-rises/">with Claude Fable 5.2 yesterday</a>:</p>
+<blockquote>
+<p><code>Make a three js animation where yonkers stands up as a big mech (cool stand up motion) and stomps around manhattan and queens and Brooklyn, use openstreetmap mapping data</code></p>
+</blockquote>
+<p>Here's <a href="https://static.simonwillison.net/static/2026/yonkers-mech-standalone.html">the HTML result</a> (I had to prompt "build that into a standalone HTML file" to get a version with no external dependencies). I then screen-captured that as a video:</p>
+<video controls playsinline preload="none" width="1028" height="720" poster="https://static.simonwillison.net/static/2026/yonkers-carbon.jpg">
+  <source src="https://static.simonwillison.net/static/2026/yonkers-carbon.mp4" type="video/mp4">
+</video>
+
+<p><strong>Update</strong>: Huh, just saw this <a href="https://www.youtube.com/watch?v=dNbkThtNzS8">on YouTube</a> (and <a href="https://twitter.com/sundarpichai/status/2120198811297694192">tweeted by Google CEO Sundar Pichai</a>):</p>
+<blockquote>
+<p>Using Google Antigravity’s /swarm feature, Carbon built an open-world 3D game where you explore Google’s Mountain View campus as a pelican riding a GBike — coordinating subagents to model 3D assets in Blender from Omni and Nano Banana references, build the browser game in Three.js with WebGL shaders, and pair procedural Web Audio sound effects with Lyria music.</p>
+</blockquote>
+<p><lite-youtube videoid="dNbkThtNzS8" js-api="js-api"
+  title="Pelican Quest: Gemini 4 Carbon"
+  playlabel="Play: Pelican Quest: Gemini 4 Carbon"
+> </lite-youtube></p>
+
+<p>Here's <a href="https://aistudio.google.com/apps/bundled/pelican-campus-quest?showAssistant=true&amp;showPreview=true&amp;fullscreenApplet=true">the playable version</a> in AI Studio.</p></div>
+    <div class="beat-meta beat-row2">
+      <a href="/2026/Nov/10/llm-gemini/" rel="bookmark">10th Nov 2026, 8:09 pm</a> &middot; <a href="/tags/llm-release/">llm-release</a>, <a href="/tags/gemini/">gemini</a>, <a href="/tags/llm/">llm</a>, <a href="/tags/google/">google</a>, <a href="/tags/generative-ai/">generative-ai</a>, <a href="/tags/ai/">ai</a>, <a href="/tags/llms/">llms</a>, <a href="/tags/pelican-riding-a-bicycle/">pelican-riding-a-bicycle</a>, <a href="/tags/yonkers-rising/">yonkers-rising</a>
+    </div>
+  </div>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="blogmark segment" data-type="blogmark" data-id="9732">
+  <p><strong><a href="https://research.meta.ai/blog/muse-ember">Introducing Our Smallest, Most Efficient Model: Muse Ember</a></strong>.
+    Meta AI just launched their entry in the Claude Haiku/GPT Luna category: Muse Ember, which they describe as:</p>
+<blockquote>
+<p>[...] our smallest and most efficient model designed for complex reasoning execution and the work agents repeat all day: tool calls, coding subtasks, routing, extraction, and long document parsing.</p>
+</blockquote>
+<p>For shorter prompts it's priced the same as GPT-6 Luna and Claude Haiku 5.5 - both are $0.10/million input tokens and $0.50/million output. Today's other big model release, Claude Fable 5.2, is <em>80x that price</em> at $8/$40.</p>
+<p>The pricing is a little less straightforward as prompts get longer, though. Luna, Ember, and Haiku all support up to a million input tokens, but they also all have a threshold after which the price goes up. Taking <em>that</em> threshold into account Ember is priced between the two others:</p>
+<center><table>
+  <thead>
+    <tr>
+      <th>Model</th>
+      <th>Prompt size</th>
+      <th>Input ($/M)</th>
+      <th>Cached input</th>
+      <th>Output</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td rowspan="2">GPT-6 Luna</td>
+      <td>≤272k</td>
+      <td>$0.10</td>
+      <td>$0.01</td>
+      <td>$0.50</td>
+    </tr>
+    <tr>
+      <td>&gt;272k</td>
+      <td>$0.20</td>
+      <td>$0.02</td>
+      <td>$0.75</td>
+    </tr>
+    <tr>
+      <td rowspan="2">Muse Ember 1.0</td>
+      <td>≤200k</td>
+      <td>$0.10</td>
+      <td>$0.004</td>
+      <td>$0.50</td>
+    </tr>
+    <tr>
+      <td>&gt;200k</td>
+      <td>$0.30</td>
+      <td>$0.012</td>
+      <td>$1.50</td>
+    </tr>
+    <tr>
+      <td rowspan="2">Claude Haiku 5.5</td>
+      <td>≤100k</td>
+      <td>$0.10</td>
+      <td>$0.01</td>
+      <td>$0.50</td>
+    </tr> 
+    <tr>
+      <td>&gt;100k</td>
+      <td>$0.50</td>
+      <td>$0.05</td>
+      <td>$2.50</td>
+    </tr>
+  </tbody>
+</table></center>
+
+<p>But comparing price-per-token doesn't really make sense these days, when reasoning tokens mean that different models might use dramatically different numbers of tokens to solve the same problem.</p>
+<p>For that, one measure that's useful is the Artificial Analysis. </p>
+<p><img alt="Stacked bar chart from Artificial Analysis comparing a cost in dollars across six models, each bar split into four unlabeled stacked segments, sorted from lowest to highest total. Claude Haiku 5.5 (low): $0.04* total, bottom segment $0.02, three thin unlabeled segments above. GPT-6 Luna (non-reasoning): $0.07 total, bottom segment $0.06, thin unlabeled segments above. GPT-6 Luna (xhigh): $0.10 total, segments from bottom $0.07, $0.02, $0.02, plus a thin unlabeled top segment. Muse Ember (xhigh): $0.12 total, segments from bottom $0.06, $0.02, $0.02, plus a thin unlabeled top segment. Muse Ember (max): $0.14 total, segments from bottom $0.07, $0.03, $0.03, $0.02. Claude Haiku 5.5 (xhigh): $0.25* total, segments from bottom $0.14, $0.04, $0.05, $0.02. Anthropic bars are terracotta, OpenAI bars are dark gray, Meta bars are blue, each with the company logo beneath." src="https://static.simonwillison.net/static/2026/artificial-analysis-haiku-class.webp" /></p>
+<p>And even more useful than that is their Intelligence Index vs. Cost per Task chart, which shows the following for those three models:</p>
+<p><img alt="Scatter plot from Artificial Analysis titled &quot;Intelligence Index vs. Cost per Task&quot;, plotting Artificial Analysis Intelligence Index (y-axis, 5 to 40) against cost per task in USD on a log scale (x-axis, $0.04 to $0.3), with a green &quot;most attractive quadrant&quot; in the upper left and a dotted Pareto line. Claude Haiku 5.5 (low)* scores about 19 at roughly $0.044. GPT-6 Luna (non-reasoning) scores about 9.5 at roughly $0.07. GPT-6 Luna (xhigh) scores about 23.5 at roughly $0.10. Muse Ember (xhigh) scores about 34 at roughly $0.12 and Muse Ember (max) about 36 at roughly $0.14, both on the Pareto line. Claude Haiku 5.5 (xhigh)* scores about 34.5 at roughly $0.25, well to the right of the Pareto line. Three unlabeled gray dots also sit on the Pareto line." src="https://static.simonwillison.net/static/2026/artificial-analysis-pareto.webp" /></p>
+<p>The Muse Ember models sit right on that Pareto line - the line at which you can only improve one dimension by giving up another. Meta call this out in their announcement:</p>
+<blockquote>
+<p>It also sits on the efficiency frontier of the full Artificial Analysis leaderboard: no model scores higher for less per task.</p>
+</blockquote>
+<p>(That grey dot on the Pareto line in the middle of the green area is GPT-6.1 Terra (low) - clearly I should be paying more attention to the Terra family!)</p>
+<p>Muse Ember has six reasoning levels - minimal, low, medium, high, xhigh, and max - so I <a href="https://tools.simonwillison.net/markdown-svg-renderer?url=https%3A%2F%2Fgist.github.com%2Fsimonw%2Fc7666e8a54d84f724ac8121f9fa6cc4d">rendered six pelicans riding bicycles</a>. The "high" reasoning level failed to return a full SVG, and the other SVGs were surprising in that the reasoning level didn't cleanly map to the visual quality of the response.</p>
+<p>Here's the "max" one, but the others are worth a look too:</p>
+<p><img alt="Bicycle frame is OK, basket has fish, pelican has a weird blue hat on." src="https://static.simonwillison.net/static/2026/muse-ember.webp" /></p>
+<p>The Ember pelicans are comparable in quality to those <a href="https://tools.simonwillison.net/markdown-svg-renderer?url=https://gist.github.com/simonw/185cff7ff0b11379725abf7f78d5d2b2">I got from Muse Wonder</a>, which is <a href="https://www.llm-prices.com/#sel=muse-ember-1.0%2Cmuse-ember-1.0-200k%2Cmuse-wonder-1.0">40x the price</a> of Muse Ember.</p>
+  
+  <p class="date-and-tags">
+    <a href="/2026/Nov/10/muse-ember/" rel="bookmark">#</a>
+    <a href="/2026/Nov/10/muse-ember/">7:28 am</a>
+     / <a href="/tags/ai/">ai</a>, <a href="/tags/generative-ai/">generative-ai</a>, <a href="/tags/llms/">llms</a>, <a href="/tags/meta/">meta</a>, <a href="/tags/llm-pricing/">llm-pricing</a>, <a href="/tags/llm-release/">llm-release</a>, <a href="/tags/artificial-analysis/">artificial-analysis</a>, <a href="/tags/muse/">muse</a>
+  </p>
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="quote segment" data-type="quotation" data-id="2463">
+  <blockquote cite="https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-fable-5-2#say-who-owns-the-code"><p>Claude Fable 5.2 pays close attention to who owns the code it works on. In Anthropic’s testing on small coding tasks, the model tended to add to the existing structure when the prompt said nothing about ownership or presented the code base as someone else’s, even when that duplicated existing code. When the prompt said the code base was the model’s own, it often consolidated duplicated code and sometimes made related fixes without being asked.</p>
+<p>If you want the model to improve the structure as it works, say that the code is its own:</p>
+<blockquote>
+<p><code>You are the owner and long-term maintainer of this codebase, and its design is up to you.</code></p>
+</blockquote>
+<p>The ownership sentence makes the model much more likely to consolidate duplicated code into one shared function. In Anthropic’s testing on small coding tasks, the model consolidated duplicated code in under 10 percent of runs without the sentence and in about 75 percent of runs with it.</p></blockquote>
+  <p class="cite">&mdash; <a href="https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-fable-5-2#say-who-owns-the-code">Prompting Claude Fable 5.2</a>, <span class="context">Anthropic documentation</span></p>
+  
+  <p class="date-and-tags">
+    <a href="/2026/Nov/10/prompting-claude-fable-52/" rel="bookmark">#</a>
+    <a href="/2026/Nov/10/prompting-claude-fable-52/">5:34 am</a>
+     / <a href="/tags/prompt-engineering/">prompt-engineering</a>, <a href="/tags/anthropic/">anthropic</a>, <a href="/tags/generative-ai/">generative-ai</a>, <a href="/tags/ai/">ai</a>, <a href="/tags/llms/">llms</a>, <a href="/tags/claude-mythos-fable/">claude-mythos-fable</a>
+  </p>
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="beat segment" data-type="beat" data-id="5105">
+  
+  <div class="beat-content">
+    <div class="beat-row1">
+      
+        <a class="beat-label tool" href="/elsewhere/tool/">Tool</a>
+      
+      <span class="beat-title"><a href="https://tools.simonwillison.net/yonkers-rises">Yonkers Rises</a></span>
+      
+    </div>
+    <div class="beat-note blogmark-body"><p>I realized I didn't know where Yonkers was, so I looked it up on Google Maps and then, to help embed its location and shape in my head (and to try out Claude Fable 5.2's 3D modeling and animation skills), I <a href="https://claude.ai/share/97443910-2e0a-4e17-9b9e-11d14d8ff65c">prompted Fable 5.2 Medium</a> to:</p>
+<blockquote>
+<p><code>Make a three js animation where yonkers stands up as a big mech (cool stand up motion) and átomos around manhattan and queens and Brooklyn, use openstreetmap mapping data</code></p>
+</blockquote>
+<p>It correctly deduced that "átomos" was a mobile keyboard typo for "stomps":</p>
+<video controls playsinline preload="none" width="572" height="360" poster="https://static.simonwillison.net/static/2026/yonkers.webp">
+  <source src="https://static.simonwillison.net/static/2026/yonkers-large.mp4" type="video/mp4">
+</video></div>
+    <div class="beat-meta beat-row2">
+      <a href="/2026/Nov/10/yonkers-rises/" rel="bookmark">10th Nov 2026, 3:53 am</a> &middot; <a href="/tags/three-js/">three-js</a>, <a href="/tags/llms/">llms</a>, <a href="/tags/ai/">ai</a>, <a href="/tags/generative-ai/">generative-ai</a>, <a href="/tags/yonkers-rising/">yonkers-rising</a>, <a href="/tags/claude-mythos-fable/">claude-mythos-fable</a>
+    </div>
+  </div>
+</div>
+
+
+
+
+
+<h3 class="blog-mixed-list-year">Monday, 9th November 2026</h3>
+
+
+
+
+
+
+
+
+
+
+
+<div class="beat segment" data-type="beat" data-id="5104">
+  
+  <div class="beat-content">
+    <div class="beat-row1">
+      
+        <a class="beat-label release" href="/elsewhere/release/">Release</a>
+      
+      <span class="beat-title"><a href="https://github.com/simonw/llm-anthropic/releases/tag/0.31">llm-anthropic 0.31</a></span>
+      
+    </div>
+    <div class="beat-note blogmark-body"><p>Anthropic <a href="https://www.anthropic.com/claude-fable-and-mythos-5-2">released Fable 5.2 and Mythos 5.2</a> today. Fable 5.2 is currently <a href="https://artificialanalysis.ai/models/claude-fable-5-2">ranked first on Artificial Analysis</a>. Anthropic say it "solved two open problems in the physics of black holes", so clearly their internal benchmarks have become more ambitious!</p>
+<p>I've added the new models to <code>llm-anthropic</code>, so you can now run prompts through Fable 5.2 like this:</p>
+<pre><code>uv tool install llm
+llm install llm-anthropic
+llm keys set anthropic
+# paste key here
+llm -m claude-fable-5.2 "Generate an SVG of a pelican riding a bicycle"
+</code></pre>
+<p>I ran pelicans at all five reasoning levels - <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>, and <code>max</code>. You can <a href="https://tools.simonwillison.net/markdown-svg-renderer?url=https%3A%2F%2Fgist.github.com%2Fsimonw%2Fbcd1a1bf38b929b0bbbae2e38b808e97">see them all here</a> - here's the best result I got, from <code>xhigh</code>:</p>
+<p><img alt="It's good - legs the right side of the bicycle, good frame, nice pouch, weird little fingers on the handlebars. The pouch looks slightly misaligned with the top of the beak." src="https://static.simonwillison.net/static/2026/fable-5.2-xhigh.avif" /></p>
+<p><code>max</code> failed to return an image at all, running out of tokens after spending 128,000 <a href="https://tools.simonwillison.net/markdown-svg-renderer?url=https%3A%2F%2Fgist.github.com%2Fsimonw%2Fbcd1a1bf38b929b0bbbae2e38b808e97#reasoning-2">thinking about them</a>. That's the same bug that I saw with <a href="https://simonwillison.net/2026/Sep/22/opus-and-sol-and-luna/#claude-opus-5-5-max-over-thinks-to-the-point-of-breaking">Opus 5.5</a> - but it's new for the Fable series, both <a href="https://simonwillison.net/2026/Jun/9/claude-fable-5/#and-some-pelicans">Fable 5</a> and <a href="https://simonwillison.net/2026/Sep/1/claude-fable-5-1/#max">Fable 5.1</a> returned max effort pelicans just fine.</p>
+<p>It's priced at $8/million input and $40/million output, which is a 20% discount on the previous Fable 5.1 ($10/$50).</p>
+<p>I also used Fable 5.2 to <a href="https://simonwillison.net/2026/Nov/9/mysterious-beeps/">help identify the source of a mysterious beep</a>.</p></div>
+    <div class="beat-meta beat-row2">
+      <a href="/2026/Nov/9/llm-anthropic/" rel="bookmark">9th Nov 2026, 11:58 pm</a> &middot; <a href="/tags/llm-release/">llm-release</a>, <a href="/tags/llm/">llm</a>, <a href="/tags/anthropic/">anthropic</a>, <a href="/tags/claude/">claude</a>, <a href="/tags/generative-ai/">generative-ai</a>, <a href="/tags/pelican-riding-a-bicycle/">pelican-riding-a-bicycle</a>, <a href="/tags/ai/">ai</a>, <a href="/tags/llms/">llms</a>, <a href="/tags/claude-mythos-fable/">claude-mythos-fable</a>
+    </div>
+  </div>
+</div>
+
+
+
+
+
+
+
+
+<div class="entry segment" data-type="entry" data-id="9572">
+  <h3><a href="/2026/Nov/9/mysterious-beeps/" rel="bookmark">Locating the source of a mysterious beep with Claude</a></h3>
+  
+    <div class="card-container">
+      <a href="/2026/Nov/9/mysterious-beeps/"><img src="https://static.simonwillison.net/static/2026/beep-locator-card.jpg" alt="Visit Locating the source of a mysterious beep with Claude"></a>
+    </div>
+  
+  <p>
+    <p>Our house has a box room, full of boxes that we still haven’t unpacked from our last move. A couple of weeks ago something in that room started <em>intermittently beeping</em>. The beeps were far enough apart that standing in the room and trying to determine the source of the noise was frustrating, and I really didn’t want to dig through every one of those boxes. So I had Claude Code build <a href="https://github.com/simonw/beep-locator">Beep Locator</a>, a software system for triangulating the source of a mysterious beep using multiple devices scattered around the room.</p>
+
+    <span style="font-size: 0.9em">[... <a href="/2026/Nov/9/mysterious-beeps/">2,039 words</a>]</span>
+  </p>
+  <div class="entryFooter">
+  <a href="/2026/Nov/9/mysterious-beeps/" title="Permalink for &quot;Locating the source of a mysterious beep with Claude&quot;">11:57 pm</a> / <a href="/tags/projects/">projects</a>, <a href="/tags/ai/">ai</a>, <a href="/tags/generative-ai/">generative-ai</a>, <a href="/tags/llms/">llms</a>, <a href="/tags/claude/">claude</a>, <a href="/tags/coding-agents/">coding-agents</a>, <a href="/tags/claude-code/">claude-code</a>, <a href="/tags/claude-mythos-fable/">claude-mythos-fable</a>
+  </div>
+</div> 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="note segment beat-comment" data-type="beat" data-id="5101">
+  <p class="comment-source-bar"><a class="beat-label comment" href="/elsewhere/comment/">Comment</a> <img class="beat-favicon" src="https://www.google.com/s2/favicons?domain=news.ycombinator.com&amp;sz=128" alt="" width="14" height="14" loading="lazy"> <a href="https://news.ycombinator.com/item?id=50416456#50421091">My comment</a> on <a href="https://news.ycombinator.com/item?id=50416456">The Web Is More Than Enough, by Paul Ford</a> &mdash; Hacker News</p>
+
+  
+  <p>OK, this comment convinced me to give that a shot.</p>
+<p>Here's a thing I made in Three.js this morning - a Nudibranch themed Faberge Egg: <a href="https://static.simonwillison.net/static/2026/Hidden-Reef-Egg-threejs.html">https://static.simonwillison.net/static/2026/Hidden-Reef-Egg...</a> (77KB)</p>
+<p>I just asked Claude (Opus 5.5 Medium running in regular Claude Chat) to port that to Vanilla JS, in the same thread where it had built it, and got this: <a href="https://static.simonwillison.net/static/2026/Hidden-Reef-Egg-Vanilla-WebGL.html">https://static.simonwillison.net/static/2026/Hidden-Reef-Egg...</a> (98KB)</p>
+<p>They aren't identical - you can see what Claude said about that in the transcript (I don't fully understand why it differed): <a href="https://claude.ai/share/e56d163e-2793-4677-aa11-191d5058b414">https://claude.ai/share/e56d163e-2793-4677-aa11-191d5058b414</a></p>
+<p>But yeah, it turns out Claude Opus 5.5 is perfectly capable of 3D modeling in Vanilla JS + WebGL without Three.js.</p>
+<p>In eyeballing the code I find the Three.js slightly easier to understand myself, but I rarely look at the code for these 3D projects so that isn't a particularly big deal.</p>
+  
+  <p class="date-and-tags">
+    <a href="/2026/Nov/9/hn-50421091/" rel="bookmark">#</a>
+    <a href="/2026/Nov/9/hn-50421091/">4:32 am</a>
+     / <a href="/tags/claude/">claude</a>, <a href="/tags/javascript/">javascript</a>, <a href="/tags/three-js/">three-js</a>, <a href="/tags/hacker-news/">hacker-news</a>, <a href="/tags/generative-ai/">generative-ai</a>, <a href="/tags/ai/">ai</a>, <a href="/tags/llms/">llms</a>
+  </p>
+
+</div>
+
+
+
+
+
+
+
+
+<div class="entry segment" data-type="entry" data-id="9571">
+  <h3><a href="/2026/Nov/9/details-summary/" rel="bookmark">Hide your slop PR descriptions behind &lt;details&gt;&lt;summary&gt;</a></h3>
+  
+    <div class="card-container">
+      <a href="/2026/Nov/9/details-summary/"><img src="https://static.simonwillison.net/static/2026/details-summary-card.webp" alt="Visit Hide your slop PR descriptions behind &lt;details&gt;&lt;summary&gt;"></a>
+    </div>
+  
+  <p>
+    <p>Most of the changes I make to my projects these days come in the form of PRs opened for me by Claude Code or Codex. The PR is my unit of work—I use them to bundle commits together, iterating on them until a feature is complete, document decisions and then merge the finished result. Today’s coding agents are great at writing PR descriptions.</p>
+
+    <span style="font-size: 0.9em">[... <a href="/2026/Nov/9/details-summary/">987 words</a>]</span>
+  </p>
+  <div class="entryFooter">
+  <a href="/2026/Nov/9/details-summary/" title="Permalink for &quot;Hide your slop PR descriptions behind &lt;details&gt;&lt;summary&gt;&quot;">4:25 am</a> / <a href="/tags/github/">github</a>, <a href="/tags/html/">html</a>, <a href="/tags/markdown/">markdown</a>, <a href="/tags/ai/">ai</a>, <a href="/tags/datasette/">datasette</a>, <a href="/tags/generative-ai/">generative-ai</a>, <a href="/tags/llms/">llms</a>, <a href="/tags/ai-assisted-programming/">ai-assisted-programming</a>, <a href="/tags/llm/">llm</a>, <a href="/tags/coding-agents/">coding-agents</a>
+  </div>
+</div> 
+
+
+
+
+
+
+
+
+
+
+
+
+<h3 class="blog-mixed-list-year">Sunday, 8th November 2026</h3>
+
+
+
+
+
+
+
+
+
+
+
+<div class="beat segment" data-type="beat" data-id="5097">
+  
+  <div class="beat-content">
+    <div class="beat-row1">
+      
+        <a class="beat-label research" href="/elsewhere/research/">Research</a>
+      
+      <span class="beat-title"><a href="https://github.com/simonw/research/tree/main/sqlite-parse-number-c-vs-rust#readme">parse_number() as a SQLite extension: C vs Rust</a></span>
+      
+    </div>
+    <div class="beat-note blogmark-body"><p>I was out walking the dog when I got curious about how easy/difficult it would be to write a SQLite C extension that adds a <code>parse_number()</code> function for turning strings like <code>-$1,234.56</code> or <code>'12.5%'</code> into numeric values that could be summed and sorted.</p>
+<p>I fired up regular Claude chat (Opus 5.5) <a href="https://claude.ai/share/7f18f157-6c96-4d49-a1d4-f02403e3b261">and prompted</a>:</p>
+<blockquote>
+<p><code>I'm thinking about a SQLite custom function 'parse_number(value)' that strips ',', '$', '£' and '%', handles a leading '-', and returns 'NULL' for anything it can’t parse</code></p>
+<p><code>Explore the difference between building this as a SQLite extension in C v.s. in Rust - I want to compare performance and code complexity and size of the resulting</code>.so<code>(or whatever) file</code></p>
+</blockquote>
+<p>This gave me a solid starting point - the Rust extension was 321 KB (using <a href="https://github.com/rusqlite/rusqlite">Rusqlite</a>) and 298 KB (using <a href="https://github.com/asg017/sqlite-loadable-rs">sqlite-loadable-rs</a>), while the C extension was 14 KB. But the Rust extension was faster!</p>
+<p>Turns out that's because the Rust equivalent of C's <code>strtod</code> is "twice as fast". So I prompted:</p>
+<blockquote>
+<p><code>Try writing your own C function for parsing text into a decimal number that catches up to or beats the Rust implementation</code></p>
+</blockquote>
+<p>And it did, using "Clinger's fast path":</p>
+<blockquote>
+<p>Net cost per row over 2 million rows, lower is better:</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>first C</th>
+<th>new C</th>
+<th>rusqlite</th>
+<th>sqlite-loadable</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Mixed data</td>
+<td>67 ns</td>
+<td><strong>19 ns</strong></td>
+<td>46 ns</td>
+<td>41 ns</td>
+</tr>
+<tr>
+<td>Integers only</td>
+<td>25 ns</td>
+<td><strong>16 ns</strong></td>
+<td>36 ns</td>
+<td>32 ns</td>
+</tr>
+<tr>
+<td>Decimals only</td>
+<td>106 ns</td>
+<td><strong>18 ns</strong></td>
+<td>55 ns</td>
+<td>47 ns</td>
+</tr>
+</tbody>
+</table>
+</blockquote>
+
+<p>Finally, I had it rewrite the prototype as a research report to match the others in <a href="https://github.com/simonw/research">simonw/research</a> by prompting this:</p>
+<blockquote>
+<p><code>Clone simonw/research from GitHub and turn your above investigation into a research report as seen in that repository - you can give me a zip file to download that contains your new folder</code></p>
+</blockquote>
+<p>Here's <a href="https://github.com/simonw/research/tree/main/sqlite-parse-number-c-vs-rust#readme">the resulting report</a>.</p></div>
+    <div class="beat-meta beat-row2">
+      <a href="/2026/Nov/8/sqlite-parse-number-c-vs-rust/" rel="bookmark">8th Nov 2026, 10:26 pm</a> &middot; <a href="/tags/research/">research</a>, <a href="/tags/c/">c</a>, <a href="/tags/rust/">rust</a>, <a href="/tags/sqlite/">sqlite</a>, <a href="/tags/claude/">claude</a>
+    </div>
+  </div>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="beat segment beat-sighting" data-type="beat" data-id="5411">
+  <div class="beat-content">
+    <div class="beat-row1">
+      <a class="beat-label sighting" href="/elsewhere/sighting/">Sighting</a>
+      <span class="beat-title"><a href="/2026/Nov/8/sighting-413706009/">11:05 AM – 11:40 AM</a></span>
+      <span class="beat-commit">&mdash; Great Blue Heron, Western Grebe, Botta&#x27;s Pocket Gopher, California Brown Pelican, California Sea Lion, Pacific Harbor Seal, in Monterey Bay National Marine Sanctuary, CA, US, CA</span>
+    </div>
+    <captioned-image-gallery>
+      <figure><a href="https://static.inaturalist.org/photos/761475467/original.jpg"><img src="https://static.inaturalist.org/photos/761475467/small.jpg" alt="Great Blue Heron" loading="lazy" data-width="2048" data-height="1365"></a><figcaption><a href="https://www.inaturalist.org/observations/413706009" title="View observation on iNaturalist">Great Blue Heron</a></figcaption></figure><figure><a href="https://static.inaturalist.org/photos/761475495/original.jpg"><img src="https://static.inaturalist.org/photos/761475495/small.jpg" alt="Great Blue Heron" loading="lazy" data-width="1365" data-height="2048"></a><figcaption><a href="https://www.inaturalist.org/observations/413706009" title="View observation on iNaturalist">Great Blue Heron</a></figcaption></figure><figure><a href="https://static.inaturalist.org/photos/761476559/original.jpg"><img src="https://static.inaturalist.org/photos/761476559/small.jpg" alt="Western Grebe" loading="lazy" data-width="2048" data-height="1365"></a><figcaption><a href="https://www.inaturalist.org/observations/413706582" title="View observation on iNaturalist">Western Grebe</a></figcaption></figure><figure><a href="https://static.inaturalist.org/photos/761476014/original.jpg"><img src="https://static.inaturalist.org/photos/761476014/small.jpg" alt="Botta&#x27;s Pocket Gopher" loading="lazy" data-width="2048" data-height="1365"></a><figcaption><a href="https://www.inaturalist.org/observations/413706312" title="View observation on iNaturalist">Botta&#x27;s Pocket Gopher</a></figcaption></figure><figure><a href="https://static.inaturalist.org/photos/761476204/original.jpg"><img src="https://static.inaturalist.org/photos/761476204/small.jpg" alt="California Brown Pelican" loading="lazy" data-width="2048" data-height="1365"></a><figcaption><a href="https://www.inaturalist.org/observations/413706374" title="View observation on iNaturalist">California Brown Pelican</a></figcaption></figure><figure><a href="https://static.inaturalist.org/photos/761475600/original.jpg"><img src="https://static.inaturalist.org/photos/761475600/small.jpg" alt="California Sea Lion" loading="lazy" data-width="2048" data-height="1365"></a><figcaption><a href="https://www.inaturalist.org/observations/413706107" title="View observation on iNaturalist">California Sea Lion</a></figcaption></figure><figure><a href="https://static.inaturalist.org/photos/761477075/original.jpg"><img src="https://static.inaturalist.org/photos/761477075/small.jpg" alt="Pacific Harbor Seal" loading="lazy" data-width="2048" data-height="1365"></a><figcaption><a href="https://www.inaturalist.org/observations/413706815" title="View observation on iNaturalist">Pacific Harbor Seal</a></figcaption></figure>
+    </captioned-image-gallery>
+    
+    <div class="beat-meta beat-row2">
+      <a href="/2026/Nov/8/sighting-413706009/" rel="bookmark">8th Nov 2026</a>
+    </div>
+  </div>
+</div>
+
+
+
+
+
+<h3 class="blog-mixed-list-year">Saturday, 7th November 2026</h3>
+
+
+
+
+
+
+<div class="blogmark segment" data-type="blogmark" data-id="9731">
+  <p><strong><a href="https://github.com/simonw/datasette/issues/3046">datasette #3046: Don’t serve link: rel=next HTTP headers to Firefox for HTML pages</a></strong>.
+    I was looking at the Firefox network panel today when I noticed that requests to a Datasette table page were triggering an <a href="https://developer.mozilla.org/en-US/docs/Glossary/Prefetch">HTTP prefetch</a> to the next page of rows in that table.</p>
+<p>This was happening because Datasette pages serve an HTTP <code>link</code> header like this:</p>
+<p><code>link: &lt;https://latest.datasette.io/fixtures/compound_three_primary_keys?_next=a%2Cd%2Cv&gt;; rel="next"</code></p>
+<p>This is bad. A tiny fraction of the visitors to one of those pages will click the "next" link, which means for everyone else their browser is fetching unnecessary data and the Datasette server is having to render an entire page that then gets thrown away.</p>
+<p>I dug in and learned that Firefox has <a href="https://bugzilla.mozilla.org/show_bug.cgi?id=175418">an issue</a> that has been open for 24 years about this behavior...</p>
+<p>And one of the early comments on that issue links to <a href="https://simonwillison.net/2002/Oct/17/mozillaPrefetching/">my blog post from 2002</a> complaining about this feature. I hadn't just forgotten that I had written about it, I had forgotten the feature entirely!</p>
+  
+  <p class="date-and-tags">
+    <a href="/2026/Nov/7/link-rel-next/" rel="bookmark">#</a>
+    <a href="/2026/Nov/7/link-rel-next/">11:57 pm</a>
+     / <a href="/tags/firefox/">firefox</a>, <a href="/tags/html/">html</a>, <a href="/tags/mozilla/">mozilla</a>, <a href="/tags/datasette/">datasette</a>
+  </p>
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="note segment beat-comment" data-type="beat" data-id="5102">
+  <p class="comment-source-bar"><a class="beat-label comment" href="/elsewhere/comment/">Comment</a> <img class="beat-favicon" src="https://www.google.com/s2/favicons?domain=news.ycombinator.com&amp;sz=128" alt="" width="14" height="14" loading="lazy"> <a href="https://news.ycombinator.com/item?id=50405674#50407316">My comment</a> on <a href="https://news.ycombinator.com/item?id=50405674">Terry Pratchett&#x27;s Study</a> &mdash; Hacker News</p>
+
+  
+  <p>Terry Pratchett once wrote about the concept of "horizontal wealth". Vertical wealth is where you spend money on rich people stuff - yachts and suchlike. Horizontal wealth is where you spend more money on the things you liked before you got rich: <a href="https://chibuikeani.blogspot.com/2017/02/the-price-of-happiness-horizontal-vs.html">https://chibuikeani.blogspot.com/2017/02/the-price-of-happin...</a></p>
+<blockquote>
+<p>But horizontal wealth means not letting your increased income dictate your tastes. You like books and now you have money? Buy more books! Change those catenary bookshelves for good hardwood ones! In my case, build a library extension to your office. And, of course, you buy what will be useful for that most wonderful of pursuits, blind research, which is research without direction for the sheer joy of it.</p>
+</blockquote>
+<p>(Original source is his book A Slip of the Keyboard - this linked blog post quotes that bit.)</p>
+  
+  <p class="date-and-tags">
+    <a href="/2026/Nov/7/hn-50407316/" rel="bookmark">#</a>
+    <a href="/2026/Nov/7/hn-50407316/">7:34 pm</a>
+     / <a href="/tags/hacker-news/">hacker-news</a>, <a href="/tags/terry-pratchett/">terry-pratchett</a>
+  </p>
+
+</div>
+
+
+
+
+
+<h3 class="blog-mixed-list-year">Friday, 6th November 2026</h3>
+
+
+
+
+
+
+
+<div class="quote segment" data-type="quotation" data-id="2462">
+  <blockquote cite="https://www.youtube.com/watch?v=-U4thshDTL8&amp;t=422s"><p>The products aren't good enough to sell people on the costs.</p>
+<p>You cannot tell people that you have to listen to the whine of a data center in their backyard for AI overviews and some of the most hilarious deep fake slop in history.</p>
+<p>It's not worth it. It just isn't worth it to anyone. And agents aren't real and they might not be being used the way that anyone wants them to yet. All these companies are spending more than they're making on these products. Refrigerators holding blood storage in Europe are being hacked.</p>
+<p>The costs are too high. The benefits are not real. And if you connect that to corruption, you're like, in order to impose these costs on me, these CEOs are in the White House shaking Trump's hand, renaming it to the Gulf of America, paying for this ballroom that we don't want. It's obvious crypto-corruption, and it's still slop. </p>
+<p>The AI industry will not get out of it until they make <em>better products</em>. Until everyone can see without needing to be convinced, without needing an ad campaign, without any of this stuff that just using these products makes your life better.</p></blockquote>
+  <p class="cite">&mdash; <a href="https://www.youtube.com/watch?v=-U4thshDTL8&amp;t=422s">Nilay Patel</a>, <span class="context">The Vergecast: Big Tech lost big in the 2026 election</span></p>
+  
+  <p class="date-and-tags">
+    <a href="/2026/Nov/6/nilay-patel/" rel="bookmark">#</a>
+    <a href="/2026/Nov/6/nilay-patel/">5:13 pm</a>
+     / <a href="/tags/nilay-patel/">nilay-patel</a>, <a href="/tags/slop/">slop</a>, <a href="/tags/ai/">ai</a>, <a href="/tags/generative-ai/">generative-ai</a>, <a href="/tags/ai-ethics/">ai-ethics</a>
+  </p>
+
+</div>
+
+
+
+
+
+
+
+
+</div> 
+
+<div id="secondary">
+
+<h2 class="overband">Highlights</h2>
+<ul>
+
+  <li><a href="/2026/Nov/17/datasette-lite/">Running the full server-side Datasette Python app in the browser with service workers and Pyodide</a> - Nov. 17, 2026</li>
+
+  <li><a href="/2026/Nov/9/mysterious-beeps/">Locating the source of a mysterious beep with Claude</a> - Nov. 9, 2026</li>
+
+  <li><a href="/2026/Nov/9/details-summary/">Hide your slop PR descriptions behind &lt;details&gt;&lt;summary&gt;</a> - Nov. 9, 2026</li>
+
+  <li><a href="/2026/Nov/3/qwen-can-interpret-model-weights/">Qwen 3.8 27B on my laptop can interpret model weights, too</a> - Nov. 3, 2026</li>
+
+  <li><a href="/2026/Nov/2/census-bureau-super-intelligence/">The U.S. Census Bureau and “Super Intelligence”</a> - Nov. 2, 2026</li>
+
+  <li><a href="/2026/Oct/28/vibe-game-development/">The October inflection point for vibe game development</a> - Oct. 28, 2026</li>
+
+  <li><a href="/2026/Oct/20/battledrones/">Battle Drones - a vibe coded RTS with audio-based multiplayer</a> - Oct. 20, 2026</li>
+
+  <li><a href="/2026/Oct/12/python-3-15/">Hello Python 3.15, goodbye 3.10, and now I can use 3.11</a> - Oct. 12, 2026</li>
+
+  <li><a href="/2026/Oct/9/built-using-my-voice/">A new feature for my blog, built using my voice</a> - Oct. 9, 2026</li>
+
+  <li><a href="/2026/Oct/7/claude-haiku-5-5/">Claude Haiku 5.5</a> - Oct. 7, 2026</li>
+
+  <li><a href="/2026/Oct/3/default-hard-budget-caps/">We&#x27;re going to need default hard budget caps on pretty much everything</a> - Oct. 3, 2026</li>
+
+  <li><a href="/2026/Sep/29/openai-devday-2026-live-blog/">OpenAI DevDay 2026 live blog</a> - Sept. 29, 2026</li>
+
+  <li><a href="/2026/Sep/27/2026-in-llms-so-far/">2026 in LLMs (so far)</a> - Sept. 27, 2026</li>
+
+  <li><a href="/2026/Sep/22/opus-and-sol-and-luna/">Claude Opus 5.5, GPT-6 Sol, GPT-6 Luna, and a new price war</a> - Sept. 22, 2026</li>
+
+  <li><a href="/2026/Sep/21/jev/">Jev introduces a new shape of LLM - System One, aka Decision Models</a> - Sept. 21, 2026</li>
+
+  <li><a href="/2026/Sep/12/astra-running-routes/">Generating running routes with GPT-6 Astra and ChatGPT Work</a> - Sept. 12, 2026</li>
+
+  <li><a href="/2026/Sep/12/openai-agents-rubygems/">OpenAI agents attacked RubyGems back in May</a> - Sept. 12, 2026</li>
+
+  <li><a href="/2026/Sep/8/on-navier-stokes/">Some thoughts on the Navier–Stokes Millennium Prize Problem</a> - Sept. 8, 2026</li>
+
+  <li><a href="/2026/Sep/4/astra-pelicans/">The Pelican comparison grid for Astra is pretty interesting</a> - Sept. 4, 2026</li>
+
+  <li><a href="/2026/Sep/4/rogue-agent-wikis/">OpenAI&#x27;s rogue agents were caught communicating via public wikis</a> - Sept. 4, 2026</li>
+
+  <li><a href="/2026/Sep/2/claudes-new-system-prompt/">Claude&#x27;s new system prompt really doesn&#x27;t want to reproduce song lyrics</a> - Sept. 2, 2026</li>
+
+  <li><a href="/2026/Sep/1/claude-fable-5-1/">Claude Fable 5.1 made me a really nice animated pelican</a> - Sept. 1, 2026</li>
+
+  <li><a href="/2026/Aug/30/understanding-chatgpt-work/">Understanding ChatGPT Work</a> - Aug. 30, 2026</li>
+
+  <li><a href="/2026/Aug/19/conceptual-integrity-and-counting-lines-of-code/">Conceptual integrity and counting lines of code</a> - Aug. 19, 2026</li>
+
+  <li><a href="/2026/Aug/16/qwen-38-27b/">Qwen 3.8 27B is excellent, but it defaults to wildly overthinking things</a> - Aug. 16, 2026</li>
+
+  <li><a href="/2026/Aug/7/openai-timeline/">Now we have a timeline of the OpenAI accidental attack against Hugging Face</a> - Aug. 7, 2026</li>
+
+  <li><a href="/2026/Aug/5/raccoon-heist/">One-shotting a Raccoon Heist game using Claude Fable 5</a> - Aug. 5, 2026</li>
+
+  <li><a href="/2026/Aug/4/new-release-of-llm/">New release of LLM adds support for reasoning traces, OpenAI Responses, server-side tools, and smarter logging</a> - Aug. 4, 2026</li>
+
+  <li><a href="/2026/Jul/31/stateless-mcp/">Stateless MCP has recaptured my interest (and inspired mcp-explorer and datasette-mcp)</a> - July 31, 2026</li>
+
+  <li><a href="/2026/Jul/22/openai-cyberattack/">OpenAI’s accidental cyberattack against Hugging Face is science fiction that happened</a> - July 22, 2026</li>
+
+  <li><a href="/2026/Jul/21/cat-and-thariq/">A Fireside Chat with Cat and Thariq from the Claude Code team</a> - July 21, 2026</li>
+
+  <li><a href="/2026/Jul/16/kimi-k3/">Kimi K3, and what we can still learn from the pelican benchmark</a> - July 16, 2026</li>
+
+  <li><a href="/2026/Jul/9/gpt-5-6/">The new GPT-5.6 family: Luna, Terra, Sol</a> - July 9, 2026</li>
+
+  <li><a href="/2026/Jul/7/sqlite-utils-4/">sqlite-utils 4.0, now with database schema migrations</a> - July 7, 2026</li>
+
+  <li><a href="/2026/Jul/5/sqlite-utils-fable/">sqlite-utils 4.0rc2, mostly written by Claude Fable (for about $149.25)</a> - July 5, 2026</li>
+
+  <li><a href="/2026/Jun/30/shot-scraper-video/">Have your agent record video demos of its work with shot-scraper video</a> - June 30, 2026</li>
+
+  <li><a href="/2026/Jun/22/porting-moebius/">Porting the Moebius 0.2B image inpainting model to run in the browser with Claude Code</a> - June 22, 2026</li>
+
+  <li><a href="/2026/Jun/21/sqlite-utils-40rc1/">sqlite-utils 4.0rc1 adds migrations and nested transactions</a> - June 21, 2026</li>
+
+  <li><a href="/2026/Jun/18/datasette-apps/">Datasette Apps: Host custom HTML applications inside Datasette</a> - June 18, 2026</li>
+
+  <li><a href="/2026/Jun/17/glm-52/">GLM-5.2 is probably the most powerful text-only open weights LLM</a> - June 17, 2026</li>
+
+</ul>
+<section style="
+    /* .promo */
+    border-radius: 8px;
+    margin: 1.5rem 0;
+    padding: 1rem 1.25rem;
+    /* .variant-a */
+    border: 2px solid #6c3eb9;
+  ">
+  <h3 style="
+      /* h3 */
+      margin: 0 0 0.5rem;
+      font-size: 1.25rem;
+    ">
+    Monthly briefing
+  </h3>
+  <p style="
+      /* p */
+      margin: 0 0 1rem;
+      line-height: 1.4;
+    ">
+    Sponsor me for <strong>$10/month</strong> and get a curated email digest of the month's most important LLM developments.
+  </p>
+  <p style="
+      /* p */
+      margin: 0 0 1rem;
+      line-height: 1.4;
+    ">
+    Pay me to send you less!
+  </p>
+  <a href="https://github.com/sponsors/simonw/" style="
+      /* a.button */
+      display: inline-block;
+      padding: 0.5rem 1rem;
+      background: #6c3eb9;
+      color: #fff;
+      text-decoration: none;
+      border-radius: 4px;
+      font-weight: 600;
+    ">
+    Sponsor &amp; subscribe
+  </a>
+</section>
+
+</div> 
+</div> 
+
+
+
+<div id="ft">
+    <ul>
+      <li><a href="/about/#disclosures">Disclosures</a></li>
+      <li><a href="/about/#about-site">Colophon</a></li>
+      <li>&copy;</li>
+      <li><a href="/2002/">2002</a></li>
+      <li><a href="/2003/">2003</a></li>
+      <li><a href="/2004/">2004</a></li>
+      <li><a href="/2005/">2005</a></li>
+      <li><a href="/2006/">2006</a></li>
+      <li><a href="/2007/">2007</a></li>
+      <li><a href="/2008/">2008</a></li>
+      <li><a href="/2009/">2009</a></li>
+      <li><a href="/2010/">2010</a></li>
+      <li><a href="/2011/">2011</a></li>
+      <li><a href="/2012/">2012</a></li>
+      <li><a href="/2013/">2013</a></li>
+      <li><a href="/2014/">2014</a></li>
+      <li><a href="/2015/">2015</a></li>
+      <li><a href="/2016/">2016</a></li>
+      <li><a href="/2017/">2017</a></li>
+      <li><a href="/2018/">2018</a></li>
+      <li><a href="/2019/">2019</a></li>
+      <li><a href="/2020/">2020</a></li>
+      <li><a href="/2021/">2021</a></li>
+      <li><a href="/2022/">2022</a></li>
+      <li><a href="/2023/">2023</a></li>
+      <li><a href="/2024/">2024</a></li>
+      <li><a href="/2025/">2025</a></li>
+      <li><a href="/2026/">2026</a></li>
+      <li>
+        <button id="theme-toggle" type="button" aria-label="Toggle theme">
+          
+          <svg id="icon-auto" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d=""/></svg>
+          
+          <svg id="icon-light" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" style="display:none"><path d=""/></svg>
+          
+          <svg id="icon-dark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" style="display:none"><path d=""/></svg>
+        </button>
+      </li>
+    </ul>
+</div>
+
+<style>/* stub */</style>
+<script>/* stub */</script>
+<script type="module">/* stub */</script>
+<script>/* stub */</script>
+<script>/* stub */</script>
+<script>/* stub */</script>
+<script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/vce701823e78c4301a35b7e07294d87301792088814092" integrity="sha512-UKNk8GbxkABxKcXYuLkO16EleLGUkcvJWtpSNmExE0Too3ZaFAxTscNWEc1OdAv5/BikHawapSCaiD2XCmp+Bw==" data-cf-beacon='{"version":"2024.11.0","token":"42c41055028944ee9764ce8039f69a82","r":1,"spa":2}' crossorigin="anonymous">/* stub */</script>
+</body>
+</html>

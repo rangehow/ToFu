@@ -16,6 +16,7 @@ with the registered checkpoint at the current result revision now publishes it,
 exactly as it already re-pinned a published accept; only the same request's
 attempts, or any Turn of the Coordinator binding that dispatched it, may do it.
 """
+from copy import deepcopy
 import threading
 from types import SimpleNamespace
 
@@ -80,14 +81,32 @@ def test_a_resumed_request_publishes_its_accepted_review_at_the_current_result(
     """coord-p-pk: the accept carried no checkpoint_sha, and the Worker Turn may have
     gained projection revisions since (drift). The same request publishes it."""
     r = run; worker, pin = completed(r)
+    binding, task_id = r.c.repo.admission(worker['id']), worker['execution']['taskId']
+    workspace = r.workspaces[task_id]
+    workspace.update(state='active')
+    receipt = workspace['origin']['delivery']
+    workspace['origin']['sourceSnapshot'] = 'b' * 40
+    executor_task_id = r.attempts[worker['execution']['attemptId']]['taskId']
+    receipt.update(state='pending', phase='checkpoint', executorTaskId=executor_task_id,
+                   publicationMode='committed')
+    assert receipt['checkpointSha'] != workspace['origin']['sourceSnapshot']
     woken, released = _publishing(r)
+
+    def receive():
+        assert r.c.repo.validate_publication(binding, task_id)['id'] == worker['id']
+        woken.append(True)
+        workspace['state'] = 'integrated'
+        receipt.update(state='delivered', headSha=pin['checkpointSha'], targetSha=pin['checkpointSha'])
+
+    r.service.publication_wake = receive
     if accepted_by == 'resumed':
         _restart_resume(r)
     accepted = r.call('review_project_work', assignment_id=worker['id'], result_revision=1,
                       decision='accept', note=NOTE)
     assert 'error' not in accepted and accepted['checkpoint_sha'] is None, accepted
+    assert not accepted['canonical_delivery'] and accepted['delivery']['status'] == 'pending', accepted
     assert 'same note, the current result_revision and checkpoint_sha' in accepted['next_step']
-    binding, task_id = r.c.repo.admission(worker['id']), worker['execution']['taskId']
+    assert woken == released == []
     with pytest.raises(PublicationAwaitsReview):
         r.c.repo.validate_publication(binding, task_id)
     assert _receiver_verdict(r, worker, monkeypatch) == 'project_publication_authority_missing'
@@ -110,6 +129,39 @@ def test_a_resumed_request_publishes_its_accepted_review_at_the_current_result(
     assert row['publication']['subject'] != 'coordinator:' + r.task['id']
     assert r.c.repo.validate_publication(binding, task_id)['id'] == worker['id']
     assert _receiver_verdict(r, worker, monkeypatch) == ''
+    before = deepcopy((row, workspace, r.calls, r.created, woken, released))
+    terminal = r.service.view(worker['id'], principal=r.c.principal)
+    assert terminal['canonicalDelivery'] and terminal['publication'] == row['publication']
+    assert (r.c.repo.read(worker['id']), workspace, r.calls, r.created, woken, released) == before
+
+
+def test_a_resumed_no_file_result_needs_no_publication(run):
+    r = run
+    worker = delegate(r)
+    end(r, worker)
+    workspace = r.workspaces[worker['execution']['taskId']]
+    workspace.update(checkpoint_sha='b' * 40, state='integrated')
+    workspace['origin']['sourceSnapshot'] = 'b' * 40
+    workspace['origin']['delivery'].update(
+        phase='no_changes', publicationMode='committed', checkpointSha='b' * 40,
+        headSha='b' * 40, targetSha='b' * 40,
+        executorTaskId=r.attempts[worker['execution']['attemptId']]['taskId'])
+    woken, released = _publishing(r)
+    _restart_resume(r)
+
+    accepted = r.call('review_project_work', assignment_id=worker['id'], result_revision=1,
+                      decision='accept', note=NOTE)
+
+    assert 'error' not in accepted, accepted
+    assert accepted['canonical_delivery'] and accepted['checkpoint_sha'] is None, accepted
+    assert 'no publication action is needed' in accepted['next_step']
+    row = r.c.repo.read(worker['id'])
+    assert row.get('publication') is None and woken == released == []
+    before = deepcopy((row, workspace, r.calls, r.created))
+    terminal = r.service.view(worker['id'], principal=r.c.principal)
+    assert terminal['canonicalDelivery'] and terminal['publication'] is None
+    assert (r.c.repo.read(worker['id']), workspace, r.calls, r.created) == before
+    assert woken == released == []
 
 
 def _continuation_with_another_requests_worker(r):
@@ -153,9 +205,15 @@ def test_a_continuation_publishes_its_review_of_another_requests_worker(run, mon
     'nonhuman_request', 'revoked_grant', 'other_decision', 'owner_review',
     'changed_note', 'unregistered_checkpoint', 'earlier_result'])
 def test_publishing_an_accepted_review_keeps_every_authority_refusal(run, monkeypatch, refusal):
+    from lib import integration_control
+
+    default_releases = []
+    monkeypatch.setattr(integration_control, 'release_publication_hold',
+                        lambda *args, **kwargs: default_releases.append((args, kwargs)))
     r = run
     worker, pin = completed(r)
     checkpoint = pin['checkpointSha']
+    woken, released = _publishing(r)
     if refusal == 'owner_review':
         # The owner's own review route records an accept the Coordinator never made.
         r.c.repo.record_review(worker['id'], 'accept', NOTE, 1, worker['grant']['revision'])
@@ -164,10 +222,12 @@ def test_publishing_an_accepted_review_keeps_every_authority_refusal(run, monkey
         recorded = r.call('review_project_work', assignment_id=worker['id'], result_revision=1,
                           decision=decision, note=NOTE)
         assert 'error' not in recorded, recorded
+    assert woken == []
+    assert released == ([worker['execution']['taskId']] if refusal == 'other_decision' else [])
+    callbacks_before = deepcopy((woken, released))
     _restart_resume(r)
     r.turns[worker['execution']['turnId']]['projectionRevision'] = 3
     before = r.c.repo.read(worker['id'])
-    woken, _ = _publishing(r)
     arguments = {'assignment_id': worker['id'], 'result_revision': 3, 'decision': 'accept', 'note': NOTE,
                  'checkpoint_sha': checkpoint}
     if refusal == 'nonhuman_request':
@@ -187,7 +247,8 @@ def test_publishing_an_accepted_review_keeps_every_authority_refusal(run, monkey
     assert 'error' in refused, refused
     after = r.c.repo.read(worker['id'])
     assert after['review'] == before['review'] and after.get('publication') is None
-    assert woken == []
+    assert (woken, released) == callbacks_before
+    assert default_releases == []
     if refusal == 'nonhuman_request':
         assert refused['code'] == 'nonhuman_request', refused
     elif refusal == 'changed_note':

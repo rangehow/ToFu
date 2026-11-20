@@ -13,6 +13,8 @@ Failure-first：S4 实现前 egress_status / 选择器端点不存在。
 
 from __future__ import annotations
 
+from lib.oauth.codex import CodexAccessTokenSnapshot
+
 import json
 import time
 import unittest
@@ -299,10 +301,8 @@ class TestProviderProbeRouting(unittest.TestCase):
         reader = mock.Mock(status_code=200)
         reader.read_all_text.return_value = (
             'data: {"type":"response.output_text.delta","delta":"OK"}\n\n')
-        with mock.patch('lib.oauth.codex.codex_get_valid_token',
-                        return_value='tok'), \
-             mock.patch('lib.oauth.token_store.load_token',
-                        return_value={'account_id': 'acc'}), \
+        with mock.patch('lib.oauth.codex.codex_get_valid_token_snapshot',
+                        return_value=CodexAccessTokenSnapshot('tok', 'acc')), \
              mock.patch('lib.desktop.egress.route_request', return_value='a1'), \
              mock.patch('lib.desktop.egress.open_stream', return_value=reader) as os_:
             status, _detail = self._probe()(
@@ -312,7 +312,7 @@ class TestProviderProbeRouting(unittest.TestCase):
         self.assertTrue(os_.called)
 
     def test_codex_probe_not_logged_in_neutral(self):
-        with mock.patch('lib.oauth.codex.codex_get_valid_token',
+        with mock.patch('lib.oauth.codex.codex_get_valid_token_snapshot',
                         return_value=None):
             status, _detail = self._probe()(
                 'https://chatgpt.com/backend-api/codex', 'oauth-managed',
@@ -322,10 +322,8 @@ class TestProviderProbeRouting(unittest.TestCase):
     def test_codex_probe_403_classified_unauthorized(self):
         reader = mock.Mock(status_code=403)
         reader.read_all_text.return_value = 'Cloudflare block'
-        with mock.patch('lib.oauth.codex.codex_get_valid_token',
-                        return_value='tok'), \
-             mock.patch('lib.oauth.token_store.load_token',
-                        return_value={'account_id': 'acc'}), \
+        with mock.patch('lib.oauth.codex.codex_get_valid_token_snapshot',
+                        return_value=CodexAccessTokenSnapshot('tok', 'acc')), \
              mock.patch('lib.desktop.egress.route_request', return_value='a1'), \
              mock.patch('lib.desktop.egress.open_stream', return_value=reader):
             status, _detail = self._probe()(

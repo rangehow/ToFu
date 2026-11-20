@@ -4,7 +4,7 @@ import { ApiError } from '../../api/transport';
 import { createDevicesClient } from './client';
 import { createDevicesStore, type PushPorts } from './live';
 import {
-  projectFleet, summarizeFleet, tierChipState, type DevicePermissions, type FleetSources, type Tiers, type WireNode,
+  projectFleet, summarizeFleet, tierChipState, type DevicePermissions, type FleetSources, type Tiers, type WireNode, type WireBrowserClient,
 } from './model';
 
 const tiers = (on: Array<keyof Tiers>): Tiers => ({
@@ -23,7 +23,7 @@ function node(overrides: Partial<WireNode>): WireNode {
 function permissions(nodeId: string, home: Tiers, device: Tiers | null): DevicePermissions {
   const effective = Object.fromEntries(Object.entries(home)
     .map(([key, value]) => [key, value && !!device?.[key as keyof Tiers]])) as Tiers;
-  return { node_id: nodeId, home, device, effective };
+  return { node_id: nodeId, home, device, effective, rev: 0 };
 }
 
 function sources(overrides: Partial<FleetSources> = {}): FleetSources {
@@ -77,7 +77,7 @@ describe('projectFleet', () => {
     const fleet = projectFleet(sources({
       permissions: { state: 'ok', value: { permissions: {
         n1: permissions('n1', tiers(['read', 'write']), tiers(['read', 'write', 'exec'])),
-      }, liveness_window_s: 15 } },
+      }, rev: 0, liveness_window_s: 15 } },
       defaults: { state: 'ok', value: { defaults: { server: 'n1', computer: null } } },
     }));
     const row = fleet.rows.find(candidate => candidate.nodeId === 'n1')!;
@@ -116,6 +116,22 @@ it('summarizes nodes for the pill without counting the Home', () => {
 });
 
 describe('devices client', () => {
+  it('sends the reviewed owner revision (including zero) and preserves the stale error', async () => {
+    const row = permissions('n/1', tiers(['read']), null);
+    const stale = new ApiError('Stale policy', { status: 409, code: 'stale_device_policy' });
+    const request = vi.fn().mockResolvedValueOnce({ permissions: { 'n/1': row }, rev: 0 })
+      .mockResolvedValueOnce({ ...row, rev: 1 }).mockRejectedValueOnce(stale);
+    const client = createDevicesClient(request as never);
+    expect(await client.permissions(new AbortController().signal)).toEqual({
+      state: 'ok', value: { permissions: { 'n/1': row }, rev: 0 },
+    });
+    expect(await client.setCeiling('n/1', { exec: true }, 0)).toEqual({ ...row, rev: 1 });
+    expect(request).toHaveBeenNthCalledWith(2, '/api/v4/devices/n%2F1/ceiling', {
+      method: 'PUT', json: { tiers: { exec: true }, expected_revision: 0 }, onError: 'throw',
+    });
+    await expect(client.setCeiling('n/1', { exec: false }, 1)).rejects.toBe(stale);
+    expect(request).toHaveBeenCalledTimes(3);
+  });
   it('maps a route this Home does not serve to absent and other failures to failed', async () => {
     const request = vi.fn(async (path: string) => {
       if (path.includes('permissions')) throw new ApiError('nope', { status: 404 });
@@ -156,14 +172,14 @@ function fakePush() {
   };
 }
 
-function fakeClient(state: { nodes: WireNode[]; failNodes?: boolean; bootId?: string }) {
+function fakeClient(state: { nodes: WireNode[]; browsers?: WireBrowserClient[]; failNodes?: boolean; bootId?: string }) {
   const calls = { nodes: 0 };
   const ok = <T>(value: T) => Promise.resolve({ state: 'ok' as const, value });
   const client = {
     nodes: () => { calls.nodes += 1; return state.failNodes ? Promise.resolve({ state: 'failed' as const, message: 'down' }) : ok(state.nodes); },
     permissions: () => Promise.resolve({ state: 'absent' as const }),
     defaults: () => Promise.resolve({ state: 'absent' as const }),
-    browsers: () => ok([]),
+    browsers: () => ok(state.browsers ?? []),
     waits: () => ok([]),
     home: () => ok({ host: 'h', bootId: state.bootId || 'b1' }),
   };
@@ -237,4 +253,28 @@ describe('live devices store', () => {
     release();
     expect(push.subscribers()).toBe(0);
   });
+});
+
+it('keeps two synthetic browser peers in the current account read and ignores foreign account hints', async () => {
+  const push = fakePush();
+  const state = { nodes: [], browsers: [
+    { client_id: 'work', profile: 'Work' }, { client_id: 'personal', profile: 'Personal' },
+  ] };
+  const fake = fakeClient(state);
+  const store = createDevicesStore(push.ports, fake.client);
+  const release = store.subscribe(() => {});
+  await flush();
+  expect(store.snapshot().fleet?.rows.filter(row => row.kind === 'browser').map(row => row.key))
+    .toEqual(['browser:work', 'browser:personal']);
+  state.browsers = [{ client_id: 'foreign', profile: 'Other account' }];
+  push.frame({ type: 'devices.changed', userId: 'someone-else' });
+  await flush();
+  expect(fake.calls.nodes).toBe(1);
+  expect(store.snapshot().fleet?.rows.some(row => row.key === 'browser:foreign')).toBe(false);
+  state.browsers = [{ client_id: 'personal', profile: 'Personal' }];
+  push.frame({ type: 'devices.changed', userId: 'owner' });
+  await flush();
+  expect(store.snapshot().fleet?.rows.filter(row => row.kind === 'browser').map(row => row.key))
+    .toEqual(['browser:personal']);
+  release();
 });

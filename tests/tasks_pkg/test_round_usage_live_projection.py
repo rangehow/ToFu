@@ -106,6 +106,29 @@ def test_round_record_projection_has_a_fixed_evidence_budget():
     assert projected_size < raw_size * 0.01
 
 
+def test_responses_evidence_stays_off_public_live_and_sdk_usage(monkeypatch):
+    from lib.agent_core.run_contract import project_agent_event_evidence
+    from lib.cost import RESPONSES_INPUT_USAGE_KEY, observed_cache_read
+    from lib.llm.responses_outbound import responses_response_to_openai
+
+    events = []
+    monkeypatch.setattr(_fallback_usage, 'append_event', lambda task, ev: events.append(ev))
+    usage = responses_response_to_openai({
+        'status': 'completed', 'output': [], 'usage': {
+            'input_tokens': 100, 'output_tokens': 3,
+            'input_tokens_details': {'cached_tokens': '90'},
+        },
+    })['usage']
+    task = _task()
+    _fallback_usage._emit_round_usage(task, 1, 'fixture-model', usage, tag='R1')
+    [event] = events
+    compatibility = {'prompt_tokens': 100, 'completion_tokens': 3, 'total_tokens': 103,
+                     'prompt_tokens_details': {'cached_tokens': 90}}
+    assert event['usage'] == compatibility
+    assert project_agent_event_evidence(event)['usage'] == compatibility
+    assert RESPONSES_INPUT_USAGE_KEY in usage and observed_cache_read(usage) is None
+
+
 def test_emit_stashes_openai_convention_prompt_includes_cache(monkeypatch):
     """OpenAI convention: prompt_tokens already includes cache → tokensIn is
     the raw input number, never double-counted."""

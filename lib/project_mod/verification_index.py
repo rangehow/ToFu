@@ -6,7 +6,7 @@ requested, changed blobs are read, in one cat-file transaction. One atomically
 replaced cache retains entries for the current inventory, shared across private
 checkouts. Cache loss/concurrent replacement costs work, never coverage.
 
-Entry points: build_index, select_paths. Dependencies: standard library, Git,
+Entry points: build_index, select_paths, measure. Dependencies: standard library, Git,
 ``lib.tools.process_environment`` for Git's environment.
 Contract: docs/modules/project_integration.md, "Landing verification".
 """
@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -180,3 +181,51 @@ def build_index(root, revision, selector, cache_path, paths=None) -> IndexResult
     return IndexResult({path: {'refs': resolve(path, entries[path]['refs'])} for path in selected},
                        len(missing), len(selected) - len(missing),
                        time.perf_counter() - started, error)
+
+
+def measure(root, revision='HEAD', repetitions=3):
+    """Measure full-reference parity, warm reuse and exact one-file scope on a revision."""
+    from lib.project_mod import landing_verification as landing
+
+    head = landing._git(root, 'rev-parse', '--verify', f'{revision}^{{commit}}')
+    if head.returncode:
+        raise ValueError(head.stderr.strip())
+    head = head.stdout.strip()
+    timings = {name: [] for name in ('ordinary_cold', 'content_cold', 'content_warm', 'scoped_cold')}
+    with landing.merge_checkout(root, head) as checkout, tempfile.TemporaryDirectory() as temporary:
+        selector = landing._load_selector(checkout)
+        expected = None
+        parsed = []
+        for repeat in range(repetitions):
+            cache = Path(temporary) / f'index-{repeat}.json'
+            order = ('ordinary_cold', 'content_cold') if repeat % 2 == 0 else ('content_cold', 'ordinary_cold')
+            for kind in order:
+                started = time.perf_counter()
+                if kind == 'ordinary_cold':
+                    index = selector.build_index(str(checkout / 'tests'), None)
+                else:
+                    result = build_index(root, head, selector, cache)
+                    index = result.index
+                    parsed.append(result.parsed)
+                timings[kind].append(time.perf_counter() - started)
+                refs = {path: row['refs'] for path, row in index.items()}
+                if expected is None:
+                    expected = refs
+                if refs != expected:
+                    raise AssertionError('index reference sets differ')
+            started = time.perf_counter()
+            warm = build_index(root, head, selector, cache)
+            timings['content_warm'].append(time.perf_counter() - started)
+            assert warm.parsed == 0 and {p: row['refs'] for p, row in warm.index.items()} == expected
+            first = sorted(expected)[0]
+            started = time.perf_counter()
+            scoped = build_index(root, head, selector,
+                Path(temporary) / f'scoped-{repeat}.json', [first])
+            timings['scoped_cold'].append(time.perf_counter() - started)
+            assert scoped.index == {first: {'refs': expected[first]}} and scoped.parsed == 1
+        return {'revision': head, 'python': sys.version, 'files': len(expected),
+                'equivalent_reference_sets': True, 'cold_blobs_parsed': parsed,
+                'cache_bytes': cache.stat().st_size,
+                'samples_seconds': timings,
+                'median_seconds': {name: statistics.median(values) for name, values in timings.items()},
+                'scope': 'Index preparation only; scoped mode selects one test file.'}

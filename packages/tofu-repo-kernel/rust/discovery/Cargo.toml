@@ -13,7 +13,7 @@ path = "lib.rs"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-gix = { version = "=0.90.0", default-features = false, features = ["dirwalk", "sha1", "sha256"] }
+gix = { version = "=0.89.0", default-features = false, features = ["dirwalk", "sha1", "sha256"] }
 
 [[bin]]
 name = "tofu-repository-discovery"

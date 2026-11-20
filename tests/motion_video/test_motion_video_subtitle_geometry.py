@@ -350,9 +350,60 @@ def test_burn_stages_an_ass_document(monkeypatch, tmp_path):
     res = mv.burn_in_subtitles(str(video), str(srt), str(tmp_path / 'o.mp4'),
                                verify_safe_box=False)
     assert res['ok'] is True, res
+    assert res['safe_box_checked'] == 0
+    assert res['subtitle_vertical_inconclusive'] == []
     joined = ' '.join(seen['args'])
     assert '.ass' in joined, 'the burn must consume a geometry-bound ASS doc'
     assert 'final.srt' not in joined, 'the raw SRT must not reach libass'
+
+
+def _ink_verdict(monkeypatch, tmp_path, rectangle):
+    """Run the real verifier on a synthetic before/after frame pair."""
+    import lib.motion_video._concat as MC
+    from PIL import Image, ImageDraw
+
+    before = Image.new('RGB', (640, 360), 'black')
+    after = before.copy()
+    if rectangle is not None:
+        ImageDraw.Draw(after).rectangle(rectangle, fill='white')
+
+    def extract(source, _at, destination, **_kw):
+        (before if source == 'synthetic-before' else after).save(destination)
+        return True
+
+    monkeypatch.setattr(MC, '_frame_png', extract)
+    return MC._verify_safe_box(
+        'synthetic-before', 'synthetic-after', [(0.0, 1.0, 'Synthetic cue')],
+        640, 360, ffmpeg='unused', env={}, workdir=str(tmp_path))
+
+
+def test_vertical_edge_contact_is_reported_not_certified(monkeypatch, tmp_path):
+    """Ink touching the frame's vertical edge is ambiguous: an inset line and
+    an edge-flush line can only be told apart by pixels that do not exist
+    outside the crop, so neither is counted as verified."""
+    verdict = _ink_verdict(monkeypatch, tmp_path, (200, 340, 440, 359))
+    assert verdict['ok'] is True
+    assert verdict['checked'] == 0
+    [entry] = verdict['vertical_inconclusive']
+    assert entry['bbox'] == [200, 340, 440, 359]
+    assert entry['time_s'] == 0.5
+
+
+def test_fully_visible_near_edge_ink_stays_verified(monkeypatch, tmp_path):
+    """One pixel of clearance is enough to keep the existing verification."""
+    verdict = _ink_verdict(monkeypatch, tmp_path, (200, 340, 440, 358))
+    assert verdict['ok'] is True
+    assert verdict['checked'] == 1
+    assert verdict['vertical_inconclusive'] == []
+
+
+def test_horizontal_overflow_and_no_ink_stay_refusals(monkeypatch, tmp_path):
+    overflow = _ink_verdict(monkeypatch, tmp_path, (-20, 280, 200, 310))
+    assert overflow['ok'] is False
+    assert overflow['category'] == 'subtitle_overflow'
+    missing = _ink_verdict(monkeypatch, tmp_path, None)
+    assert missing['ok'] is False
+    assert missing['category'] == 'subtitle_missing'
 
 
 def test_geometry_comes_from_the_video_not_the_caller(monkeypatch, tmp_path):
@@ -390,3 +441,31 @@ def test_geometry_comes_from_the_video_not_the_caller(monkeypatch, tmp_path):
     assert 'ass' in captured, 'no ASS document was staged'
     assert 'PlayResX: 720' in captured['ass']
     assert 'PlayResY: 1280' in captured['ass']
+
+
+def test_burn_preserves_vertical_inconclusive_evidence(monkeypatch, tmp_path):
+    import lib.motion_video._concat as MC
+    from pathlib import Path
+
+    video = tmp_path / 'v.mp4'
+    video.write_bytes(b'mp4')
+    srt = tmp_path / 'c.srt'
+    srt.write_text('1\n00:00:00,000 --> 00:00:02,000\nSynthetic cue\n')
+    evidence = [{'time_s': 1.0, 'bbox': [200, 340, 440, 359],
+                 'detail': 'complete glyph visibility cannot be established'}]
+
+    def render(args, **kwargs):
+        Path(args[-1]).write_bytes(b'mp4')
+        return {'rc': 0, 'category': '', 'elapsed': 0.1, 'err': ''}
+
+    monkeypatch.setattr('lib.motion_video._env.ffmpeg_bin', lambda: '/fake/ffmpeg')
+    monkeypatch.setattr(MC, '_run_ffmpeg', render)
+    monkeypatch.setattr('lib.motion_video._gates.probe_video',
+                        lambda *args, **kwargs: {'width': 640, 'height': 360,
+                                                'duration': 2.0})
+    monkeypatch.setattr(MC, '_verify_safe_box', lambda *args, **kwargs: {
+        'ok': True, 'checked': 0, 'vertical_inconclusive': evidence})
+    result = mv.burn_in_subtitles(str(video), str(srt), str(tmp_path / 'out.mp4'))
+    assert result['ok'] is True
+    assert result['safe_box_checked'] == 0
+    assert result['subtitle_vertical_inconclusive'] == evidence

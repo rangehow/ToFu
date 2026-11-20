@@ -167,11 +167,12 @@ def inspect_session(scope, arguments, *, model='', task=None):
                           lambda text: fits_tool_result_budget(text, model=model))
 
 
-def control_session(task, scope, arguments, *, acting_principal=None):
+def control_session(task, scope, arguments, *, acting_principal=None, model_source=None):
     """Resume the exact accepted execution, or stop its exact current Attempt.
 
     Every action, accepted or refused, is recorded in the audit log
-    (``coordinator_session_control``).
+    (``coordinator_session_control``). ``model_source`` is the server-resolved
+    owner principal when the tool selected the direct set_model path.
     """
     from lib.project_dispatch.delegation import audited_coordinator_control, coordinator_control_record
     record = coordinator_control_record(
@@ -179,11 +180,12 @@ def control_session(task, scope, arguments, *, acting_principal=None):
         conversation_id=arguments.get('conversation_id'), turn_id=arguments.get('turn_id'),
         attempt_id=arguments.get('attempt_id'))
     return audited_coordinator_control(
-        record, lambda: _control_session(task, scope, arguments, acting_principal=acting_principal),
+        record, lambda: _control_session(task, scope, arguments, acting_principal=acting_principal,
+                                        model_source=model_source),
         lambda result: {'command_id': result.get('command_id') if isinstance(result, Mapping) else None})
 
 
-def _control_session(task, scope, arguments, *, acting_principal=None):
+def _control_session(task, scope, arguments, *, acting_principal=None, model_source=None):
     """``control_session`` without its audit record.
 
     ``acting_principal`` replaces the current request's source principal only
@@ -202,8 +204,9 @@ def _control_session(task, scope, arguments, *, acting_principal=None):
         from .session_model import set_session_model
         if acting_principal is not None:
             return set_session_model(task, scope, acting_principal, arguments, delegated=True)
-        return set_session_model(task, scope, source_for_task(ProjectDispatchRepository(
-            scope['user_id'], scope['project_path']), task, delegated=True)[0], arguments)
+        principal = model_source or source_for_task(ProjectDispatchRepository(
+            scope['user_id'], scope['project_path']), task)[0]
+        return set_session_model(task, scope, principal, arguments)
     if action not in {'continue', 'checkpoint_resume', 'regenerate', 'stop', 'follow_up', 'hold', 'resume'}:
         raise ValueError('action must be continue, checkpoint_resume, regenerate, stop, hold, resume, '
                          'follow_up or set_model')
@@ -436,7 +439,8 @@ def _successor(task, scope, arguments, row, turn, service):
                               'resultRevision': row['review']['resultRevision']}} if rework else {}),
             'idempotency_key': 'follow-up:' + result_key,
             **({'attachments': arguments['attachments']} if arguments.get('attachments') else {}),
-        }, create=lambda scope, arguments: {'conversation_id': turn['conversationId']})
+        }, create=lambda scope, arguments: {'conversation_id': turn['conversationId']},
+            coverage_from=row['id'])
     except CommandReused as reused:
         raise FollowUpRefused(f'This result already continues in assignment {reused.assignment_id} with '
                               'another instruction; follow up on that session\u2019s latest Turn.') from reused
@@ -444,6 +448,41 @@ def _successor(task, scope, arguments, row, turn, service):
             'dispatch': worker['dispatch'], 'status': worker['status'], 'task_id': worker['task_id'],
             **({'resolves_held_conflict': {'checkpoint_sha': row['publication']['checkpointSha'],
                                            'paths': held['paths']}} if held else {})}
+
+
+def _set_model_from_context(task, scope, arguments):
+    """Select an owner request or the existing standing delegation, before any effect."""
+    from lib.identity import PrincipalContext
+    from lib.project_dispatch.delegation import source_for_task
+    from lib.project_dispatch.repository import NonhumanRequest, ProjectDispatchRepository
+    from lib.router.owner_delegation import delegated_conversation_control
+
+    principal = PrincipalContext.from_payload(task.get('_principalContext') or {})
+    if principal.require_owner() != scope['user_id']:
+        raise PermissionError('The task principal belongs to another owner')
+    if (task.get('config') or {}).get('planMode'):
+        raise PermissionError('Plan mode cannot change a session model')
+    if principal.kind == 'user' and task.get('_attended') is not False:
+        repository = ProjectDispatchRepository(scope['user_id'], scope['project_path'])
+        try:
+            source, _, _ = source_for_task(repository, task)
+        except NonhumanRequest:
+            pass  # A live lead without an owner message needs the standing grant.
+        else:
+            cross_project = False
+
+            def mark_cross_project(_project):
+                nonlocal cross_project
+                cross_project = True
+
+            try:
+                _target(scope, arguments, write=True, reach=mark_cross_project)
+            except (PermissionError, ValueError):
+                # Keep the ordinary audited refusal for invalid or unavailable targets.
+                return control_session(task, scope, arguments, model_source=source)
+            if not cross_project and source.kind == 'user':
+                return control_session(task, scope, arguments, model_source=source)
+    return delegated_conversation_control(task, scope, arguments, control=control_session)
 
 
 def execute_session_tool(task, scope, name, arguments):
@@ -459,6 +498,8 @@ def execute_session_tool(task, scope, name, arguments):
         elif arguments.get('owner_delegation') is not None:
             from lib.router.owner_delegation import delegated_conversation_control
             result = delegated_conversation_control(task, scope, arguments, control=control_session)
+        elif arguments.get('action') == 'set_model':
+            result = _set_model_from_context(task, scope, arguments)
         else:
             result = control_session(task, scope, arguments)
     except (PermissionError, ValueError, KeyError, LifecycleNotFound, ConversationSyncNotFound,

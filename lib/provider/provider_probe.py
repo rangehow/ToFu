@@ -77,9 +77,16 @@ _IMAGE_PROBE_MIN_TIMEOUT = 60  # generation routinely takes 10-40s
 logger = get_logger(__name__)
 
 
+def _probe_transport_failure(error):
+    # Transport exception messages can quote header values and request data.
+    error_class = type(error).__name__
+    logger.warning('[CellProbe] transport error: %s', error_class)
+    return 'unavailable', 'network: %s' % error_class
+
+
 def probe_one_cell(base_url, api_key, model_id, extra_headers, timeout,
                    protocol='openai', oauth='', adapter=None,
-                   owner_user_id: int | None = None):
+                   owner_user_id: int | None = None, *, on_prepared_headers=None):
     """Send a minimal completion to test one (key, model) pair.
 
     Returns one of: 'ok', 'rate_limited', 'unauthorized', 'not_found',
@@ -107,9 +114,12 @@ def probe_one_cell(base_url, api_key, model_id, extra_headers, timeout,
     the NEUTRAL verdict ``'not_logged_in'`` — never a model fault, never
     recommend-disable. ``owner_user_id`` is optional only for direct-network
     providers; OAuth and adapter probes need the request-captured owner to use
-    desktop egress and otherwise fail closed.
+    desktop egress and otherwise fail closed. The optional
+    ``on_prepared_headers`` observer receives the final values of explicit
+    header names only for a verifiable direct Requests response; the probe
+    verdict is independent of whether that observation is available.
     """
-    from lib.http_transport.client import http_post
+    from lib.http_transport.client import http_post, prepared_response_headers
     # Model-routing v2 stores the Responses wire as ``openai_responses``
     # (``contracts/model_routing_v2.schema.json``). Only ``lib/llm_dispatch/
     # slot.py`` normalized that spelling — the probe did not, so a Responses
@@ -157,9 +167,7 @@ def probe_one_cell(base_url, api_key, model_id, extra_headers, timeout,
                          model_id, base_url, e)
             return 'unavailable', str(e)[:160]
         except Exception as e:
-            logger.warning('[CellProbe] %s @ %s adapter relay error: %s',
-                           model_id, base_url, e)
-            return 'unavailable', 'network: %s' % str(e)[:120]
+            return _probe_transport_failure(e)
         code = resp.status_code
         try:
             body = resp.text[:65536]
@@ -221,9 +229,7 @@ def probe_one_cell(base_url, api_key, model_id, extra_headers, timeout,
                              model_id, e)
                 return 'unavailable', str(e)[:160]
             except Exception as e:
-                logger.warning('[CellProbe] codex %s network error: %s',
-                               model_id, e)
-                return 'unavailable', 'network: %s' % str(e)[:120]
+                return _probe_transport_failure(e)
             return _classify_verified(
                 code, resp_body,
                 validate=lambda parsed, raw, raw_bytes:
@@ -277,9 +283,7 @@ def probe_one_cell(base_url, api_key, model_id, extra_headers, timeout,
                          model_id, base_url, e)
             return 'unavailable', str(e)[:160]
         except Exception as e:
-            logger.warning('[CellProbe] %s @ %s network error: %s',
-                           model_id, base_url, e)
-            return 'unavailable', 'network: %s' % str(e)[:120]
+            return _probe_transport_failure(e)
         code = resp.status_code
         try:
             resp_body = resp.text[:65536]
@@ -342,9 +346,13 @@ def probe_one_cell(base_url, api_key, model_id, extra_headers, timeout,
     try:
         resp = http_post(url, json=payload, headers=headers, timeout=timeout)
     except Exception as e:
-        logger.warning('[CellProbe] %s @ %s network error: %s', model_id, base_url, e)
-        return 'unavailable', 'network: %s' % str(e)[:120]
+        return _probe_transport_failure(e)
 
+    if on_prepared_headers is not None:
+        observed = prepared_response_headers(
+            resp, method='POST', url=url, names=extra_headers or ())
+        if observed is not None:
+            on_prepared_headers(observed)
     code = resp.status_code
     try:
         body = resp.text[:65536]
@@ -622,8 +630,7 @@ def _post_and_classify(url, headers, timeout, *, json_body=None, files=None,
         resp = http_post(url, json=json_body, files=files, data=data,
                          headers=headers, timeout=timeout)
     except Exception as e:
-        logger.warning('[CellProbe] %s network error: %s', surface or url, e)
-        return 'unavailable', 'network: %s' % str(e)[:120]
+        return _probe_transport_failure(e)
     code = resp.status_code
     try:
         body = resp.text[:65536]
@@ -866,7 +873,7 @@ _PROBE_DEFINITIVE = {
 def probe_cell_multi(base_url, api_key, model_id, extra_headers, timeout,
                      attempts=3, retry_delay=0.8, protocol='openai',
                      probe_fn=None, oauth='', adapter=None,
-                     owner_user_id: int | None = None):
+                     owner_user_id: int | None = None, cancelled=None):
     """Probe a cell up to ``attempts`` times to filter out FALSE 429s.
 
     ``probe_fn`` defaults to :func:`probe_one_cell` (chat surface); the
@@ -878,6 +885,8 @@ def probe_cell_multi(base_url, api_key, model_id, extra_headers, timeout,
     fn = probe_fn or probe_one_cell
     last_status, last_detail = 'error', ''
     for i in range(attempts):
+        if cancelled is not None and cancelled():
+            raise RuntimeError('provider probe cancelled before dispatch')
         # Call through the module global so tests can patch probe_one_cell.
         if probe_fn is None:
             status, detail = fn(base_url, api_key, model_id, extra_headers,
@@ -1192,8 +1201,13 @@ def build_probe_work(
         maximum_cells = int(maximum_cells)
         if maximum_cells <= 0:
             raise ValueError('maximum_cells must be positive')
+
     work = []
     for key_idx, api_key in enumerate(api_keys or []):
+        if credential_contexts:
+            credential = credential_contexts[key_idx]
+            if not credential.get('enabled', True):
+                continue
         for m in (models or []):
             root = (m.get('model_id') or '').strip()
             if not root:
@@ -1271,6 +1285,12 @@ def persist_probe_task(task: dict) -> bool:
         return False
 
 
+def probe_dispatch_cancelled(task):
+    """Check local withdrawal without storage I/O under the probe lock."""
+    cancelled = task.get('_dispatch_cancelled')
+    return bool(task.get('_abort') or (cancelled is not None and cancelled()))
+
+
 def submit_provider_probe_task(
     task: dict,
     work: list,
@@ -1305,6 +1325,8 @@ def submit_provider_probe_task(
         finally:
             _scrub_probe_work_owner(task, owned_work)
 
+    if probe_dispatch_cancelled(task):
+        raise TimeoutError('provider probe cancelled before submission')
     future = _CELL_PROBE_LANE.submit_task(
         f'provider-probe:{provider_id}:{id(task)}',
         # TODO(enterprise): include the authenticated owner when the legacy
@@ -1390,7 +1412,7 @@ def run_cell_probe_task(task: dict, work: list, timeout: int, *, on_complete=Non
                 len(work), len(task['cells']), attempts, protocol)
 
     def _run(item):
-        if task.get('_abort'):
+        if probe_dispatch_cancelled(task):
             raise RuntimeError('provider probe cancelled before dispatch')
         key_idx, api_key, root, mid = item[0], item[1], item[2], item[3]
         caps = item[4] if len(item) > 4 else None
@@ -1439,7 +1461,7 @@ def run_cell_probe_task(task: dict, work: list, timeout: int, *, on_complete=Non
                                           cell_headers,
                                           cell_timeout, attempts=cell_attempts,
                                           protocol=cell_protocol, probe_fn=probe_fn,
-                                          oauth=cell_oauth,
+                                          oauth=cell_oauth, cancelled=lambda: probe_dispatch_cancelled(task),
                                           **({'adapter': cell_adapter} if cell_adapter else {}),
                                           **({'owner_user_id': owner_user_id}
                                              if owner_user_id is not None else {}))

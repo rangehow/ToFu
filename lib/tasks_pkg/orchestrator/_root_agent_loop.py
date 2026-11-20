@@ -68,6 +68,7 @@ from lib.tasks_pkg.orchestrator._tool_dispatch_round import run_tool_dispatch
 from lib.tasks_pkg.orchestrator._tool_loop_breaker import (
     finish_after_background_task_acceptance,
     finish_after_idle_coordinator_wait,
+    finish_after_idle_swarm_wait,
     guide_nonretryable_tool_recovery,
     handle_tool_loop_circuit_breaker,
 )
@@ -362,25 +363,18 @@ class _RootLoopHooks:
     ) -> ProviderStreamResult:
         request = self.request
         state = self.state
-        # The request after a content_filter fallback returns to the primary;
-        # only the refused attempt's own appended tool rounds stay on the
-        # fallback, so one refused history does not bill a probe per round
-        # (_switch.retry_primary_for_messages). Flip BEFORE
-        # prepare_round_context/build_round_request so every model-bound field
-        # matches the dispatched model. _call's own stamp then finds the round
-        # already on the primary and does not switch again. Only the DISPATCH
-        # path does this, not a standalone build_round_request (wire parity).
+        # Carry this request's decision through body preparation and transport;
+        # the call layer must not consume the same refusal exemption again.
         from lib.tasks_pkg.llm_fallback import _switch as _model_switch
-        if (state.model and self.task.get('_fallback_model') == state.model
-                and self.task.get('_fallback_kind') == 'content_filter'
-                and self.task.get('_fallback_from')
-                and self.task['_fallback_from'] != state.model
-                and not (self.task.get('config') or {}).get('disableModelFallback')):
-            if _model_switch.retry_primary_for_messages(self.task, self.messages):
-                state.model = self.task['_fallback_from']
+        request_model_decision = _model_switch.decide_request_model(
+            self.task, state.model, round_num, self.messages)
+        state.model = request_model_decision.model
         prepare_round_context(self.task, self.messages, round_num=round_num,
             tid=request.tid, model=state.model, project_path=request.project_path,
             project_enabled=request.project_enabled, round_tools=round_tools)
+        request_model_decision = _model_switch.decide_request_model(
+            self.task, state.model, round_num, self.messages, request_model_decision)
+        state.model = request_model_decision.model
 
         # Final fail-closed boundary: inbox/tool-surface injections happen
         # after the ordinary compaction pipeline, so measure the complete
@@ -412,6 +406,15 @@ class _RootLoopHooks:
             prompt_admission = admit_round_context(self.task, self.messages, admission_tools,
                 round_num=round_num, model=state.model,
                 precomputed_tool_schema_tokens=reusable_schema_tokens)
+            request_model_decision = _model_switch.decide_request_model(
+                self.task, state.model, round_num, self.messages, request_model_decision)
+            if state.model != request_model_decision.model:
+                state.model = request_model_decision.model
+                reusable_schema_evidence = False
+                reusable_schema_fingerprint = None
+                prompt_admission = admit_round_context(
+                    self.task, self.messages, admission_tools,
+                    round_num=round_num, model=state.model)
         measured_schema_tokens = validated_tool_schema_token_count(
             admission_tools, prompt_admission.get('_toolSchemaLocalTokens'))
         if measured_schema_tokens is not None:
@@ -465,6 +468,7 @@ class _RootLoopHooks:
                 stream_accumulator,
                 round_num=round_num, tid=request.tid,
                 max_tokens=request.max_tokens,
+                request_model_decision=request_model_decision,
                 on_request_usage=lambda usage: self.round_context.update(request_usage=usage),
                 on_admission_denied=lambda denial: self.round_context.update(admission_denial=denial))
             dispatch_returned = True
@@ -482,7 +486,9 @@ class _RootLoopHooks:
                 stamp_round_cache_accounting(
                     self.task,
                     round_num=round_num, tid=request.tid, model=state.model,
-                    tools=tools_this_round, usage=state.last_usage,
+                    # last_usage can retain a different paid attempt on an
+                    # unmetered return. Cache evidence must name this request.
+                    tools=tools_this_round, usage=current_request_usage,
                     assistant_msg=state.assistant_msg,
                     api_rounds=state.api_rounds, messages=self.messages,
                 )
@@ -725,6 +731,10 @@ class _RootLoopHooks:
             return LoopDirective.halt(self.state.exit_reason)
         if stop_awaiting_user_action(
                 self.task, self.state, round_num=round_num, tid=self.request.tid):
+            return LoopDirective.halt(self.state.exit_reason)
+        if finish_after_idle_swarm_wait(
+                self.task, self.state, message=_message, round_num=round_num,
+                tid=self.request.tid, dispatch_timed_out=bool((_note or {}).get('timed_out'))):
             return LoopDirective.halt(self.state.exit_reason)
         if handle_tool_loop_circuit_breaker(
                 self.task, self.state, messages=self.messages,

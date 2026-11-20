@@ -97,6 +97,7 @@ class TestCostMath:
             model_id=cost._LEGACY_PRESET_TO_MODEL["opus"],
             provider_id="provider-x",
             at=123.0,
+            unrounded_cny_components=False,
         )
 
     def test_legacy_preset_maps_to_model(self):
@@ -180,7 +181,7 @@ class TestCostMath:
         with mock.patch(
                 "lib.conversations.repository.scan_conversation_turn_usage",
                 return_value=(1, iter([projection]))), \
-                mock.patch.object(cost, "_calc_msg_cost_cny", return_value=1.25):
+                mock.patch.object(cost, "_calc_msg_cost", return_value={"costCny": 1.25}):
             got = cost._scan_costs_in_range(
                 ts - 1, ts + 1, 2026, 8,
                 owner_user_id=OWNER_USER_ID)

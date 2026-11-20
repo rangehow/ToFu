@@ -97,7 +97,8 @@ class JobService:
             record = old['value']
         return self._view(record)
 
-    def _load(self, actor, operation_id):
+    def _load_record(self, actor, operation_id):
+        """Load and validate owned durable state without constructing a provider."""
         row = self.repository.get(actor, operation_id)
         if not row:
             raise EnvironmentError('not_found', 'No job in this owner scope')
@@ -107,61 +108,166 @@ class JobService:
             raise EnvironmentError('scope_changed', 'Job belongs to another project scope')
         if seal(plan) != record['plan_hash']:
             raise EnvironmentError('plan_corrupt', 'Job plan seal does not match')
-        return row['version'], record, self.resolve_provider(actor, plan['provider'])
+        return row['version'], record
 
-    def submit(self, actor, operation_id, plan_hash, authorize):
-        version, record, provider = self._load(actor, operation_id)
+    def submit(self, actor, operation_id, plan_hash, authorize, *, before_submit=None):
+        version, record = self._load_record(actor, operation_id)
         if plan_hash != record['plan_hash'] or not authorize(actor, plan_hash):
             raise EnvironmentError('approval_required', 'Exact job plan authorization required')
         if record['phase'] != 'planned':
             return self._view(record)
         plan = record['plan']
+        provider = self.resolve_provider(actor, plan['provider'])
         if provider.validate_job(actor, plan['spec'], operation_id=operation_id) != plan['admission']:
             raise EnvironmentError('provider_changed', 'Job admission changed; replan required')
+        if before_submit is not None and before_submit() is False:
+            raise EnvironmentError('submission_aborted', 'Submission is no longer admitted')
         record['phase'] = 'submitting'
-        claimed = self.repository.put(actor, operation_id, record, version)
         try:
-            record['reference'] = validate_reference(provider.submit_job(actor, plan['spec'], operation_id, plan['admission']))
-            record['phase'] = 'queued'
-        except Exception as exc:
-            record['phase'] = 'failed' if isinstance(exc, EnvironmentError) and not exc.uncertain else 'uncertain'
-            record['error'] = getattr(exc, 'code', 'external_outcome_unknown')
-        self.repository.put(actor, operation_id, record, claimed['version'])
+            self.repository.put(actor, operation_id, record, version)
+        except EnvironmentError as exc:
+            if exc.code != 'conflict':
+                raise
+            _, record = self._load_record(actor, operation_id)
+            return self._view(record)
+        outcome = {}
+        guard_error = None
+        _, latest = self._load_record(actor, operation_id)
+        try:
+            if latest.get('cancellation'):
+                raise EnvironmentError('submission_aborted', 'Cancellation requested before physical submit')
+            if before_submit is not None and before_submit() is False:
+                raise EnvironmentError('submission_aborted', 'Submission is no longer admitted')
+        except BaseException as exc:
+            guard_error = exc
+            outcome = {'phase': 'failed', 'error': 'submission_aborted'}
+        else:
+            try:
+                _, latest = self._load_record(actor, operation_id)
+                if latest.get('cancellation'):
+                    raise EnvironmentError('submission_aborted', 'Cancellation requested before physical submit')
+                try:
+                    if before_submit is not None and before_submit() is False:
+                        raise EnvironmentError('submission_aborted', 'Submission is no longer admitted')
+                except BaseException as exc:
+                    guard_error = exc
+                    outcome = {'phase': 'failed', 'error': 'submission_aborted'}
+                if guard_error is not None:
+                    raise EnvironmentError('submission_aborted', 'Submission is no longer admitted')
+                outcome['reference'] = validate_reference(provider.submit_job(actor, plan['spec'], operation_id, plan['admission']))
+                outcome['phase'] = 'queued'
+            except Exception as exc:
+                outcome['phase'] = 'failed' if isinstance(exc, EnvironmentError) and not exc.uncertain else 'uncertain'
+                outcome['error'] = getattr(exc, 'code', 'external_outcome_unknown')
+        # Cancellation can commit while submission is outside the repository.
+        # Never replace its intent with the pre-submit record.
+        version, record = self._load_record(actor, operation_id)
+        while record['phase'] in {'submitting', 'uncertain'} and record['reference'] is None:
+            record.update(outcome)
+            try:
+                self.repository.put(actor, operation_id, record, version)
+                break
+            except EnvironmentError as exc:
+                if exc.code != 'conflict': raise
+                version, record = self._load_record(actor, operation_id)
+        if guard_error is not None:
+            raise guard_error
         return self._view(record)
 
     def cancel(self, actor, operation_id, plan_hash, authorize):
-        version, record, provider = self._load(actor, operation_id)
+        version, record = self._load_record(actor, operation_id)
         if plan_hash != record['plan_hash'] or not authorize(actor, plan_hash):
             raise EnvironmentError('approval_required', 'Exact job cancellation authorization required')
-        if record['phase'] not in {'queued', 'running', 'failed'}:
+        while True:
+            if record['phase'] not in {'planned', 'submitting', 'uncertain', 'queued', 'running', 'failed'}:
+                return self._view(record)
+            if record['phase'] == 'failed' and record['reference'] is None:
+                return self._view(record)
+            intent = record.get('cancellation')
+            if intent is not None and intent.get('state') != 'rejected':
+                break
+            record['cancellation'] = {'plan_hash': plan_hash, 'state': 'requested'}
+            if record['phase'] == 'planned':
+                record['phase'] = 'cancelled'
+            try:
+                self.repository.put(actor, operation_id, record, version)
+                break
+            except EnvironmentError as exc:
+                if exc.code != 'conflict':
+                    raise
+                # Retry only the durable intent CAS under the already checked
+                # exact authorization, never an external mutation or new grant.
+                version, record = self._load_record(actor, operation_id)
+                if record['plan_hash'] != plan_hash:
+                    raise EnvironmentError('approval_required', 'Cancellation plan changed') from exc
+        return self.progress_cancellation(actor, operation_id)
+
+    def progress_cancellation(self, actor, operation_id):
+        """Advance only a recorded exact-plan cancellation; never grant new authority."""
+        version, record = self._load_record(actor, operation_id)
+        intent = record.get('cancellation')
+        if intent == {'plan_hash': record['plan_hash'], 'state': 'claimed'}:
             return self._view(record)
-        if record['phase'] == 'failed' and record['reference'] is None:
-            # A definitively rejected submission has no owned external resource
-            # to stop. Preserve its failure instead of inventing cancellation.
+        if intent != {'plan_hash': record['plan_hash'], 'state': 'requested'}:
+            raise EnvironmentError('approval_required', 'Recorded exact job cancellation authorization required')
+        if record['phase'] not in {'queued', 'running', 'failed'} or record['reference'] is None:
             return self._view(record)
+        provider = self.resolve_provider(actor, record['plan']['provider'])
         previous = record['phase']
         if previous == 'failed':
             record['execution_failure_before_cancellation'] = {
                 'phase': previous, 'exit_code': record.get('exit_code'), 'error': record.get('error')}
         record['phase'] = 'cancelling'
-        claimed = self.repository.put(actor, operation_id, record, version)
+        record['cancellation']['state'] = 'claimed'
+        try:
+            claimed = self.repository.put(actor, operation_id, record, version)
+        except EnvironmentError as exc:
+            if exc.code != 'conflict':
+                raise
+            _, record = self._load_record(actor, operation_id)
+            return self._view(record)
         try:
             provider.cancel_job(actor, record['reference'], operation_id)
         except Exception as exc:
-            record['phase'] = previous if isinstance(exc, EnvironmentError) and not exc.uncertain else 'cancel_uncertain'
+            rejected = isinstance(exc, EnvironmentError) and not exc.uncertain
+            record['phase'] = previous if rejected else 'cancel_uncertain'
+            if rejected:
+                record['cancellation']['state'] = 'rejected'
             record['error'] = getattr(exc, 'code', 'cancel_outcome_unknown')
-        self.repository.put(actor, operation_id, record, claimed['version'])
+        try:
+            self.repository.put(actor, operation_id, record, claimed['version'])
+        except EnvironmentError as exc:
+            if exc.code != 'conflict': raise
+            _, record = self._load_record(actor, operation_id)
         return self._view(record)
 
-    def status(self, actor, operation_id):
-        version, record, provider = self._load(actor, operation_id)
+    def inspect(self, actor, operation_id):
+        """Read owned durable state without resolving or calling a provider."""
+        return self._view(self._load_record(actor, operation_id)[1])
+
+    def reconcile_reference(self, actor, operation_id):
+        """Recover an owned reference without a subsequent provider status read."""
+        version, record = self._load_record(actor, operation_id)
         if record['phase'] in {'submitting', 'uncertain'}:
+            provider = self.resolve_provider(actor, record['plan']['provider'])
             reference = provider.reconcile_job(actor, json.loads(canonical(record)))
             if reference is None:
                 return self._view(record)
             record['reference'] = validate_reference(reference)
             record['phase'] = 'queued'
+            try:
+                self.repository.put(actor, operation_id, record, version)
+            except EnvironmentError as exc:
+                if exc.code != 'conflict': raise
+                _, record = self._load_record(actor, operation_id)
+                return self._view(record)
+        return self._view(record)
+
+    def status(self, actor, operation_id):
+        self.reconcile_reference(actor, operation_id)
+        version, record = self._load_record(actor, operation_id)
         if record['phase'] in {'queued', 'running', 'cancelling', 'cancel_uncertain'}:
+            provider = self.resolve_provider(actor, record['plan']['provider'])
             snapshot = json.loads(canonical(provider.job_status(actor, record['reference'], operation_id)))
             discrepancies = snapshot.pop('discrepancies', None)
             if set(snapshot) != {'state', 'exit_code'} or snapshot['state'] not in {'queued', 'running', 'succeeded', 'failed', 'cancelled'}:
@@ -186,7 +292,11 @@ class JobService:
             record['exit_code'] = exit_code
             if discrepancies:
                 record['discrepancies'] = discrepancies
-            self.repository.put(actor, operation_id, record, version)
+            try:
+                self.repository.put(actor, operation_id, record, version)
+            except EnvironmentError as exc:
+                if exc.code != 'conflict': raise
+                _, record = self._load_record(actor, operation_id)
         return self._view(record)
 
     def collect(self, actor, operation_id, destination):
@@ -194,55 +304,64 @@ class JobService:
 
         Provider returns bounded byte chunks from the exact owned job. Destination
         is a trusted caller path, never interpreted as a remote job path.
-        Local partial files are removed on failure; durable state is untouched.
+        Partial snapshots are reclaimed on failure. A lost receipt acknowledgement
+        requires durable readback, never replay of job execution.
         """
-        import hashlib
         import os
-        import shutil
-        import tempfile
-        from pathlib import Path, PurePosixPath
-        version, record, provider = self._load(actor, operation_id)
+        import uuid
+        from contextlib import nullcontext
+        from .job_files import OutputDirectory
+        version, record = self._load_record(actor, operation_id)
         if record['phase'] != 'succeeded':
             raise EnvironmentError('job_not_succeeded', 'Collect requires proven successful job exit')
-        root = Path(destination)
-        if not root.is_dir() or root.is_symlink():
-            raise EnvironmentError('invalid_destination', 'Trusted real destination directory required')
-        staging = Path(tempfile.mkdtemp(prefix='compute-result-', dir=root))
+        provider = self.resolve_provider(actor, record['plan']['provider'])
+        scope = nullcontext(destination) if isinstance(destination, OutputDirectory) else OutputDirectory(destination)
+        with scope as root:
+            name = 'compute-result-' + uuid.uuid4().hex
+            os.mkdir(name, mode=0o700, dir_fd=root.fd)
+            try:
+                with root.child([name]) as staging:
+                    return self._collect_pinned(actor, operation_id, version, record, provider, staging)
+            except BaseException:
+                with root.cleanup_child(name):
+                    raise
+
+    def _collect_pinned(self, actor, operation_id, version, record, provider, staging):
+        import hashlib
+        import os
+        from pathlib import PurePosixPath
         limit = record['plan']['spec']['limits']['result_bytes']
         total = 0
         receipts = []
-        try:
-            for name in record['plan']['spec']['outputs']:
-                remote = PurePosixPath(name)
-                if remote.is_absolute() or '..' in remote.parts or not remote.parts or '\\' in name:
-                    raise EnvironmentError('invalid_output', 'Relative output path required')
-                target = staging.joinpath(*remote.parts)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                digest = hashlib.sha256()
-                size = 0
-                with target.open('xb') as output:
-                    for chunk in provider.read_job_output(actor, record['reference'], operation_id, name):
-                        if not isinstance(chunk, bytes) or len(chunk) > 1048576:
-                            raise EnvironmentError('provider_protocol', 'Output chunks must be bytes of at most 1 MiB')
-                        total += len(chunk)
-                        if total > limit:
-                            raise EnvironmentError('result_limit', 'Collected output exceeds approved result-byte bound')
-                        output.write(chunk)
-                        digest.update(chunk)
-                        size += len(chunk)
-                    output.flush()
-                    os.fsync(output.fileno())
-                receipts.append({'name': name, 'bytes': size, 'sha256': digest.hexdigest()})
-            previous = record.get('outputs')
-            if previous is not None and previous != receipts:
-                raise EnvironmentError('output_changed', 'Terminal job outputs differ from sealed receipts')
-            record['outputs'] = receipts
-            self.repository.put(actor, operation_id, record, version)
-        except BaseException:
-            shutil.rmtree(staging)
-            raise
+        for name in record['plan']['spec']['outputs']:
+            remote = PurePosixPath(name)
+            if remote.is_absolute() or '..' in remote.parts or not remote.parts or '\\' in name:
+                raise EnvironmentError('invalid_output', 'Relative output path required')
+            digest = hashlib.sha256()
+            size = 0
+            with staging.child(remote.parts[:-1], create=True) as parent:
+                fd = os.open(remote.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600, dir_fd=parent.fd)
+            with os.fdopen(fd, 'wb') as output:
+                for chunk in provider.read_job_output(actor, record['reference'], operation_id, name):
+                    if not isinstance(chunk, bytes) or len(chunk) > 1048576:
+                        raise EnvironmentError('provider_protocol', 'Output chunks must be bytes of at most 1 MiB')
+                    total += len(chunk)
+                    if total > limit:
+                        raise EnvironmentError('result_limit', 'Collected output exceeds approved result-byte bound')
+                    output.write(chunk)
+                    digest.update(chunk)
+                    size += len(chunk)
+                output.flush()
+                os.fsync(output.fileno())
+            receipts.append({'name': name, 'bytes': size, 'sha256': digest.hexdigest()})
+        previous = record.get('outputs')
+        if previous is not None and previous != receipts:
+            raise EnvironmentError('output_changed', 'Terminal job outputs differ from sealed receipts')
+        record['outputs'] = receipts
+        self.repository.put(actor, operation_id, record, version)
         return {'operation_id': operation_id, 'reference': record['reference'],
-                'directory': str(staging), 'outputs': receipts, 'total_bytes': total,
+                'directory': str(staging.path), 'outputs': receipts, 'total_bytes': total,
                 'durable': self.repository.durable}
 
     def _view(self, record):

@@ -56,11 +56,12 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 from lib.git_runtime import beyond_git_ceiling
 from lib.log import get_logger
 from lib.project_mod.generated_integration import output_family
+from lib.weak_lock_pool import WeakLockPool
 
 logger = get_logger(__name__)
 
@@ -131,8 +132,10 @@ RADAR_DIR = 'tofu-radar'
 _SCHEMA_VERSION = 1
 _SAFE_NAME = re.compile(r'[^A-Za-z0-9._-]')
 # One process's writers of one record never interleave their read-modify-write;
-# a record has a single conversation, so no cross-process writer exists.
-_record_lock = threading.Lock()
+# a record has a single conversation, so no cross-process writer exists. Keyed
+# per record: one conversation's volume-bound rewrite never delays another
+# conversation's signal, and terminal settlement waits on its own lane only.
+_record_locks: WeakLockPool[str, Any] = WeakLockPool(threading.Lock)
 # Latest (HEAD, trunk) -> merge base per checkout root. Exact: a moved HEAD or
 # trunk misses the entry and replaces it; one entry per live checkout.
 _base_cache: dict[str, tuple[str, str, str]] = {}
@@ -482,7 +485,7 @@ def _update_record(checkout: Checkout, writer: str, title: str,
         live = live_paths(checkout, trunk, earlier)
         if live is not None:
             landed = set(earlier) - live
-    with _record_lock:
+    with _record_locks.lock_for(str(path)):
         known, recorded_title = _known_paths(path, checkout)
         title = title or recorded_title
         known = {key: value for key, value in known.items() if key not in landed}

@@ -12,6 +12,7 @@ use std::io;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 
 use crate::authority::{AuthorityDatabase, AuthorityTransaction};
 use crate::conversation_header::TENANT_GLOBAL_OWNER_ID;
@@ -1075,6 +1076,14 @@ fn mark_delivered(
         {
             return bounded_response(&json!({"acknowledged":false, "changed":0}));
         }
+        // Native currently holds only legacy Swarm sessions. Their writer
+        // epoch is zero; a same-run nonzero epoch must never degrade to an
+        // unfenced delivery, even when the task ID matches.
+        if p.contains_key("checkpoint_writer_epoch")
+            && required_u64(p, "checkpoint_writer_epoch")? != 0
+        {
+            return bounded_response(&json!({"acknowledged":false, "changed":0}));
+        }
     }
     let mut changed = 0_u64;
     let mut resumable_delta = 0_u64;
@@ -1179,6 +1188,97 @@ fn agent_state_get(
 /// escaped continuation id, so every page can carry at least one agent.
 const AGENT_PAGE_ENVELOPE_RESERVE_BYTES: usize = 4096;
 
+/// Check the owned header and hash the exact source in this page transaction.
+/// Core envelopes name immutable blob content, so this includes agents on both
+/// sides of the cursor without decoding all of their checkpoint bodies.
+fn snapshot_cut(
+    database: &AuthorityDatabase,
+    tx: &mut AuthorityTransaction,
+    payload: &Map<String, Value>,
+    swarm_key: &str,
+    after: &str,
+) -> io::Result<Option<String>> {
+    if !["expected_task_id", "expected_updated_at", "snapshot_cut"]
+        .iter()
+        .any(|field| payload.contains_key(*field))
+    {
+        return Ok(None);
+    }
+    let run = required_text(payload, "expected_task_id", 4096)?;
+    let revision = required_u64(payload, "expected_updated_at")?;
+    let owner = required_u64(payload, "user_id")?;
+    if owner == 0
+        || owner > i64::MAX as u64
+        || revision > i64::MAX as u64
+        || [swarm_key, run, after]
+            .iter()
+            .any(|value| value.contains('\0'))
+    {
+        return Err(invalid_input("invalid swarm snapshot cut selectors"));
+    }
+    let supplied = match (after.is_empty(), payload.get("snapshot_cut")) {
+        (true, None) => None,
+        (false, Some(Value::String(token)))
+            if token.len() == 64
+                && token
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) =>
+        {
+            Some(token)
+        }
+        _ => return Err(invalid_input("invalid swarm snapshot cut continuation")),
+    };
+    let changed = || conflict("Swarm checkpoint cut changed between pages");
+    if owner != tx.owner_user_id() || !claim_is_owned(database, tx, swarm_key)? {
+        return Err(changed());
+    }
+    let document = read_session_document(database, tx, swarm_key)?.ok_or_else(changed)?;
+    let state = read_session_state(database, tx, swarm_key)?.ok_or_else(changed)?;
+    if document.swarm_key != swarm_key
+        || document.task_id != run
+        || state.updated_at != revision
+        || document.config.get("user_id").and_then(Value::as_u64) != Some(owner)
+    {
+        return Err(changed());
+    }
+    fn part(hash: &mut Sha256, bytes: &[u8]) {
+        hash.update((bytes.len() as u64).to_be_bytes());
+        hash.update(bytes);
+    }
+    let mut hash = Sha256::new();
+    hash.update(b"tofu.swarm.native.snapshot-cut.v1");
+    hash.update(tx.tenant_id().to_be_bytes());
+    hash.update(owner.to_be_bytes());
+    let raw_document = database
+        .entity_get(tx, &session_document_key(tx, swarm_key)?)?
+        .ok_or_else(|| invalid_data("swarm session envelope disappeared"))?;
+    part(&mut hash, &raw_document);
+    part(&mut hash, &encode(&document, "swarm session document")?);
+    part(&mut hash, &encode(&state, "swarm session state")?);
+    let (start, end) = agent_range(tx, SWARM_AGENT_STATE_NAMESPACE, swarm_key)?;
+    let rows = scan_paged(database, tx, start, &end, MAX_SWARM_AGENTS_PER_SESSION + 1)?;
+    if rows.len() > MAX_SWARM_AGENTS_PER_SESSION {
+        return Err(crate::resource_exhaustion::domain_bound(
+            "swarm agent count exceeds its bound",
+        ));
+    }
+    for (key, raw_state) in rows {
+        let agent_id = decode_agent_id(&key, swarm_key)?;
+        let core_key = agent_key(tx, SWARM_AGENT_CORE_NAMESPACE, swarm_key, &agent_id)?;
+        let raw_core = database
+            .entity_get(tx, &core_key)?
+            .ok_or_else(|| invalid_data("swarm agent state has no core"))?;
+        part(&mut hash, agent_id.as_bytes());
+        part(&mut hash, &raw_state);
+        part(&mut hash, &raw_core);
+    }
+    let token = format!("{:x}", hash.finalize());
+    if supplied.is_some_and(|value| value != &token) {
+        return Err(changed());
+    }
+    Ok(Some(token))
+}
+
 /// Agents of one session in key order, packed into a response below the
 /// stream ceiling. A session larger than one response is read completely by
 /// following `next_after_agent_id`; `swarm.session.get` keeps refusing it.
@@ -1194,6 +1294,7 @@ fn agents_page(
         "",
         MAX_SWARM_AGENT_ID_CHARACTERS,
     )?;
+    let cut = snapshot_cut(database, tx, &request.payload, swarm_key, &after)?;
     let (mut start, end) = agent_range(tx, SWARM_AGENT_STATE_NAMESPACE, swarm_key)?;
     if !after.is_empty() {
         start = agent_key(tx, SWARM_AGENT_STATE_NAMESPACE, swarm_key, &after)?
@@ -1231,10 +1332,11 @@ fn agents_page(
         }
         start = continuation.1;
     }
-    bounded_response(&json!({
-        "agents":agents,
-        "next_after_agent_id":next_after_agent_id,
-    }))
+    let mut result = json!({"agents":agents, "next_after_agent_id":next_after_agent_id});
+    if let Some(cut) = cut {
+        result["snapshot_cut"] = Value::String(cut);
+    }
+    bounded_response(&result)
 }
 
 /// Keys of resumable sessions, newest first. Checkpoint bodies are never

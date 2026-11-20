@@ -1,0 +1,82 @@
+{
+ "extractor": "pymupdf-raw",
+ "images": [
+  {
+   "base64": {
+    "$blob": "images/000.jpg",
+    "kind": "raster"
+   },
+   "bbox": [
+    22.0,
+    27.0,
+    314.0,
+    211.29
+   ],
+   "caption": "Figure 1: selected source diagram",
+   "height": 170,
+   "mediaType": "image/jpeg",
+   "page": 1,
+   "pages": [
+    1
+   ],
+   "source": "figure_clip",
+   "width": 272
+  },
+  {
+   "base64": {
+    "$blob": "images/001.jpg",
+    "kind": "raster"
+   },
+   "bbox": [
+    22.0,
+    27.0,
+    314.0,
+    211.29
+   ],
+   "caption": "Figure 2: selected source diagram",
+   "height": 170,
+   "mediaType": "image/jpeg",
+   "page": 2,
+   "pages": [
+    2
+   ],
+   "source": "figure_clip",
+   "width": 272
+  },
+  {
+   "base64": {
+    "$blob": "images/002.jpg",
+    "kind": "raster"
+   },
+   "bbox": [
+    22.0,
+    27.0,
+    314.0,
+    211.29
+   ],
+   "caption": "Figure 3: selected source diagram",
+   "height": 170,
+   "mediaType": "image/jpeg",
+   "page": 3,
+   "pages": [
+    3
+   ],
+   "source": "figure_clip",
+   "width": 272
+  }
+ ],
+ "isScanned": false,
+ "limits": {
+  "maxImageWidth": 300,
+  "maxImages": 3,
+  "maxPages": 0,
+  "maxTextChars": 0
+ },
+ "method": "pymupdf_raw",
+ "processedPages": 7,
+ "text": "Figure 1: selected source diagram\n\nFigure 2: selected source diagram\n\nFigure 3: selected source diagram\n\nTable 1. Measured results\ncell 0:0\ncell 0:1\ncell 0:2\ncell 1:0\ncell 1:1\ncell 1:2\ncell 2:0\ncell 2:1\ncell 2:2\ncell 3:0\ncell 3:1\ncell 3:2\n\nTable 1. Measured results\ncell 0:0\ncell 0:1\ncell 0:2\ncell 1:0\ncell 1:1\ncell 1:2\ncell 2:0\ncell 2:1\ncell 2:2\ncell 3:0\ncell 3:1\ncell 3:2\n\nOrdinary page without a caption\ncell 0:0\ncell 0:1\ncell 0:2\ncell 1:0\ncell 1:1\ncell 1:2\ncell 2:0\ncell 2:1\ncell 2:2\ncell 3:0\ncell 3:1\ncell 3:2\n\nFigure 4: figure-only page with a gradient\n",
+ "textLength": 559,
+ "totalPages": 7,
+ "truncated": false,
+ "warnings": []
+}

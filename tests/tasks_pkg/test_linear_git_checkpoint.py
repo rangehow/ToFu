@@ -85,6 +85,9 @@ def _stable(repo: Path) -> str:
 @pytest.mark.parametrize('state,eligible,reason', [
     ('fresh', True, 'initial linear baseline activation'),
     ('owned', True, 'owns stable at HEAD'),
+    ('owned-candidate', True, 'owns stable at HEAD'),
+    ('pristine-candidate', True, 'initial linear baseline activation'),
+    ('pristine-stable', True, 'initial linear baseline activation'),
     ('candidate', False, 'Integration candidate exists'),
     ('unowned-stable', False, 'no linear baseline ownership'),
     ('missing-stable', False, 'stable ref is missing'),
@@ -98,14 +101,22 @@ def _stable(repo: Path) -> str:
 def test_publication_mode_resolution_is_read_only(repository, state, eligible, reason):
     head = _head(repository)
     _git(repository, 'config', '--local', 'tofu.linearCheckpoint', 'true')
-    if state in {'owned', 'candidate', 'stable-behind', 'stable-diverged', 'foreign-baseline'}:
+    if state in {'owned', 'owned-candidate', 'stable-behind', 'stable-diverged', 'foreign-baseline'}:
         for ref in (checkpoint.STABLE_REF, checkpoint.CHECKPOINT_BASELINE_REF):
             _git(repository, 'update-ref', ref, head)
     tree = _git(repository, 'rev-parse', 'HEAD^{tree}').stdout.strip()
     if state == 'candidate':
+        side = _git(repository, 'commit-tree', tree, '-p', head, '-m', 'candidate work').stdout.strip()
+        _git(repository, 'update-ref', 'refs/tofu/candidate', side)
+    elif state == 'owned-candidate':
         _git(repository, 'update-ref', 'refs/tofu/candidate', head)
-    elif state == 'unowned-stable':
+    elif state == 'pristine-candidate':
+        _git(repository, 'update-ref', 'refs/tofu/candidate', head)
+    elif state == 'pristine-stable':
         _git(repository, 'update-ref', checkpoint.STABLE_REF, head)
+    elif state == 'unowned-stable':
+        side = _git(repository, 'commit-tree', tree, '-p', head, '-m', 'unowned stable').stdout.strip()
+        _git(repository, 'update-ref', checkpoint.STABLE_REF, side)
     elif state == 'missing-stable':
         _git(repository, 'update-ref', checkpoint.CHECKPOINT_BASELINE_REF, head)
     elif state == 'stable-behind':
@@ -847,11 +858,30 @@ def test_failed_publication_never_rolls_back_index(repository, monkeypatch):
     assert (repository / 'README.md').read_text() == 'checkpoint bytes\n'
 
 
-def test_candidate_history_is_not_adopted(repository):
+def test_pristine_candidate_at_head_is_adopted(repository):
+    """An isolated workspace's initialization ref carries no publication."""
     base = _head(repository)
     _git(repository, 'update-ref', 'refs/tofu/candidate', base)
     (repository / 'README.md').write_text('unpublished\n')
+
+    result = _settle(repository, _task('pristine-candidate'))
+
+    row = result['repositories'][0]
+    assert row['verification'] == 'passed'
+    assert _head(repository) != base
+    assert _stable(repository) == _head(repository)
+    assert checkpoint._revision(repository, checkpoint.CHECKPOINT_BASELINE_REF)
+
+
+def test_candidate_beyond_head_is_not_adopted(repository):
+    base = _head(repository)
+    tree = _git(repository, 'rev-parse', 'HEAD^{tree}').stdout.strip()
+    side = _git(repository, 'commit-tree', tree, '-p', base, '-m', 'candidate work').stdout.strip()
+    _git(repository, 'update-ref', 'refs/tofu/candidate', side)
+    (repository / 'README.md').write_text('unpublished\n')
+
     result = _settle(repository, _task('foreign-candidate'))
+
     assert result['status'] == 'error'
     assert _head(repository) == base
     assert not checkpoint._revision(repository, checkpoint.STABLE_REF)

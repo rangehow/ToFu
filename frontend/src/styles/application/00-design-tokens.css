@@ -259,6 +259,26 @@
   --world-trophy:#c9a24a;
   --world-trophy-edge:#7d5a1c;
   --world-trophy-shine:rgba(255,246,214,0.8);
+  /* Office brief (the person panel's column, features/world/panel.ts): it follows the application theme;
+     dark is walnut paper with cream ink, the light themes override it below with warm paper. */
+  --office-paper:#1b140e;
+  --office-card:#251b13;
+  --office-sunk:#2f2318;
+  --office-line:#3b2d20;
+  --office-ink:#f6ead2;
+  --office-ink-muted:#c3ae8b;
+  --office-ink-faint:#9a8566;
+  --office-head:#22170f;
+  --office-accent:#e3bd6a;
+  --office-good:#86d896;
+  --office-good-bg:rgba(134,216,150,0.14);
+  --office-info:#8ec2f2;
+  --office-info-bg:rgba(142,194,242,0.14);
+  --office-bad:#ef8f80;
+  --office-bad-bg:rgba(239,122,104,0.16);
+  --office-warn:#f2c25e;
+  --office-warn-bg:rgba(242,191,85,0.15);
+  --office-shadow:0 6px 18px rgba(0,0,0,0.35);
 
   /* ── Conversation signals (08-conversation-signals.css) ──
      Proactive-agent banner (violet; light/tofu retune below), model-fallback
@@ -398,6 +418,27 @@
   --backdrop:rgba(74,63,47,0.35);
   --focus-ring:0 0 0 3px rgba(201,122,29,0.25);
   --knob-shadow:0 1px 2px rgba(19,25,31,0.16);
+}
+
+[data-theme="light"], [data-theme="tofu"]{
+  --office-paper:#f8f3e8;
+  --office-card:#fffdf8;
+  --office-sunk:#efe6d3;
+  --office-line:#e3d6bc;
+  --office-ink:#2f2418;
+  --office-ink-muted:#6f5b45;
+  --office-ink-faint:#766250;
+  --office-head:#fffaf0;
+  --office-accent:#845a0e;
+  --office-good:#256b3d;
+  --office-good-bg:#dcf1e1;
+  --office-info:#2a679c;
+  --office-info-bg:#dfeefb;
+  --office-bad:#a63b2b;
+  --office-bad-bg:#fbe1dc;
+  --office-warn:#87590f;
+  --office-warn-bg:#fbefc9;
+  --office-shadow:0 1px 2px rgba(60,40,10,0.06),0 4px 14px rgba(60,40,10,0.06);
 }
 
 /* ── Reduced motion: the whole library honors it from day one ── */

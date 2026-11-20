@@ -2,19 +2,22 @@
 
 from __future__ import annotations
 
-from collections import deque
+import errno
 import hashlib
+import hmac
 import json
+import logging
 import os
 from pathlib import Path
 import queue
 import secrets
 import shutil
+import socket
 import subprocess
 import sys
 import threading
 import time
-from typing import Callable
+from typing import Callable, Sequence
 
 from lib.storage.client import StorageClient
 from lib.storage.errors import StorageError, StorageStartDeferred, StorageStartRefused
@@ -62,10 +65,6 @@ _MAX_RPC_DEADLINE_S = 120.0
 # cannot allocate unbounded memory through an unterminated line.
 _MAX_ENGINE_STDERR_LINE_CHARS = 16 * 1024
 _ENGINE_LINE_TRUNCATED_MARKER = '…[truncated]'
-# A refused startup names the child's exit code and its last stderr lines, so
-# a remote log (CI, a user's report) shows why without the full child stream.
-_STARTUP_FAILURE_STDERR_LINES = 8
-_STARTUP_FAILURE_STDERR_LINE_CHARS = 400
 # Engine JSON line contract (packages/tofu-db/src/engine_log.rs):
 # {"source":"tofu-db","timestamp":...,"level":...,"target":...,"message":...};
 # timestamp is the engine's RFC 3339 UTC emit instant.
@@ -161,7 +160,6 @@ def _mirror_engine_stderr_line(line: str, *, pid: int) -> None:
 
 def _drain_child_stderr(stream, *, pid: int,
                         forward: Callable[[str], None] = _forward_raw_stderr_line,
-                        tail: 'deque[str] | None' = None,
                         ) -> None:
     """Continuously drain one managed child's stderr pipe until EOF.
 
@@ -198,8 +196,6 @@ def _drain_child_stderr(stream, *, pid: int,
             line = truncated + _ENGINE_LINE_TRUNCATED_MARKER + '\n'
         forward(line)
         _mirror_engine_stderr_line(line, pid=pid)
-        if tail is not None and line.strip():
-            tail.append(line.rstrip()[:_STARTUP_FAILURE_STDERR_LINE_CHARS])
 
 
 def rpc_deadline_seconds() -> float:
@@ -354,6 +350,14 @@ class _LivenessStreak:
         # per-probe failure warnings then give way to the slow-answer report.
         self.slow = False
         self._last_report = {'unresponsive': 0.0, 'slow': 0.0, 'blocked': 0.0}
+        # None: this monitor alone watches its engine and always reports.
+        self.reporter: _EpisodeReporterLease | None = None
+
+    def log(self, level: int, message: str, *args: object) -> None:
+        """Log an episode line; DEBUG unless this process reports the episode."""
+        if self.reporter is not None and not self.reporter.held():
+            level = logging.DEBUG
+        logger.log(level, message, *args)
 
     def served(self, *, late: bool = False) -> int:
         """Record a served probe; return the failure count it ended."""
@@ -381,6 +385,60 @@ class _LivenessStreak:
             return False
         self._last_report[kind] = now
         return True
+
+
+class _EpisodeReporterLease:
+    """One attached process reports each liveness episode of a shared engine.
+
+    Every process attached to an external engine runs its own monitor, so
+    one engine stall was logged once per attached process (39 identical
+    lines per message on 2026-11-18). The holder of this lease logs the
+    episode; the other monitors keep judging and acting on their own
+    attachment and log the same lines at DEBUG. The lease is a Linux
+    abstract-namespace socket name keyed by the engine's PID and start
+    identity: it touches no volume (an engine stall is often a volume
+    stall), does not depend on each process's ``TMPDIR``, and the kernel
+    releases it when the holder exits, so a surviving monitor takes over
+    at its next interval. Where election is unavailable every monitor
+    reports, as before; only explicit address contention demotes a report.
+    """
+
+    def __init__(self, *engine_identity: object) -> None:
+        identity = '-'.join(str(part) for part in engine_identity)
+        self._socket: socket.socket | None = None
+        self._supported = (sys.platform.startswith('linux')
+                           and hasattr(socket, 'AF_UNIX'))
+        self._name = (f'\0tofu-storage-liveness-reporter-{os.getuid()}-{identity}'
+                      if self._supported else '')
+
+    def held(self) -> bool:
+        """Whether this process reports; takes a free lease on the way."""
+        if not self._supported:
+            return True
+        if self._socket is not None:
+            return True
+        try:
+            candidate = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        except OSError:
+            return True
+        try:
+            candidate.bind(self._name)
+        except OSError as exc:
+            try:
+                candidate.close()
+            except OSError:
+                pass
+            return exc.errno != errno.EADDRINUSE
+        self._socket = candidate
+        return True
+
+    def release(self) -> None:
+        candidate, self._socket = self._socket, None
+        if candidate is not None:
+            try:
+                candidate.close()
+            except OSError:
+                pass
 
 
 class _LivenessProbe:
@@ -1017,9 +1075,20 @@ class StorageSupervisor:
         sqlite_fastpath_mode: str | None = None,
         on_crash: Callable[[int], None] | None = None,
         child_stderr_forward: Callable[[str], None] | None = None,
+        sql_authority_command: Sequence[str] | None = None,
     ) -> None:
         self._project_root = Path(project_root).resolve() if project_root else None
         self._backend = backend
+        # Test seam for the Rust port of the SQL authority (Rust rewrite P3b):
+        # the same SQL backend served by another implementation of the same
+        # storage.v1 contract. Only an explicit test project root may run it;
+        # the configured backend and the production launch are unchanged.
+        if sql_authority_command is not None and (self._project_root is None or backend != 'sqlite'):
+            raise ValueError(
+                'a replacement SQL authority requires an explicit test project root and the sqlite backend')
+        self._sql_authority_command = (
+            tuple(str(part) for part in sql_authority_command)
+            if sql_authority_command is not None else None)
         self._child_stderr_forward = child_stderr_forward or _forward_raw_stderr_line
         # Scratch authorities may pin their volume without temporarily changing
         # the application's process-wide configuration during a background job.
@@ -1065,7 +1134,6 @@ class StorageSupervisor:
         self._unreaped_child: subprocess.Popen[str] | None = None
         self._process_started_at: float | None = None
         self._stderr_drainer: threading.Thread | None = None
-        self._stderr_tail: deque[str] = deque(maxlen=_STARTUP_FAILURE_STDERR_LINES)
         self._client: StorageClient | None = None
         self._token = ''
         self._intentional_stop = False
@@ -1235,6 +1303,16 @@ class StorageSupervisor:
             self._verified_artifact_sample = current
         return {'checked': True, 'consistent': True, 'detail': ''}
 
+    def attached_confirmation(self, context: bytes) -> str:
+        """Bind an operator confirmation to the currently authenticated handoff."""
+        with self._lock:
+            if not self._external_attached or not self.ready or not self._token:
+                raise RuntimeError('No authenticated external storage attachment')
+            epoch = str(self._external_process_start).encode('ascii')
+            return hmac.new(self._token.encode('ascii'),
+                            b'tofu.attached-confirmation.v1\0' + epoch + b'\0' + context,
+                            hashlib.sha256).hexdigest()
+
     def status(self) -> dict[str, object]:
         """Return an in-memory snapshot; never performs an RPC or disk read."""
         with self._lock:
@@ -1259,34 +1337,31 @@ class StorageSupervisor:
                 state = 'exited'
             else:
                 state = 'stopped'
-            if self._backend is not None:
-                configured_backend = self._backend
-            else:
-                from runtime_guards import load_deployment_configuration
-                configured_backend = load_deployment_configuration(
-                    allow_test_backend_override=(
-                        os.environ.get(
-                            'TOFU_STORAGE_ALLOW_PROJECT_OVERRIDE') == '1')
-                ).storage_backend
             snapshot: dict[str, object] = {
                 'ready': ready,
                 'state': state,
-                'backend': self._ready_backend or configured_backend,
+                'backend': self._ready_backend,
                 'pid': process.pid if child_alive else (self._external_pid if ready else None),
                 'port': self._endpoint_port if ready else None,
                 'last_exit_code': self._last_exit_code,
             }
-            if snapshot['backend'] == 'tofudb':
-                snapshot['search_projection_directory'] = (
-                    self._search_projection_directory if alive else '')
-                snapshot['native_fastpath'] = self._native_fastpath if ready else None
+            search_projection_directory = self._search_projection_directory if alive else ''
+            native_fastpath = self._native_fastpath if ready else None
             if self._embedded_runtime is not None:
                 snapshot['transport'] = 'embedded'
             if alive and self._liveness_condition is not None:
                 # Why storage answers slowly or not at all right now: slow,
                 # unanswered or kernel-blocked (see _liveness_interval).
                 snapshot['liveness'] = dict(self._liveness_condition)
-            return snapshot
+        if snapshot['backend'] is None:
+            # Only before a backend answered ready: the configuration read may
+            # touch the shared volume, so it never runs under the lock that
+            # the readiness route and the event loop wait on.
+            snapshot['backend'] = self._configured_backend()
+        if snapshot['backend'] == 'tofudb':
+            snapshot['search_projection_directory'] = search_projection_directory
+            snapshot['native_fastpath'] = native_fastpath
+        return snapshot
 
     def _defer_while_lease_held(self) -> None:
         """Defer a managed start while another process holds the project lease.
@@ -1294,7 +1369,7 @@ class StorageSupervisor:
         A child started now could only fail on the lease and count as a failed
         start; the restart worker retries on its existing backoff instead.
         """
-        from lib.storage.lease_status import read_storage_lease_status
+        from server_manager import read_storage_lease_status
         if self._project_root is not None:
             data_dir = self._project_root / 'data'
         else:
@@ -1326,7 +1401,10 @@ class StorageSupervisor:
         # can be slow, and status() must keep answering meanwhile.
         self._defer_while_lease_held()
         expected_protocol = PROTOCOL_VERSION
-        launch_command = [sys.executable, '-m', 'lib.storage_authority_sql']
+        launch_command = (
+            list(self._sql_authority_command)
+            if self._sql_authority_command is not None and native_scope is None
+            else [sys.executable, '-m', 'lib.storage_authority_sql'])
         verified_artifact = ''
         native_plan = None
         if native_scope is not None:
@@ -1432,12 +1510,7 @@ class StorageSupervisor:
                     # stderr=None inheritance lost every respawned child's
                     # output and kept engine errors out of app.log/incident.
                     stderr=subprocess.PIPE,
-                    # Never decode with the locale codec (cp1252 on Windows):
-                    # one undecodable child byte raised UnicodeDecodeError,
-                    # which ended the stderr drainer, lost the failure tail
-                    # and left the pipe to fill until the child blocked.
-                    encoding='utf-8',
-                    errors='replace',
+                    text=True,
                     bufsize=1,
                     close_fds=(os.name != 'nt'),
                     creationflags=creationflags,
@@ -1476,7 +1549,6 @@ class StorageSupervisor:
                 code = str(ready.get('code') or 'database_unavailable')[:80]
                 diagnostic = str(
                     ready.get('diagnostic') or 'startup was refused')[:500]
-                diagnostic += self._startup_failure_context(process)
                 if code == 'storage_full':
                     # A full volume or exhausted quota: starting again cannot
                     # succeed until space returns, and it is not crash pressure.
@@ -1675,10 +1747,6 @@ class StorageSupervisor:
                 except subprocess.TimeoutExpired:
                     code = process.poll()
                 suffix = f' (exit {code})' if code is not None else ''
-                if code is not None:
-                    self._join_stderr_drainer()
-                if self._stderr_tail:
-                    suffix += ' [stderr: ' + ' | '.join(self._stderr_tail) + ']'
                 raise RuntimeError(
                     'storage sidecar closed its readiness channel before startup'
                     + suffix)
@@ -1810,7 +1878,7 @@ class StorageSupervisor:
         )
         from lib.storage_authority_sql.preflight import ProjectLease
 
-        if _durability_args():
+        if 'normal' in _durability_args():
             raise RuntimeError(
                 'embedded transport serves strict durability only; '
                 'TOFU_DB_DURABILITY=normal requires the daemon transport')
@@ -2379,6 +2447,19 @@ class StorageSupervisor:
         streak = _LivenessStreak(
             self._liveness_failure_threshold,
             self._liveness_unresponsive_seconds if proves_liveness else 0.0)
+        with self._lock:
+            engine_identity = ((self._external_pid, self._external_process_start)
+                               if proves_liveness else
+                               ('endpoint', self._endpoint_port))
+        streak.reporter = _EpisodeReporterLease(*engine_identity)
+        try:
+            self._watch_external_sidecar(client, streak, proves_liveness)
+        finally:
+            streak.reporter.release()
+
+    def _watch_external_sidecar(self, client: StorageClient,
+                                streak: _LivenessStreak,
+                                proves_liveness: bool) -> None:
         while not self._external_monitor_stop.wait(
                 self._liveness_interval_seconds):
             verdict = self._liveness_interval(
@@ -2471,35 +2552,18 @@ class StorageSupervisor:
                     'next spawn; the previous child pipe never reached EOF',
                     previous.name)
         self._stderr_drainer = None
-        self._stderr_tail = deque(maxlen=_STARTUP_FAILURE_STDERR_LINES)
         stream = process.stderr
         if stream is None:
             return
         drainer = threading.Thread(
             target=_drain_child_stderr,
             args=(stream,),
-            kwargs={'pid': process.pid, 'forward': self._child_stderr_forward,
-                    'tail': self._stderr_tail},
+            kwargs={'pid': process.pid, 'forward': self._child_stderr_forward},
             name=f'storage-stderr-drainer-{process.pid}',
             daemon=True,
         )
         drainer.start()
         self._stderr_drainer = drainer
-
-    def _startup_failure_context(self, process: subprocess.Popen[str]) -> str:
-        """Describe a failed child's exit code and its last stderr lines."""
-        try:
-            code = process.wait(timeout=1.0)
-        except subprocess.TimeoutExpired:
-            code = process.poll()
-        if code is not None:
-            # The exited child's stderr reaches EOF; collect its last lines.
-            self._join_stderr_drainer()
-        parts = [f'exit_code={code if code is not None else "running"}']
-        lines = list(self._stderr_tail)
-        if lines:
-            parts.append('stderr: ' + ' | '.join(lines))
-        return ' [' + '; '.join(parts) + ']'
 
     def _join_stderr_drainer(self, *, timeout: float = 2.0) -> None:
         """Bounded wait for the current child's drainer after its EOF."""
@@ -2608,16 +2672,17 @@ class StorageSupervisor:
                     'since': (previous['since'] if previous.get('state') == 'slow'
                               else time.time())})
                 if streak.report_due('slow', now):
-                    logger.warning(
-                        '%s pid=%s answered its liveness probe after %.1fs '
+                    streak.log(
+                        logging.WARNING, '%s pid=%s answered its liveness probe after %.1fs '
                         '(probe deadline %.1fs): slow, not dead; kept',
                         label, pid, answered_after,
                         self._liveness_probe_deadline_seconds)
             else:
                 self._set_liveness_condition(None)
             if ended and not late:
-                logger.info('%s liveness recovered after %d failed probe(s)',
-                            label, ended)
+                streak.log(logging.INFO,
+                           '%s liveness recovered after %d failed probe(s)',
+                           label, ended)
             return 'served'
         if outcome != 'pending':
             streak.probe = None
@@ -2629,11 +2694,12 @@ class StorageSupervisor:
             self._set_liveness_condition({'state': 'unanswered', **unanswered})
             if streak.failures < streak.threshold:
                 if not streak.slow:
-                    logger.warning('%s liveness probe failed (%d/%d) pid=%s',
-                                   label, streak.failures, streak.threshold, pid)
+                    streak.log(logging.WARNING,
+                               '%s liveness probe failed (%d/%d) pid=%s',
+                               label, streak.failures, streak.threshold, pid)
             elif streak.report_due('unresponsive', now):
-                logger.warning(
-                    '%s pid=%s unresponsive for %.0fs (%d failed probes); '
+                streak.log(
+                    logging.WARNING, '%s pid=%s unresponsive for %.0fs (%d failed probes); '
                     'judged only after %.0fs without an answer', label, pid,
                     streak.unresponsive_for(now), streak.failures,
                     streak.budget_seconds)
@@ -2644,8 +2710,8 @@ class StorageSupervisor:
         self._set_liveness_condition(
             {'state': 'kernel-blocked', 'detail': blocked, **unanswered})
         if streak.report_due('blocked', now):
-            logger.warning(
-                '%s pid=%s has not answered for %.0fs and is blocked in the '
+            streak.log(
+                logging.WARNING, '%s pid=%s has not answered for %.0fs and is blocked in the '
                 'kernel: %s. No signal can recycle it before that call '
                 'returns, so it is kept and probed; check the data volume',
                 label, pid, streak.unresponsive_for(now), blocked)

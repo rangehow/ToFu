@@ -689,11 +689,10 @@ def register_production_lifecycle(
         # handshake is a required startup gate, never a best-effort task
         # or a selectable mode — backgrounded, never made optional.
         _phase_spec(3, steps.start_storage),
-        _phase_spec(4, steps.init_database),
-        # The authority switch must finish before imports instantiate
-        # the dispatcher or workers accept tasks. Migration is
-        # revision-idempotent and never writes back to legacy config.
-        _phase_spec(5, steps.bootstrap_model_routing),
+        # Local routing convergence must precede both recovery and worker
+        # startup: either path may issue an aggregate-revision witness.
+        _phase_spec(4, steps.bootstrap_model_routing),
+        _phase_spec(5, steps.init_database),
         _phase_spec(6, steps.validate_imports),
         _phase_spec(7, steps.start_workers, app),
         _phase_spec(

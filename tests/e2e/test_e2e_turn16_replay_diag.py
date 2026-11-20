@@ -35,23 +35,15 @@ def _stub_stream_llm_response(task, body, tag='', on_tool_call_ready=None):
 
 
 @pytest.fixture(scope='module', autouse=True)
-def _install_llm_stubs(flask_app):
-    from lib.durable_worker.runtime import ensure_workers_started, stop_workers
-    from tests.support.model_routing import install_native_test_model_route
+def _install_llm_stubs():
+    import lib.tasks_pkg.llm_fallback._call as llm_fb
 
-    # Same seams as tests/e2e/test_e2e_smoke.py: a blank authority needs a
-    # callable route, and accepted chat Attempts run on the durable workers.
-    install_native_test_model_route(owner_user_id=1, capabilities=('text', 'thinking'))
     saved = _fallback_transport.stream_llm_response
     _fallback_transport.stream_llm_response = _stub_stream_llm_response
     try:
-        ensure_workers_started(flask_app)
         yield
     finally:
-        try:
-            stop_workers(flask_app)
-        finally:
-            _fallback_transport.stream_llm_response = saved
+        _fallback_transport.stream_llm_response = saved
 
 
 def _wait_app_ready(page, timeout=15000):

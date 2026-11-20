@@ -53,7 +53,7 @@ from lib.swarm.presentation_budget import (
     SWARM_TOOL_TIMELINE_JSON_BYTES,
     SWARM_TOOL_TIMELINE_ROW_LIMIT,
 )
-from lib.swarm.scheduler import StreamingScheduler
+from lib.swarm.scheduler import StreamingScheduler, SwarmExecutorHandoffError
 from lib.tools.poll import POLL_WAIT_CAP_S
 
 logger = get_logger(__name__)
@@ -693,6 +693,7 @@ class MasterOrchestrator:
         # <swarm-update>s would otherwise sit unread in the inbox. Must never
         # raise into the driver loop.
         self.on_settled = on_settled
+        self.continuation_source = (parent_config or {}).get('_swarmContinuationSource') or task_id
         # The model-facing inbox is keyed by the STABLE swarm key (conv id
         # when available) so <swarm-update>s enqueued by background agents
         # survive into later turns of the same conversation. Defaults to
@@ -749,6 +750,9 @@ class MasterOrchestrator:
             owner_key=user_id,
         )
 
+        # Rehydrate installs the acknowledged epoch before preparing any child.
+        # A constructed child captures it; late writers never refresh it.
+        self._checkpoint_writer_epoch = 0
         self._agents: dict[str, SubAgent] = {}
         self._results: list[tuple[SubTaskSpec, SubAgentResult]] = []
         self._results_by_id: dict[str, tuple[SubTaskSpec, SubAgentResult]] = {}
@@ -1039,6 +1043,7 @@ class MasterOrchestrator:
             swarm_key=self.inbox_key,
             swarm_run_id=self.task_id,
         )
+        agent._checkpoint_writer_epoch = getattr(self, '_checkpoint_writer_epoch', 0)
 
         if ((spec.retained_agent_id or spec.retained_execution_context is not None)
                 and not context['transient_runtime']):
@@ -1093,6 +1098,8 @@ class MasterOrchestrator:
         # makes must land on the same beacon the driver and the TTL sweep read,
         # otherwise we would just have created a fourth private clock.
         agent.progress_beacon = self._beacon
+        if getattr(self, '_sql_run_identity', None) is not None and self.before_agent_admission is not None:
+            agent._recovery_dispatch_guard = self.before_agent_admission
         with self._lock:
             self._agents[spec.id] = agent
         return agent
@@ -1430,7 +1437,8 @@ class MasterOrchestrator:
                 if not (self._parent_task_proxy.get('_transientRuntime') or self._parent_task_proxy.get('_invocationStorageFree')):
                     from lib.swarm.run_messages import binding_for, RunMessageRepository
                     RunMessageRepository(binding_for(self._parent_task_proxy, spec, self.inbox_key,
-                                                     run_id=self.task_id)).close()
+                                                     run_id=self.task_id), checkpoint_writer_epoch=getattr(
+                                                         self, '_checkpoint_writer_epoch', 0)).close()
             except Exception:
                 logger.warning('[Master:%s] terminal mailbox fence uncertain agent=%s',
                                self.task_id, spec.id, exc_info=True)
@@ -1575,7 +1583,9 @@ class MasterOrchestrator:
                 if spec.id not in self._delivered_result_ids:
                     inbox_enqueue(self.inbox_key, payload,
                                   priority='later', mode='swarm-update',
-                                  agent_id=spec.id, extra={'status': result.status, 'swarm_run_id': self.task_id})
+                                  agent_id=spec.id, extra={'status': result.status,
+                                      'swarm_run_id': self.task_id,
+                                      'checkpoint_writer_epoch': self._checkpoint_writer_epoch})
         except Exception as e:
             logger.error('[Master:%s] Failed to enqueue swarm-update for agent=%s: %s',
                          self.task_id, spec.id, e, exc_info=True)
@@ -1642,7 +1652,21 @@ class MasterOrchestrator:
         # the LLM as an error before returning the handle.  The returned
         # list is the post-dedup spec set; on first call it should equal
         # ``self.specs`` (no prior session state to dedupe against).
-        accepted = self._scheduler.add_specs(self.specs)
+        before_enqueue = getattr(self, '_before_initial_enqueue', None)
+        if before_enqueue is None:
+            accepted = self._scheduler.add_specs(self.specs)
+        else:
+            self._before_initial_enqueue = None
+            try:
+                accepted = self._scheduler.add_specs(self.specs, before_enqueue=before_enqueue)
+            except SwarmExecutorHandoffError:
+                # A partial physical handoff still needs the ordinary driver
+                # to drain results and settle any peers already in execution.
+                self._start_driver()
+                raise
+            except Exception:
+                self._scheduler.shutdown(require_quiescence=True)
+                raise
         if len(accepted) != len(self.specs):
             logger.warning(
                 '[Master:%s] add_specs deduplicated %d → %d on first add — '
@@ -1688,6 +1712,10 @@ class MasterOrchestrator:
                     if self._aborted or self.abort_check():
                         break
             except Exception as e:
+                if isinstance(e, SwarmExecutorHandoffError):
+                    # The driver owns teardown after activation returned. Keep
+                    # the exact cut and stop unentered work without settling it.
+                    self.suspend_after_handoff_refusal()
                 self._driver_error = f'{type(e).__name__}: {e}'
                 logger.error('%s Driver loop crashed: %s', log_prefix, e, exc_info=True)
             finally:
@@ -1862,7 +1890,8 @@ class MasterOrchestrator:
                 try:
                     from lib.swarm import persistence
                     if not self._restart_suspended:
-                        persistence.mark_session_terminated(self.inbox_key)
+                        persistence.mark_session_terminated(self.inbox_key, run_id=self.task_id,
+                            checkpoint_writer_epoch=self._checkpoint_writer_epoch)
                 except Exception as _pe:
                     logger.debug('%s mark_session_terminated failed: %s',
                                  log_prefix, _pe)
@@ -1892,12 +1921,16 @@ class MasterOrchestrator:
         self._driver_thread = threading.Thread(
             target=_driver, name=f'swarm-driver-{self.task_id}', daemon=True,
         )
-        self._driver_thread.start()
+        try:
+            self._driver_thread.start()
+        except Exception:
+            self._driver_thread = None
+            raise
 
     # ── Rehydration entry point (startup resume) ─────
 
     def rehydrate_in_background(self, persisted_agents: list[dict], *,
-                                resume_parent_stop: bool = False) -> None:
+                                resume_parent_stop: bool = False, before_enqueue=None) -> None:
         """Resume a swarm from persisted per-agent checkpoints after a restart.
 
         ``persisted_agents`` is the ``agents`` list from
@@ -1928,7 +1961,8 @@ class MasterOrchestrator:
 
         resume_specs: list[SubTaskSpec] = []
         preloaded = 0
-        re_enqueued = 0
+        restored_updates = []
+        blocked_checkpoints = []
 
         for spec in self.specs:
             a = by_id.get(spec.id)
@@ -1984,8 +2018,7 @@ class MasterOrchestrator:
                         self._delivered_result_ids.add(spec.id)
                 preloaded += 1
                 if result.status in ('completed', 'failed') and not a.get('delivered'):
-                    self._reenqueue_swarm_update(spec, result)
-                    re_enqueued += 1
+                    restored_updates.append((spec, result))
             else:
                 # Non-terminal → resume. Seed messages if we have a checkpoint.
                 self._resume_results[spec.id] = dict(a.get('result') or {})
@@ -2068,21 +2101,11 @@ class MasterOrchestrator:
                 self._results_by_id[spec.id] = (spec, result)
                 if a.get('delivered'):
                     self._delivered_result_ids.add(spec.id)
-            # Never-started descendants have no worker to persist their result.
-            # Use the existing checkpoint/outbox authority, not a new task store.
-            from lib.swarm.persistence import save_agent
-            save_agent(self.inbox_key, spec.id, role=spec.role,
-                       objective=spec.objective, status=result.status,
-                       messages=messages, result=result.to_dict(),
-                       rounds_used=rounds_used)
+            blocked_checkpoints.append((spec, result, messages, rounds_used))
             preloaded += 1
             if not a.get('delivered'):
-                self._reenqueue_swarm_update(spec, result)
-                re_enqueued += 1
+                restored_updates.append((spec, result))
         resume_specs = safe_resume_specs
-
-        logger.info('[Master:%s] Rehydrate — preloaded=%d (re-enqueued=%d) resume=%d',
-                    self.task_id, preloaded, re_enqueued, len(resume_specs))
 
         if self._aborted:
             self._terminated = True
@@ -2094,10 +2117,32 @@ class MasterOrchestrator:
         self._scheduler._completed.update(self._results_by_id)
         if resume_specs:
             try:
-                self._scheduler.add_specs(resume_specs)
+                accepted = self._scheduler.add_specs(resume_specs, **(
+                    {'before_enqueue': before_enqueue, 'preserve_on_submit_refusal': True}
+                    if before_enqueue is not None else {}))
+                if before_enqueue is not None and not accepted:
+                    raise SwarmExecutorHandoffError('Swarm restore had no admitted specs')
             except ValueError as e:
+                if before_enqueue is not None:
+                    raise
                 logger.warning('[Master:%s] rehydrate add_specs cycle: %s',
                                self.task_id, e)
+        elif before_enqueue is not None:
+            before_enqueue([])
+
+        # Keep preparation side-effect free until scheduler handoff succeeds.
+        # Never-started blocked descendants have no worker to save their result.
+        from lib.swarm.persistence import save_agent
+        for spec, result, messages, rounds_used in blocked_checkpoints:
+            save_agent(self.inbox_key, spec.id, role=spec.role,
+                       objective=spec.objective, status=result.status,
+                       messages=messages, result=result.to_dict(),
+                       rounds_used=rounds_used, run_id=self.task_id,
+                       checkpoint_writer_epoch=self._checkpoint_writer_epoch)
+        for spec, result in restored_updates:
+            self._reenqueue_swarm_update(spec, result)
+        logger.info('[Master:%s] Rehydrate — preloaded=%d (re-enqueued=%d) resume=%d',
+                    self.task_id, preloaded, len(restored_updates), len(resume_specs))
 
         if self.on_progress:
             self.on_progress({
@@ -2151,7 +2196,8 @@ class MasterOrchestrator:
                 if spec.id not in self._delivered_result_ids:
                     inbox_enqueue(self.inbox_key, payload, priority='later',
                                   mode='swarm-update', agent_id=spec.id,
-                                  extra={'status': result.status, 'swarm_run_id': self.task_id})
+                                  extra={'status': result.status, 'swarm_run_id': self.task_id,
+                                         'checkpoint_writer_epoch': self._checkpoint_writer_epoch})
         except Exception as e:
             logger.warning('[Master:%s] re-enqueue swarm-update for %s failed: %s',
                            self.task_id, spec.id, e)
@@ -2204,6 +2250,7 @@ class MasterOrchestrator:
                 objective=spec.objective,
                 status=result.status,
                 result=result.to_dict(),
+                checkpoint_writer_epoch=self._checkpoint_writer_epoch,
             )
         except Exception:
             # Completion must proceed; teardown retries before any deletion.
@@ -2678,7 +2725,8 @@ class MasterOrchestrator:
             try:
                 from lib.swarm import persistence
                 if delivery_ack is None:
-                    persistence.mark_delivered(self.inbox_key, _delivered_ids, task_id=self.task_id)
+                    persistence.mark_delivered(self.inbox_key, _delivered_ids, task_id=self.task_id,
+                        checkpoint_writer_epoch=self._checkpoint_writer_epoch)
             except Exception as e:
                 logger.debug('[Master:%s] mark_delivered after await failed: %s',
                              self.task_id, e)
@@ -2721,7 +2769,8 @@ class MasterOrchestrator:
                 try:
                     from lib.swarm import persistence
                     if delivery_ack is None:
-                        persistence.mark_delivered(self.inbox_key, [agent_id], task_id=self.task_id)
+                        persistence.mark_delivered(self.inbox_key, [agent_id], task_id=self.task_id,
+                            checkpoint_writer_epoch=self._checkpoint_writer_epoch)
                 except Exception as e:
                     logger.debug('[Master:%s] mark_delivered after get_agent_result '
                                  'failed: %s', self.task_id, e)
@@ -2799,6 +2848,8 @@ class MasterOrchestrator:
         """One projection for uncommitted attempts, including stranded children."""
 
         if self.is_restart_suspended:
+            if not self._aborted and agent_id in started_at:
+                return SubAgentStatus.RUNNING.value
             return SubAgentStatus.INTERRUPTED.value
         if terminated:
             if self._aborted:
@@ -2881,6 +2932,15 @@ class MasterOrchestrator:
                     })
             return out
 
+
+    def suspend_after_handoff_refusal(self) -> None:
+        """Retain the recovery cut without revoking already admitted peers."""
+        with self._lock:
+            if not self._aborted:
+                self._restart_suspended = True
+        self._completion_event.set()
+        if self._scheduler is not None:
+            self._scheduler.cancel_pending()
 
     def suspend_for_restart(self) -> None:
         """Stop scheduling while leaving durable unfinished work resumable."""
@@ -2975,6 +3035,15 @@ class MasterOrchestrator:
 
     # ── Diagnostics ───────────────────────────────────
 
+    def wait_covers_pending_delivery(self, ids: tuple[str, ...]) -> bool:
+        """Only an exact wait for the outstanding required batch can detach."""
+        with self._lock:
+            return (bool(ids and self.on_settled)
+                    and not (self._terminated or self._aborted or self._restart_suspended
+                             or self._stop_stalled)
+                    and set(ids) == {spec.id for spec in self.specs
+                                    if spec.required_for_completion and spec.id not in self._results_by_id})
+
     @property
     def delivery_dependencies_settled(self) -> bool:
         """Required specs have real terminal receipts; optional work may remain."""
@@ -2986,6 +3055,17 @@ class MasterOrchestrator:
     def is_terminated(self) -> bool:
         return self._terminated
 
+    @property
+    def has_live_work(self) -> bool:
+        scheduler = self._scheduler
+        return self.has_live_driver or (scheduler is not None and scheduler.running_count > 0)
+
+    @property
+    def has_live_driver(self) -> bool:
+        """True until the driver exits, including its settlement callbacks."""
+        driver = self._driver_thread
+        return driver is not None and driver.is_alive()
+
     def holds_parent(self, task_id: str) -> bool:
         """True while running or future work of this session is born under ``task_id``.
 
@@ -2994,18 +3074,30 @@ class MasterOrchestrator:
         no live session holds it (``turn_handoff.hold_detached_swarm``).
         """
         with self._lock:
-            if self._terminated or self._driver_thread is None:
+            if not self.has_live_work:
                 return False
             if self._parent_task_proxy.get('id') == task_id:
                 return True
             return any((spec.retained_execution_context or {}).get('parent_task_id') == task_id
                        for spec in self.specs)
 
+    def finish_failed_activation(self) -> None:
+        """Release detached claim waiters after driverless recovery cleanup."""
+        if self._driver_thread is None:
+            self._terminated = True
+            self._terminated_event.set()
+
+    @property
+    def is_draining_handoff(self) -> bool:
+        return self._restart_suspended and self.has_live_work
+
     def wait_terminated(self) -> None:
-        """Block until the driver finished, including its terminal persistence."""
+        """Block through driver finalization or drained, driverless activation failure."""
         self._terminated_event.wait()
         if self._driver_thread is not None:
             self._driver_thread.join()
+        if self._scheduler is not None:
+            self._scheduler.wait_for_worker_quiescence()
 
     @property
     def progress_beacon(self) -> ProgressBeacon:

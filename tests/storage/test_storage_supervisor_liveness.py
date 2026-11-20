@@ -14,12 +14,14 @@ and the load average or cgroup memory never decide a recycle.
 
 from __future__ import annotations
 
+import errno
 import logging
 import os
 import subprocess
 import sys
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -567,3 +569,283 @@ def test_liveness_unresponsive_budget_defaults_and_bounds():
         {'TOFU_STORAGE_LIVENESS_UNRESPONSIVE_SECONDS': '1'}) == 10.0
     assert _liveness_unresponsive_budget(
         {'TOFU_STORAGE_LIVENESS_UNRESPONSIVE_SECONDS': '99999'}) == 3600.0
+
+
+# ── One report per episode across attached processes (2026-11-18) ─────────
+
+
+@pytest.fixture
+def reporter_sockets(monkeypatch):
+    state = SimpleNamespace(
+        create_error=None, bind_error=None, close_error=None,
+        calls=0, candidates=[], names={}, lock=threading.Lock())
+
+    class Candidate:
+        def __init__(self):
+            self.name = None
+            self.close_calls = 0
+
+        def bind(self, name):
+            if state.bind_error is not None:
+                raise state.bind_error
+            with state.lock:
+                if name in state.names:
+                    raise OSError(errno.EADDRINUSE, 'injected contention')
+                state.names[name] = self
+                self.name = name
+
+        def close(self):
+            self.close_calls += 1
+            with state.lock:
+                if self.name is not None:
+                    del state.names[self.name]
+                    self.name = None
+            if state.close_error is not None:
+                raise state.close_error
+
+    def factory(family, kind):
+        assert (family, kind) == (1, 2)
+        state.calls += 1
+        if state.create_error is not None:
+            raise state.create_error
+        candidate = Candidate()
+        state.candidates.append(candidate)
+        return candidate
+
+    monkeypatch.setattr(supervisor_mod, 'socket', SimpleNamespace(
+        AF_UNIX=1, SOCK_DGRAM=2, socket=factory))
+    monkeypatch.setattr(supervisor_mod, 'sys', SimpleNamespace(platform='linux'))
+    monkeypatch.setattr(supervisor_mod, 'os', SimpleNamespace(
+        environ={}, getuid=lambda: 1000))
+    monkeypatch.setattr(StorageSupervisor, '_external_engine_exited',
+                        lambda self: False)
+    return state
+
+
+@pytest.mark.parametrize(('failure', 'close_error'), [
+    ('create', None),
+    ('create-contention-code', None),
+    ('bind', None),
+    ('bind-unsupported', None),
+    ('bind-unknown', None),
+    ('bind', errno.EBADF),
+    ('contention', None),
+    ('contention', errno.EBADF),
+    ('held', errno.EBADF),
+])
+def test_reporter_election_failure_preserves_external_detach_and_visibility(
+        reporter_sockets, caplog, failure, close_error):
+    sockets = reporter_sockets
+    winner = supervisor_mod._EpisodeReporterLease('endpoint', 9)
+    if failure == 'contention':
+        assert winner.held()
+    if failure.startswith('create'):
+        code = errno.EMFILE if failure == 'create' else errno.EADDRINUSE
+        sockets.create_error = OSError(code, 'injected socket creation failure')
+    elif failure == 'bind-unsupported':
+        sockets.bind_error = OSError(errno.EINVAL, 'injected unsupported abstract bind')
+    elif failure == 'bind':
+        sockets.bind_error = OSError(errno.ENOMEM, 'injected bind allocation failure')
+    elif failure == 'bind-unknown':
+        sockets.bind_error = OSError('injected bind failure without errno')
+    if close_error is not None:
+        sockets.close_error = OSError(close_error, 'injected close failure')
+
+    try:
+        for _ in range(3):
+            caplog.clear()
+            supervisor = _wired_supervisor()
+            client = _FailingHealthClient()
+            client.close_calls = 0
+
+            def close():
+                client.close_calls += 1
+
+            client.close = close
+            supervisor._client = client
+            supervisor._external_attached = True
+            supervisor._endpoint_port = 9
+            crashes = []
+            supervisor.add_crash_callback(crashes.append)
+            with caplog.at_level(logging.DEBUG, logger='tofu.storage.supervisor'):
+                supervisor._monitor_external_sidecar(client)
+
+            assert client.calls == 3
+            assert client.close_calls == 1
+            assert supervisor._client is None
+            assert not supervisor._external_attached
+            assert supervisor._last_exit_code == -1
+            assert crashes == [-1]
+            probes = [r for r in caplog.records if 'probe failed (' in r.getMessage()]
+            assert len(probes) == 2
+            expected = logging.DEBUG if failure == 'contention' else logging.WARNING
+            assert [r.levelno for r in probes] == [expected, expected]
+            assert any(r.levelno == logging.CRITICAL and 'detaching' in r.getMessage()
+                       for r in caplog.records)
+    finally:
+        winner.release()
+        winner.release()
+    assert not sockets.names
+    assert all(candidate.close_calls == 1 for candidate in sockets.candidates)
+
+
+@pytest.mark.parametrize('election', [
+    'create', 'bind', 'contention', 'held', 'create-then-held', 'bind-then-contention',
+])
+def test_reporter_election_preserves_polling_and_repeated_warning_cadence(
+        monkeypatch, reporter_sockets, caplog, election):
+    sockets = reporter_sockets
+    winner = supervisor_mod._EpisodeReporterLease(424242, 17)
+    if election == 'contention':
+        assert winner.held()
+    elif election.startswith('create'):
+        sockets.create_error = OSError(errno.EMFILE, 'injected descriptor exhaustion')
+    elif election.startswith('bind'):
+        sockets.bind_error = OSError(errno.ENOMEM, 'injected bind allocation failure')
+    now = [1000.0]
+    ticks = iter([1000.0, 1001.0, 1030.0, 1031.0, 1061.0])
+
+    def wait(interval):
+        assert interval == 0.01
+        tick = next(ticks, None)
+        if tick is None:
+            return True
+        now[0] = tick
+        if tick == 1031.0 and '-then-' in election:
+            sockets.create_error = sockets.bind_error = None
+            if election == 'bind-then-contention':
+                assert winner.held()
+        return False
+
+    monkeypatch.setattr(supervisor_mod, 'time', SimpleNamespace(
+        monotonic=lambda: now[0], time=lambda: now[0]))
+    supervisor = _wired_supervisor(threshold=2, unresponsive=120.0)
+    supervisor._external_pid = 424242
+    supervisor._external_process_start = 17
+    supervisor._external_monitor_stop = SimpleNamespace(wait=wait)
+    client = _FailingHealthClient()
+    supervisor._client = client
+    supervisor._external_attached = True
+    crashes = []
+    supervisor.add_crash_callback(crashes.append)
+    try:
+        with caplog.at_level(logging.DEBUG, logger='tofu.storage.supervisor'):
+            supervisor._monitor_external_sidecar(client)
+    finally:
+        winner.release()
+    assert client.calls == 5
+    assert supervisor._client is client
+    assert supervisor._external_attached
+    assert supervisor._last_exit_code is None
+    assert crashes == []
+    assert supervisor._liveness_condition['failedProbes'] == 5
+    assert supervisor._liveness_condition['unansweredSeconds'] == 61.0
+    reports = [r for r in caplog.records if 'External Storage Sidecar' in r.getMessage()]
+    expected = ([logging.DEBUG] * 4 if election == 'contention'
+                else [logging.WARNING] * 2 + [logging.DEBUG] * 2
+                if election == 'bind-then-contention' else [logging.WARNING] * 4)
+    assert [r.levelno for r in reports] == expected
+    if election == 'create-then-held':
+        assert len(sockets.candidates) == 1
+    assert len([r for r in reports if 'unresponsive for' in r.getMessage()]) == 3
+    assert not sockets.names
+    assert all(candidate.close_calls == 1 for candidate in sockets.candidates)
+
+
+@pytest.mark.parametrize('platform', ['non-linux', 'no-af-unix'])
+def test_reporter_lease_unavailable_platform_reports_without_a_socket(
+        monkeypatch, reporter_sockets, platform):
+    if platform == 'non-linux':
+        monkeypatch.setattr(supervisor_mod.sys, 'platform', 'darwin')
+    else:
+        monkeypatch.delattr(supervisor_mod.socket, 'AF_UNIX')
+    monkeypatch.setattr(supervisor_mod, 'os', SimpleNamespace())
+    lease = supervisor_mod._EpisodeReporterLease('endpoint', 9)
+    assert lease.held()
+    lease.release()
+    assert reporter_sockets.calls == 0
+
+
+def test_an_engine_stall_is_reported_once_by_all_attached_monitors(
+        reporter_sockets, caplog):
+    """Every attached process watches the engine; one of them reports it.
+
+    2026-11-18: each of 39 attached processes logged every line of each
+    liveness episode of the one external engine (78 'probe failed' and 39
+    'unresponsive' lines per episode), multiplying the warning counts. The
+    monitors still judge independently; only the holder of the per-engine
+    reporter lease logs above DEBUG, and a surviving monitor takes the
+    lease over when the reporter detaches.
+    """
+    stall = threading.Event()
+
+    class _SharedEngineClient:
+        def health(self, deadline=None):
+            if stall.is_set():
+                raise StorageError('database_unavailable', 'volume stall')
+            return {'ready': True, 'backend': 'tofudb'}
+
+    monitors = []
+    for index in range(3):
+        supervisor = _wired_supervisor(threshold=3, unresponsive=60.0)
+        supervisor._external_pid = 424242
+        supervisor._external_process_start = 17
+        supervisor._endpoint_port = 9
+        client = _SharedEngineClient()
+        supervisor._client = client
+        thread = threading.Thread(
+            target=supervisor._monitor_external_sidecar, args=(client,),
+            name=f'test-external-monitor-{index}', daemon=True)
+        monitors.append((supervisor, thread))
+
+    def episode():
+        stall.set()
+        time.sleep(0.3)
+        stall.clear()
+        time.sleep(0.3)
+
+    def lines(level):
+        return [record.getMessage() for record in caplog.records
+                if record.levelno == level
+                and 'External Storage Sidecar' in record.getMessage()]
+
+    with caplog.at_level(logging.DEBUG, logger='tofu.storage.supervisor'):
+        for _, thread in monitors:
+            thread.start()
+        try:
+            time.sleep(0.1)
+            episode()
+            warnings = lines(logging.WARNING)
+            assert [m for m in warnings if 'probe failed (1/3)' in m] == [
+                'External Storage Sidecar liveness probe failed (1/3) pid=424242']
+            assert len([m for m in warnings if 'unresponsive for' in m]) == 1
+            assert len([m for m in lines(logging.INFO) if 'recovered' in m]) == 1
+            # The other monitors saw the same episode and kept it at DEBUG.
+            assert len([m for m in lines(logging.DEBUG) if 'probe failed (1/3)' in m]) == 2
+
+            # The reporter detaches; the next episode is still reported once.
+            reporter_thread = next(
+                record.threadName for record in caplog.records
+                if record.levelno == logging.WARNING
+                and 'probe failed (1/3)' in record.getMessage())
+            survivors = []
+            for supervisor, thread in monitors:
+                if thread.name == reporter_thread:
+                    supervisor._external_monitor_stop.set()
+                    thread.join(timeout=5)
+                    assert not thread.is_alive()
+                else:
+                    survivors.append((supervisor, thread))
+            assert len(survivors) == 2
+            caplog.clear()
+            episode()
+            warnings = lines(logging.WARNING)
+            assert len([m for m in warnings if 'probe failed (1/3)' in m]) == 1
+        finally:
+            for supervisor, _ in monitors:
+                supervisor._external_monitor_stop.set()
+            for _, thread in monitors:
+                thread.join(timeout=5)
+                assert not thread.is_alive()
+    assert not reporter_sockets.names
+    assert all(candidate.close_calls == 1 for candidate in reporter_sockets.candidates)

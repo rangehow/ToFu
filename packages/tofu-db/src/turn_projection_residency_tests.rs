@@ -98,10 +98,11 @@ fn reads_of_a_resident_live_head_decode_no_head_chain() {
         HEAD_MATERIALIZATIONS.with(|count| count.set(0));
         let mut tx = reader.begin_with_identity_claim_scopes(7, 11).unwrap();
         let turn = get(reader, &mut tx, CONVERSATION, TURN).unwrap().unwrap();
-        let context = super::model_context::read(reader, &mut tx, CONVERSATION, TURN, false, None)
-            .unwrap()
-            .unwrap()
-            .into_bytes();
+        let context =
+            super::model_context::read(reader, &mut tx, CONVERSATION, TURN, false, None, None)
+                .unwrap()
+                .unwrap()
+                .into_bytes();
         (
             turn,
             context,

@@ -6,7 +6,7 @@ import pytest
 pytestmark = pytest.mark.visual
 
 
-@pytest.mark.parametrize('scenario', ['login_prepare_retired', 'reuse_settles_retired', 'device_reopen'])
+@pytest.mark.parametrize('scenario', ['login_prepare_retired', 'reuse_settles_retired', 'device_reopen', 'status_unavailable'])
 def test_settings_oauth_opening_lifetime(browser, live_server, scenario):
     from playwright.sync_api import expect
 
@@ -25,6 +25,9 @@ def test_settings_oauth_opening_lifetime(browser, live_server, scenario):
             return route.abort()
         if parsed.path == '/api/v4/oauth/status':
             state['reads'] += 1
+            if scenario == 'status_unavailable':
+                pending.append(route)
+                return None
             codex = {'status': 'not_started', 'authenticated': False,
                      'shared_login_reuse_supported': True}
             if state['device']:
@@ -53,8 +56,18 @@ def test_settings_oauth_opening_lifetime(browser, live_server, scenario):
         modal = page.locator('#settingsModal')
         expect(modal).to_be_visible(timeout=20000)
         page.locator('.settings-tab[data-tab="oauth"]').click()
+        page.get_by_role('button', name='ChatGPT', exact=True).click()
         login = page.locator('#oauthCodexLoginBtn')
         expect(login).to_be_enabled()
+        if scenario == 'status_unavailable':
+            feedback = page.locator('#oauthStatusFeedback')
+            expect(feedback).to_have_text('Loading…')
+            assert pending
+            pending.pop().fulfill(status=400, json={'error': 'synthetic private diagnostic'})
+            expect(feedback).to_have_text('OAuth Login · Failed to load')
+            expect(feedback).not_to_contain_text('synthetic private diagnostic')
+            expect(login).to_be_enabled()
+            return
         if scenario == 'device_reopen':
             page.locator('#oauthCodexDeviceBtn').click()
             expect(page.locator('#oauthCodexDeviceCode')).to_have_text('SYNTH-CODE')
@@ -68,6 +81,7 @@ def test_settings_oauth_opening_lifetime(browser, live_server, scenario):
         opening.click()
         expect(modal).to_be_visible()
         page.locator('.settings-tab[data-tab="oauth"]').click()
+        page.get_by_role('button', name='ChatGPT', exact=True).click()
         if scenario == 'device_reopen':
             expect(page.locator('#oauthCodexStatus')).to_have_class('oauth-status-badge authenticated', timeout=10000)
             assert state['reads'] >= 3

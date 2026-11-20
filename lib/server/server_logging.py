@@ -49,6 +49,29 @@ _LOG_FMT = ('%(asctime)s [%(levelname)s] %(name)s [%(threadName)s]: '
             '%(tofu_correlation_prefix)s%(tofu_coalesce_note)s%(message)s')
 _LOG_DATEFMT = '%Y-%m-%d %H:%M:%S'
 
+
+class _SinkFormatter(BoundedFormatter):
+    """Persist opted-in mailbox correlation only at the physical text sink."""
+
+    def format(self, record):
+        from copy import copy
+        event = getattr(record, 'tofu_event_name', '')
+        if event in {'swarm_mailbox_retirement', 'mailbox_input_rejection'}:
+            fields = getattr(record, 'tofu_event_fields', {})
+            tokens = [str(fields.get(key, '-')) for key in
+                      ('user_id', 'conversation_id', 'swarm_run_id')]
+            tokens = [token if re.fullmatch(r'[A-Za-z0-9_.:-]{1,256}', token)
+                      else '-' for token in tokens]
+            attempt = fields.get('attempt_id', '-')
+            if not isinstance(attempt, str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,256}', attempt):
+                attempt = '-'
+            pid = record.process if type(record.process) is int and 0 < record.process < 2**63 else '-'
+            record = copy(record)
+            record.tofu_correlation_prefix = (
+                '[mailbox-correlation owner=%s conversation=%s run=%s attempt=%s pid=%s] '
+                % (*tokens, attempt, pid) + getattr(record, 'tofu_correlation_prefix', ''))
+        return super().format(record)
+
 # 'tofu_search' is the extracted search/fetch library (sibling package). Its
 # loggers carry first-class business diagnostics — the per-engine result
 # counts, the streaming-fetch race-to-N decisions, the LLM content-filter
@@ -495,7 +518,7 @@ def build_logging_runtime(*, log_dir, under_pytest, log_agg_enabled,
     QueueHandler + QueueListener decouple request-thread logging from slow
     FUSE/NFS file I/O.
     """
-    formatter = BoundedFormatter(_LOG_FMT, datefmt=_LOG_DATEFMT)
+    formatter = _SinkFormatter(_LOG_FMT, datefmt=_LOG_DATEFMT)
 
     app_handler = _app_log_handler(log_dir, formatter)
 
@@ -666,7 +689,7 @@ def build_storage_host_logging_runtime(*, console_handler):
     console keeps every line it had). docs/LOGGING.md, "The native storage
     host's logs".
     """
-    formatter = BoundedFormatter(_LOG_FMT, datefmt=_LOG_DATEFMT)
+    formatter = _SinkFormatter(_LOG_FMT, datefmt=_LOG_DATEFMT)
 
     def build_file_sinks():
         from lib.runtime import runtime_paths

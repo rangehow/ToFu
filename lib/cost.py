@@ -210,15 +210,109 @@ def normalize_usage(usage: Optional[dict]) -> dict:
     return out
 
 
+# Attempt-local protocol evidence; existing round/SDK projections strip _wire_*.
+RESPONSES_INPUT_USAGE_KEY = '_wire_responses_input_usage'
+_RESPONSES_COUNTER_FIELDS = ('input_tokens', 'cache_read', 'cache_write')
+_RESPONSES_COUNTER_STATUSES = frozenset({'missing', 'null', 'invalid', 'unverified', 'observed'})
+_MISSING_USAGE_FIELD = object()
+_INVALID_USAGE_PARENT = object()
+
+
+def _reported_token_count(value: object) -> int | None:
+    return value if type(value) is int and value >= 0 else None
+
+
+def _responses_usage_field(parent: object, key: str) -> object:
+    if isinstance(parent, dict):
+        return parent.get(key, _MISSING_USAGE_FIELD)
+    if parent is None or parent is _MISSING_USAGE_FIELD:
+        return parent
+    return _INVALID_USAGE_PARENT
+
+
+def _responses_counter(value: object) -> tuple[int | None, str]:
+    if value is _MISSING_USAGE_FIELD:
+        return None, 'missing'
+    if value is None:
+        return None, 'null'
+    count = _reported_token_count(value)
+    return (None, 'invalid') if count is None else (count, 'observed')
+
+
+def responses_input_usage_evidence(response: dict | None) -> dict:
+    """Project a terminal Responses response into exact counts and closed statuses.
+
+    Tofu interprets ``input_tokens_details`` as details of cache-inclusive input.
+    Each cache count must fit the original total independently: the protocol
+    does not establish that the read and write sets are disjoint. ``None`` for
+    the whole response means no original terminal receipt was captured.
+    """
+    if response is None:
+        return dict.fromkeys(_RESPONSES_COUNTER_FIELDS) | {
+            'status': dict.fromkeys(_RESPONSES_COUNTER_FIELDS, 'unavailable'),
+        }
+    usage = _responses_usage_field(response, 'usage')
+    details = _responses_usage_field(usage, 'input_tokens_details')
+    total, total_status = _responses_counter(_responses_usage_field(usage, 'input_tokens'))
+    evidence = {'input_tokens': total, 'status': {'input_tokens': total_status}}
+    for field, key in (('cache_read', 'cached_tokens'), ('cache_write', 'cache_write_tokens')):
+        count, status = _responses_counter(_responses_usage_field(details, key))
+        if count is not None:
+            if total is None:
+                count, status = None, 'unverified'
+            elif count > total:
+                count, status = None, 'invalid'
+        evidence[field] = count
+        evidence['status'][field] = status
+    return evidence
+
+
+def reported_responses_input_usage(usage: Optional[dict]) -> dict | None:
+    """Read only a well-formed adapter receipt; aliases cannot restore provenance."""
+    if not is_responses_usage(usage):
+        return None
+    evidence = usage.get(RESPONSES_INPUT_USAGE_KEY)
+    states = evidence.get('status') if isinstance(evidence, dict) else None
+    if not isinstance(states, dict) or len(states) != len(_RESPONSES_COUNTER_FIELDS):
+        return None
+    total = _reported_token_count(evidence.get('input_tokens'))
+    for field in _RESPONSES_COUNTER_FIELDS:
+        state = states.get(field)
+        if (not isinstance(state, str) or state not in _RESPONSES_COUNTER_STATUSES
+                or field not in evidence):
+            return None
+        count = evidence[field]
+        if state == 'observed':
+            if (_reported_token_count(count) is None or total is None or count > total):
+                return None
+        elif count is not None:
+            return None
+    return evidence
+
+
+def is_responses_usage(usage: Optional[dict]) -> bool:
+    """Even a usage-less settled Responses route requires an exact receipt."""
+    if not isinstance(usage, dict):
+        return False
+    dispatch = usage.get('_dispatch')
+    if isinstance(dispatch, dict) and dispatch.get('protocol'):
+        return dispatch['protocol'] == 'responses'
+    return RESPONSES_INPUT_USAGE_KEY in usage
+
+
 def observed_cache_read(usage: Optional[dict]) -> Optional[int]:
     """Return cache-read tokens only when a provider actually reported them.
 
     ``normalize_usage`` intentionally fills absent counters with zero for cost
-    arithmetic. Durable last-read publication must instead distinguish an
-    observed zero from missing/null/malformed usage. Reuse the same alias map.
+    arithmetic. Durable last-read publication must distinguish an observed
+    zero from missing/null/malformed usage. For Responses, only the adapter's
+    exact-input receipt is evidence: legacy and alias-only rows remain unknown.
     """
     if not isinstance(usage, dict):
         return None
+    if is_responses_usage(usage):
+        evidence = reported_responses_input_usage(usage)
+        return evidence['cache_read'] if evidence is not None else None
     values = [usage.get(key) for key in _USAGE_KEY_ALIASES['cache_read']]
     for parent_key, child_key in _USAGE_NESTED_ALIASES['cache_read']:
         parent = usage.get(parent_key)
@@ -646,6 +740,7 @@ def compute_cost(
 
     pricing_override: Optional[dict] = None,
     pricing_data: Optional[dict] = None,
+    unrounded_cny_components: bool = False,
 ) -> Optional[dict]:
     """Compute USD + CNY cost from a usage dict.
 
@@ -653,6 +748,8 @@ def compute_cost(
     are zero. Otherwise returns the same keys the JS ``calcCostCny``
     produces so callers can swap freely. Loops pass one ``pricing_data``
     snapshot (``get_pricing_data()``) instead of copying it per round.
+    Aggregators can request unrounded CNY components and round after folding;
+    the per-quote totals and USD fields keep their normal precision.
     """
     if not usage or not isinstance(usage, dict):
         return None
@@ -755,6 +852,13 @@ def compute_cost(
     no_cache_input_usd = (total_input * base_in_usd) / 1e6
     cache_savings_usd = no_cache_input_usd - (
         input_cost_usd + cw_cost_usd + cr_cost_usd)
+    if unrounded_cny_components:
+        input_cny, output_cny, write_cny, read_cny = (
+            input_cost_usd * rate, output_cost_usd * rate, cw_cost_usd * rate, cr_cost_usd * rate)
+    else:
+        input_cny, output_cny, write_cny, read_cny = (
+            _round(input_cost_usd * rate, 6), _round(output_cost_usd * rate, 6),
+            _round(cw_cost_usd * rate, 6), _round(cr_cost_usd * rate, 6))
 
     return {
         'costUsd': _round(cost_usd),
@@ -779,10 +883,10 @@ def compute_cost(
         **({'cacheWrite1hTokens': cache_write_1h} if cache_write_1h else {}),
         'cacheReadTokens': cache_read,
         'thinkingTokens': think_tok,
-        'inputCostCny': _round(input_cost_usd * rate, 6),
-        'outputCostCny': _round(output_cost_usd * rate, 6),
-        'cacheWriteCostCny': _round(cw_cost_usd * rate, 6),
-        'cacheReadCostCny': _round(cr_cost_usd * rate, 6),
+        'inputCostCny': input_cny,
+        'outputCostCny': output_cny,
+        'cacheWriteCostCny': write_cny,
+        'cacheReadCostCny': read_cny,
         # USD per-component sub-costs — consumed by the billing adapter
         # (lib/billing/cost.compute_request_cost) so the wallet debit and the
         # displayed cost share ONE arithmetic core and can never drift.
@@ -855,7 +959,7 @@ def compute_api_rounds_cost(
         if not isinstance(round_entry, dict):
             continue
         usage = round_entry.get('usage')
-        if not isinstance(usage, dict) or not usage:
+        if not frozen and (not isinstance(usage, dict) or not usage):
             continue
         model = str(round_entry.get('model') or fallback_model_id or '')
         provider = (round_entry.get('provider_id')

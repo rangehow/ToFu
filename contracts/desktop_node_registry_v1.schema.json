@@ -66,6 +66,7 @@
         "confirmedAt": {"anyOf": [{"$ref": "#/$defs/timestamp"}, {"type": "null"}]},
         "replacement": {"anyOf": [{"$ref": "#/$defs/pendingCredential"}, {"type": "null"}]},
         "conflict": {"anyOf": [{"$ref": "#/$defs/conflict"}, {"type": "null"}]},
+        "predecessorCredentialId": {"description": "Private binding used to refuse retirement of a different incarnation of the predecessor.", "type": "string", "minLength": 1, "maxLength": 256},
         "predecessor": {"description": "The node this pending node says it replaces on the same host (renamed host, recreated container: PairRequest.previous_node_id), when the owner has such a node. Confirming forgets the predecessor unless it is online at that moment (then the two are twins and both stay); either way the field clears.", "anyOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]}
       }
     },

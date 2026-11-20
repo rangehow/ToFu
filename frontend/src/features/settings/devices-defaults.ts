@@ -8,9 +8,9 @@
  */
 import { featureRegistry } from '../../feature-registry';
 import { t } from '../../i18n';
-import { request } from '../../api/transport';
-import { createButton, createField, toast } from '../../ui';
-import { createDevicesClient } from '../devices/client';
+import { ApiError, request } from '../../api/transport';
+import { createButton, createField, setFieldError, toast, type FieldHandle } from '../../ui';
+import { createDevicesClient, type DevicesClient } from '../devices/client';
 import { defaultKindLabel } from '../devices/labels';
 import { DEFAULT_KINDS, projectFleet, type DefaultKind, type DeviceRow, type FleetSources } from '../devices/model';
 import { el } from '../devices/dom';
@@ -18,9 +18,85 @@ import { el } from '../devices/dom';
 type Bridge = { _populateDevicesTab?: () => void; _destroyDevicesTab?: () => void; closeSettings?: () => void };
 const bridge = featureRegistry as unknown as Bridge;
 let controller: AbortController | null = null;
+// Accepted saves outlive the render so a replacement visit can read after they settle.
+const pendingDefaultSaves = new Map<DefaultKind, Promise<void>>();
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function bindDefaultSave(client: DevicesClient, kind: DefaultKind, field: FieldHandle,
+  initialValue: string, signal: AbortSignal, canPublish: () => boolean): void {
+  const select = field.control as HTMLSelectElement;
+  let acknowledged = initialValue;
+  let needsAuthority = false;
+
+  const adopt = (value: string) => {
+    acknowledged = value;
+    if (![...select.options].some(option => option.value === value)) {
+      select.add(new Option(value, value));
+    }
+    select.value = value;
+  };
+
+  const reread = async () => {
+    if (!canPublish() || !needsAuthority || retry.disabled) return;
+    retry.disabled = true;
+    try {
+      const defaults = await client.defaults(signal);
+      if (!canPublish() || defaults.state !== 'ok') return;
+      const current = defaults.value.defaults[kind];
+      // A malformed success without this kind is not evidence that it was cleared.
+      if (current !== null && (typeof current !== 'string' || !current)) return;
+      adopt(current ?? '');
+      needsAuthority = false;
+      setFieldError(field, null);
+      select.disabled = false;
+      if (document.activeElement === retry) select.focus();
+      retry.hidden = true;
+    } catch (error) {
+      if (!signal.aborted) throw error;
+    } finally {
+      if (canPublish()) {
+        retry.disabled = false;
+        retry.hidden = !needsAuthority;
+      }
+    }
+  };
+  const retry = createButton({ label: t('settings.devices.retryDefaultRead'), variant: 'ghost', size: 'sm',
+    onClick: () => { void reread(); } });
+  retry.hidden = true;
+  field.el.append(retry);
+  select.addEventListener('change', () => {
+    if (!canPublish() || needsAuthority || pendingDefaultSaves.has(kind)) return;
+    const selected = select.value;
+    if (selected === acknowledged) return;
+    select.disabled = true;
+    setFieldError(field, null);
+
+    const save = client.setDefault(kind, selected || null).then(result => {
+      if (!canPublish()) return;
+      // Only this kind belongs to this write; other kinds can save independently.
+      adopt(result.defaults[kind] ?? '');
+      toast(t('settings.devices.saved'), { variant: 'success' });
+    }).catch(async error => {
+      if (!canPublish()) return;
+      if (error instanceof ApiError && error.status >= 400 && error.status < 500 && error.status !== 408) {
+        select.value = acknowledged;
+        setFieldError(field, t('devicesPage.error.save', { message: errorText(error) }));
+        return;
+      }
+      // The write may have committed without an acknowledgement. Only a fresh read can unlock this kind.
+      needsAuthority = true;
+      select.selectedIndex = -1;
+      setFieldError(field, t('settings.devices.defaultUnknown'));
+      await reread();
+    }).finally(() => {
+      pendingDefaultSaves.delete(kind);
+      if (canPublish()) select.disabled = needsAuthority;
+    });
+    pendingDefaultSaves.set(kind, save);
+  });
 }
 
 async function populate(): Promise<void> {
@@ -29,16 +105,23 @@ async function populate(): Promise<void> {
   controller?.abort();
   controller = new AbortController();
   const signal = controller.signal;
+  const isCurrent = () => !signal.aborted && document.getElementById('devicesSettingsRoot') === root;
   const client = createDevicesClient();
   const open = createButton({ label: t('settings.devices.open'), variant: 'primary', onClick: () => {
     bridge.closeSettings?.();
     window.location.hash = '/devices';
   } });
   root.replaceChildren(open, el('p', 'settings-desc', t('devicesPage.loading')));
-  const [nodes, defaults, waits, browsers] = await Promise.all([
+  if (pendingDefaultSaves.size) await Promise.all(pendingDefaultSaves.values());
+  if (!isCurrent()) return;
+  const reads = await Promise.all([
     client.nodes(signal), client.defaults(signal), client.waits(signal), client.browsers(signal),
-  ]);
-  if (signal.aborted) return;
+  ]).catch(error => {
+    if (!signal.aborted) throw error;
+    return null;
+  });
+  if (!reads || !isCurrent()) return;
+  const [nodes, defaults, waits, browsers] = reads;
   const sources: FleetSources = { nodes, defaults, waits, browsers, permissions: { state: 'absent' }, home: { state: 'absent' } };
   const fleet = projectFleet(sources);
   const parts: HTMLElement[] = [open];
@@ -56,17 +139,9 @@ async function populate(): Promise<void> {
       const choices = [{ value: '', label: t('settings.devices.noDefault') },
         ...candidates.map(row => ({ value: row.nodeId as string, label: row.name }))];
       if (current && !candidates.some(row => row.nodeId === current)) choices.push({ value: current, label: current });
-      const field = createField({ label: t('settings.devices.defaultFor', { kind: defaultKindLabel(kind as DefaultKind) }),
+      const field = createField({ label: t('settings.devices.defaultFor', { kind: defaultKindLabel(kind) }),
         choices, value: current, size: 'sm' });
-      const select = field.control as HTMLSelectElement;
-      select.addEventListener('change', async () => {
-        try {
-          await client.setDefault(kind, select.value || null);
-          toast(t('settings.devices.saved'), { variant: 'success' });
-        } catch (error) {
-          toast(t('devicesPage.error.save', { message: errorText(error) }), { variant: 'error' });
-        }
-      });
+      bindDefaultSave(client, kind, field, current, signal, () => isCurrent() && root.contains(field.el));
       section.append(field.el);
     }
   }

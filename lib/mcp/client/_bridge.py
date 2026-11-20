@@ -2309,6 +2309,25 @@ class MCPBridge:
             activity = getattr(self, '_last_activity', None)
             if activity is not None:
                 activity[server_name] = time.monotonic()
+            server_config = getattr(self, '_configs', {}).get(server_name) or (
+                handle.config if handle is not None else None)
+
+        # Owner Hope queue ban: every MCP submission path reaches this call.
+        from lib.mcp.queue_policy import submission_refusal
+        refused = submission_refusal(server_name, server_config, raw_tool_name, arguments,
+                                     owner_user_id=self._owner_user_id, meta=meta)
+        if refused is not None:
+            caller_project = (meta or {}).get('tofu/project') or ''
+            logger.warning('[MCP:Call] %s.%s refused by owner queue policy: %s queue=%s '
+                           'owner=%s project=%s', server_name, raw_tool_name,
+                           refused['error_code'], refused.get('queue', ''),
+                           self._owner_user_id, caller_project)
+            audit_log('mcp_queue_policy_refusal', server=server_name, tool=raw_tool_name,
+                      error_code=refused['error_code'], queue=refused.get('queue', ''),
+                      owner_user_id=self._owner_user_id, project=caller_project,
+                      policy_source=refused['policy_source'])
+            return MCPToolResult(json.dumps(refused, ensure_ascii=False),
+                                 structured_json=refused, is_error=True)
 
         asleep = handle is None or parked or handle.session is None
         # Every call would fail on a credential known to be expired; a newer

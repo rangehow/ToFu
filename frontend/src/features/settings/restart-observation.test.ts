@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { projectRestartHealth, restartPhaseProgress, restartWaitNotice } from './restart-observation';
+import { projectRestartHealth, restartPhaseLabel, restartPhaseProgress, restartWaitNotice } from './restart-observation';
 
 describe('restart health authority', () => {
   it('does not mistake the accepting process or an early listener for completion', () => {
@@ -25,5 +25,17 @@ describe('restart health authority', () => {
   it('projects the running phase without extrapolating to a later phase', () => {
     expect(restartPhaseProgress({status:'running',phaseTotal:9,currentPhase:{index:3,key:'storage_sidecar'}})).toEqual({key:'storage_sidecar',pct:20+76*2/9});
     expect(restartPhaseProgress({status:'running',phaseTotal:9,currentPhase:{index:10,key:'readiness'}})).toBeNull();
+  });
+  it('never paints a phase key the catalog does not know', () => {
+    const catalog: Record<string, string> = {'update.phase.storage_sidecar': '正在启动存储 sidecar…'};
+    const translate = (key: string) => catalog[key] ?? key;
+    expect(restartPhaseLabel('storage_sidecar', 'Storage sidecar', translate))
+      .toBe('正在启动存储 sidecar…');
+    // A phase added on the server before the browser catalog: the server's
+    // label is degraded copy, the raw i18n key is a broken UI.
+    expect(restartPhaseLabel('execution_service', 'Execution service', translate))
+      .toBe('Execution service');
+    expect(restartPhaseLabel('execution_service', '', translate)).toBe('update.phase.execution_service');
+    expect(restartPhaseLabel('', 'Execution service', translate)).toBe('Execution service');
   });
 });

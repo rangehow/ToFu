@@ -5,7 +5,9 @@ tool loop.  A thread-local connection therefore gives consecutive rounds a
 real persistent Responses session without crossing event-loop or tenant
 boundaries.  Two routes use it: public Responses routes that opt in
 (``responses.transport=websocket``), and the ChatGPT Codex subscription
-backend, whose first-party client (Codex CLI) defaults to this transport.
+backend, whose first-party client (Codex CLI) carries verified connection
+state across turns. Idle Codex sockets may be checked out by another worker
+thread. Active sockets remain exclusive to their task.
 
 Continuation follows Codex CLI's rule (``core/src/client.rs``
 ``prepare_websocket_request``): when every non-input request field is
@@ -28,7 +30,6 @@ Entry points: :func:`stream_responses_websocket`,
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import hashlib
 import json
 import threading
 import time
@@ -37,9 +38,13 @@ from urllib.parse import urlsplit, urlunsplit
 from lib.llm._sse_core import SSEAccumulator
 from lib.llm._transport import StreamProgress
 from lib.llm.stream_result import ProviderStreamState
+from lib.llm.request_prefix import compare_request_prefix
+from lib.llm.request_checkpoint import IdleRequestCheckpoints, request_checkpoint_key
+from lib.llm.sent_frame import sent_frame
 from lib.llm.llm_errors import (
     AbortedError,
     EndpointUnreachableError,
+    ModelAdmissionRefused,
     PROVIDER_RESPONSE_ERRORS,
     RetryableAPIError,
 )
@@ -57,7 +62,7 @@ _CODEX_HTTP_ONLY_HEADERS = frozenset({
 })
 #: Request fields allowed to differ between a response and its continuation.
 _CONTINUATION_VARIABLE_FIELDS = frozenset({
-    'input', 'previous_response_id', 'stream', 'client_metadata', 'generate',
+    'previous_response_id', 'stream', 'client_metadata', 'generate',
 })
 #: Application-authored items a continuation may append after the output.
 _APPLICATION_ITEM_TYPES = frozenset({
@@ -73,6 +78,12 @@ _CODEX_METADATA_EVENTS = frozenset({
 _CHAIN_RESET_CODES = frozenset({
     'previous_response_not_found', 'websocket_connection_limit_reached',
 })
+#: Full-frame reasons that mean the previous chain is gone: the complete input
+#: starts a new chain, so the frame is a reset rather than a plain full request.
+#: Only reasons this transport actually emits belong here. Server refusal codes
+#: (``_CHAIN_RESET_CODES``, ``previous_response_rejected``) are detection
+#: vocabulary: the refused chain is resent as ``provider_reconnect``.
+_RESET_FRAME_REASONS = frozenset({'provider_reconnect'})
 _PRE_OUTPUT_EVENTS = frozenset({
     'response.created', 'response.in_progress', 'response.queued',
     'response.metadata',
@@ -105,11 +116,12 @@ class _Session:
     last_output: list = field(default_factory=list)
     state_key: str = ''
     last_used: float = field(default_factory=time.monotonic)
+    proxy: str | None = None
 
 
 _local = threading.local()
 _POLL_SECONDS = 0.25
-_MAX_THREAD_SESSIONS = 8
+_MAX_RETAINED_SESSIONS = 8
 
 
 def _sessions() -> dict[str, _Session]:
@@ -150,30 +162,52 @@ def _handshake_headers(plan) -> dict:
     return headers
 
 
-def _session_key(plan, handshake: dict) -> str:
-    # The handshake carries credential, account, affinity and model routing
-    # identity; any change needs a new connection. Per-request trace ids do not.
-    stable = sorted((str(name).lower(), str(value))
-                    for name, value in handshake.items()
-                    if str(name).lower() != 'm-traceid')
-    material = json.dumps([plan.url, stable, plan.responses_state_key],
-                          ensure_ascii=False)
-    return hashlib.sha256(material.encode('utf-8')).hexdigest()
+def _session_key(plan, handshake: dict, scope: str, owner_scope: str = '') -> str:
+    return request_checkpoint_key(
+        plan.url, handshake, scope, owner_scope,
+        transient_headers=frozenset({'m-traceid'}))
 
 
-def _close_session(key: str, *, reason: str = '') -> None:
-    session = _sessions().pop(key, None)
-    if session is None:
-        return
+def _disconnect(session: _Session, reason: str) -> None:
     try:
         session.connection.close()
     except Exception as exc:
         logger.debug('[ResponsesWS] close failed (%s): %s', reason, exc)
 
 
+def _close_session(key: str, *, reason: str = '') -> None:
+    session = _sessions().pop(key, None)
+    if session is not None:
+        _disconnect(session, reason)
+
+
+_idle_checkpoints = IdleRequestCheckpoints[_Session](_MAX_RETAINED_SESSIONS, _disconnect)
+
+
+def _take_codex_session(plan, key: str, conversation_key: str,
+                        owner_scope: str) -> _Session | None:
+    session = _idle_checkpoints.take(conversation_key)
+    if session is None:
+        return None
+    # Recheck egress policy at checkout. A previously direct route can now
+    # require desktop relay, or the network authority can pick another proxy.
+    try:
+        if (_connection_open(session.connection)
+                and session.proxy == _websocket_proxy(plan, owner_scope)):
+            _prune_sessions()
+            session.state_key = plan.responses_state_key
+            _sessions()[key] = session
+            return session
+    except BaseException:
+        _disconnect(session, 'Codex checkout failed')
+        raise
+    _disconnect(session, 'idle Codex socket or route changed')
+    return None
+
+
 def _prune_sessions() -> None:
     sessions = _sessions()
-    while len(sessions) >= _MAX_THREAD_SESSIONS:
+    while len(sessions) >= _MAX_RETAINED_SESSIONS:
         oldest = min(sessions, key=lambda key: sessions[key].last_used)
         _close_session(oldest, reason='thread-local LRU')
 
@@ -218,12 +252,24 @@ def _websocket_proxy(plan, owner_scope: str):
 
 def _open_session(plan, key: str, handshake: dict, owner_scope: str = '') -> _Session:
     try:
-        from websockets.sync.client import connect
+        from websockets.sync.client import ClientConnection, connect
     except Exception as exc:  # pragma: no cover - dependency is installed
         raise ResponsesWebSocketUnavailable(
             f'websockets client unavailable: {exc}') from exc
     proxy = _websocket_proxy(plan, owner_scope)
     _prune_sessions()
+    from lib.llm.request import require_physical_model_dispatch
+    require_physical_model_dispatch(plan)
+    connection_options = {}
+    if getattr(plan, 'physical_model_dispatch_guard', None) is not None:
+        class GuardedConnection(ClientConnection):
+            def handshake(self, *args, **kwargs):
+                # connect has finished TCP/proxy/TLS setup. No authenticated
+                # Upgrade may borrow the earlier pre-connect check.
+                require_physical_model_dispatch(plan)
+                return super().handshake(*args, **kwargs)
+
+        connection_options['create_connection'] = GuardedConnection
     try:
         connection = connect(
             _ws_url(plan.url),
@@ -237,11 +283,14 @@ def _open_session(plan, key: str, handshake: dict, owner_scope: str = '') -> _Se
             # for the peer's closing acknowledgement (seconds through a
             # proxy) would stall the turn that just finished.
             close_timeout=0,
+            **connection_options,
         )
+    except (AbortedError, ModelAdmissionRefused):
+        raise
     except Exception as exc:
         raise ResponsesWebSocketUnavailable(str(exc)) from exc
     session = _Session(connection=connection,
-                       state_key=plan.responses_state_key)
+                       state_key=plan.responses_state_key, proxy=proxy)
     _sessions()[key] = session
     logger.debug('[ResponsesWS] opened state=%s url=%s',
                  plan.responses_state_key[:8], _ws_url(plan.url))
@@ -295,45 +344,38 @@ def _is_application_item(item) -> bool:
             and item.get('role') in _APPLICATION_ROLES)
 
 
-def _fixed_fields(request: dict) -> dict:
-    return {name: value for name, value in request.items()
-            if name not in _CONTINUATION_VARIABLE_FIELDS}
-
-
-def _continuation_input(session: _Session, request: dict) -> list | None:
-    """Return the delta to send after ``previous_response_id``, or ``None``."""
-    previous = session.last_request
-    if not session.previous_response_id or not isinstance(previous, dict):
-        return None
-    if _fixed_fields(previous) != _fixed_fields(request):
-        return None
-    prior = previous.get('input')
-    current = request.get('input')
-    if not isinstance(prior, list) or not isinstance(current, list):
-        return None
-    if current[:len(prior)] != prior:
-        return None
-    rest = current[len(prior):]
+def _continuation_input(session: _Session, request: dict) -> tuple[list | None, str]:
+    """Return the admitted delta or the content-free reason for a full frame."""
+    previous = session.last_request if session.previous_response_id else None
+    comparison = compare_request_prefix(
+        previous, request, protocol='responses',
+        variable_fields=_CONTINUATION_VARIABLE_FIELDS)
+    if comparison.full_reason:
+        return None, comparison.full_reason
+    rest = comparison.suffix
     produced = [_output_signature(item) for item in session.last_output]
     replayed = [_output_signature(item) for item in rest[:len(produced)]]
     if replayed != produced:
-        return None
+        return None, 'previous_output_changed'
     delta = rest[len(produced):]
-    if not delta or not all(_is_application_item(item) for item in delta):
-        return None
-    return delta
+    if not delta:
+        return None, 'empty_delta'
+    if not all(_is_application_item(item) for item in delta):
+        return None, 'non_application_delta'
+    return delta, ''
 
 
 def _request_payload(plan, session: _Session, *,
-                     force_full: bool = False) -> tuple[dict, dict]:
-    """Return ``(response.create fields, complete logical request)``."""
+                     force_full: bool = False) -> tuple[dict, dict, str]:
+    """Return ``(response.create fields, complete logical request, full-frame reason)``."""
     from lib.llm.request import transport_body
 
     request = dict(transport_body(plan.body))
     request.pop('stream', None)
     request.pop('previous_response_id', None)
     payload = dict(request)
-    delta = None if force_full else _continuation_input(session, request)
+    delta, full_reason = ((None, 'provider_reconnect') if force_full
+                          else _continuation_input(session, request))
     if delta is None:
         payload['previous_response_id'] = None
     else:
@@ -346,7 +388,7 @@ def _request_payload(plan, session: _Session, *,
             metadata = dict(payload.get('client_metadata') or {})
             metadata[TURN_STATE_HEADER] = routing_state
             payload['client_metadata'] = metadata
-    return payload, request
+    return payload, request, full_reason
 
 
 def _chain_reset_reason(event: dict, *, continuation: bool) -> str:
@@ -387,7 +429,10 @@ def stream_responses_websocket(
         raise ResponsesWebSocketUnavailable(
             'socket disabled for this task', expected=True)
     handshake = _handshake_headers(plan)
-    key = _session_key(plan, handshake)
+    key = _session_key(plan, handshake, state_key, owner_scope)
+    lineage = getattr(plan, 'responses_conversation_key', '')
+    conversation_key = (_session_key(plan, handshake, lineage, owner_scope)
+                        if _is_codex(plan) and lineage else '')
     callbacks = dict(
         on_thinking=on_thinking, on_content=on_content,
         on_tool_call_ready=on_tool_call_ready, abort_check=abort_check,
@@ -402,9 +447,15 @@ def stream_responses_websocket(
             # nothing was sent on it, and its chain state is gone with it.
             _close_session(key, reason='closed by server')
             session = None
+        reused_idle_socket = False
         if session is None:
             try:
-                session = _open_session(plan, key, handshake, owner_scope)
+                if conversation_key and not force_full:
+                    session = _take_codex_session(
+                        plan, key, conversation_key, owner_scope)
+                    reused_idle_socket = session is not None
+                if session is None:
+                    session = _open_session(plan, key, handshake, owner_scope)
             except ResponsesWebSocketUnavailable as exc:
                 if dispatched:
                     # This plan was already dispatched once; a fresh attempt
@@ -413,15 +464,20 @@ def stream_responses_websocket(
                         f'Responses WebSocket reconnect failed: {exc}') from exc
                 disabled.add(state_key)
                 raise
-        payload, request = _request_payload(
+        payload, request, full_reason = _request_payload(
             plan, session, force_full=force_full)
-        if not dispatched:
-            from lib.llm.request import mark_model_request_dispatched
-            mark_model_request_dispatched(plan)
-            dispatched = True
         try:
-            return _exchange(plan, key, session, payload, request, **callbacks)
+            return _exchange(plan, key, session, payload, request,
+                             first_dispatch=not dispatched,
+                             conversation_key=conversation_key,
+                             reused_idle_socket=reused_idle_socket,
+                             full_reason=full_reason, **callbacks)
+        except ModelAdmissionRefused:
+            if _sessions().get(key) is session:
+                _close_session(key, reason='dispatch authority refused')
+            raise
         except _ChainReset as reset:
+            dispatched = True
             _close_session(key, reason=str(reset))
             if force_full:
                 raise RetryableAPIError(
@@ -431,7 +487,23 @@ def stream_responses_websocket(
             force_full = True
 
 
-def _exchange(plan, key, session, payload, request, *, on_thinking,
+def _log_first_codex_frame(trace_id, receipt):
+    from lib.llm.cache_exchange import loggable_cache_exchange
+    bounded = loggable_cache_exchange(receipt) or {}
+    logger.info(
+        '[ResponsesWS] trace=%s idle_reuse=%s continuation=%s input_items=%s '
+        'frame_kind=%s frame_sha256=%s frame_bytes=%s '
+        'provider_input_tokens=%s provider_cached_tokens=%s full_reason=%s',
+        trace_id, bounded.get('reused_idle_connection'),
+        bounded.get('incremental'), bounded.get('sent_input_items'),
+        bounded.get('frame_kind'), bounded.get('frame_sha256'),
+        bounded.get('frame_bytes'), bounded.get('provider_input_tokens'),
+        bounded.get('provider_cached_tokens'),
+        bounded.get('full_reason') or '-')
+
+
+def _exchange(plan, key, session, payload, request, *, first_dispatch,
+              conversation_key, reused_idle_socket, full_reason, on_thinking,
               on_content, on_tool_call_ready, abort_check, log_prefix,
               on_first_byte_wait, on_stream_wait):
     """Send one ``response.create`` and stream it to a verified result."""
@@ -439,11 +511,25 @@ def _exchange(plan, key, session, payload, request, *, on_thinking,
     codex = _is_codex(plan)
     rate_limits: list = []
     output_started = False
+    observe_first_frame = conversation_key and (reused_idle_socket or session.last_request is None)
     try:
         # Once send() is attempted, delivery is ambiguous on failure. Never
         # replay the same response.create on SSE inside this attempt.
         frame = json.dumps({'type': 'response.create', **payload},
                            ensure_ascii=False, separators=(',', ':'))
+        from lib.llm.request import mark_model_request_dispatched, require_physical_model_dispatch
+        if first_dispatch:
+            mark_model_request_dispatched(plan)
+        require_physical_model_dispatch(plan)
+        if continuation:
+            frame_kind, frame_reason = 'incremental', ''
+        elif full_reason in _RESET_FRAME_REASONS:
+            frame_kind, frame_reason = 'reset', full_reason
+        else:
+            frame_kind, frame_reason = 'full', full_reason
+        frame_evidence = sent_frame(
+            plan.body, frame, transport='websocket', kind=frame_kind,
+            reason=frame_reason, sent_items=len(payload['input']))
         session.connection.send(frame)
         session.last_used = time.monotonic()
         import lib.llm._transport as _tp
@@ -457,7 +543,7 @@ def _exchange(plan, key, session, payload, request, *, on_thinking,
             on_tool_call_ready=on_tool_call_ready,
             route_output_limit_key=plan.route_output_limit_key,
             credential_present=getattr(plan, 'credential_present', False),
-            progress=progress)
+            progress=progress, sent_frame=frame_evidence)
         idle_timeout = _tp.stream_idle_timeout_seconds()
         silence_deadline = _tp.silent_stream_deadline_seconds()
         last_beat = time.monotonic()
@@ -560,12 +646,21 @@ def _exchange(plan, key, session, payload, request, *, on_thinking,
                 break
 
         acc.fire_final_tool_callback()
-        result = acc.finalize()
+        result = acc.finalize(websocket_frame={
+            'sent_items': len(payload['input']),
+            'incremental': continuation,
+            'full_reason': full_reason,
+            'reused_connection': session.last_request is not None,
+            'reused_idle_connection': reused_idle_socket,
+        })
         if result.state is ProviderStreamState.PREMATURE_CLOSE:
             usage = dict(result.usage)
             usage['_failure_stage'] = 'midstream_close'
             result = result.with_usage(usage)
         _msg, finish, usage = result
+        from lib.llm.cache_exchange import CACHE_EXCHANGE_KEY
+        if observe_first_frame and (receipt := usage.get(CACHE_EXCHANGE_KEY)):
+            _log_first_codex_frame(plan.trace_id, receipt)
         if not result.is_verified_complete:
             # An interrupted/malformed response is not a state checkpoint.
             # In particular, a compatibility finish_reason of ``tool_calls``
@@ -586,7 +681,10 @@ def _exchange(plan, key, session, payload, request, *, on_thinking,
             if (finish != 'tool_calls'
                     and not (isinstance(usage, dict)
                              and usage.get('_program_pending'))):
-                _close_session(key, reason='terminal assistant response')
+                if conversation_key and response_id and finish == 'stop':
+                    _idle_checkpoints.park(conversation_key, _sessions().pop(key))
+                else:
+                    _close_session(key, reason='terminal assistant response')
         if rate_limits:
             from lib.subscription_quota import (
                 codex_rate_limit_event_headers, record_codex_quota)
@@ -595,7 +693,7 @@ def _exchange(plan, key, session, payload, request, *, on_thinking,
                 dict(result.usage), cache_key='oauth_codex',
                 source='websocket_event'))
         return result
-    except (AbortedError, ResponsesWebSocketUnavailable, _ChainReset):
+    except (AbortedError, ModelAdmissionRefused, ResponsesWebSocketUnavailable, _ChainReset):
         raise
     except Exception as exc:
         _close_session(key, reason='stream failure')

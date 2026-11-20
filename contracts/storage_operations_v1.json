@@ -2,10 +2,10 @@
   "format": "tofu.storage-operation-catalog.v1",
   "generatedBy": "scripts/gen_storage_operation_catalog.py",
   "sourceProtocol": "storage.v1",
-  "sourceSchemaVersion": 70,
-  "sourceRegistryVersion": 58,
-  "operationCount": 386,
-  "operationsSha256": "4c66779acf597e78781c7f148bc05c9e06cb5213a19014392fb27090f4866caa",
+  "sourceSchemaVersion": 71,
+  "sourceRegistryVersion": 60,
+  "operationCount": 391,
+  "operationsSha256": "4449e88482bf9ced4e02c19fdb061b6e7263864489e4193b770980023116f5ca",
   "operations": [
     {
       "name": "artifact.create",
@@ -385,6 +385,14 @@
     },
     {
       "name": "conversation.metadata.update",
+      "domain": "conversations",
+      "kind": "command",
+      "receiptRequired": true,
+      "transactionTimeoutSeconds": null,
+      "ownerScope": "handler-enforced"
+    },
+    {
+      "name": "conversation.portable_import",
       "domain": "conversations",
       "kind": "command",
       "receiptRequired": true,
@@ -2136,6 +2144,14 @@
       "ownerScope": "handler-enforced"
     },
     {
+      "name": "record.device_policy_commit",
+      "domain": "core",
+      "kind": "command",
+      "receiptRequired": true,
+      "transactionTimeoutSeconds": null,
+      "ownerScope": "handler-enforced"
+    },
+    {
       "name": "record.get",
       "domain": "core",
       "kind": "query",
@@ -2376,7 +2392,23 @@
       "ownerScope": "handler-enforced"
     },
     {
+      "name": "swarm.session.delete_exact",
+      "domain": "workflows",
+      "kind": "command",
+      "receiptRequired": true,
+      "transactionTimeoutSeconds": null,
+      "ownerScope": "handler-enforced"
+    },
+    {
       "name": "swarm.session.get",
+      "domain": "workflows",
+      "kind": "query",
+      "receiptRequired": false,
+      "transactionTimeoutSeconds": null,
+      "ownerScope": "handler-enforced"
+    },
+    {
+      "name": "swarm.session.lifecycle.get",
       "domain": "workflows",
       "kind": "query",
       "receiptRequired": false,
@@ -2924,6 +2956,14 @@
       "name": "turn.related.announce",
       "domain": "turns",
       "kind": "command",
+      "receiptRequired": false,
+      "transactionTimeoutSeconds": null,
+      "ownerScope": "handler-enforced"
+    },
+    {
+      "name": "turn.resume.plan.read",
+      "domain": "turns",
+      "kind": "query",
       "receiptRequired": false,
       "transactionTimeoutSeconds": null,
       "ownerScope": "handler-enforced"

@@ -201,6 +201,12 @@ def _turn_create_pair(session: Session, payload: Mapping[str, Any]) -> Any:
             raise StorageError(
                 "turn_parent_invalid", "Parent turn does not exist"
             )
+    expected_conversation = payload.get('expected_conversation_revision')
+    if expected_conversation is not None:
+        if type(expected_conversation) is not int or expected_conversation < 0:
+            raise StorageError('database_protocol_error', 'Invalid expected conversation revision')
+        if _turn_revision(session, payload) != expected_conversation:
+            raise StorageError('turn_lane_advanced', 'The conversation changed before admission.')
     expected_parent = payload.get('expected_parent_projection_revision')
     if expected_parent is not None:
         if type(expected_parent) is not int or expected_parent < 0 or not parent_turn_id:
@@ -293,6 +299,9 @@ def _turn_create_pair(session: Session, payload: Mapping[str, Any]) -> Any:
     input_turn_id = str(uuid.uuid4())
     output_turn_id = str(uuid.uuid4())
     attempt_id = str(uuid.uuid4())
+    from lib.conversation_sync.execution_identity import bind_accepted_capabilities
+    accepted_config = bind_accepted_capabilities(
+        payload.get('config') or {}, conv_id, output_turn_id, attempt_id)
     input_attempt_id = str(uuid.uuid4()) if input_actor != "human" else None
     input_presentation_id = str(
         payload.get("input_presentation_id") or f"{command_id}:input"
@@ -427,7 +436,7 @@ def _turn_create_pair(session: Session, payload: Mapping[str, Any]) -> Any:
             "pending",
             0,
             _dump({}),
-            _dump(payload.get("config") or {}),
+            _dump(accepted_config),
             _dump({}),
             now,
         ),
@@ -467,7 +476,7 @@ def _turn_create_pair(session: Session, payload: Mapping[str, Any]) -> Any:
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 queue_id, user_id, conv_id, _dump(dict(queue_message)),
-                _dump(payload.get("config") or {}), queue_position, queue_kind,
+                _dump(accepted_config), queue_position, queue_kind,
                 queue_priority, queue_created_at, input_turn_id, output_turn_id,
                 attempt_id,
             ),
@@ -1121,6 +1130,76 @@ def _resume_ctx_rebound_projection(
     return next_projection
 
 
+def _attempt_source(session: Session, turn, public, expected_revision):
+    """Shared CAS/live-Attempt fences; caller owns transaction and authorization."""
+    if expected_revision != public["projectionRevision"]:
+        raise StorageError(
+            "turn_projection_stale", "The turn changed since this command was prepared."
+        )
+    current_id = public.get("currentAttemptId")
+    current = session.fetch_one(
+        "SELECT status, task_id FROM storage_generation_attempts WHERE attempt_id=? "
+        "AND conversation_id=? AND turn_id=?",
+        (current_id, turn["conversation_id"], turn["turn_id"]),
+    ) if current_id else None
+    if current is not None and current["status"] in ("pending", "running"):
+        raise StorageError("database_conflict", "This turn already has a live attempt.")
+    return current_id, current
+
+
+def _attempt_resume_anchor(public, operation, requested_anchor):
+    settlement = public["settlement"]
+    if not isinstance(settlement, Mapping):
+        raise StorageError("database_protocol_error", "Invalid stored turn settlement")
+    options, anchors = _validated_resume_option_anchors(settlement)
+    if operation != "regenerate" and operation not in options:
+        raise StorageError(
+            "database_conflict", f"{operation} is not available for the current settlement."
+        )
+    if requested_anchor is not None and not isinstance(requested_anchor, Mapping):
+        raise StorageError("database_protocol_error", "Requested resume anchor must be an object")
+    # A request may omit the derived retained-position index. The accepted
+    # anchor is always the stored canonical value.
+    anchor = canonical_resume_anchor(operation, requested_anchor, anchors.get(operation, {}))
+    if anchor is None:
+        raise StorageError("database_conflict", "The requested resume anchor is not current.")
+    return anchor
+
+
+def _attempt_later_turns(session: Session, turn):
+    """Prove the later lane tail and all its rooted branches are settled."""
+    conv_id, user_id = turn["conversation_id"], turn["user_id"]
+    tail_ids = [
+        str(row["turn_id"])
+        for row in session.fetch_all(
+            "SELECT turn_id FROM storage_conversation_turns "
+            "WHERE conversation_id=? AND user_id=? AND lane_id=? AND ordinal>?",
+            (conv_id, user_id, turn["lane_id"], turn["ordinal"]),
+        )
+    ]
+    return _turn_deletion_closure(session, conv_id, user_id, tail_ids)
+
+
+def _attempt_resume_projection(session: Session, turn, public, current_id, current):
+    projection = dict(public["projection"])
+    if not current_id:
+        return projection
+    count = session.fetch_one(
+        "SELECT COUNT(*) AS attempt_count FROM storage_generation_attempts "
+        "WHERE conversation_id=? AND turn_id=?",
+        (turn["conversation_id"], turn["turn_id"]),
+    )
+    if count is None:
+        raise StorageError("database_integrity", "Attempt count is unavailable")
+    if int(count["attempt_count"] or 0) <= 1:
+        # Freeze the first settled owner's identity before moving ownership.
+        # Do not attribute ambiguous, unstamped multi-attempt legacy history.
+        return projection_history_with_execution_identity(
+            projection, attempt_id=current_id, task_id=current["task_id"] if current is not None else "",
+        )
+    return projection
+
+
 def _turn_attempt_create(session: Session, payload: Mapping[str, Any]) -> Any:
     conv_id, user_id = _turn_identity(payload)
     dispatch_mode = _attempt_dispatch_mode(payload)
@@ -1232,46 +1311,8 @@ def _turn_attempt_create(session: Session, payload: Mapping[str, Any]) -> Any:
     if turn is None:
         raise StorageError("database_not_found", "Turn not found")
     public = _turn_public(session, turn)
-    if expected_revision != public["projectionRevision"]:
-        raise StorageError(
-            "turn_projection_stale",
-            "The turn changed since this command was prepared.",
-        )
-    current_id = public.get("currentAttemptId")
-    current = None
-    if current_id:
-        current = session.fetch_one(
-            "SELECT status, task_id FROM storage_generation_attempts WHERE attempt_id=?",
-            (current_id,),
-        )
-        if current is not None and current["status"] in ("pending", "running"):
-            raise StorageError(
-                "database_conflict", "This turn already has a live attempt."
-            )
-    settlement = public["settlement"]
-    if not isinstance(settlement, Mapping):
-        raise StorageError(
-            "database_protocol_error", "Invalid stored turn settlement")
-    options, anchors = _validated_resume_option_anchors(settlement)
-    if operation != "regenerate" and operation not in options:
-        raise StorageError(
-            "database_conflict",
-            f"{operation} is not available for the current settlement.",
-        )
-    requested_anchor = payload.get("resume_anchor")
-    stored_anchor = dict(anchors.get(operation, {}))
-    if requested_anchor is not None and not isinstance(
-            requested_anchor, Mapping):
-        raise StorageError(
-            "database_protocol_error", "Requested resume anchor must be an object")
-    # The request may omit the anchor's derived retained-position index; the
-    # accepted anchor is always the stored canonical value, so replay keeps
-    # one Attempt identity and a genuinely different selection still fails.
-    anchor = canonical_resume_anchor(operation, requested_anchor, stored_anchor)
-    if anchor is None:
-        raise StorageError(
-            "database_conflict", "The requested resume anchor is not current."
-        )
+    current_id, current = _attempt_source(session, turn, public, expected_revision)
+    anchor = _attempt_resume_anchor(public, operation, payload.get("resume_anchor"))
 
     # Resolve and validate the entire later tail before ANY writes,
     # especially submitted-input updates: a live later turn or rooted branch
@@ -1280,46 +1321,12 @@ def _turn_attempt_create(session: Session, payload: Mapping[str, Any]) -> Any:
     # (continue/checkpoint_resume/answer_guidance) of an earlier interrupted
     # Turn completes it in place and preserves every later Turn, whose model
     # context reads only the lane prefix through its own ordinal.
-    tail_ids = [
-        str(row["turn_id"])
-        for row in session.fetch_all(
-            "SELECT turn_id FROM storage_conversation_turns "
-            "WHERE conversation_id=? AND user_id=? AND lane_id=? AND ordinal>?",
-            (conv_id, user_id, turn["lane_id"], turn["ordinal"]),
-        )
-    ]
-    later_rows = _turn_deletion_closure(
-        session, conv_id, user_id, tail_ids,
-    )
+    later_rows = _attempt_later_turns(session, turn)
     discarded_rows = later_rows if operation == "regenerate" else {}
     _require_acknowledged_later_turn_discard(acknowledged_discard, discarded_rows)
     now = int(time.time() * 1000)
-    projection = dict(public["projection"])
-    if operation != "regenerate" and current_id:
-        attempt_count_row = session.fetch_one(
-            "SELECT COUNT(*) AS attempt_count "
-            "FROM storage_generation_attempts "
-            "WHERE conversation_id=? AND turn_id=?",
-            (conv_id, turn_id),
-        )
-        if attempt_count_row is None:
-            raise StorageError("database_integrity", "Attempt count is unavailable")
-        attempt_count = int(attempt_count_row["attempt_count"] or 0)
-        if attempt_count <= 1:
-            # Freeze the first settled owner's identity before
-            # current_attempt_id moves to its successor. This is the last
-            # authority boundary that unambiguously knows both the old owner
-            # and its whole checkpoint projection.
-            projection = projection_history_with_execution_identity(
-                projection,
-                attempt_id=current_id,
-                task_id=current["task_id"] if current is not None else "",
-            )
-        # A pre-migration Turn may already contain several unstamped attempts.
-        # Attributing that entire history to the latest owner manufactures a
-        # false identity and recreates llmRound collisions. Leave ambiguous
-        # legacy rows unscoped; new writes are stamped at persistence time and
-        # the renderer has an occurrence-aware compatibility path.
+    projection = (dict(public["projection"]) if operation == "regenerate" else
+                  _attempt_resume_projection(session, turn, public, current_id, current))
     rolled_back_fields: dict[str, Any] = {}
     if operation != "regenerate":
         # Rewind bookkeeping: a resume that restarts a terminal lane must not
@@ -1519,6 +1526,7 @@ def _turn_attempt_create(session: Session, payload: Mapping[str, Any]) -> Any:
         # empty) but restarts the thinking lane: the resumed model re-thinks,
         # and the interrupted tail is preserved in ``rolledBack`` above.
         projection["thinking"] = ""
+    settlement = public["settlement"]
     accepted_config = dict(payload.get("config") or {})
     accepted_config["_resumeSource"] = {
         "attemptId": current_id or "", "taskId": str(current["task_id"] or "") if current else "",
@@ -1527,6 +1535,8 @@ def _turn_attempt_create(session: Session, payload: Mapping[str, Any]) -> Any:
     }
     new_revision = public["projectionRevision"] + 1
     attempt_id = str(uuid.uuid4())
+    from lib.conversation_sync.execution_identity import bind_accepted_capabilities
+    accepted_config = bind_accepted_capabilities(accepted_config, conv_id, turn_id, attempt_id)
     session.execute(
         "INSERT INTO storage_generation_attempts "
         "(attempt_id,conversation_id,turn_id,command_id,task_id,operation,"

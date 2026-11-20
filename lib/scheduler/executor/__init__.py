@@ -9,11 +9,11 @@ dispatches scheduler tool calls to the appropriate handler:
   timer_create — delegated to ._timer._execute_timer_create
   timer_manage — delegated to ._timer._execute_timer_manage
 
-The public import path (``lib.scheduler.executor``) and every symbol
-(``execute_scheduler_tool`` plus the ``_execute_*`` / ``_coerce_int_arg``
-helpers) are preserved byte-identically for backwards compatibility.
+``execute_scheduler_tool`` accepts the invocation principal separately from
+model arguments; built-in Detect uses it to validate manual runs.
 """
 
+from lib.conversation_sync.execution_identity import ManualDetectAdmission
 from lib.identity import PrincipalContext
 from lib.log import get_logger
 from lib.scheduler.cron import describe_cron, next_cron_run
@@ -29,7 +29,8 @@ from lib.scheduler.tool_defs import SCHEDULABLE_TASK_TYPES, TOOL_UPDATABLE_FIELD
 logger = get_logger(__name__)
 
 
-def execute_scheduler_tool(fn_name, fn_args):
+def execute_scheduler_tool(fn_name, fn_args, *, principal: PrincipalContext | None = None,
+                           manual_detect_admission: ManualDetectAdmission | None = None, caller_shutdown=None):
     """Execute a scheduler tool call of the owner's own conversation.
 
     Project roles use ``_roles.execute_role_scheduler_tool`` instead. Every
@@ -37,14 +38,17 @@ def execute_scheduler_tool(fn_name, fn_args):
     failure as text starting with ``Error:``, and without the verdict the
     round would settle ``done``.
     """
-    result = _execute_owner_scheduler_tool(fn_name, fn_args)
+    result = _execute_owner_scheduler_tool(
+        fn_name, fn_args, invocation_principal=principal,
+        manual_detect_admission=manual_detect_admission, caller_shutdown=caller_shutdown)
     if isinstance(result, str) and result.startswith('Error:'):
         from lib.scheduler.executor._roles import failed_text
         return failed_text(result)
     return result
 
 
-def _execute_owner_scheduler_tool(fn_name, fn_args):
+def _execute_owner_scheduler_tool(fn_name, fn_args, *, invocation_principal=None,
+                                  manual_detect_admission=None, caller_shutdown=None):
     mgr = get_scheduler()
     try:
         user_id = int(fn_args.get('_user_id'))
@@ -192,7 +196,8 @@ def _execute_owner_scheduler_tool(fn_name, fn_args):
             return 'Error: task_id is required for this action'
 
         if action == 'run':
-            success, result = mgr.run_task_now(task_id, user_id=user_id)
+            success, result = _run_owner_task_now(
+                mgr, task_id, user_id, invocation_principal, manual_detect_admission, caller_shutdown)
             if success is None:
                 return f'Error: Task {task_id} not found'
             status = 'OK' if success else 'FAIL'
@@ -232,3 +237,22 @@ def _execute_owner_scheduler_tool(fn_name, fn_args):
 
 
 __all__ = ['execute_scheduler_tool']
+
+
+def _run_owner_task_now(manager, task_id, user_id, principal, admission, caller_shutdown=None):
+    import os
+
+    if os.environ.get('TOFU_PROCESS_ROLE') == 'execution_shard' and admission is not None:
+        row = manager.get_task(task_id, user_id=user_id)
+        if row and row['task_type'] == 'provider_probe_daily':
+            if row.get('system_key') != 'daily-provider-probe':
+                return None, 'Task not found'
+            from lib.scheduler.manual_detect_control import run_on_primary
+            from lib.tasks_pkg.command_control_transport import CommandControlUnavailable
+
+            try:
+                return run_on_primary(admission, task_id, caller_shutdown=caller_shutdown)
+            except CommandControlUnavailable:
+                return False, 'Scheduler owner unavailable or outcome unconfirmed; not replayed.'
+    return manager.run_task_now(task_id, user_id=user_id, principal=principal,
+                                manual_detect_admission=admission)

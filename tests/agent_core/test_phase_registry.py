@@ -94,13 +94,15 @@ _NON_PHASE_EVENT_VALUES: dict[str, str] = {
     'skipped': 'memory-prefetch trace stage',
     'model_in_flight': 'root execution-budget checkpoint',
     'tools_in_flight': 'root execution-budget checkpoint',
-    # persistence_wait.checkpoint_invocation effect boundary (tool/ready/
-    # terminal); the deferred ready-receipt barrier names it literally.
-    'ready': 'invocation effect-boundary checkpoint',
+    # Round-end invocation checkpoint (checkpoint_invocation(..., phase='ready')
+    # in lib/tasks_pkg/persistence_wait.py): a durability-barrier label that
+    # only reaches logs and the swarm checkpoint_phase, never EventType.PHASE.
+    'ready': 'invocation round-end checkpoint',
     'serializing': 'JavaScript executor internal lifecycle',
     # Project Worker state on the Coordinator's poll/continuation board
     # (lib/project_dispatch/continuation.worker_phase family), never a PHASE push.
     'needs_decision': 'project Worker state: restart-cut call of unknown effect',
+    'unpinned': 'project Worker state: accepted without checkpoint_sha, nothing publishes',
 
 
     # Restart pause belongs to SWARM_PHASE/SWARM_AGENT_PHASE, not chat PHASE.

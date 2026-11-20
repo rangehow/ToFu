@@ -92,6 +92,8 @@ let _automationTabRestore = null;
 // ══════════════════════════════════════════
 
 let SERVER_URL = '';
+let identityHydrated = false;
+let pollingAfterIdentity = false;
 let CLIENT_ID = '';               // Stable per-device client identifier
 let PROFILE_NAME = '';
 let BRIDGE_SECRET = '';           // Owner-scoped agents:bridge credential
@@ -369,14 +371,14 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 // URL the browser used to reach it. Adopt it ONLY into empty slots — a
 // user-configured value always wins, so re-downloading never clobbers a
 // working setup. An absent file (dev-loaded from the repo) is normal: skip.
-function adoptBridgePreseed(storageData) {
+function adoptBridgePreseed(storageData, generation) {
   if (storageData.bridgeSecret && storageData.serverUrl) {
     return Promise.resolve();
   }
   return fetch(chrome.runtime.getURL('bridge_preseed.json'))
     .then((r) => (r && r.ok ? r.json() : null))
     .then((pre) => {
-      if (!pre || typeof pre !== 'object') return;
+      if (generation !== serverConfigurationGeneration || !pre || typeof pre !== 'object') return;
       if (!storageData.bridgeSecret &&
           typeof pre.bridgeSecret === 'string' && pre.bridgeSecret) {
         console.log('[Bridge] Adopting pre-paired bridge secret from the downloaded package');
@@ -384,14 +386,16 @@ function adoptBridgePreseed(storageData) {
       }
       if (!storageData.serverUrl &&
           typeof pre.serverUrl === 'string' && pre.serverUrl) {
-        console.log('[Bridge] Adopting pre-paired server URL:', pre.serverUrl);
-        chrome.storage.local.set({ serverUrl: pre.serverUrl });
+        // Resolve the raw address before storing or logging anything about it.
+        // Passing it intact also preserves the missing-scheme probe fallback.
+        return configureServer(pre.serverUrl, pre.serverUrl, generation).then(result => result.ok);
       }
     })
     .catch(() => { /* no preseed in this package — manual pairing still works */ });
 }
 
 function init() {
+  const generation = ++serverConfigurationGeneration;
   _reapOrphanedRepairTab();
   _recoverTemporaryTabs().catch((error) => {
     console.warn('[TemporaryTabs] recovery failed:', _textForDiagnostic(error));
@@ -406,14 +410,23 @@ function init() {
     if (data.clientId) {
       CLIENT_ID = data.clientId;
     } else {
-      CLIENT_ID = crypto.randomUUID();
+      CLIENT_ID = CLIENT_ID || crypto.randomUUID();
       chrome.storage.local.set({ clientId: CLIENT_ID });
     }
     BRIDGE_SECRET = data.bridgeSecret || '';
     PROFILE_NAME = data.profileName || '';
+    identityHydrated = true;
+    if (pollingAfterIdentity) startPolling();
     console.log('[Bridge] Client ID:', CLIENT_ID,
                 BRIDGE_SECRET ? '(bridge secret configured)' : '');
-    adoptBridgePreseed(data).then(autoDetectServer);
+    if (generation !== serverConfigurationGeneration) return;
+    if (data.serverUrl !== undefined && typeof data.serverUrl !== 'string') {
+      console.warn('[Bridge] Stored server address rejected: expected a string.');
+      return;
+    }
+    adoptBridgePreseed(data, generation).then(adopted => {
+      if (!adopted && generation === serverConfigurationGeneration) autoDetectServer(generation);
+    });
   });
 }
 
@@ -436,42 +449,95 @@ function buildHeaders() {
 //  Server Detection
 // ══════════════════════════════════════════
 
-function autoDetectServer() {
+let serverConfigurationGeneration = 0;
+let serverConfigurationCommit = Promise.resolve();
+
+function autoDetectServer(generation = ++serverConfigurationGeneration) {
+  if (generation !== serverConfigurationGeneration) return;
   chrome.storage.local.get(['serverUrl'], (data) => {
+    if (generation !== serverConfigurationGeneration) return;
+    if (data.serverUrl !== undefined && typeof data.serverUrl !== 'string') {
+      console.warn('[Bridge] Stored server address rejected: expected a string.');
+      return;
+    }
     if (data.serverUrl) {
       // Stored values predate normalization (a raw "…/#/chat" paste) or come
       // from a preseed: resolve them like a fresh entry.
-      void configureServer(data.serverUrl);
+      void configureServer(data.serverUrl, data.serverUrl, generation, true);
       return;
     }
     // Scan open tabs for a Tofu page; its address-bar URL is resolved to
     // the real base, reverse-proxy prefix included.
     chrome.tabs.query({}, (tabs) => {
+      if (generation !== serverConfigurationGeneration) return;
       const tab = tabs.find(t => t.title && t.title.includes('Tofu') && t.url
                                  && normalizeTofuServerUrl(t.url).ok);
-      if (tab) void configureServer(tab.url);
+      if (tab) void configureServer(tab.url, SERVER_URL, generation);
     });
   });
 }
 
 /* Resolve any user/stored/detected address and adopt it. Returns the
  * resolver verdict ({ok, url, verified, warning} or {ok:false, error}). */
-async function configureServer(input) {
+async function configureServer(input, baseUrl = SERVER_URL, generation, restoring = false) {
+  const normalized = normalizeTofuServerUrl(input, {baseUrl});
+  if (!normalized.ok) {
+    console.warn('[Bridge] Server address rejected:', normalized.error);
+    return normalized;
+  }
+  if (generation === undefined) generation = ++serverConfigurationGeneration;
+  if (generation !== serverConfigurationGeneration) {
+    return {ok: false, error: 'Server configuration was superseded by a newer choice.'};
+  }
   const resolved = await resolveTofuServerUrl(input, {
-    fetch: (...args) => fetch(...args), timeoutMs: FETCH_TIMEOUT});
-  if (resolved.ok) setServer(resolved.url);
-  else console.warn('[Bridge] Server address rejected:', resolved.error);
-  return resolved;
+    fetch: (...args) => fetch(...args), timeoutMs: FETCH_TIMEOUT, baseUrl});
+  if (generation !== serverConfigurationGeneration) {
+    return {ok: false, error: 'Server configuration was superseded by a newer choice.'};
+  }
+  if (!resolved.ok) {
+    console.warn('[Bridge] Server address rejected:', resolved.error);
+    return resolved;
+  }
+  const commit = serverConfigurationCommit.then(async () => {
+    if (generation !== serverConfigurationGeneration) {
+      return {ok: false, error: 'Server configuration was superseded by a newer choice.'};
+    }
+    let previous;
+    try {
+      previous = await chrome.storage.local.get(['serverUrl']);
+    } catch (_) {
+      if (!SERVER_URL && generation === serverConfigurationGeneration) autoDetectServer(generation);
+      return {ok: false, error: 'Could not read the saved server address. The previous selection is unchanged; try saving again.'};
+    }
+    if (generation !== serverConfigurationGeneration) {
+      return {ok: false, error: 'Server configuration was superseded by a newer choice.'};
+    }
+    if (!(restoring && previous.serverUrl === resolved.url)) {
+      try {
+        await chrome.storage.local.set({serverUrl: resolved.url});
+      } catch (_) {
+        if (restoring && generation === serverConfigurationGeneration) {
+          setServer(resolved.url);
+          return {...resolved, warning: 'Connected using the stored address; its normalized form could not be saved.'};
+        }
+        if (!SERVER_URL && generation === serverConfigurationGeneration) autoDetectServer(generation);
+        return {ok: false, error: 'Could not save the server address. The previous stored selection is retained.'};
+      }
+    }
+    setServer(resolved.url);
+    return resolved;
+  });
+  serverConfigurationCommit = commit.then(() => {}, () => {});
+  return commit;
 }
 
 function setServer(input) {
-  const normalized = normalizeTofuServerUrl(input);
+  const normalized = normalizeTofuServerUrl(input, {baseUrl: input});
   if (!normalized.ok) return;
   const url = normalized.url;
   if (url === SERVER_URL) return;
   SERVER_URL = url;
   console.log('[Bridge] Server:', SERVER_URL);
-  chrome.storage.local.set({ serverUrl: url });
   registerOriginMarker(url);
   bridgeTransport.resetAuthentication();
   stopPolling();
@@ -604,7 +670,7 @@ async function _reapOrphanedRepairTab() {
   let serverUrl = '';
   try {
     const cfg = await chrome.storage.local.get(['serverUrl']);
-    const normalized = normalizeTofuServerUrl(cfg && cfg.serverUrl);
+    const normalized = normalizeTofuServerUrl(cfg && cfg.serverUrl, {baseUrl: cfg && cfg.serverUrl});
     serverUrl = normalized.ok ? normalized.url : '';
   } catch (_) {}
   const url = String(tab.url || '');
@@ -688,8 +754,12 @@ async function attemptAutoRepair(opts) {
 // ══════════════════════════════════════════
 
 // Transport owns scheduling; command execution owns settlement and resources.
-function startPolling() { return bridgeTransport.start(); }
-function stopPolling() { bridgeTransport.stop(); }
+function startPolling() {
+  if (!identityHydrated) { pollingAfterIdentity = true; return; }
+  pollingAfterIdentity = false;
+  return bridgeTransport.start();
+}
+function stopPolling() { pollingAfterIdentity = false; bridgeTransport.stop(); }
 function executeAndReport(command, connection = bridgeConnection()) {
   return bridgeCommands.execute(command, connection);
 }

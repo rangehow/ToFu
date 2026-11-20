@@ -48,9 +48,6 @@ _CSS_PATH2 = os.path.join(ROOT, 'static', 'settings.css')
 def _read_all_css() -> str:
     root = Path(ROOT) / 'frontend/src/styles'
     paths = sorted(root.glob('application/*.css')) + sorted(root.glob('settings/*.css'))
-    # Demand-loaded sheets live beside their feature owners.
-    paths += sorted(p for p in (Path(ROOT) / 'frontend/src').rglob('*.css')
-                    if root not in p.parents)
     assert paths, 'retained style owners must exist'
     return '\n'.join(path.read_text(encoding='utf-8') for path in paths)
 

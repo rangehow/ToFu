@@ -1,5 +1,12 @@
 # Project modification guidance
 
+`toolchains.py` owns the per-project persistent toolchain registry
+(`tofu.toolchains.json`), applied by `run_command._get_cmd_env` for every command
+of the project and its Worker checkouts: persistent locations only, declared PATH
+entries and variables, missing installs skipped and named, malformed registries
+refusing the command with the fix. Contract `docs/PROJECT_TOOLCHAINS.md`; verify
+`tests/project_mod/test_project_toolchains.py`.
+
 ## Scope
 
 This package owns model-facing project reads, writes, and bounded command

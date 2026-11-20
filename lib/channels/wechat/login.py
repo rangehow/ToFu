@@ -123,21 +123,24 @@ def _confirm(store: ChannelStore, body: dict[str, Any], configured: str, qrcode:
     if not token or not user:
         raise _fail(store, qrcode, '微信 confirmed the login without a bot token or user; start it again')
     from lib.channels.bots.account import vault_entry_name
-    from lib.credentials_vault import set_entry
+    from lib.credentials_vault import delete_entry, set_entry
+    import secrets
     if not _matches(store.account('wechat') or {}, qrcode):
         return False
-    entry = vault_entry_name(store.owner, 'wechat')
+    entry = f'{vault_entry_name(store.owner, "wechat")}.{secrets.token_hex(10)}'
     set_entry(entry, token, note=f'微信 ClawBot token (Tofu owner {store.owner})')
     chat = str(ids.thread_key('wechat', 'uid', user))
     moment = now_ms()
 
     accepted = False
+    previous = {}
 
     def change(account):
-        nonlocal accepted
+        nonlocal accepted, previous
         accepted = _matches(account, qrcode)
         if not accepted:
             return account
+        previous = account.get('credential') or {}
         account.update(credential={'name': entry, 'managed': True}, appId=str(body.get('ilink_bot_id') or '') or None,
                        apiBaseUrl=None if base == WECHAT['apiBase'] else base,
                        identity={'uid': user, 'name': ''}, commandChat=chat, login=None, cursor='',
@@ -145,7 +148,10 @@ def _confirm(store: ChannelStore, body: dict[str, Any], configured: str, qrcode:
         return account
     store.update_account('wechat', change)
     if not accepted:
+        delete_entry(entry)
         return False
+    if previous.get('managed') and previous.get('name') != entry:
+        delete_entry(str(previous['name']))
     store.update_thread(ids.thread_key('wechat', 'uid', user),
                         lambda record: record if record.get('title') else {**record, 'title': '微信'})
     logger.info('[Channels] wechat login confirmed owner=%s', store.owner)

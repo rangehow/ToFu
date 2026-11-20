@@ -20,6 +20,8 @@ import time
 from typing import Any, Mapping
 
 from lib.log import get_logger
+from lib.translate.errors import (
+    CONTENT_GUARD_REFUSAL, CONTENT_GUARD_REFUSAL_KIND)
 
 from lib.llm.diagnostic_timing import timed_call, timed_stage
 from lib.storage.errors import StorageError
@@ -272,6 +274,32 @@ def _translation_failure_marker(reason: Any, error: Any) -> dict[str, Any]:
     }
 
 
+def content_guard_refusal_recorded(projection: Mapping[str, Any]) -> bool:
+    """Whether this projection already carries a content-guard refusal verdict.
+
+    Such a verdict is final for the text: a re-spawn spends another dispatch
+    budget to reach the same refusal (2026-11-18 boot sweep: 122 ERRORs).
+    Current markers name the kind; older ones carry only the refusal text.
+    Legacy markers are removed by normalization, so a raw projection is
+    normalized first (same shape the sweep's light read produces).
+    """
+    from lib.turn_projection_patch import normalize_projection_document
+
+    normalized = normalize_projection_document(projection)
+    translation = normalized.get('translation')
+    markers = [normalized.get('_translateFailed')]
+    if isinstance(translation, Mapping):
+        markers.extend((translation.get('sendFailure'), translation.get('failure')))
+    for marker in markers:
+        if not isinstance(marker, Mapping):
+            continue
+        if marker.get('reason') == CONTENT_GUARD_REFUSAL_KIND:
+            return True
+        if str(marker.get('error') or '').startswith(CONTENT_GUARD_REFUSAL):
+            return True
+    return False
+
+
 def mark_turn_translation_failed(
     conversation_id: str,
     turn_id: str,
@@ -290,7 +318,8 @@ def mark_turn_translation_failed(
     ``_translateFailed`` converts the in-memory, thread-local failure into
     durable, inspectable state. The marker is cleared by the next successful
     commit (``_merge_translation`` pops it) and never blocks a retry: the
-    terminal coordinator and the boot sweep treat it as eligible work.
+    terminal coordinator and the boot sweep treat it as eligible work — except
+    a content-guard refusal, which is final (content_guard_refusal_recorded).
     """
     def _attempt_mark() -> dict[str, Any]:
         latest_conflict: LifecycleConflict | None = None

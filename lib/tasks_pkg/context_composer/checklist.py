@@ -55,8 +55,8 @@ def _is_checklist_carrier(message: dict) -> bool:
 
 
 def _accepted_result(text: str, state: dict) -> bool:
-    # Compare the complete snapshot, not a substring/hash that may survive
-    # while explanation/list rows are clamped away. Prefix describes operation,
+    # Compare the complete rendered snapshot or board reference, not a fragment
+    # that could survive clipping. Prefix describes operation,
     # including rejected/no-op writes which still return the accepted state.
     if not isinstance(text, str):
         return False
@@ -68,7 +68,7 @@ def _accepted_result(text: str, state: dict) -> bool:
 
 
 def _board_result_visible(text: str, state: dict) -> bool:
-    """An accepted task-board receipt renders the checklist it left as its ``plan``."""
+    """A paired write receipt names the accepted plan (a readable board reference on new writes)."""
     try:
         result = json.loads(text) if isinstance(text, str) else None
     except ValueError:
@@ -204,8 +204,10 @@ def _evidence_memo_scope(messages: list[dict], state: dict,
         return None
     # todo_state_from_task returns detached normalized snapshots. Their values,
     # including explanation and content, identify accepted progress, not id().
-    state_key = (state['version'], state['update_count'], state['explanation'],
-                 tuple((item['content'], item['status']) for item in state['todos']))
+    reference = state.get('boardRef')
+    state_key = (state['version'], state['update_count'], reference['bindingRevision'], reference['revision']) \
+        if reference else (state['version'], state['update_count'], state['explanation'],
+                           tuple((item['content'], item['status']) for item in state['todos']))
     return (round_num, id(messages), state_key)
 
 

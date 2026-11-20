@@ -49,7 +49,8 @@ def test_a_worker_settlement_wakes_now_despite_a_future_commitment(board):
     r.attempts['coordinator-attempt']['status'] = 'completed'
     # A promise due an hour from now, unrelated to this Worker result.
     due = r.c.now[0] + 3600
-    r.publish([{'title': 'Report the quota-reset result', 'status': 'pending', 'due': iso(due)}])
+    r.publish([{'title': 'Report the quota-reset result', 'status': 'pending', 'due': iso(due),
+                'blocker': {'kind': 'next_action', 'action': 'Report the quota-reset result'}}])
     # The result is new evidence: the wake is dispatched NOW, not at `due`.
     assert r.wake() == ['accepted']
     assert controls(r)[-1]['request']['coordinatorWake']['reason'] == 'results'
@@ -64,7 +65,8 @@ def test_a_settlement_during_a_running_turn_is_delivered_after_it(board):
     end(r, first)
     r.attempts['coordinator-attempt']['status'] = 'completed'
     due = r.c.now[0] + 3600
-    r.publish([{'title': 'Report the quota-reset result', 'status': 'pending', 'due': iso(due)}])
+    r.publish([{'title': 'Report the quota-reset result', 'status': 'pending', 'due': iso(due),
+                'blocker': {'kind': 'next_action', 'action': 'Report the quota-reset result'}}])
     assert r.wake() == ['accepted']
     # A second Worker, already delegated, settles while the continuation turn
     # is mid-flight (activate so the delegation source is the current attempt).
@@ -101,7 +103,8 @@ def test_a_stall_retry_with_no_new_evidence_still_waits(board):
     r.attempts['coordinator-attempt']['status'] = 'completed'
     assert r.wake() == ['accepted']
     due = r.c.now[0] + 3600
-    r.publish([{'title': 'Report the quota-reset result', 'status': 'pending', 'due': iso(due)}])
+    r.publish([{'title': 'Report the quota-reset result', 'status': 'pending', 'due': iso(due),
+                'blocker': {'kind': 'next_action', 'action': 'Report the quota-reset result'}}])
     end(r, controls(r)[-1], delivered=False)  # no new Worker evidence
     assert r.wake() == [], 'a retry with no new evidence waits for the promised time'
     assert r.scheduled[-1] == due

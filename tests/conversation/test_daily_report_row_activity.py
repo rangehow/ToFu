@@ -184,9 +184,9 @@ def test_cost_scan_uses_usage_from_authority_projection(monkeypatch):
 
     def price(usage, model, provider, **kwargs):
         pricing_calls.append((usage, model, provider, kwargs))
-        return 1.25
+        return {'costCny': 1.25}
 
-    monkeypatch.setattr(cost, '_calc_msg_cost_cny', price)
+    monkeypatch.setattr(cost, '_calc_msg_cost', price)
     start, end = _range()
 
     got = cost._scan_costs_in_range(

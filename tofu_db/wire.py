@@ -19,14 +19,21 @@ defined by the same contract; callers still observe one request/response pair.
 
 from __future__ import annotations
 
-from .generated_v2 import COMMITTED_EVENTS_CONTRACT, MAX_COMMIT_NOTICE_KEYS
+from .generated_v2 import (
+    COMMITTED_EVENTS_CONTRACT,
+    MAX_COMMAND_ID_BYTES,
+    MAX_COMMIT_NOTICE_KEYS,
+    MAX_OPERATION_BYTES,
+)
 
 import hashlib
 import json
 import select
 import socket
+import time
+from contextlib import nullcontext
 
-from ._loopback import create_connection
+from ._loopback import _remaining, create_connection
 import struct
 from dataclasses import dataclass
 from typing import Any, Iterable
@@ -561,6 +568,22 @@ def decode_message(body: bytes | bytearray) -> dict[int, Any]:
     return value
 
 
+def _admit_request_text(operation: str, command_id: str | None) -> None:
+    """Refuse a request text field the daemon's frame validation would reject.
+
+    The daemon answers such a frame by closing the connection, which a client
+    cannot tell from an availability failure: it would replay a request that
+    can never succeed. Same bounds and wording as ``protocol.rs::validate_text``.
+    """
+    for value, maximum, name in ((operation, MAX_OPERATION_BYTES, 'operation'),
+                                 (command_id, MAX_COMMAND_ID_BYTES, 'command ID')):
+        if value is None and name == 'command ID':
+            continue
+        encoded = value.encode('utf-8')
+        if not encoded or len(encoded) > maximum or b'\0' in encoded:
+            raise ValueError(f'invalid storage.v2 {name}')
+
+
 def pack_frame(body: bytes) -> bytes:
     return struct.pack(">I", len(body)) + body + struct.pack(">I", crc32c(body))
 
@@ -670,6 +693,7 @@ class StorageV2Session:
         timeout: float = 10.0,
         correlation_seed: int = 1,
         response_admission: Any = None,
+        cancellation=None,
     ):
         if (type(owner_id) is not int or not 0 < owner_id < 2**64
                 or (tenant_id is not None and (
@@ -697,15 +721,20 @@ class StorageV2Session:
             FIELD_SCHEMA_IDS: schemas,
             FIELD_AUTH_TOKEN: token,
         })
-        self._sock = create_connection((host, port), timeout=timeout)
+        started = time.monotonic()
+        self._sock = create_connection((host, port), timeout=timeout, **(
+            {'cancellation': cancellation} if cancellation is not None else {}))
         try:
-            # RPC frames/chunks must not wait for an ACK of the preceding
-            # TCP segment. Nagle + delayed ACK otherwise adds ~40 ms stalls
-            # when a request ends with a short segment under CPU contention.
-            self._sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            self._sock.settimeout(timeout)
-            self._sock.sendall(pack_frame(hello))
-            acknowledgement = recv_frame(self._sock)
+            binding = cancellation.bind(self.interrupt) if cancellation is not None else nullcontext()
+            with binding:
+                self._sock.settimeout(timeout if cancellation is None else
+                                      _remaining(timeout, started))
+                self._sock.sendall(pack_frame(hello))
+                if cancellation is not None:
+                    self._sock.settimeout(_remaining(timeout, started))
+                acknowledgement = recv_frame(self._sock)
+                if cancellation is not None:
+                    self._sock.settimeout(timeout)
             if (acknowledgement.get(FIELD_KIND) != KIND_RESPONSE
                     or acknowledgement.get(FIELD_CORRELATION_ID) != correlation):
                 raise StorageV2ProtocolError("storage.v2 hello acknowledgement mismatch")
@@ -774,6 +803,7 @@ class StorageV2Session:
         command_id: str | None,
         deadline_unix_ms: int,
     ) -> StorageV2Response:
+        _admit_request_text(operation, command_id)
         correlation = self._next_correlation()
         payload_bytes = _payload_bytes(payload if payload is not None else {})
         if len(payload_bytes) > MAX_PAYLOAD_BYTES:
@@ -856,6 +886,7 @@ class StorageV2Session:
     def _request_frames(self, requests, deadline_unix_ms):
         frames, slots = [], []
         for operation, payload in requests:
+            _admit_request_text(operation, None)
             payload_bytes = _payload_bytes(payload if payload is not None else {})
             if len(payload_bytes) > MAX_PAYLOAD_BYTES:
                 slots.append(None)

@@ -191,13 +191,13 @@ def test_projection_materializes_one_authorization_witness_per_deployment(monkey
         credential['credential_id'] = f'extra-{index}'
         document['credentials'].append(credential)
     checks = []
-    authorized = candidate_compiler._credential_rejection
+    authorized = candidate_compiler._credential_authorization
 
     def counted(credential, **kwargs):
         checks.append(credential['credential_id'])
         return authorized(credential, **kwargs)
 
-    monkeypatch.setattr(candidate_compiler, '_credential_rejection', counted)
+    monkeypatch.setattr(candidate_compiler, '_credential_authorization', counted)
     compiler = RouteCandidateCompiler(document)
     candidates = compiler.compile_deployments(NativeModelSelection(ModelRef('creator', 'alpha'), None))
     assert len(candidates) == 2

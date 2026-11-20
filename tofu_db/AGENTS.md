@@ -15,7 +15,8 @@ recovery shared with the lifecycle manager and SQL client. Package exports stay
 lazy so that control-plane imports never load wire schemas or accelerators.
 Semantic adaptation and supervision belong in `lib/storage/`.
 
-`generated_contract.py` comes from `scripts/gen_storage_operation_catalog.py`;
+`generated_contract.py` is rendered from `contracts/storage_operations_v1.json`
+by `tofu-xtask contracts` (`make contracts`);
 never change the schema version by hand. `generated_v2.py` comes from
 `scripts/gen_storage_v2_contract.py` and owns committed-envelope limits. Wire authority remains
 `contracts/storage_v2.json`. Keep errors typed and do not retry ambiguous writes.

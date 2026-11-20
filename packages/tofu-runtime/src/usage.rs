@@ -128,20 +128,17 @@ fn parsed(usage: &Map<String, Value>, key: &str) -> Result<u64, Error> {
         .flatten()
         .unwrap_or(0))
 }
-pub fn observed_totals(usage: &Value) -> Result<Observation, Error> {
-    let Some(usage) = usage.as_object() else {
-        return Ok(Observation {
-            tokens: 0,
-            complete: false,
-        });
-    };
+struct InputObservation {
+    total: u64,
+    observed_total: Option<u64>,
+    observed_read: Option<u64>,
+    complete: bool,
+}
+
+fn observe_input(usage: &Map<String, Value>) -> Result<InputObservation, Error> {
     let input = counter(usage, USAGE_INPUT_KEYS, &[])?;
-    let output = counter(usage, USAGE_OUTPUT_KEYS, &[])?;
     let write = counter(usage, USAGE_CACHE_WRITE_KEYS, &[])?;
     let read = counter(usage, USAGE_CACHE_READ_KEYS, USAGE_CACHE_READ_NESTED)?;
-    // Thinking is already within output totals. Still validate supported numeric
-    // representation exactly as the canonical observation's cleaning pass does.
-    counter(usage, USAGE_THINKING_KEYS, USAGE_THINKING_NESTED)?;
     let cached = write
         .first
         .checked_add(read.first)
@@ -182,16 +179,31 @@ pub fn observed_totals(usage: &Value) -> Result<Observation, Error> {
     } else {
         input.first
     };
-    let tokens = total_input
-        .checked_add(output.first)
-        .ok_or(Error::CounterOverflow)?;
-    Ok(Observation {
-        tokens,
-        complete: input.known()
-            && output.known()
-            && !cache_fallback
+    Ok(InputObservation {
+        total: total_input,
+        observed_total: input.known().then_some(total_input),
+        observed_read: read.present.then_some(read.first),
+        complete: input.known() && !cache_fallback
             && ((!read.invalid && !write.invalid) || !anthropic),
     })
+}
+
+pub(crate) fn cache_input_counts(usage: &Value) -> (Option<u64>, Option<u64>) {
+    usage.as_object().and_then(|usage| observe_input(usage).ok())
+        .map(|input| (input.observed_total, input.observed_read))
+        .unwrap_or_default()
+}
+
+pub fn observed_totals(usage: &Value) -> Result<Observation, Error> {
+    let Some(usage) = usage.as_object() else {
+        return Ok(Observation { tokens: 0, complete: false });
+    };
+    let input = observe_input(usage)?;
+    let output = counter(usage, USAGE_OUTPUT_KEYS, &[])?;
+    // Thinking is already within output totals, but its representation is validated.
+    counter(usage, USAGE_THINKING_KEYS, USAGE_THINKING_NESTED)?;
+    let tokens = input.total.checked_add(output.first).ok_or(Error::CounterOverflow)?;
+    Ok(Observation { tokens, complete: input.complete && output.known() })
 }
 
 /// Bounded JSON evidence for host accounting; unsupported counts stay unknown.

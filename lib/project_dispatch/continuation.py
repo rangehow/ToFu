@@ -141,7 +141,7 @@ _CAUSE_PHASES = frozenset({'needs_review', 'held', 'interrupted', 'ended'})
 _PENDING_PHASES = frozenset({'running', 'delivering'})
 
 
-def _cause_observed(repository, coordinator_id, summaries) -> bool:
+def _cause_observed(repository, coordinator_id, summaries, *, predecessor_id=None) -> bool:
     """Whether the lane's last completed Turn was told every result this wake would act on.
 
     True only while another Worker of the request is still pending: its
@@ -151,15 +151,63 @@ def _cause_observed(repository, coordinator_id, summaries) -> bool:
     """
     with _LANE_LOCK:
         observation = _LANE_OBSERVATIONS.get((repository.owner, coordinator_id))
-    if observation is None:
-        return False
     phases = [(summary, worker_phase(summary)) for summary in summaries]
     if not any(phase in _PENDING_PHASES for _, phase in phases):
+        return False
+    predecessor = repository.get_attempt(predecessor_id) if predecessor_id else None
+    if predecessor and predecessor.get('status') == 'failed':
+        return _durably_observed(repository, coordinator_id, predecessor, phases)
+    if observation is None:
         return False
     reported = observation['reported']
     return all(reported.get(summary['assignment_id'])
                == (summary['attempt_id'], (summary.get('delivery') or {}).get('status'))
                for summary, phase in phases if phase in _CAUSE_PHASES)
+
+
+def _durably_observed(repository, coordinator_id, predecessor, phases):
+    if predecessor.get('conversationId') != coordinator_id:
+        return False
+    before = repository.read_turn(coordinator_id, predecessor['turnId'], projection=False) or {}
+    lane, ordinal = before.get('laneId'), before.get('ordinal')
+    if not lane or type(ordinal) is not int or before.get('currentAttemptId') != predecessor['attemptId']:
+        return False
+    later = repository.turn_list(coordinator_id, user_id=repository.owner,
+                                 lane_id=lane, after_ordinal=ordinal, light=True).get('turns', [])
+    causes = [row for row, phase in phases if phase in _CAUSE_PHASES]
+    for turn in reversed(later):
+        observed = (turn.get('settlement') or {}).get('coordinatorWorkerObservations')
+        if (turn.get('status') != 'completed' or turn.get('laneId') != lane
+                or type(turn.get('ordinal')) is not int or turn['ordinal'] <= ordinal
+                or not turn.get('currentAttemptId') or not observed):
+            continue
+        for row in causes:
+            witness = observed.get(row['assignment_id']) or {}
+            if (witness.get('attemptId') != row['attempt_id']
+                    or witness.get('deliveryStatus') != (row.get('delivery') or {}).get('status')):
+                break
+            current = repository.get_attempt(row['attempt_id'])
+            if not current:
+                break
+            result = repository.read_turn(row['conversation_id'], current['turnId'], projection=False)
+            if (not result or result.get('currentAttemptId') != row['attempt_id']
+                    or witness.get('resultRevision') != model_context_revision(result)):
+                break
+        else:
+            return bool(causes)
+    return False
+
+
+def results_wake_observed(repository, assignment):
+    """Final result-only admission check, using this request's current frontier."""
+    request = assignment['request']
+    wake = request.get('coordinatorWake') or {}
+    if assignment['execution'] is not None or wake.get('reason') != 'results':
+        return False
+    source = request['delegation']['attemptId']
+    value, _ = repository._load(repository._selection(sources=[source]))
+    return _cause_observed(repository, request['coordinatorId'], worker_summaries(repository, _group(value, source)),
+                           predecessor_id=wake['previousAttemptId'])
 
 
 def _commitments(repository, source, rows, *, now):
@@ -269,6 +317,85 @@ def _group(value, source_attempt):
             if (row['request'].get('delegation') or {}).get('attemptId') == source_attempt]
 
 
+def _diagnostic_withdrawn_prerequisite(repository, value, assignment):
+    """Find positive withdrawal evidence hidden by the admission reason reducer."""
+    from .repository import WITHDRAWN_DEPENDENCY_REASONS
+    rows = {row['id']: row for row in value['assignments']}
+    pending = list(assignment['request'].get('dependencies', []))
+    seen = set()
+    while pending:
+        reference = pending.pop()
+        identity = reference['assignmentId']
+        if identity in seen:
+            continue
+        seen.add(identity)
+        if len(seen) > repository.dependency_graph_limit:
+            return False
+        row = rows.get(identity)
+        if row is None or row['grant']['revision'] != reference['grantRevision']:
+            continue
+        if row['grant']['revoked']:
+            return True
+        states = repository.dependency_states(row, value=value)
+        if any(state['status'] == 'invalid' and state['reason'] in WITHDRAWN_DEPENDENCY_REASONS
+               for state in states):
+            return True
+        pending.extend(row['request'].get('dependencies', []))
+    return False
+
+
+def pre_park_witness(repository, value, source_attempt):
+    """Registered-work observations; never birth or finish authority.
+
+    The existing finish refusal consumes this diagnostic. File evidence uses
+    live publication validation, which can settle ended model intents; acquiring
+    these observations is not guaranteed nonmutating.
+    """
+    from .repository import DispatchGrantRevoked, WITHDRAWN_DEPENDENCY_REASONS
+    witness = {'ready': [], 'blocked': [], 'unknown': [],
+               'unregistered_intentions': 'unknown', 'request_disposition': 'unknown'}
+    rows = _group(value, source_attempt)
+    if any(row['sourceAttemptId'] == source_attempt for row in value.get('coordinatorSettlements', [])):
+        witness['request_disposition'] = 'settled'
+        return witness
+    if not rows:
+        return witness
+    if _decision(repository, value, rows[0]['request']['delegation']) is not None:
+        witness['request_disposition'] = 'owner_decision'
+        return witness
+    witness['request_disposition'] = 'open'
+    for row in rows:
+        if row['request'].get('profile', {}).get('mode') == 'coordinator' or row['execution'] is not None:
+            continue
+        try:
+            repository.validate_own(repository._admission(row), value=value)
+            source = row['request']['authorizationSource']
+            if source.get('ownerDelegation'):
+                repository.validate_human_source(source, admitted=False)
+            states = repository.dependency_states(row, value=value)
+            statuses = {state['status'] for state in states}
+            if any(state['status'] == 'invalid' and state['reason'] in WITHDRAWN_DEPENDENCY_REASONS
+                   for state in states):
+                phase = 'blocked'
+            elif statuses - {'ready', 'waiting_review', 'waiting_delivery'} and \
+                    _diagnostic_withdrawn_prerequisite(repository, value, row):
+                phase = 'blocked'
+            elif statuses <= {'ready'}:
+                phase = 'ready'
+            elif statuses <= {'ready', 'waiting_review', 'waiting_delivery'}:
+                phase = 'blocked'
+            else:
+                phase = 'unknown'
+        except DispatchGrantRevoked:
+            phase = 'blocked'
+        except Exception:
+            # A diagnostic must not promote unavailable or ambiguous evidence
+            # to a blocker, disclose an external error, or replace the refusal.
+            phase = 'unknown'
+        witness[phase].append(row['id'])
+    return witness
+
+
 def _attempt(repository, row):
     execution = row['execution']
     if execution is None:
@@ -359,7 +486,7 @@ def worker_phase(summary):
     if review is None:
         return 'needs_review'
     delivery = (summary.get('delivery') or {}).get('status')
-    if review.get('decision') != 'accept' or delivery in (None, 'delivered'):
+    if review.get('decision') != 'accept' or delivery in (None, 'delivered', 'closed'):
         return 'settled'
     return 'held' if delivery in HELD_DELIVERY else 'delivering'
 
@@ -393,6 +520,21 @@ def _decision(repository, value, origin):
     return pending if pending and not pending.get('resolved') else None
 
 
+def _blocks_automatic_retry(repository, attempt):
+    """An exact failed Turn's durable verdict, without reading its projection."""
+    turn = repository.turn_get(attempt['conversationId'], attempt['turnId'],
+                              user_id=repository.owner, include_projection=False)
+    if not turn or turn.get('currentAttemptId') != attempt['attemptId']:
+        return False
+    error = (turn.get('settlement') or {}).get('error') or {}
+    # The worker-exit verdict without a cut call forbids replaying that
+    # Attempt, not an independently authorized request wake at the lane tail.
+    if (error.get('code') == 'worker_effect_outcome_unknown'
+            and error.get('cutCallsClassifiedSafe') is True and not error.get('unknownEffects')):
+        return False
+    return (error.get('retryPolicy') or {}).get('automatic') is False
+
+
 def _proposal(repository, value, source_attempt):
     ensure_open(value, source_attempt)
     rows = _group(value, source_attempt)
@@ -424,6 +566,9 @@ def _proposal(repository, value, source_attempt):
     # only its own appended reports follow resumes in place, keeping its
     # authority: a resume preserves every later Turn.
     restarted = None
+    decision = _decision(repository, value, origin)
+    if decision is not None and _human_replied(repository, source['request']['coordinatorId'], decision['reportTurnId']):
+        return None  # The human answered; their new request owns the next step.
     if previous:
         if previous['grant']['revoked']:
             return None
@@ -431,12 +576,24 @@ def _proposal(repository, value, source_attempt):
         if attempt is not None and attempt.get('status') == 'superseded':
             return None  # A newer human input owns the lane and request steering.
         if attempt is None:
-            if (previous['request']['coordinatorWake'].get('reason') == 'results'
+            wake = previous['request']['coordinatorWake']
+            if (wake.get('reason') == 'results'
                     and _cause_observed(repository, source['request']['coordinatorId'],
-                                        worker_summaries(repository, rows))):
-                return None  # Queued during the Turn that has since seen its results.
-            return {'existing': previous}  # Authorized, never born: ordinary admission births it.
-        resume = repository.restart_resume(previous)
+                                        worker_summaries(repository, rows),
+                                        predecessor_id=wake['previousAttemptId'])):
+                if decision is None or repository.clock() < decision['dueAt']:
+                    return {'wait_until': decision['dueAt']} if decision else None
+                # A discharged results wake does not own the independent decision.
+                # Pin the last executed wake, never the dormant unbound row.
+                pin = repository.validate_wake_predecessor(previous, value=value)
+                previous = repository._find(value, pin) if pin else None
+                attempt = _attempt(repository, previous) if previous else repository.get_attempt(wake['previousAttemptId'])
+                if not attempt or attempt.get('status') not in TERMINAL:
+                    return None
+            else:
+                repository.validate_wake_predecessor(previous, value=value)
+                return {'existing': previous}  # Authorized, never born: ordinary admission births it.
+        resume = repository.restart_resume(previous) if previous else None
         if resume is not None and resume['option'] is not None:
             # A wake a restart interrupted continues in place from its checkpoint.
             return {'existing': previous}
@@ -474,13 +631,15 @@ def _proposal(repository, value, source_attempt):
                         for row in terminal])
     progress = _digest(summaries)
     reason = 'results'
-    decision = _decision(repository, value, origin)
-    # A restart cut the last Turn of this request short: its work continues now,
-    # whatever the Workers are doing, and it is neither waiting nor a stall.
-    waiting = restarted is None and (not terminal or previous and len(terminal) != len(summaries)
+    # A failed results wake did not finish handling its result frontier. Use
+    # the existing stall policy even if another Worker has not settled (a held
+    # Worker in particular may never send another settlement).
+    failed_results = (previous is not None and attempt.get('status') == 'failed'
+                      and previous['request']['coordinatorWake'].get('reason') == 'results'
+                      and any(worker_phase(row) in _CAUSE_PHASES for row in terminal))
+    waiting = restarted is None and not failed_results and (not terminal or
+               previous and len(terminal) != len(summaries)
                and previous['request']['coordinatorWake']['frontier'] == frontier)
-    if decision is not None and _human_replied(repository, source['request']['coordinatorId'], decision['reportTurnId']):
-        return None  # The human answered; their new request owns the next step.
     if waiting:
         # Active Workers will wake this request. A due decision or a due
         # commitment is the only other reason to resume while they run.
@@ -497,9 +656,12 @@ def _proposal(repository, value, source_attempt):
         reason = 'commitment_due'
     elif decision is not None and repository.clock() >= decision['dueAt']:
         reason = 'decision_default'
-    if reason == 'results' and _cause_observed(repository, source['request']['coordinatorId'], summaries):
-        return None  # The last Turn saw these results; a pending Worker's settlement wakes it.
+    if (reason == 'results' and _cause_observed(repository, source['request']['coordinatorId'], summaries,
+                                                predecessor_id=attempt['attemptId'] if failed_results else None)):
+        # The pending Worker owns the result wake, not the independent deadline.
+        return {'wait_until': decision['dueAt']} if decision else None
     stalled = 0
+    retry_blocked = False
     if reason == 'results' and restarted is None:
         for prior in reversed(coordinators):
             if prior['request']['coordinatorWake']['progress'] != progress:
@@ -507,7 +669,8 @@ def _proposal(repository, value, source_attempt):
             prior_attempt = _attempt(repository, prior)
             if prior_attempt and prior_attempt.get('status') in TERMINAL:
                 stalled += 1
-        if stalled:
+        retry_blocked = bool(stalled and failed_results and _blocks_automatic_retry(repository, attempt))
+        if stalled and not retry_blocked:
             if (attempt.get('status') == 'completed'
                     and not any(worker_phase(row) in ACTIONABLE_PHASES for row in summaries)):
                 # The last turn ended normally and saw exactly this evidence with
@@ -518,22 +681,26 @@ def _proposal(repository, value, source_attempt):
                 # Waiting for a promised time is not stalling, but only a retry
                 # with no new Worker evidence may wait for it. A settled result
                 # is new evidence and never waits for an unrelated commitment.
-                return {'wait_until': next_due}
+                return {'wait_until': min(next_due, decision['dueAt']) if decision else next_due}
             # No new Worker evidence: back off before retrying instead of
             # stopping, so transient Coordinator failures recover unattended.
             delays = CONTRACT['delegationDefaults']['stallRetrySeconds']
             retry_at = _settled_at(attempt) + delays[min(stalled - 1, len(delays) - 1)]
             if stalled < controls.get('maxStalledTurns', CONTRACT['delegationDefaults']['maxStalledTurns']) \
                     and repository.clock() < retry_at:
-                return {'wait_until': retry_at}
+                return {'wait_until': min(retry_at, decision['dueAt']) if decision else retry_at}
     wake = {'previousAttemptId': attempt['attemptId'], 'frontier': frontier, 'progress': progress,
             'reason': reason}
+    if previous is not None:
+        wake['predecessor'] = {'assignmentId': previous['id'], 'grantRevision': previous['grant']['revision']}
     if reason == 'commitment_due':
         wake['commitments'] = [{'title': item['title'], 'dueAt': item['dueAt']}
                                for item in due_commitments]
     profile = {'mode': 'coordinator', 'tools': controls['tools'], 'readPaths': [], 'writePaths': []}
     if reason == 'commitment_due':
-        brief = _due_promises_subject(due_commitments)
+        # The structured wake carries every promise; render titles at birth,
+        # not inside the fixed brief where they can cut off the rebuild marker.
+        brief = _CONTINUE + f'{len(due_commitments)} task-board promises are due. '
     elif reason == 'decision_default':
         brief = (_CONTINUE + 'The human did not answer your decision report '
                  '(Turn ' + decision['reportTurnId'] + ') within the reply window. Proceed with your stated recommendation:\n'
@@ -558,8 +725,13 @@ def _proposal(repository, value, source_attempt):
         'brief': brief[:4096], 'model': controls['model'], 'budget': {},
         'profile': profile, 'delegation': deepcopy(origin), 'coordinatorWake': wake}
     exhausted = reason == 'results' and stalled >= controls.get('maxStalledTurns', CONTRACT['delegationDefaults']['maxStalledTurns'])
+    if (exhausted or retry_blocked) and decision is not None:
+        # A stopped results retry cannot settle an independently owed owner decision.
+        return {'wait_until': min(decision['dueAt'], next_due) if next_due else decision['dueAt']}
     return {'request': request, 'granter': {key: source['grant'][key] for key in ('owner', 'tenant', 'subject')},
-        'stalled': exhausted, 'source': source, 'decision': decision if reason == 'decision_default' else None,
+        'stalled': exhausted or retry_blocked, 'retry_blocked': retry_blocked,
+        'source': source, 'decision': decision if reason == 'decision_default' else None,
+        'worker_fences': tuple(row['assignment_id'] for row in summaries),
         'command': 'coordinator-wake:' + _digest([source_attempt, wake]), 'restarted': restarted}
 
 
@@ -609,14 +781,14 @@ def wake_brief(repository, assignment):
     """
     request = assignment['request']
     stored = request['brief']
-    if CONTINUATION_BRIEF_MARK not in stored:
-        return stored  # No separable instruction to rebuild (or cut by the brief bound).
-    subject = stored[:stored.index(CONTINUATION_BRIEF_MARK)]
+    subject, marker, _ = stored.partition(CONTINUATION_BRIEF_MARK)
     wake = request.get('coordinatorWake') or {}
     if wake.get('reason') == 'commitment_due':
         note = subject.partition(_CONTINUE)[0]
         due = _promises_still_due(repository, assignment, wake.get('commitments') or [])
         subject = note + (_due_promises_subject(due) if due else _CONTINUE)
+    elif not marker:
+        return stored  # A legacy brief with no separable instruction.
     return subject + continuation_instruction(request['profile'])
 
 
@@ -637,44 +809,100 @@ def continuation_instruction(profile):
             'each settlement with its whole result. '
             'Review results, delegate the next stage or repairs (including re-delegating failed work with a narrower '
             'scope or a different approach), and await active workers without model polling. '
-            'When the full objective is verified and delivered, report_to_user(kind=delivery), then finish_project_request with that report Turn ID. '
+            'When the objective is delivered, report_to_user(kind=delivery), then finish_project_request with that report Turn ID; '
+            'a check this environment cannot verify is recorded as unknown with what it would need, and does not by itself '
+            'block publishing the verified work and reporting that limitation. '
             'When only the human can decide something that would materially change the outcome, ' + decide +
             'Do not end merely because one stage completed.')
 
 
-def _settle(repository, source_attempt, receipt, *, check):
+def _settle(repository, source_attempt, receipt, *, check, fence_documents=(), turn_witnesses=None):
     def record(value):
         rows = value.setdefault('coordinatorSettlements', [])
         prior = next((row for row in rows if row['sourceAttemptId'] == source_attempt), None)
         if prior is not None:
-            if prior != receipt:
+            if prior != receipt and not (receipt.get('stopReport') and prior.get('reportTurnId')
+                    and {k: v for k, v in prior.items() if k != 'reportTurnId'} == receipt):
                 raise ProjectDispatchError('Coordinator settlement receipt is immutable')
             return prior
         check(value)
         rows.append(receipt)
         return receipt
-    return repository._change(record, selected=repository._selection(sources=[source_attempt]))
+    return repository._change(record, selected=repository._selection(sources=[source_attempt]),
+                              fence_documents=fence_documents, turn_witnesses=turn_witnesses)
 
 
-def _report_limit(repository, proposal, reason, *, reports=None):
-    """A stop after exhausted retries is surfaced through the existing report publisher."""
+def _publish_stop_report(repository, source, receipt, reports):
+    """Deliver a committed stop's report through the ordinary publisher."""
     from lib.conversations.coordinator_reports import CoordinatorReports
-    source = proposal['source']; origin = source['request']['delegation']
     reports = reports or CoordinatorReports(repository.owner, repository.project)
     scope = {'owner': repository.owner, 'projectPath': repository.project,
         'coordinatorId': source['request']['coordinatorId'], 'bindingRevision': source['grant']['bindingRevision']}
+    report_reason = receipt['stopReport']
+    message = ('The failed Coordinator Turn is marked unsafe to retry automatically, and there is no new Worker '
+               'evidence to act on. Completed results are retained; review the failure and reply with how to proceed.'
+               if report_reason == 'automatic_retry_blocked' else
+               'Automatic continuation retried with increasing delays, but repeated turns produced no new worker '
+               'work or verification evidence. Completed results are retained; review the conversation '
+               'and reply with how to proceed.')
     result = reports.publish(scope, {'kind': 'blocked', 'title': 'Coordinator needs your guidance',
-        'message': ('Automatic continuation retried with increasing delays, but repeated turns produced no new worker '
-                    'work or verification evidence. Completed results are retained; review the conversation '
-                    'and reply with how to proceed.'),
-        'idempotency_key': 'coordinator-stop:' + origin['attemptId'] + ':' + reason})
+        'message': message,
+        'idempotency_key': 'coordinator-stop:' + receipt['sourceAttemptId'] + ':' + report_reason})
+    identity = receipt['sourceAttemptId']
+
+    def acknowledge(value):
+        row = next(item for item in value['coordinatorSettlements'] if item['sourceAttemptId'] == identity)
+        if row != receipt and row != {**receipt, 'reportTurnId': result['turnId']}:
+            raise ProjectDispatchError('Coordinator stop report receipt changed')
+        row['reportTurnId'] = result['turnId']
+    repository._change(acknowledge, selected=repository._selection(sources=[identity]))
+
+
+def _stop_turn_witnesses(repository, value, source):
+    """Read metadata before deriving the stop, not after reading its Attempt facts."""
+    request = source['request']
+    origin = request['delegation']
+    identities = {(request['coordinatorId'], origin['turnId'])}
+    identities.update((row['request']['recipientId'], row['execution']['turnId'])
+                      for row in _group(value, origin['attemptId']) if row['execution'])
+    result = []
+    for conversation, identity in sorted(identities):
+        turn = repository.read_turn(conversation, identity, projection=False)
+        if not turn or type(turn.get('projectionRevision')) is not int:
+            raise WakeEvidenceChanged('Coordinator stop lacks exact Turn evidence')
+        result.append({'conversation_id': conversation, 'turn_id': identity,
+                       'projection_revision': turn['projectionRevision'],
+                       'attempt_id': turn.get('currentAttemptId') or '', 'status': turn['status']})
+    return result
+
+
+def _report_limit(repository, proposal, *, reports=None):
+    source = proposal['source']; origin = source['request']['delegation']
+    identity = origin['attemptId']
+
+    witnesses = []
+
     def check(value):
+        if repository.storage_version == 2:
+            witnesses[:] = _stop_turn_witnesses(repository, value, source)
         current = _proposal(repository, value, origin['attemptId'])
-        if not current or current.get('request') != proposal['request']:
+        if (not current or current.get('request') != proposal['request']
+                or not current.get('stalled')
+                or current.get('retry_blocked') != proposal.get('retry_blocked')):
             raise WakeEvidenceChanged('Coordinator stop evidence changed before settlement')
-    return _settle(repository, origin['attemptId'], {'sourceAttemptId': origin['attemptId'],
-        'reportTurnId': result['turnId'], 'turnId': origin['turnId'], 'attemptId': origin['attemptId'],
-        'taskId': origin['taskId'], 'reason': reason}, check=check)
+    pin = proposal['request']['coordinatorWake'].get('predecessor')
+    budget = origin['policy'].get('requestBudgetId')
+    fences = [('assignments', ident) for ident in proposal['worker_fences']]
+    if pin:
+        fences.append(('assignments', pin['assignmentId']))
+    if budget:
+        fences.append(('requestBudgets', budget))
+    receipt = _settle(repository, identity, {'sourceAttemptId': identity,
+        'turnId': origin['turnId'], 'attemptId': identity, 'taskId': origin['taskId'], 'reason': 'no_progress',
+        'stopReport': 'automatic_retry_blocked' if proposal.get('retry_blocked') else 'no_progress'},
+        check=check, fence_documents=fences, turn_witnesses=witnesses)
+    if not receipt.get('reportTurnId'):
+        _publish_stop_report(repository, source, receipt, reports)
 
 
 _TIMED_WAKES = {}
@@ -783,7 +1011,12 @@ def recover_coordinator(repository, *, service=None, reports=None, schedule=None
                 coordinator_id = group[0]['request']['coordinatorId'] if group else None
                 if coordinator_id is not None and _lane_held(repository, coordinator_id, held):
                     outcomes.append('deferred'); continue
-            if any(row['sourceAttemptId'] == identity for row in current.get('coordinatorSettlements', [])):
+            settlement = next((row for row in current.get('coordinatorSettlements', [])
+                               if row['sourceAttemptId'] == identity), None)
+            if settlement is not None:
+                if settlement.get('stopReport') and not settlement.get('reportTurnId') and group:
+                    _publish_stop_report(repository, group[0], settlement, reports)
+                    outcomes.append('stopped')
                 continue
             proposal = _proposal(repository, current, identity)
             if proposal is None:
@@ -803,11 +1036,13 @@ def recover_coordinator(repository, *, service=None, reports=None, schedule=None
                 row = proposal['existing']
             elif 'command' in proposal:
                 if proposal['stalled']:
-                    _report_limit(repository, proposal, 'no_progress', reports=reports)
+                    _report_limit(repository, proposal, reports=reports)
                     outcomes.append('stopped'); continue
                 def check(value):
                     latest = _proposal(repository, value, identity)
-                    if latest is None or latest.get('request') != proposal['request']:
+                    if (latest is None or latest.get('stalled')
+                            or latest.get('request') != proposal['request']
+                            or latest.get('decision') != proposal['decision']):
                         raise WakeEvidenceChanged('Coordinator wake evidence changed before admission')
                     validate_delegation_policy(repository, value, proposal['request'])
                     if proposal['decision'] is not None:
@@ -983,7 +1218,12 @@ def finish_request(repository, task, arguments):
                 continue
             current = _attempt(repository, row)
             if not current or current.get('status') != 'completed' or not row['review'] or row['review']['decision'] != 'accept':
-                raise ProjectDispatchError('Unfinished/unreviewed workers cannot complete the request')
+                witness = pre_park_witness(repository, value, origin['attemptId'])
+                raise ProjectDispatchError(
+                    'Unfinished/unreviewed workers cannot complete the request. '
+                    'Snapshot only: not permission to launch or a durable wake; '
+                    'board-only linkage remains unknown. Registered work diagnostic: '
+                    + json.dumps(witness))
             turn = repository.turn_get(row['request']['recipientId'], current['turnId'], user_id=repository.owner)
             if (not turn or turn.get('turnId') != current['turnId']
                     or turn.get('conversationId') != row['request']['recipientId']

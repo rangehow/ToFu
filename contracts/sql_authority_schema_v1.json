@@ -1,0 +1,418 @@
+{
+ "format": "tofu.sql-authority-schema.v1",
+ "generatedBy": "scripts/gen_sql_authority_schema.py",
+ "source": "lib/storage_authority_sql/schema.py",
+ "schemaVersion": 70,
+ "tables": [
+  "\n    CREATE TABLE IF NOT EXISTS storage_meta (\n        meta_key TEXT PRIMARY KEY,\n        meta_value TEXT NOT NULL\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_command_receipts (\n        command_id TEXT PRIMARY KEY,\n        operation TEXT NOT NULL,\n        request_digest TEXT NOT NULL,\n        response_json BLOB NOT NULL,\n        committed_at_ms BIGINT NOT NULL\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_command_receipts_v2 (\n        command_key BLOB PRIMARY KEY,\n        operation TEXT NOT NULL,\n        request_digest BLOB NOT NULL,\n        response_json BLOB NOT NULL,\n        committed_at_ms BIGINT NOT NULL,\n        CHECK (length(command_key) = 32),\n        CHECK (length(request_digest) = 32)\n    ) WITHOUT ROWID\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_logical_outbox (\n        sequence BIGINT PRIMARY KEY,\n        event_id TEXT NOT NULL UNIQUE,\n        operation TEXT NOT NULL,\n        schema_version BIGINT NOT NULL,\n        registry_version BIGINT NOT NULL,\n        request_id TEXT NOT NULL,\n        request_digest TEXT NOT NULL,\n        command_id TEXT NOT NULL DEFAULT '',\n        tenant_id TEXT NOT NULL,\n        owner_user_id BIGINT NOT NULL,\n        encryption_key_id TEXT NOT NULL,\n        payload_ciphertext TEXT NOT NULL,\n        record_bytes BIGINT NOT NULL,\n        committed_at_ms BIGINT NOT NULL\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_logical_replay_checkpoints (\n        target_name TEXT PRIMARY KEY,\n        stream_id TEXT NOT NULL,\n        last_sequence BIGINT NOT NULL,\n        chain_digest TEXT NOT NULL,\n        updated_at_ms BIGINT NOT NULL\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_records (\n        namespace TEXT NOT NULL,\n        record_key TEXT NOT NULL,\n        value_json JSONDOC NOT NULL,\n        version BIGINT NOT NULL,\n        updated_at_ms BIGINT NOT NULL,\n        PRIMARY KEY (namespace, record_key)\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_event_read_guards (\n        task_id TEXT PRIMARY KEY,\n        source_id TEXT NOT NULL,\n        append_version BIGINT NOT NULL,\n        prune_version BIGINT NOT NULL\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_events (\n        task_id TEXT NOT NULL,\n        sequence BIGINT NOT NULL,\n        stream_kind TEXT NOT NULL DEFAULT 'task',\n        event_type TEXT NOT NULL DEFAULT '',\n        event_kind TEXT NOT NULL DEFAULT '',\n        owner_user_id BIGINT NOT NULL DEFAULT 0,\n        project_key TEXT NOT NULL DEFAULT '',\n        project_sequence BIGINT NOT NULL DEFAULT 0,\n        event_json BLOB NOT NULL,\n        created_at_ms BIGINT NOT NULL,\n        PRIMARY KEY (task_id, sequence)\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_project_brain_projects (\n        owner_user_id BIGINT NOT NULL,\n        project_key TEXT NOT NULL,\n        head_sequence BIGINT NOT NULL,\n        checkpoint_sequence BIGINT NOT NULL DEFAULT 0,\n        projection_json JSONDOC NOT NULL,\n        updated_at_ms BIGINT NOT NULL,\n        PRIMARY KEY (owner_user_id, project_key)\n    )\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_project_brain_updated\n    ON storage_project_brain_projects(owner_user_id, updated_at_ms, project_key)\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_rate_limit_events (\n        event_id TEXT PRIMARY KEY,\n        endpoint TEXT NOT NULL,\n        client_key TEXT NOT NULL,\n        occurred_at_ms BIGINT NOT NULL,\n        expires_at_ms BIGINT NOT NULL\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_autopilot_markers (\n        conv_id TEXT PRIMARY KEY,\n        user_id BIGINT NOT NULL,\n        queue_id TEXT NOT NULL,\n        config_json JSONDOC NOT NULL DEFAULT '{}',\n        created_at_ms BIGINT NOT NULL\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_queue_items (\n        id TEXT PRIMARY KEY,\n        user_id BIGINT NOT NULL,\n        conv_id TEXT NOT NULL,\n        payload_json JSONDOC NOT NULL DEFAULT '{}',\n        config_json JSONDOC NOT NULL DEFAULT '{}',\n        position BIGINT NOT NULL,\n        kind TEXT NOT NULL DEFAULT 'real',\n        priority BIGINT NOT NULL DEFAULT 100,\n        created_at_ms BIGINT NOT NULL,\n        leased_until_ms BIGINT,\n        lease_task_id TEXT NOT NULL DEFAULT '',\n        input_turn_id TEXT NOT NULL DEFAULT '',\n        output_turn_id TEXT NOT NULL DEFAULT '',\n        attempt_id TEXT NOT NULL DEFAULT ''\n    )\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_queue_order\n    ON storage_queue_items(user_id, conv_id, priority, position)\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_worker_jobs (\n        task_id TEXT PRIMARY KEY,\n        user_id BIGINT NOT NULL,\n        tenant_id TEXT NOT NULL DEFAULT '',\n        task_kind TEXT NOT NULL,\n        payload_json JSONDOC NOT NULL DEFAULT '{}',\n        idempotency_key TEXT NOT NULL,\n        request_digest TEXT NOT NULL,\n        status TEXT NOT NULL DEFAULT 'queued',\n        priority BIGINT NOT NULL DEFAULT 100,\n        available_at_ms BIGINT NOT NULL,\n        claim_owner TEXT NOT NULL DEFAULT '',\n        lease_deadline_ms BIGINT NOT NULL DEFAULT 0,\n        lease_authority_epoch TEXT NOT NULL DEFAULT '',\n        fencing_token BIGINT NOT NULL DEFAULT 0,\n        attempt_no BIGINT NOT NULL DEFAULT 0,\n        heartbeat_at_ms BIGINT NOT NULL DEFAULT 0,\n        cancel_sequence BIGINT NOT NULL DEFAULT 0,\n        wake_sequence BIGINT NOT NULL DEFAULT 0 CHECK (wake_sequence>=0),\n        cancel_requested_at_ms BIGINT NOT NULL DEFAULT 0,\n        cancel_reason TEXT NOT NULL DEFAULT '',\n        replay_cursor BIGINT NOT NULL DEFAULT 0,\n        result_ref TEXT NOT NULL DEFAULT '',\n        error_json JSONDOC NOT NULL DEFAULT '{}',\n        created_at_ms BIGINT NOT NULL,\n        updated_at_ms BIGINT NOT NULL,\n        terminal_at_ms BIGINT NOT NULL DEFAULT 0,\n        UNIQUE (user_id, idempotency_key)\n    )\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_worker_jobs_queued\n    ON storage_worker_jobs(status, available_at_ms, priority,\n                           created_at_ms, task_id)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_worker_jobs_lease\n    ON storage_worker_jobs(status, lease_deadline_ms, priority,\n                           created_at_ms, task_id)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_worker_jobs_authority_lease\n    ON storage_worker_jobs(status, task_kind, lease_authority_epoch, lease_deadline_ms,\n                           priority, created_at_ms, task_id)\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_conversations (\n        id TEXT NOT NULL,\n        user_id BIGINT NOT NULL,\n        title TEXT NOT NULL DEFAULT 'New Chat',\n        messages_json JSONDOC NOT NULL DEFAULT '[]',\n        created_at_ms BIGINT NOT NULL DEFAULT 0,\n        updated_at_ms BIGINT NOT NULL DEFAULT 0,\n        settings_json JSONDOC NOT NULL DEFAULT '{}',\n        msg_count BIGINT NOT NULL DEFAULT 0,\n        search_text TEXT NOT NULL DEFAULT '',\n        rev BIGINT NOT NULL DEFAULT 0,\n        PRIMARY KEY (id, user_id)\n    )\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_conversations_updated\n    ON storage_conversations(user_id, updated_at_ms, id)\n    ",
+  "\n    CREATE UNIQUE INDEX IF NOT EXISTS idx_storage_conversations_global_id\n    ON storage_conversations(id)\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_conversation_trash (\n        conversation_id TEXT NOT NULL,\n        user_id BIGINT NOT NULL,\n        title TEXT NOT NULL DEFAULT 'New Chat',\n        messages_json JSONDOC NOT NULL DEFAULT '[]',\n        created_at_ms BIGINT NOT NULL DEFAULT 0,\n        updated_at_ms BIGINT NOT NULL DEFAULT 0,\n        settings_json JSONDOC NOT NULL DEFAULT '{}',\n        msg_count BIGINT NOT NULL DEFAULT 0,\n        rev BIGINT NOT NULL DEFAULT 0,\n        deleted_at_ms BIGINT NOT NULL,\n        PRIMARY KEY (conversation_id, user_id)\n    )\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_conversation_trash_retention\n    ON storage_conversation_trash(deleted_at_ms, conversation_id, user_id)\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_conversation_trash_turns (\n        conversation_id TEXT NOT NULL,\n        user_id BIGINT NOT NULL,\n        turn_id TEXT NOT NULL,\n        lane_id TEXT NOT NULL DEFAULT 'main',\n        parent_turn_id TEXT,\n        ordinal BIGINT NOT NULL,\n        actor TEXT NOT NULL,\n        kind TEXT NOT NULL DEFAULT 'reply',\n        run_id TEXT NOT NULL DEFAULT '',\n        status TEXT NOT NULL,\n        projection_json JSONDOC NOT NULL DEFAULT '{}',\n        projection_revision BIGINT NOT NULL DEFAULT 0,\n        settlement_json JSONDOC NOT NULL DEFAULT '{}',\n        created_at BIGINT NOT NULL,\n        updated_at BIGINT NOT NULL,\n        PRIMARY KEY (conversation_id, user_id, turn_id),\n        UNIQUE (conversation_id, user_id, lane_id, ordinal)\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_compaction_archives (\n        archive_id TEXT PRIMARY KEY,\n        conversation_id TEXT NOT NULL,\n\n        archive_scope TEXT NOT NULL DEFAULT '',\n        user_id BIGINT NOT NULL,\n        messages_json JSONDOC NOT NULL,\n        post_messages_json JSONDOC,\n        summary TEXT NOT NULL DEFAULT '',\n        receipt_json JSONDOC NOT NULL DEFAULT '{}',\n        trigger TEXT NOT NULL DEFAULT 'force',\n        task_id TEXT NOT NULL DEFAULT '',\n        round_num BIGINT NOT NULL DEFAULT 0,\n        model TEXT NOT NULL DEFAULT '',\n        tokens_before BIGINT NOT NULL DEFAULT 0,\n        tokens_after BIGINT NOT NULL DEFAULT 0,\n        msgs_before BIGINT NOT NULL DEFAULT 0,\n        msgs_after BIGINT NOT NULL DEFAULT 0,\n        reason TEXT NOT NULL DEFAULT '',\n        payload_size BIGINT NOT NULL DEFAULT 0,\n        created_at_ms BIGINT NOT NULL\n    )\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_compaction_archives_owner\n    ON storage_compaction_archives(user_id, conversation_id, created_at_ms, archive_id)\n\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_timers (\n        id TEXT PRIMARY KEY,\n        user_id BIGINT NOT NULL,\n        conv_id TEXT NOT NULL,\n        source_task_id TEXT NOT NULL DEFAULT '',\n        check_instruction TEXT NOT NULL,\n        check_command TEXT NOT NULL DEFAULT '',\n        continuation_message TEXT NOT NULL,\n        poll_interval BIGINT NOT NULL DEFAULT 60,\n        max_polls BIGINT NOT NULL DEFAULT 120,\n        poll_count BIGINT NOT NULL DEFAULT 0,\n        status TEXT NOT NULL DEFAULT 'active',\n        tools_config JSONDOC NOT NULL DEFAULT '{}',\n        created_at TEXT NOT NULL DEFAULT '',\n        updated_at TEXT NOT NULL DEFAULT '',\n        triggered_at TEXT NOT NULL DEFAULT '',\n        cancelled_at TEXT NOT NULL DEFAULT '',\n        execution_task_id TEXT NOT NULL DEFAULT '',\n        last_poll_at TEXT NOT NULL DEFAULT '',\n        last_poll_decision TEXT NOT NULL DEFAULT '',\n        last_poll_reason TEXT NOT NULL DEFAULT '',\n        condition_kind TEXT NOT NULL DEFAULT 'llm',\n        condition_command TEXT NOT NULL DEFAULT '',\n        condition_regex TEXT NOT NULL DEFAULT '',\n        promotion_streak BIGINT NOT NULL DEFAULT 0,\n        fallback_streak BIGINT NOT NULL DEFAULT 0,\n        promoted_at TEXT NOT NULL DEFAULT '',\n        origin TEXT NOT NULL DEFAULT 'background'\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_timer_poll_log (\n        id BIGINT PRIMARY KEY,\n        timer_id TEXT NOT NULL,\n        poll_time TEXT NOT NULL,\n        decision TEXT NOT NULL DEFAULT 'wait',\n        reason TEXT NOT NULL DEFAULT '',\n        check_output TEXT NOT NULL DEFAULT '',\n        tokens_used BIGINT NOT NULL DEFAULT 0,\n        model TEXT NOT NULL DEFAULT '',\n        poll_id TEXT NOT NULL DEFAULT '',\n        raw_output TEXT NOT NULL DEFAULT '',\n        tier TEXT NOT NULL DEFAULT 'llm',\n        predicate_matched BIGINT NOT NULL DEFAULT -1,\n        llm_agreed BIGINT NOT NULL DEFAULT -1\n    )\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_timer_poll_log\n    ON storage_timer_poll_log(timer_id, poll_time)\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_scheduled_tasks (\n        id TEXT PRIMARY KEY, user_id BIGINT NOT NULL,\n        system_key TEXT NOT NULL DEFAULT '',\n        name TEXT NOT NULL, schedule TEXT NOT NULL,\n        task_type TEXT NOT NULL DEFAULT 'command', command TEXT NOT NULL,\n        description TEXT NOT NULL DEFAULT '', enabled BIGINT NOT NULL DEFAULT 1,\n        notify_on_failure BIGINT NOT NULL DEFAULT 1,\n        notify_on_success BIGINT NOT NULL DEFAULT 0,\n        max_runtime BIGINT NOT NULL DEFAULT 300, last_run TEXT NOT NULL DEFAULT '',\n        last_result TEXT NOT NULL DEFAULT '', last_status TEXT NOT NULL DEFAULT 'never',\n        run_count BIGINT NOT NULL DEFAULT 0, fail_count BIGINT NOT NULL DEFAULT 0,\n        created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '',\n        target_conv_id TEXT NOT NULL DEFAULT '', source_conv_id TEXT NOT NULL DEFAULT '',\n        tools_config JSONDOC NOT NULL DEFAULT '{}', poll_count BIGINT NOT NULL DEFAULT 0,\n        last_poll_at TEXT NOT NULL DEFAULT '', last_poll_decision TEXT NOT NULL DEFAULT '',\n        last_poll_reason TEXT NOT NULL DEFAULT '', last_execution_at TEXT NOT NULL DEFAULT '',\n        last_execution_task_id TEXT NOT NULL DEFAULT '', last_execution_status TEXT NOT NULL DEFAULT '',\n        execution_count BIGINT NOT NULL DEFAULT 0, max_executions BIGINT NOT NULL DEFAULT 0,\n        expires_at TEXT NOT NULL DEFAULT '', condition_kind TEXT NOT NULL DEFAULT 'llm',\n        condition_command TEXT NOT NULL DEFAULT '', condition_regex TEXT NOT NULL DEFAULT '',\n        promotion_streak BIGINT NOT NULL DEFAULT 0, fallback_streak BIGINT NOT NULL DEFAULT 0,\n        promoted_at TEXT NOT NULL DEFAULT ''\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_proactive_poll_log (\n        id BIGINT PRIMARY KEY, task_id TEXT NOT NULL, poll_time TEXT NOT NULL,\n        decision TEXT NOT NULL DEFAULT 'skip', reason TEXT NOT NULL DEFAULT '',\n        status_snapshot TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '',\n        tokens_used BIGINT NOT NULL DEFAULT 0, execution_task_id TEXT NOT NULL DEFAULT '',\n        tier TEXT NOT NULL DEFAULT 'llm', predicate_matched BIGINT NOT NULL DEFAULT -1,\n        llm_agreed BIGINT NOT NULL DEFAULT -1\n    )\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_proactive_poll_log\n    ON storage_proactive_poll_log(task_id, poll_time)\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_conversation_turns (\n        turn_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, user_id BIGINT NOT NULL,\n        presentation_id TEXT NOT NULL DEFAULT '',\n        lane_id TEXT NOT NULL DEFAULT 'main', parent_turn_id TEXT,\n        ordinal BIGINT NOT NULL, actor TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'reply',\n        run_id TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending',\n        current_attempt_id TEXT, projection_json JSONDOC NOT NULL DEFAULT '{}',\n        projection_revision BIGINT NOT NULL DEFAULT 0,\n        model_context_display_offset BIGINT NOT NULL DEFAULT 0 CHECK (model_context_display_offset>=0),\n        projection_checkpoint_revision BIGINT,\n        projection_materialized_revision BIGINT,\n        projection_patch_count BIGINT NOT NULL DEFAULT 0,\n        projection_patch_bytes BIGINT NOT NULL DEFAULT 0,\n        settlement_json JSONDOC NOT NULL DEFAULT '{}',\n        created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL,\n        UNIQUE(conversation_id, lane_id, ordinal)\n    )\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_conversation_turns_owner_order\n    ON storage_conversation_turns(conversation_id, user_id, lane_id, ordinal)\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_turn_projection_checkpoints (\n        turn_id TEXT PRIMARY KEY,\n        conversation_id TEXT NOT NULL,\n        user_id BIGINT NOT NULL,\n        attempt_id TEXT NOT NULL,\n        projection_revision BIGINT NOT NULL,\n        projection_json JSONDOC NOT NULL,\n        projection_bytes BIGINT NOT NULL,\n        updated_at BIGINT NOT NULL\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_turn_search (\n        conversation_id TEXT NOT NULL,\n        user_id BIGINT NOT NULL,\n        turn_id TEXT NOT NULL,\n        lane_id TEXT NOT NULL DEFAULT 'main',\n        ordinal BIGINT NOT NULL,\n        search_text TEXT NOT NULL DEFAULT '',\n        projection_revision BIGINT NOT NULL DEFAULT 0,\n        updated_at BIGINT NOT NULL,\n        PRIMARY KEY (conversation_id, turn_id)\n    )\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_turn_search_owner_order\n    ON storage_turn_search(user_id, conversation_id, lane_id, ordinal)\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_projection_outbox (\n        projection_name TEXT NOT NULL,\n        entity_kind TEXT NOT NULL,\n        user_id BIGINT NOT NULL,\n        entity_key TEXT NOT NULL,\n        version_token TEXT NOT NULL,\n        enqueued_at_ms BIGINT NOT NULL,\n        PRIMARY KEY (projection_name, entity_kind, user_id, entity_key)\n    )\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_projection_outbox_due\n    ON storage_projection_outbox(\n        projection_name, enqueued_at_ms, entity_kind, user_id, entity_key)\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_search_conversations (\n        id TEXT NOT NULL,\n        user_id BIGINT NOT NULL,\n        updated_at_ms BIGINT NOT NULL,\n        generation_token TEXT NOT NULL DEFAULT '',\n        title TEXT NOT NULL DEFAULT '',\n        PRIMARY KEY (user_id, id)\n    )\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_search_conversations_order\n    ON storage_search_conversations(user_id, updated_at_ms, id)\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_search_turns (\n        conversation_id TEXT NOT NULL,\n        user_id BIGINT NOT NULL,\n        turn_id TEXT NOT NULL,\n        lane_id TEXT NOT NULL,\n        ordinal BIGINT NOT NULL,\n        search_text TEXT NOT NULL,\n        projection_revision BIGINT NOT NULL,\n        updated_at BIGINT NOT NULL,\n        generation_token TEXT NOT NULL DEFAULT '',\n        PRIMARY KEY (user_id, conversation_id, turn_id)\n    )\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_search_turns_owner_order\n    ON storage_search_turns(user_id, conversation_id, lane_id, ordinal)\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_turn_tombstones (\n        conversation_id TEXT NOT NULL,\n        user_id BIGINT NOT NULL,\n        turn_id TEXT NOT NULL,\n        deleted_at BIGINT NOT NULL,\n        PRIMARY KEY (conversation_id, turn_id)\n    )\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_turn_tombstones_delta\n    ON storage_turn_tombstones(conversation_id, user_id, deleted_at)\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_generation_attempts (\n        attempt_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, turn_id TEXT NOT NULL,\n        command_id TEXT NOT NULL, task_id TEXT NOT NULL DEFAULT '', operation TEXT NOT NULL,\n        dispatch_mode TEXT NOT NULL DEFAULT '',\n        queue_id TEXT NOT NULL DEFAULT '',\n        queue_state TEXT NOT NULL DEFAULT '',\n        status TEXT NOT NULL DEFAULT 'pending', base_projection_revision BIGINT NOT NULL,\n        resume_anchor_json JSONDOC NOT NULL DEFAULT '{}', config_json JSONDOC NOT NULL DEFAULT '{}',\n        error_json JSONDOC NOT NULL DEFAULT '{}',\n        timing_trace_json JSONDOC NOT NULL DEFAULT '{}', created_at BIGINT NOT NULL,\n        started_at BIGINT, settled_at BIGINT, superseded_at BIGINT,\n        UNIQUE(conversation_id, command_id)\n    )\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_generation_attempts_turn\n    ON storage_generation_attempts(turn_id)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_generation_attempts_task\n    ON storage_generation_attempts(task_id) WHERE task_id <> ''\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_generation_attempts_conversation_created\n    ON storage_generation_attempts(\n        conversation_id, created_at DESC, attempt_id DESC\n    ) WHERE task_id <> ''\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_raw_archives (\n        archive_id TEXT PRIMARY KEY,\n        user_id BIGINT NOT NULL,\n        conversation_id TEXT NOT NULL,\n        turn_id TEXT NOT NULL,\n        attempt_id TEXT NOT NULL,\n        task_id TEXT NOT NULL,\n        round_num BIGINT NOT NULL,\n        transport_attempt BIGINT NOT NULL DEFAULT 0,\n        request_blob BLOB NOT NULL,\n        response_blob BLOB NOT NULL,\n        request_bytes BIGINT NOT NULL,\n        response_bytes BIGINT NOT NULL,\n        stored_bytes BIGINT NOT NULL,\n        request_sha256 TEXT NOT NULL,\n        response_sha256 TEXT NOT NULL,\n        integrity TEXT NOT NULL,\n        truncation_reason TEXT NOT NULL DEFAULT '',\n        summary_json JSONDOC NOT NULL DEFAULT '{}',\n        created_at_ms BIGINT NOT NULL\n    )\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_raw_archives_task_round\n    ON storage_raw_archives(user_id, task_id, round_num, created_at_ms, archive_id)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_raw_archives_attempt\n    ON storage_raw_archives(user_id, attempt_id, created_at_ms, archive_id)\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_attempt_events (\n        attempt_id TEXT NOT NULL, sequence BIGINT NOT NULL, conversation_id TEXT NOT NULL,\n        turn_id TEXT NOT NULL, projection_revision BIGINT NOT NULL, type TEXT NOT NULL,\n        payload_json JSONDOC NOT NULL DEFAULT '{}', payload_bytes BIGINT NOT NULL DEFAULT 0,\n        created_at BIGINT NOT NULL,\n        PRIMARY KEY(attempt_id, sequence)\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_conversation_sync_heads (\n        conversation_id TEXT NOT NULL,\n        user_id BIGINT NOT NULL,\n        sync_sequence BIGINT NOT NULL DEFAULT 0,\n        updated_at BIGINT NOT NULL,\n        PRIMARY KEY(conversation_id, user_id)\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_conversation_changes (\n        conversation_id TEXT NOT NULL,\n        user_id BIGINT NOT NULL,\n        sync_sequence BIGINT NOT NULL,\n        change_type TEXT NOT NULL,\n        turn_id TEXT NOT NULL DEFAULT '',\n        attempt_id TEXT NOT NULL DEFAULT '',\n        attempt_sequence BIGINT,\n        event_json JSONDOC NOT NULL,\n        created_at BIGINT NOT NULL,\n        PRIMARY KEY(conversation_id, user_id, sync_sequence)\n    )\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_conversation_changes_retention\n    ON storage_conversation_changes(created_at)\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS orchestration_runs (\n        continuity_pending INTEGER NOT NULL DEFAULT 0,\n        id TEXT PRIMARY KEY,\n        user_id BIGINT NOT NULL,\n        tenant_id TEXT NOT NULL DEFAULT '',\n        orch_id TEXT NOT NULL DEFAULT '',\n        name TEXT NOT NULL DEFAULT '',\n        definition TEXT NOT NULL DEFAULT '{}',\n        input TEXT NOT NULL DEFAULT '',\n        status TEXT NOT NULL DEFAULT 'pending',\n        final TEXT NOT NULL DEFAULT '',\n        error TEXT NOT NULL DEFAULT '',\n        created_by TEXT NOT NULL DEFAULT '',\n        created_at BIGINT NOT NULL DEFAULT 0,\n        updated_at BIGINT NOT NULL DEFAULT 0,\n        finished_at BIGINT NOT NULL DEFAULT 0\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS orchestration_run_events (\n        run_id TEXT NOT NULL,\n        user_id BIGINT NOT NULL,\n        tenant_id TEXT NOT NULL DEFAULT '',\n        seq BIGINT NOT NULL,\n        type TEXT NOT NULL DEFAULT '',\n        node_id TEXT NOT NULL DEFAULT '',\n        payload TEXT NOT NULL DEFAULT '{}',\n        ts BIGINT NOT NULL DEFAULT 0,\n        PRIMARY KEY (run_id, user_id, tenant_id, seq)\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS orchestration_definitions (\n        id TEXT PRIMARY KEY,\n        user_id BIGINT NOT NULL,\n        tenant_id TEXT NOT NULL DEFAULT '',\n        name TEXT NOT NULL DEFAULT '',\n        definition_json JSONDOC NOT NULL,\n        created_at_ms BIGINT NOT NULL,\n        updated_at_ms BIGINT NOT NULL\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS swarm_sessions (\n        swarm_key TEXT PRIMARY KEY,\n        conv_id TEXT NOT NULL DEFAULT '',\n        task_id TEXT NOT NULL DEFAULT '',\n        status TEXT NOT NULL DEFAULT 'running',\n        specs_json TEXT NOT NULL DEFAULT '[]',\n        config_json TEXT NOT NULL DEFAULT '{}',\n        created_at BIGINT NOT NULL DEFAULT 0,\n        updated_at BIGINT NOT NULL DEFAULT 0\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS swarm_agents (\n        swarm_key TEXT NOT NULL,\n        agent_id TEXT NOT NULL,\n        role TEXT NOT NULL DEFAULT '',\n        objective TEXT NOT NULL DEFAULT '',\n        status TEXT NOT NULL DEFAULT 'pending',\n        messages_json TEXT NOT NULL DEFAULT '[]',\n        result_json TEXT NOT NULL DEFAULT '{}',\n        rounds_used BIGINT NOT NULL DEFAULT 0,\n        delivered BIGINT NOT NULL DEFAULT 0,\n        updated_at BIGINT NOT NULL DEFAULT 0,\n        checkpoint_id TEXT NOT NULL DEFAULT '',\n        PRIMARY KEY (swarm_key, agent_id)\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS swarm_agent_checkpoint_markers (\n        swarm_key TEXT NOT NULL,\n        agent_id TEXT NOT NULL,\n        result_json TEXT NOT NULL DEFAULT '{}',\n        rounds_used BIGINT NOT NULL DEFAULT 0,\n        updated_at BIGINT NOT NULL DEFAULT 0,\n        PRIMARY KEY (swarm_key, agent_id)\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS paper_reports (\n        user_id BIGINT NOT NULL,\n        paper_hash TEXT NOT NULL,\n        lang TEXT NOT NULL DEFAULT 'en',\n        report TEXT NOT NULL DEFAULT '',\n        model TEXT NOT NULL DEFAULT '',\n        meta TEXT NOT NULL DEFAULT '',\n        created_at BIGINT NOT NULL,\n        PRIMARY KEY (user_id, paper_hash, lang)\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS paper_translations (\n        user_id BIGINT NOT NULL,\n        paper_hash TEXT NOT NULL,\n        lang TEXT NOT NULL,\n        text TEXT NOT NULL DEFAULT '',\n        model TEXT NOT NULL DEFAULT '',\n        created_at BIGINT NOT NULL,\n        PRIMARY KEY (user_id, paper_hash, lang)\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS paper_library (\n        id TEXT NOT NULL,\n        user_id BIGINT NOT NULL,\n        title TEXT NOT NULL DEFAULT '',\n        pdf_url TEXT NOT NULL DEFAULT '',\n        pdf_filename TEXT NOT NULL DEFAULT '',\n        arxiv_id TEXT NOT NULL DEFAULT '',\n        paper_hash TEXT NOT NULL DEFAULT '',\n        parsed_text TEXT NOT NULL DEFAULT '',\n        parser_version TEXT NOT NULL DEFAULT '',\n        qa_history TEXT NOT NULL DEFAULT '[]',\n        images TEXT NOT NULL DEFAULT '[]',\n        babel_cache TEXT NOT NULL DEFAULT '{}',\n        page_count BIGINT NOT NULL DEFAULT 0,\n        folder_id TEXT NOT NULL DEFAULT '',\n        created_at BIGINT NOT NULL,\n        updated_at BIGINT NOT NULL,\n        PRIMARY KEY (id, user_id)\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS paper_notes (\n        user_id BIGINT NOT NULL,\n        id TEXT NOT NULL,\n        paper_hash TEXT NOT NULL DEFAULT '',\n        lang TEXT NOT NULL DEFAULT '',\n        anchor TEXT NOT NULL DEFAULT '{}',\n        note TEXT NOT NULL DEFAULT '',\n        created_at BIGINT NOT NULL,\n        updated_at BIGINT NOT NULL,\n        PRIMARY KEY (user_id, id)\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS daily_cost_cache (\n        user_id BIGINT NOT NULL,\n        date TEXT NOT NULL,\n        cost DOUBLE PRECISION NOT NULL DEFAULT 0,\n        conversations_json JSONDOC NOT NULL DEFAULT '{}',\n        computed_at BIGINT NOT NULL DEFAULT 0,\n        PRIMARY KEY (user_id, date)\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS paper_podcasts (\n        user_id BIGINT NOT NULL,\n        paper_hash TEXT NOT NULL,\n        mode TEXT NOT NULL,\n        lang TEXT NOT NULL,\n        voice TEXT NOT NULL DEFAULT '',\n        status TEXT NOT NULL DEFAULT 'generating',\n        script_json TEXT NOT NULL DEFAULT '',\n        file_path TEXT NOT NULL DEFAULT '',\n        duration_sec DOUBLE PRECISION NOT NULL DEFAULT 0,\n        model TEXT NOT NULL DEFAULT '',\n        tts_model TEXT NOT NULL DEFAULT '',\n        meta TEXT NOT NULL DEFAULT '',\n        created_at BIGINT NOT NULL,\n        updated_at BIGINT NOT NULL,\n        PRIMARY KEY (user_id, paper_hash, mode, lang, voice)\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS tenant_users (\n        id TEXT PRIMARY KEY,\n        owner_user_id BIGINT NOT NULL UNIQUE,\n        email TEXT NOT NULL UNIQUE,\n        password_hash TEXT NOT NULL DEFAULT '',\n        display_name TEXT NOT NULL DEFAULT '',\n        role TEXT NOT NULL DEFAULT 'user',\n        status TEXT NOT NULL DEFAULT 'active',\n        created_at BIGINT NOT NULL,\n        last_login_at BIGINT NOT NULL DEFAULT 0,\n        email_verified BIGINT NOT NULL DEFAULT 0,\n        metadata TEXT NOT NULL DEFAULT '{}'\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_identity_sequences (\n        sequence_name TEXT PRIMARY KEY,\n        next_value BIGINT NOT NULL\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS auth_credentials (\n        id TEXT PRIMARY KEY,\n        owner_user_id BIGINT NOT NULL,\n        account_user_id TEXT NOT NULL DEFAULT '',\n        tenant_id TEXT NOT NULL DEFAULT '',\n        name TEXT NOT NULL,\n        prefix TEXT NOT NULL,\n        secret_hash TEXT NOT NULL UNIQUE,\n        scopes TEXT NOT NULL,\n        rate_limit_rpm BIGINT NOT NULL DEFAULT 0,\n        rate_limit_tpd BIGINT NOT NULL DEFAULT 0,\n        created_at DOUBLE PRECISION NOT NULL,\n        last_used_at DOUBLE PRECISION,\n        expires_at DOUBLE PRECISION,\n        disabled BIGINT NOT NULL DEFAULT 0,\n        revoked_at DOUBLE PRECISION,\n        metadata TEXT NOT NULL DEFAULT '{}'\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS byo_providers (\n        id TEXT PRIMARY KEY,\n        owner_user_id BIGINT NOT NULL,\n        tenant_id TEXT NOT NULL DEFAULT '',\n        name TEXT NOT NULL,\n        base_url TEXT NOT NULL,\n        api_key_ciphertext TEXT NOT NULL DEFAULT '',\n        key_hint TEXT NOT NULL DEFAULT '',\n        models_json JSONDOC NOT NULL DEFAULT '[]',\n        extra_headers_json JSONDOC NOT NULL DEFAULT '{}',\n        thinking_format TEXT NOT NULL DEFAULT '',\n        disabled BIGINT NOT NULL DEFAULT 0,\n        created_at DOUBLE PRECISION NOT NULL,\n        updated_at DOUBLE PRECISION NOT NULL,\n        last_used_at DOUBLE PRECISION\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_model_routing_authorities (\n        owner_user_id BIGINT NOT NULL,\n        tenant_id TEXT NOT NULL DEFAULT '',\n        revision BIGINT NOT NULL,\n        document_json JSONDOC NOT NULL,\n        backup_json JSONDOC,\n        migration_receipt_json JSONDOC,\n        updated_at DOUBLE PRECISION NOT NULL,\n        PRIMARY KEY (owner_user_id, tenant_id)\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_model_routing_secrets (\n        owner_user_id BIGINT NOT NULL,\n        tenant_id TEXT NOT NULL DEFAULT '',\n        secret_reference TEXT NOT NULL,\n        ciphertext TEXT NOT NULL,\n        key_hint TEXT NOT NULL DEFAULT '',\n        created_at DOUBLE PRECISION NOT NULL,\n        updated_at DOUBLE PRECISION NOT NULL,\n        PRIMARY KEY (owner_user_id, tenant_id, secret_reference)\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS chat_artifacts (\n        id TEXT PRIMARY KEY,\n        conv_id TEXT NOT NULL,\n        task_id TEXT NOT NULL DEFAULT '',\n        msg_id TEXT NOT NULL DEFAULT '',\n        source TEXT NOT NULL,\n        source_ref JSONDOC NOT NULL DEFAULT '{}',\n        format TEXT NOT NULL,\n        title TEXT NOT NULL DEFAULT '',\n        content TEXT NOT NULL,\n        content_sha256 TEXT NOT NULL,\n        size_bytes BIGINT NOT NULL DEFAULT 0,\n        version BIGINT NOT NULL DEFAULT 1,\n        parent_id TEXT NOT NULL DEFAULT '',\n        pinned BOOLEAN NOT NULL DEFAULT FALSE,\n        meta JSONDOC NOT NULL DEFAULT '{}',\n        created_at BIGINT NOT NULL,\n        deleted_at BIGINT NOT NULL DEFAULT 0\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS tool_result_artifacts (\n        user_id BIGINT NOT NULL,\n        content_sha256 TEXT NOT NULL,\n        content TEXT NOT NULL,\n        media_type TEXT NOT NULL DEFAULT 'text/plain',\n        size_bytes BIGINT NOT NULL DEFAULT 0,\n        created_at_ms BIGINT NOT NULL,\n        expires_at_ms BIGINT NOT NULL,\n        last_accessed_at_ms BIGINT NOT NULL,\n        PRIMARY KEY (user_id, content_sha256)\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_knowledge_settings (\n        user_id BIGINT PRIMARY KEY,\n        enabled BIGINT NOT NULL DEFAULT 0,\n        visual_enrichment BIGINT NOT NULL DEFAULT 0,\n        updated_at DOUBLE PRECISION NOT NULL DEFAULT 0\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_desktop_egress_preferences (\n        owner_user_id BIGINT PRIMARY KEY,\n        agent_id TEXT NOT NULL DEFAULT '',\n        updated_at_ms BIGINT NOT NULL\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_browser_site_observations (\n        owner_user_id BIGINT NOT NULL,\n        origin TEXT NOT NULL,\n        route_family TEXT NOT NULL,\n        operation TEXT NOT NULL,\n        schema_version BIGINT NOT NULL,\n        strategy TEXT NOT NULL,\n        hints_json TEXT NOT NULL DEFAULT '[]',\n        anti_bot_vendor TEXT NOT NULL DEFAULT '',\n        auth_signal TEXT NOT NULL DEFAULT 'none',\n        status TEXT NOT NULL DEFAULT 'active',\n        confidence_milli BIGINT NOT NULL,\n        visit_count BIGINT NOT NULL,\n        successful_visits BIGINT NOT NULL,\n        hinted_visits BIGINT NOT NULL,\n        hint_match_visits BIGINT NOT NULL,\n        consecutive_failures BIGINT NOT NULL,\n        last_outcome TEXT NOT NULL,\n        last_elapsed_ms BIGINT NOT NULL DEFAULT 0,\n        last_verified_at_ms BIGINT NOT NULL,\n        last_observed_at_ms BIGINT NOT NULL,\n        expires_at_ms BIGINT NOT NULL,\n        payload_bytes BIGINT NOT NULL,\n        PRIMARY KEY (owner_user_id, origin, route_family, operation)\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_browser_site_observation_owners (\n        owner_user_id BIGINT PRIMARY KEY,\n        touched_at_ms BIGINT NOT NULL\n    )\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_browser_site_observations_owner_lru\n    ON storage_browser_site_observations(\n        owner_user_id, last_observed_at_ms, origin, route_family, operation)\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_knowledge_documents (\n        user_id BIGINT NOT NULL,\n        id TEXT NOT NULL,\n        sha256 TEXT NOT NULL,\n        name TEXT NOT NULL,\n        stored_name TEXT NOT NULL,\n        kind TEXT NOT NULL,\n        size_bytes BIGINT NOT NULL,\n        method TEXT NOT NULL,\n        warnings_json TEXT NOT NULL DEFAULT '[]',\n        text_chars BIGINT NOT NULL DEFAULT 0,\n        chunk_count BIGINT NOT NULL DEFAULT 0,\n        pages BIGINT NOT NULL DEFAULT 0,\n        scope TEXT NOT NULL DEFAULT 'library',\n        media_metadata_json TEXT NOT NULL DEFAULT '{}',\n        created_at DOUBLE PRECISION NOT NULL,\n        updated_at DOUBLE PRECISION NOT NULL,\n        PRIMARY KEY (user_id, id),\n        UNIQUE (user_id, sha256),\n        UNIQUE (user_id, stored_name)\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_knowledge_chunks (\n        user_id BIGINT NOT NULL,\n        document_id TEXT NOT NULL,\n        ordinal BIGINT NOT NULL,\n        section TEXT NOT NULL DEFAULT '',\n        location TEXT NOT NULL DEFAULT '',\n        content TEXT NOT NULL,\n        search_text TEXT NOT NULL,\n        PRIMARY KEY (user_id, document_id, ordinal),\n        FOREIGN KEY (user_id, document_id)\n            REFERENCES storage_knowledge_documents(user_id, id)\n            ON DELETE CASCADE\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_knowledge_assets (\n        user_id BIGINT NOT NULL,\n        id TEXT NOT NULL,\n        document_id TEXT NOT NULL,\n        ordinal BIGINT NOT NULL,\n        kind TEXT NOT NULL,\n        stored_name TEXT NOT NULL,\n        mime_type TEXT NOT NULL,\n        sha256 TEXT NOT NULL,\n        size_bytes BIGINT NOT NULL,\n        width BIGINT NOT NULL DEFAULT 0,\n        height BIGINT NOT NULL DEFAULT 0,\n        page BIGINT NOT NULL DEFAULT 0,\n        pages_json TEXT NOT NULL DEFAULT '[]',\n        bbox_json TEXT NOT NULL DEFAULT '[]',\n        caption TEXT NOT NULL DEFAULT '',\n        ocr_text TEXT NOT NULL DEFAULT '',\n        description TEXT NOT NULL DEFAULT '',\n        enrichment_status TEXT NOT NULL DEFAULT 'not_requested',\n        enrichment_model TEXT NOT NULL DEFAULT '',\n        enrichment_error TEXT NOT NULL DEFAULT '',\n        metadata_json TEXT NOT NULL DEFAULT '{}',\n        created_at DOUBLE PRECISION NOT NULL,\n        updated_at DOUBLE PRECISION NOT NULL,\n        PRIMARY KEY (user_id, id),\n        UNIQUE (user_id, document_id, ordinal),\n        UNIQUE (user_id, stored_name),\n        FOREIGN KEY (user_id, document_id)\n            REFERENCES storage_knowledge_documents(user_id, id)\n            ON DELETE CASCADE\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_knowledge_chunk_assets (\n        user_id BIGINT NOT NULL,\n        document_id TEXT NOT NULL,\n        chunk_ordinal BIGINT NOT NULL,\n        asset_id TEXT NOT NULL,\n        relation TEXT NOT NULL DEFAULT 'evidence',\n        ordinal BIGINT NOT NULL DEFAULT 0,\n        PRIMARY KEY (\n            user_id, document_id, chunk_ordinal, asset_id, relation\n        ),\n        FOREIGN KEY (user_id, document_id, chunk_ordinal)\n            REFERENCES storage_knowledge_chunks(user_id, document_id, ordinal)\n            ON DELETE CASCADE,\n        FOREIGN KEY (user_id, asset_id)\n            REFERENCES storage_knowledge_assets(user_id, id)\n            ON DELETE CASCADE\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_knowledge_terms (\n        user_id BIGINT NOT NULL,\n        term TEXT NOT NULL,\n        document_id TEXT NOT NULL,\n        chunk_ordinal BIGINT NOT NULL,\n        PRIMARY KEY (user_id, term, document_id, chunk_ordinal),\n        FOREIGN KEY (user_id, document_id, chunk_ordinal)\n            REFERENCES storage_knowledge_chunks(user_id, document_id, ordinal)\n            ON DELETE CASCADE\n    )\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_knowledge_documents_updated\n    ON storage_knowledge_documents(user_id, updated_at DESC, id)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_knowledge_documents_created\n    ON storage_knowledge_documents(user_id, created_at DESC, id)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_knowledge_assets_enrichment\n    ON storage_knowledge_assets(user_id, enrichment_status, updated_at, id)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_knowledge_terms_chunk\n    ON storage_knowledge_terms(user_id, document_id, chunk_ordinal)\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS optimizer_proposals (\n        user_id BIGINT NOT NULL,\n        id TEXT NOT NULL,\n        created_at TEXT NOT NULL,\n        title TEXT NOT NULL,\n        rationale TEXT NOT NULL,\n        action_type TEXT NOT NULL,\n        action_args TEXT NOT NULL,\n        severity TEXT NOT NULL DEFAULT 'low',\n        confidence DOUBLE PRECISION NOT NULL DEFAULT 0,\n        evidence TEXT NOT NULL DEFAULT '',\n        status TEXT NOT NULL DEFAULT 'pending_review',\n        status_reason TEXT NOT NULL DEFAULT '',\n        PRIMARY KEY (user_id, id)\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS optimizer_action_log (\n        user_id BIGINT NOT NULL,\n        id TEXT NOT NULL,\n        proposal_id TEXT NOT NULL,\n        applied_at TEXT NOT NULL,\n        expires_at TEXT NOT NULL DEFAULT '',\n        pre_metric TEXT NOT NULL DEFAULT '',\n        outcome_metric TEXT NOT NULL DEFAULT '',\n        outcome_recorded_at TEXT NOT NULL DEFAULT '',\n        reverted_at TEXT NOT NULL DEFAULT '',\n        revert_reason TEXT NOT NULL DEFAULT '',\n        PRIMARY KEY (user_id, id),\n        FOREIGN KEY (user_id, proposal_id)\n            REFERENCES optimizer_proposals(user_id, id)\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS log_aggregates (\n        fingerprint TEXT PRIMARY KEY,\n        level TEXT NOT NULL,\n        logger TEXT NOT NULL DEFAULT '',\n        template TEXT NOT NULL DEFAULT '',\n        sample TEXT NOT NULL DEFAULT '',\n        count BIGINT NOT NULL DEFAULT 0,\n        first_seen BIGINT NOT NULL DEFAULT 0,\n        last_seen BIGINT NOT NULL DEFAULT 0\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_plugin_manifests (\n        namespace TEXT PRIMARY KEY,\n        manifest_version BIGINT NOT NULL,\n        manifest_json BLOB NOT NULL,\n        updated_at_ms BIGINT NOT NULL\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_plugin_rows (\n        namespace TEXT NOT NULL,\n        table_name TEXT NOT NULL,\n        row_key TEXT NOT NULL,\n        document_json BLOB NOT NULL,\n        version BIGINT NOT NULL,\n        updated_at_ms BIGINT NOT NULL,\n        PRIMARY KEY (namespace, table_name, row_key)\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS storage_plugin_unique_values (\n        namespace TEXT NOT NULL,\n        table_name TEXT NOT NULL,\n        index_name TEXT NOT NULL,\n        index_value TEXT NOT NULL,\n        row_key TEXT NOT NULL,\n        PRIMARY KEY (namespace, table_name, index_name, index_value)\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS billing_ledger (\n        id TEXT PRIMARY KEY,\n        user_id TEXT NOT NULL,\n        ts BIGINT NOT NULL,\n        amount_micro BIGINT NOT NULL,\n        kind TEXT NOT NULL,\n        ref_type TEXT NOT NULL DEFAULT '',\n        ref_id TEXT NOT NULL DEFAULT '',\n        balance_after_micro BIGINT NOT NULL,\n        note TEXT NOT NULL DEFAULT ''\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS billing_wallets (\n        user_id TEXT PRIMARY KEY,\n        balance_micro BIGINT NOT NULL DEFAULT 0,\n        currency TEXT NOT NULL DEFAULT 'CREDIT',\n        low_balance_alert_micro BIGINT NOT NULL DEFAULT 0,\n        updated_at BIGINT NOT NULL\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS billing_redeem_codes (\n        code TEXT PRIMARY KEY,\n        amount_micro BIGINT NOT NULL,\n        batch TEXT NOT NULL DEFAULT '',\n        created_by TEXT NOT NULL DEFAULT '',\n        created_at BIGINT NOT NULL,\n        expires_at BIGINT NOT NULL DEFAULT 0,\n        redeemed_by TEXT NOT NULL DEFAULT '',\n        redeemed_at BIGINT NOT NULL DEFAULT 0,\n        note TEXT NOT NULL DEFAULT ''\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS billing_payments (\n        id TEXT PRIMARY KEY,\n        user_id TEXT NOT NULL,\n        provider TEXT NOT NULL,\n        provider_id TEXT NOT NULL DEFAULT '',\n        amount_minor BIGINT NOT NULL,\n        currency TEXT NOT NULL DEFAULT 'USD',\n        credit_micro BIGINT NOT NULL,\n        status TEXT NOT NULL DEFAULT 'pending',\n        created_at BIGINT NOT NULL,\n        settled_at BIGINT NOT NULL DEFAULT 0,\n        raw TEXT NOT NULL DEFAULT '{}'\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS integration_workspaces (\n        id BIGINT PRIMARY KEY,\n        user_id BIGINT NOT NULL,\n        project_root TEXT NOT NULL,\n        task_id TEXT NOT NULL,\n        title TEXT NOT NULL DEFAULT '',\n        workspace_path TEXT NOT NULL,\n        managed BIGINT NOT NULL DEFAULT 0,\n        state TEXT NOT NULL DEFAULT 'running',\n        base_sha TEXT NOT NULL DEFAULT '',\n        checkpoint_sha TEXT NOT NULL DEFAULT '',\n        candidate_sha TEXT NOT NULL DEFAULT '',\n        error TEXT NOT NULL DEFAULT '',\n        created_at DOUBLE PRECISION NOT NULL,\n        updated_at DOUBLE PRECISION NOT NULL,\n        UNIQUE(user_id, project_root, task_id)\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS integration_events (\n        id BIGINT PRIMARY KEY,\n        user_id BIGINT NOT NULL,\n        project_root TEXT NOT NULL,\n        task_id TEXT NOT NULL DEFAULT '',\n        kind TEXT NOT NULL,\n        message TEXT NOT NULL DEFAULT '',\n        detail TEXT NOT NULL DEFAULT '',\n        created_at DOUBLE PRECISION NOT NULL\n    )\n    ",
+  "\n    CREATE TABLE IF NOT EXISTS integration_workspace_meta (\n        user_id BIGINT NOT NULL,\n        project_root TEXT NOT NULL,\n        task_id TEXT NOT NULL,\n        origin_json TEXT NOT NULL DEFAULT '{}',\n        updated_at DOUBLE PRECISION NOT NULL,\n        PRIMARY KEY (user_id, project_root, task_id)\n    )\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS storage_plugin_rows_table_idx\n    ON storage_plugin_rows(namespace, table_name, updated_at_ms)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS storage_rate_limit_bucket_idx\n    ON storage_rate_limit_events(endpoint, client_key, occurred_at_ms)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_ledger_user_ts\n    ON billing_ledger(user_id, ts DESC)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_ledger_ref\n    ON billing_ledger(ref_type, ref_id)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_ledger_kind\n    ON billing_ledger(kind)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_ledger_reserve_sweep\n    ON billing_ledger(user_id, ref_id)\n    WHERE ref_type = 'reserve'\n    ",
+  "\n    CREATE UNIQUE INDEX IF NOT EXISTS uq_billing_ledger_idempotency\n    ON billing_ledger(user_id, kind, ref_type, ref_id)\n    WHERE ref_type <> '' AND ref_id <> ''\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_payments_user\n    ON billing_payments(user_id)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_payments_status\n    ON billing_payments(status)\n    ",
+  "\n    CREATE UNIQUE INDEX IF NOT EXISTS uq_billing_payments_provider_id\n    ON billing_payments(provider, provider_id)\n    WHERE provider_id <> ''\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_integration_ready\n    ON integration_workspaces(state, updated_at)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_integration_events_project\n    ON integration_events(project_root, id DESC)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_paper_lib_user\n    ON paper_library(user_id, updated_at DESC)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_paper_lib_hash\n    ON paper_library(paper_hash, updated_at DESC)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_paper_lib_arxiv\n    ON paper_library(user_id, arxiv_id, updated_at DESC)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_chat_artifact_conv\n    ON chat_artifacts(conv_id, created_at DESC)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_chat_artifact_msg\n    ON chat_artifacts(conv_id, msg_id)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_chat_artifact_sha\n    ON chat_artifacts(conv_id, content_sha256)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_chat_artifact_task\n    ON chat_artifacts(task_id)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_tool_result_artifact_expiry\n    ON tool_result_artifacts(expires_at_ms, user_id)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_tenant_users_role\n    ON tenant_users(role)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_tenant_users_status_created\n    ON tenant_users(status, created_at DESC)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_auth_credentials_owner_created\n    ON auth_credentials(tenant_id, owner_user_id, created_at DESC, id DESC)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_auth_credentials_account\n    ON auth_credentials(account_user_id)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_byo_providers_owner_created\n    ON byo_providers(tenant_id, owner_user_id, created_at DESC, id DESC)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_model_routing_secrets_owner_updated\n    ON storage_model_routing_secrets(\n        tenant_id, owner_user_id, updated_at, secret_reference)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_swarm_sessions_status\n    ON swarm_sessions(status)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_swarm_agents_key\n    ON swarm_agents(swarm_key)\n    "
+ ],
+ "migrations": {
+  "16": [
+   "ALTER TABLE storage_timers ADD COLUMN user_id BIGINT NOT NULL DEFAULT 1",
+   "ALTER TABLE storage_scheduled_tasks ADD COLUMN user_id BIGINT NOT NULL DEFAULT 1"
+  ],
+  "17": [
+   "UPDATE storage_timers SET status='orphaned' WHERE status='active' AND origin='inline'"
+  ],
+  "18": [
+   "ALTER TABLE storage_queue_items ADD COLUMN user_id BIGINT NOT NULL DEFAULT 1",
+   "ALTER TABLE storage_autopilot_markers ADD COLUMN user_id BIGINT NOT NULL DEFAULT 1",
+   "DROP INDEX IF EXISTS idx_storage_queue_order",
+   "CREATE INDEX idx_storage_queue_order ON storage_queue_items(user_id, conv_id, priority, position)"
+  ],
+  "20": [
+   "ALTER TABLE storage_board_tasks ADD COLUMN user_id BIGINT NOT NULL DEFAULT 1",
+   "ALTER TABLE storage_watch_items ADD COLUMN user_id BIGINT NOT NULL DEFAULT 1",
+   "DROP INDEX IF EXISTS idx_storage_board_tasks_project",
+   "CREATE INDEX idx_storage_board_tasks_project ON storage_board_tasks(user_id, project_path, created_at, id)",
+   "DROP INDEX IF EXISTS idx_storage_watch_items_project",
+   "CREATE INDEX idx_storage_watch_items_project ON storage_watch_items(user_id, project_path, updated_at DESC)",
+   "UPDATE storage_records SET record_key = '1:' || record_key WHERE namespace = 'project_charter'",
+   "UPDATE storage_events SET task_id = 'project-feed:1:' || SUBSTR(task_id, LENGTH('project-feed:') + 1) WHERE task_id LIKE 'project-feed:%'",
+   "UPDATE storage_events SET task_id = 'project-status:1:' || SUBSTR(task_id, LENGTH('project-status:') + 1) WHERE task_id LIKE 'project-status:%'"
+  ],
+  "21": [
+   "CREATE TABLE integration_workspaces_v21 (id BIGINT PRIMARY KEY, user_id BIGINT NOT NULL, project_root TEXT NOT NULL, task_id TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', workspace_path TEXT NOT NULL, managed BIGINT NOT NULL DEFAULT 0, state TEXT NOT NULL DEFAULT 'running', base_sha TEXT NOT NULL DEFAULT '', checkpoint_sha TEXT NOT NULL DEFAULT '', candidate_sha TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', created_at DOUBLE PRECISION NOT NULL, updated_at DOUBLE PRECISION NOT NULL, UNIQUE(user_id, project_root, task_id))",
+   "INSERT INTO integration_workspaces_v21(id, user_id, project_root, task_id, title, workspace_path, managed, state, base_sha, checkpoint_sha, candidate_sha, error, created_at, updated_at) SELECT id, 1, project_root, task_id, title, workspace_path, managed, state, base_sha, checkpoint_sha, candidate_sha, error, created_at, updated_at FROM integration_workspaces",
+   "DROP TABLE integration_workspaces",
+   "ALTER TABLE integration_workspaces_v21 RENAME TO integration_workspaces",
+   "CREATE TABLE integration_events_v21 (id BIGINT PRIMARY KEY, user_id BIGINT NOT NULL, project_root TEXT NOT NULL, task_id TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL, message TEXT NOT NULL DEFAULT '', detail TEXT NOT NULL DEFAULT '', created_at DOUBLE PRECISION NOT NULL)",
+   "INSERT INTO integration_events_v21(id, user_id, project_root, task_id, kind, message, detail, created_at) SELECT id, 1, project_root, task_id, kind, message, detail, created_at FROM integration_events",
+   "DROP TABLE integration_events",
+   "ALTER TABLE integration_events_v21 RENAME TO integration_events",
+   "CREATE TABLE integration_workspace_meta_v21 (user_id BIGINT NOT NULL, project_root TEXT NOT NULL, task_id TEXT NOT NULL, origin_json TEXT NOT NULL DEFAULT '{}', updated_at DOUBLE PRECISION NOT NULL, PRIMARY KEY(user_id, project_root, task_id))",
+   "INSERT INTO integration_workspace_meta_v21(user_id, project_root, task_id, origin_json, updated_at) SELECT 1, project_root, task_id, origin_json, updated_at FROM integration_workspace_meta",
+   "DROP TABLE integration_workspace_meta",
+   "ALTER TABLE integration_workspace_meta_v21 RENAME TO integration_workspace_meta"
+  ],
+  "22": [
+   "ALTER TABLE storage_events ADD COLUMN stream_kind TEXT NOT NULL DEFAULT 'task'",
+   "ALTER TABLE storage_events ADD COLUMN event_type TEXT NOT NULL DEFAULT ''",
+   "ALTER TABLE storage_events ADD COLUMN event_kind TEXT NOT NULL DEFAULT ''",
+   "UPDATE storage_events SET stream_kind='project_feed' WHERE task_id LIKE 'project-feed:%'",
+   "UPDATE storage_events SET stream_kind='project_status' WHERE task_id LIKE 'project-status:%'",
+   "DROP INDEX IF EXISTS idx_storage_events_created"
+  ],
+  "23": [
+   "ALTER TABLE storage_attempt_events ADD COLUMN payload_bytes BIGINT NOT NULL DEFAULT 0"
+  ],
+  "24": [],
+  "25": [
+   "CREATE TABLE tenant_users_v25 (id TEXT PRIMARY KEY, owner_user_id BIGINT NOT NULL UNIQUE, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL DEFAULT '', display_name TEXT NOT NULL DEFAULT '', role TEXT NOT NULL DEFAULT 'user', status TEXT NOT NULL DEFAULT 'active', created_at BIGINT NOT NULL, last_login_at BIGINT NOT NULL DEFAULT 0, email_verified BIGINT NOT NULL DEFAULT 0, metadata TEXT NOT NULL DEFAULT '{}')",
+   "INSERT INTO tenant_users_v25(id, owner_user_id, email, password_hash, display_name, role, status, created_at, last_login_at, email_verified, metadata) SELECT id, ROW_NUMBER() OVER (ORDER BY created_at, id) + 1, email, password_hash, display_name, role, status, created_at, last_login_at, email_verified, metadata FROM tenant_users",
+   "DROP TABLE tenant_users",
+   "ALTER TABLE tenant_users_v25 RENAME TO tenant_users",
+   "CREATE INDEX idx_tenant_users_email ON tenant_users(email)",
+   "CREATE INDEX idx_tenant_users_role ON tenant_users(role)",
+   "CREATE INDEX idx_tenant_users_status_created ON tenant_users(status, created_at DESC)"
+  ],
+  "26": [],
+  "27": [],
+  "28": [
+   "CREATE TABLE orchestration_runs_v28 (id TEXT PRIMARY KEY, user_id BIGINT NOT NULL, tenant_id TEXT NOT NULL DEFAULT '', orch_id TEXT NOT NULL DEFAULT '', name TEXT NOT NULL DEFAULT '', definition TEXT NOT NULL DEFAULT '{}', input TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', final TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', created_by TEXT NOT NULL DEFAULT '', created_at BIGINT NOT NULL DEFAULT 0, updated_at BIGINT NOT NULL DEFAULT 0, finished_at BIGINT NOT NULL DEFAULT 0)",
+   "INSERT INTO orchestration_runs_v28(id, user_id, tenant_id, orch_id, name, definition, input, status, final, error, created_by, created_at, updated_at, finished_at) SELECT id, 1, '', orch_id, name, definition, input, status, final, error, created_by, created_at, updated_at, finished_at FROM orchestration_runs",
+   "DROP TABLE orchestration_runs",
+   "ALTER TABLE orchestration_runs_v28 RENAME TO orchestration_runs",
+   "CREATE TABLE orchestration_run_events_v28 (run_id TEXT NOT NULL, user_id BIGINT NOT NULL, tenant_id TEXT NOT NULL DEFAULT '', seq BIGINT NOT NULL, type TEXT NOT NULL DEFAULT '', node_id TEXT NOT NULL DEFAULT '', payload TEXT NOT NULL DEFAULT '{}', ts BIGINT NOT NULL DEFAULT 0, PRIMARY KEY(run_id, user_id, tenant_id, seq))",
+   "INSERT INTO orchestration_run_events_v28(run_id, user_id, tenant_id, seq, type, node_id, payload, ts) SELECT run_id, 1, '', seq, type, node_id, payload, ts FROM orchestration_run_events",
+   "DROP TABLE orchestration_run_events",
+   "ALTER TABLE orchestration_run_events_v28 RENAME TO orchestration_run_events",
+   "CREATE INDEX idx_orch_runs_status ON orchestration_runs(tenant_id, user_id, status, updated_at DESC)",
+   "CREATE INDEX idx_orch_runs_orch ON orchestration_runs(tenant_id, user_id, orch_id, created_at DESC)"
+  ],
+  "29": [],
+  "30": [
+   "ALTER TABLE auth_credentials ADD COLUMN revoked_at DOUBLE PRECISION"
+  ],
+  "31": [],
+  "32": [
+   "CREATE TABLE paper_reports_v32 (user_id BIGINT NOT NULL, paper_hash TEXT NOT NULL, lang TEXT NOT NULL DEFAULT 'en', report TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '', meta TEXT NOT NULL DEFAULT '', created_at BIGINT NOT NULL, PRIMARY KEY(user_id, paper_hash, lang))",
+   "INSERT INTO paper_reports_v32(user_id, paper_hash, lang, report, model, meta, created_at) SELECT 1, paper_hash, lang, report, model, meta, created_at FROM paper_reports",
+   "DROP TABLE paper_reports",
+   "ALTER TABLE paper_reports_v32 RENAME TO paper_reports",
+   "CREATE TABLE paper_translations_v32 (user_id BIGINT NOT NULL, paper_hash TEXT NOT NULL, lang TEXT NOT NULL, text TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '', created_at BIGINT NOT NULL, PRIMARY KEY(user_id, paper_hash, lang))",
+   "INSERT INTO paper_translations_v32(user_id, paper_hash, lang, text, model, created_at) SELECT 1, paper_hash, lang, text, model, created_at FROM paper_translations",
+   "DROP TABLE paper_translations",
+   "ALTER TABLE paper_translations_v32 RENAME TO paper_translations",
+   "CREATE TABLE paper_podcasts_v32 (user_id BIGINT NOT NULL, paper_hash TEXT NOT NULL, mode TEXT NOT NULL, lang TEXT NOT NULL, voice TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'generating', script_json TEXT NOT NULL DEFAULT '', file_path TEXT NOT NULL DEFAULT '', duration_sec DOUBLE PRECISION NOT NULL DEFAULT 0, model TEXT NOT NULL DEFAULT '', tts_model TEXT NOT NULL DEFAULT '', meta TEXT NOT NULL DEFAULT '', created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY(user_id, paper_hash, mode, lang, voice))",
+   "INSERT INTO paper_podcasts_v32(user_id, paper_hash, mode, lang, voice, status, script_json, file_path, duration_sec, model, tts_model, meta, created_at, updated_at) SELECT 1, paper_hash, mode, lang, voice, status, script_json, file_path, duration_sec, model, tts_model, meta, created_at, updated_at FROM paper_podcasts",
+   "DROP TABLE paper_podcasts",
+   "ALTER TABLE paper_podcasts_v32 RENAME TO paper_podcasts",
+   "CREATE TABLE paper_notes_v32 (user_id BIGINT NOT NULL, id TEXT NOT NULL, paper_hash TEXT NOT NULL DEFAULT '', lang TEXT NOT NULL DEFAULT '', anchor TEXT NOT NULL DEFAULT '{}', note TEXT NOT NULL DEFAULT '', created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, PRIMARY KEY(user_id, id))",
+   "INSERT INTO paper_notes_v32(user_id, id, paper_hash, lang, anchor, note, created_at, updated_at) SELECT 1, id, paper_hash, lang, anchor, note, created_at, updated_at FROM paper_notes",
+   "DROP TABLE paper_notes",
+   "ALTER TABLE paper_notes_v32 RENAME TO paper_notes"
+  ],
+  "33": [],
+  "34": [],
+  "35": [],
+  "36": [
+   "ALTER TABLE storage_scheduled_tasks ADD COLUMN system_key TEXT NOT NULL DEFAULT ''",
+   "DELETE FROM storage_scheduled_tasks WHERE task_type IN ('pg_backup', 'pg_basebackup')"
+  ],
+  "37": [
+   "ALTER TABLE optimizer_proposals ADD COLUMN user_id BIGINT NOT NULL DEFAULT 1",
+   "ALTER TABLE optimizer_action_log ADD COLUMN user_id BIGINT NOT NULL DEFAULT 1",
+   "CREATE TABLE optimizer_proposals_v37 (user_id BIGINT NOT NULL, id TEXT NOT NULL, created_at TEXT NOT NULL, title TEXT NOT NULL, rationale TEXT NOT NULL, action_type TEXT NOT NULL, action_args TEXT NOT NULL, severity TEXT NOT NULL DEFAULT 'low', confidence DOUBLE PRECISION NOT NULL DEFAULT 0, evidence TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending_review', status_reason TEXT NOT NULL DEFAULT '', PRIMARY KEY(user_id, id))",
+   "INSERT INTO optimizer_proposals_v37(user_id, id, created_at, title, rationale, action_type, action_args, severity, confidence, evidence, status, status_reason) SELECT user_id, id, created_at, title, rationale, action_type, action_args, severity, confidence, evidence, status, status_reason FROM optimizer_proposals",
+   "CREATE TABLE optimizer_action_log_v37 (user_id BIGINT NOT NULL, id TEXT NOT NULL, proposal_id TEXT NOT NULL, applied_at TEXT NOT NULL, expires_at TEXT NOT NULL DEFAULT '', pre_metric TEXT NOT NULL DEFAULT '', outcome_metric TEXT NOT NULL DEFAULT '', outcome_recorded_at TEXT NOT NULL DEFAULT '', reverted_at TEXT NOT NULL DEFAULT '', revert_reason TEXT NOT NULL DEFAULT '', PRIMARY KEY(user_id, id), FOREIGN KEY(user_id, proposal_id) REFERENCES optimizer_proposals_v37(user_id, id))",
+   "INSERT INTO optimizer_action_log_v37(user_id, id, proposal_id, applied_at, expires_at, pre_metric, outcome_metric, outcome_recorded_at, reverted_at, revert_reason) SELECT user_id, id, proposal_id, applied_at, expires_at, pre_metric, outcome_metric, outcome_recorded_at, reverted_at, revert_reason FROM optimizer_action_log",
+   "DROP TABLE optimizer_action_log",
+   "DROP TABLE optimizer_proposals",
+   "ALTER TABLE optimizer_proposals_v37 RENAME TO optimizer_proposals",
+   "ALTER TABLE optimizer_action_log_v37 RENAME TO optimizer_action_log"
+  ],
+  "38": [],
+  "39": [],
+  "40": [
+   "ALTER TABLE storage_compaction_archives ADD COLUMN receipt_json JSONDOC NOT NULL DEFAULT '{}'"
+  ],
+  "41": [
+   "ALTER TABLE storage_knowledge_documents ADD COLUMN scope TEXT NOT NULL DEFAULT 'library'",
+   "ALTER TABLE storage_knowledge_documents ADD COLUMN media_metadata_json TEXT NOT NULL DEFAULT '{}'",
+   "ALTER TABLE storage_knowledge_assets ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'"
+  ],
+  "42": [
+   "ALTER TABLE storage_conversation_trash ADD COLUMN messages_json JSONDOC NOT NULL DEFAULT '[]'"
+  ],
+  "43": [
+   "DROP TABLE storage_rate_limit_events",
+   "CREATE TABLE storage_rate_limit_events (event_id TEXT PRIMARY KEY, endpoint TEXT NOT NULL, client_key TEXT NOT NULL, occurred_at_ms BIGINT NOT NULL, expires_at_ms BIGINT NOT NULL)"
+  ],
+  "44": [
+   "CREATE UNIQUE INDEX IF NOT EXISTS idx_goal_runs_one_active ON orchestration_runs(tenant_id, user_id, orch_id) WHERE created_by = 'chat_goal_mode' AND status IN ('pending', 'running', 'paused')"
+  ],
+  "45": [
+   "ALTER TABLE storage_generation_attempts ADD COLUMN dispatch_mode TEXT NOT NULL DEFAULT ''",
+   "CREATE INDEX IF NOT EXISTS idx_storage_generation_attempts_dispatchable ON storage_generation_attempts(created_at, attempt_id) WHERE status = 'pending' AND task_id = '' AND dispatch_mode = 'conversation_executor'"
+  ],
+  "46": [
+   "ALTER TABLE storage_generation_attempts ADD COLUMN timing_trace_json JSONDOC NOT NULL DEFAULT '{}'",
+   "CREATE INDEX IF NOT EXISTS idx_storage_generation_attempts_task ON storage_generation_attempts(task_id) WHERE task_id <> ''"
+  ],
+  "47": [
+   "CREATE INDEX IF NOT EXISTS idx_storage_generation_attempts_conversation_created ON storage_generation_attempts(conversation_id, created_at DESC, attempt_id DESC) WHERE task_id <> ''"
+  ],
+  "48": [
+   "ALTER TABLE storage_conversation_turns ADD COLUMN projection_materialized_revision BIGINT",
+   "ALTER TABLE storage_conversation_turns ADD COLUMN projection_patch_count BIGINT NOT NULL DEFAULT 0",
+   "ALTER TABLE storage_conversation_turns ADD COLUMN projection_patch_bytes BIGINT NOT NULL DEFAULT 0",
+   "CREATE INDEX IF NOT EXISTS idx_storage_attempt_events_projection_chain ON storage_attempt_events(attempt_id, projection_revision, sequence)"
+  ],
+  "49": [
+   "ALTER TABLE storage_conversation_turns ADD COLUMN projection_checkpoint_revision BIGINT"
+  ],
+  "50": [
+   "UPDATE storage_turn_projection_checkpoints SET projection_revision=projection_revision+1 WHERE EXISTS (SELECT 1 FROM storage_conversation_turns AS turn_row WHERE turn_row.turn_id=storage_turn_projection_checkpoints.turn_id AND turn_row.conversation_id=storage_turn_projection_checkpoints.conversation_id AND turn_row.user_id=storage_turn_projection_checkpoints.user_id AND turn_row.current_attempt_id=storage_turn_projection_checkpoints.attempt_id AND turn_row.projection_checkpoint_revision=storage_turn_projection_checkpoints.projection_revision AND turn_row.projection_revision=storage_turn_projection_checkpoints.projection_revision+1 AND turn_row.projection_materialized_revision IS NULL AND turn_row.projection_patch_count=0 AND turn_row.projection_patch_bytes=0)",
+   "UPDATE storage_conversation_turns SET projection_checkpoint_revision=projection_revision WHERE projection_checkpoint_revision IS NOT NULL AND projection_revision=projection_checkpoint_revision+1 AND projection_materialized_revision IS NULL AND projection_patch_count=0 AND projection_patch_bytes=0 AND EXISTS (SELECT 1 FROM storage_turn_projection_checkpoints AS checkpoint WHERE checkpoint.turn_id=storage_conversation_turns.turn_id AND checkpoint.conversation_id=storage_conversation_turns.conversation_id AND checkpoint.user_id=storage_conversation_turns.user_id AND checkpoint.attempt_id=storage_conversation_turns.current_attempt_id AND checkpoint.projection_revision=storage_conversation_turns.projection_revision)"
+  ],
+  "51": [
+   "ALTER TABLE storage_conversation_changes ADD COLUMN attempt_sequence BIGINT",
+   "CREATE INDEX IF NOT EXISTS idx_storage_conversation_changes_attempt_event_reference ON storage_conversation_changes(attempt_id, attempt_sequence) WHERE attempt_sequence IS NOT NULL"
+  ],
+  "52": [
+   "CREATE TABLE IF NOT EXISTS storage_command_receipts_v2 (command_key BLOB PRIMARY KEY, operation TEXT NOT NULL, request_digest BLOB NOT NULL, response_json BLOB NOT NULL, committed_at_ms BIGINT NOT NULL, CHECK (length(command_key) = 32), CHECK (length(request_digest) = 32)) WITHOUT ROWID"
+  ],
+  "53": [
+   "CREATE TABLE IF NOT EXISTS storage_desktop_egress_preferences (owner_user_id BIGINT PRIMARY KEY, agent_id TEXT NOT NULL DEFAULT '', updated_at_ms BIGINT NOT NULL)"
+  ],
+  "54": [
+   "CREATE TABLE IF NOT EXISTS storage_model_routing_authorities (owner_user_id BIGINT NOT NULL, tenant_id TEXT NOT NULL DEFAULT '', revision BIGINT NOT NULL, document_json JSONDOC NOT NULL, backup_json JSONDOC, migration_receipt_json JSONDOC, updated_at DOUBLE PRECISION NOT NULL, PRIMARY KEY (owner_user_id, tenant_id))",
+   "CREATE TABLE IF NOT EXISTS storage_model_routing_secrets (owner_user_id BIGINT NOT NULL, tenant_id TEXT NOT NULL DEFAULT '', secret_reference TEXT NOT NULL, ciphertext TEXT NOT NULL, key_hint TEXT NOT NULL DEFAULT '', created_at DOUBLE PRECISION NOT NULL, updated_at DOUBLE PRECISION NOT NULL, PRIMARY KEY (owner_user_id, tenant_id, secret_reference))",
+   "CREATE INDEX IF NOT EXISTS idx_model_routing_secrets_owner_updated ON storage_model_routing_secrets(tenant_id, owner_user_id, updated_at, secret_reference)"
+  ],
+  "55": [
+   "ALTER TABLE storage_conversation_turns ADD COLUMN presentation_id TEXT NOT NULL DEFAULT ''",
+   "ALTER TABLE storage_generation_attempts ADD COLUMN queue_id TEXT NOT NULL DEFAULT ''",
+   "ALTER TABLE storage_generation_attempts ADD COLUMN queue_state TEXT NOT NULL DEFAULT ''",
+   "ALTER TABLE storage_queue_items ADD COLUMN input_turn_id TEXT NOT NULL DEFAULT ''",
+   "ALTER TABLE storage_queue_items ADD COLUMN output_turn_id TEXT NOT NULL DEFAULT ''",
+   "ALTER TABLE storage_queue_items ADD COLUMN attempt_id TEXT NOT NULL DEFAULT ''",
+   "DROP INDEX IF EXISTS idx_storage_generation_attempts_dispatchable"
+  ],
+  "56": [
+   "ALTER TABLE storage_events ADD COLUMN owner_user_id BIGINT NOT NULL DEFAULT 0",
+   "ALTER TABLE storage_events ADD COLUMN project_key TEXT NOT NULL DEFAULT ''",
+   "ALTER TABLE storage_events ADD COLUMN project_sequence BIGINT NOT NULL DEFAULT 0",
+   "CREATE TABLE IF NOT EXISTS storage_project_brain_projects (owner_user_id BIGINT NOT NULL, project_key TEXT NOT NULL, head_sequence BIGINT NOT NULL, checkpoint_sequence BIGINT NOT NULL DEFAULT 0, projection_json JSONDOC NOT NULL, updated_at_ms BIGINT NOT NULL, PRIMARY KEY (owner_user_id, project_key))",
+   "CREATE INDEX IF NOT EXISTS idx_storage_project_brain_updated ON storage_project_brain_projects(owner_user_id, updated_at_ms, project_key)",
+   "CREATE UNIQUE INDEX IF NOT EXISTS idx_storage_events_project_sequence ON storage_events(owner_user_id, project_key, project_sequence) WHERE project_sequence > 0"
+  ],
+  "57": [
+   "CREATE TABLE IF NOT EXISTS storage_raw_archives (archive_id TEXT PRIMARY KEY, user_id BIGINT NOT NULL, conversation_id TEXT NOT NULL, turn_id TEXT NOT NULL, attempt_id TEXT NOT NULL, task_id TEXT NOT NULL, round_num BIGINT NOT NULL, transport_attempt BIGINT NOT NULL DEFAULT 0, request_blob BLOB NOT NULL, response_blob BLOB NOT NULL, request_bytes BIGINT NOT NULL, response_bytes BIGINT NOT NULL, stored_bytes BIGINT NOT NULL, request_sha256 TEXT NOT NULL, response_sha256 TEXT NOT NULL, integrity TEXT NOT NULL, truncation_reason TEXT NOT NULL DEFAULT '', summary_json JSONDOC NOT NULL DEFAULT '{}', created_at_ms BIGINT NOT NULL)",
+   "CREATE INDEX IF NOT EXISTS idx_storage_raw_archives_task_round ON storage_raw_archives(user_id, task_id, round_num, created_at_ms, archive_id)",
+   "CREATE INDEX IF NOT EXISTS idx_storage_raw_archives_attempt ON storage_raw_archives(user_id, attempt_id, created_at_ms, archive_id)"
+  ],
+  "58": [
+   "CREATE TABLE IF NOT EXISTS storage_browser_site_observation_owners (owner_user_id BIGINT PRIMARY KEY, touched_at_ms BIGINT NOT NULL)",
+   "CREATE TABLE IF NOT EXISTS storage_browser_site_observations (owner_user_id BIGINT NOT NULL, origin TEXT NOT NULL, route_family TEXT NOT NULL, operation TEXT NOT NULL, schema_version BIGINT NOT NULL, strategy TEXT NOT NULL, hints_json TEXT NOT NULL DEFAULT '[]', anti_bot_vendor TEXT NOT NULL DEFAULT '', auth_signal TEXT NOT NULL DEFAULT 'none', status TEXT NOT NULL DEFAULT 'active', confidence_milli BIGINT NOT NULL, visit_count BIGINT NOT NULL, successful_visits BIGINT NOT NULL, hinted_visits BIGINT NOT NULL, hint_match_visits BIGINT NOT NULL, consecutive_failures BIGINT NOT NULL, last_outcome TEXT NOT NULL, last_elapsed_ms BIGINT NOT NULL DEFAULT 0, last_verified_at_ms BIGINT NOT NULL, last_observed_at_ms BIGINT NOT NULL, expires_at_ms BIGINT NOT NULL, payload_bytes BIGINT NOT NULL, PRIMARY KEY (owner_user_id, origin, route_family, operation))",
+   "CREATE INDEX IF NOT EXISTS idx_browser_site_observations_owner_lru ON storage_browser_site_observations(owner_user_id, last_observed_at_ms, origin, route_family, operation)"
+  ],
+  "59": [
+   "ALTER TABLE storage_search_conversations ADD COLUMN title TEXT NOT NULL DEFAULT ''"
+  ],
+  "60": [
+   "ALTER TABLE storage_compaction_archives ADD COLUMN post_messages_json JSONDOC"
+  ],
+  "61": [
+   "ALTER TABLE storage_compaction_archives ADD COLUMN archive_scope TEXT NOT NULL DEFAULT ''",
+   "CREATE INDEX IF NOT EXISTS idx_storage_compaction_archives_scope ON storage_compaction_archives(user_id,conversation_id,archive_scope,created_at_ms,archive_id)"
+  ],
+  "62": [
+   "ALTER TABLE storage_browser_site_observations ADD COLUMN hinted_visits BIGINT NOT NULL DEFAULT 0",
+   "ALTER TABLE storage_browser_site_observations ADD COLUMN hint_match_visits BIGINT NOT NULL DEFAULT 0"
+  ],
+  "63": [],
+  "64": [
+   "ALTER TABLE storage_worker_jobs ADD COLUMN lease_authority_epoch TEXT NOT NULL DEFAULT ''"
+  ],
+  "65": [
+   "ALTER TABLE storage_worker_jobs ADD COLUMN wake_sequence BIGINT NOT NULL DEFAULT 0 CHECK (wake_sequence>=0)"
+  ],
+  "66": [
+   "ALTER TABLE orchestration_runs ADD COLUMN continuity_pending INTEGER NOT NULL DEFAULT 0"
+  ],
+  "67": [
+   "ALTER TABLE storage_conversation_turns ADD COLUMN model_context_display_offset BIGINT NOT NULL DEFAULT 0 CHECK (model_context_display_offset>=0)"
+  ],
+  "68": [],
+  "69": [],
+  "70": [
+   "ALTER TABLE swarm_agents ADD COLUMN checkpoint_id TEXT NOT NULL DEFAULT ''"
+  ]
+ },
+ "chunkSchema": [
+  "CREATE TABLE IF NOT EXISTS storage_search_chunks (user_id BIGINT NOT NULL,conversation_id TEXT NOT NULL,turn_id TEXT NOT NULL,chunk_index BIGINT NOT NULL,ordinal BIGINT NOT NULL,role TEXT NOT NULL,match_field TEXT NOT NULL,search_text TEXT NOT NULL,folded_text TEXT NOT NULL,generation_token TEXT NOT NULL,PRIMARY KEY(user_id,conversation_id,turn_id,chunk_index))",
+  "CREATE INDEX IF NOT EXISTS idx_storage_search_chunks_owner ON storage_search_chunks(user_id,conversation_id,ordinal,turn_id,chunk_index)"
+ ],
+ "postMigrationIndexes": [
+  "CREATE INDEX IF NOT EXISTS idx_scheduler_execution_owner ON storage_scheduled_tasks(user_id, last_execution_task_id) WHERE task_type='agent'",
+  "CREATE INDEX IF NOT EXISTS idx_storage_compaction_archives_scope ON storage_compaction_archives(user_id,conversation_id,archive_scope,created_at_ms,archive_id)",
+  "CREATE UNIQUE INDEX IF NOT EXISTS idx_storage_events_project_sequence ON storage_events(owner_user_id, project_key, project_sequence) WHERE project_sequence > 0",
+  "CREATE INDEX IF NOT EXISTS idx_storage_conversation_changes_attempt_event_reference ON storage_conversation_changes(attempt_id, attempt_sequence) WHERE attempt_sequence IS NOT NULL",
+  "CREATE INDEX IF NOT EXISTS idx_storage_generation_attempts_dispatchable ON storage_generation_attempts(created_at, attempt_id) WHERE status = 'pending' AND task_id = '' AND dispatch_mode = 'conversation_executor' AND queue_state = ''",
+  "CREATE INDEX IF NOT EXISTS storage_rate_limit_bucket_idx ON storage_rate_limit_events(endpoint, client_key, occurred_at_ms)",
+  "CREATE INDEX IF NOT EXISTS storage_rate_limit_expiry_idx ON storage_rate_limit_events(expires_at_ms, event_id)",
+  "CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduler_system_task ON storage_scheduled_tasks(user_id, system_key) WHERE system_key <> ''",
+  "CREATE INDEX IF NOT EXISTS idx_orch_continuity_pending ON orchestration_runs(finished_at, id, user_id, tenant_id) WHERE continuity_pending = 1",
+  "CREATE INDEX IF NOT EXISTS idx_orch_runs_status ON orchestration_runs(tenant_id, user_id, status, updated_at DESC)",
+  "CREATE INDEX IF NOT EXISTS idx_orch_runs_orch ON orchestration_runs(tenant_id, user_id, orch_id, created_at DESC)",
+  "CREATE UNIQUE INDEX IF NOT EXISTS idx_goal_runs_one_active ON orchestration_runs(tenant_id, user_id, orch_id) WHERE created_by = 'chat_goal_mode' AND status IN ('pending', 'running', 'paused')",
+  "CREATE INDEX IF NOT EXISTS idx_orch_definitions_owner_updated ON orchestration_definitions(tenant_id, user_id, updated_at_ms DESC, id)",
+  "CREATE INDEX IF NOT EXISTS idx_paper_reports_owner_latest ON paper_reports(user_id, paper_hash, created_at DESC)",
+  "CREATE INDEX IF NOT EXISTS idx_paper_notes_owner_document ON paper_notes(user_id, paper_hash, lang, created_at, id)",
+  "CREATE INDEX IF NOT EXISTS idx_opt_prop_owner_created ON optimizer_proposals(user_id, created_at DESC, id)",
+  "CREATE INDEX IF NOT EXISTS idx_opt_prop_owner_status ON optimizer_proposals(user_id, status, created_at DESC, id)",
+  "CREATE INDEX IF NOT EXISTS idx_opt_prop_owner_action ON optimizer_proposals(user_id, action_type, created_at DESC, id)",
+  "CREATE INDEX IF NOT EXISTS idx_opt_actlog_owner_proposal ON optimizer_action_log(user_id, proposal_id, applied_at DESC, id)",
+  "CREATE INDEX IF NOT EXISTS idx_opt_actlog_owner_applied ON optimizer_action_log(user_id, applied_at DESC, id)",
+  "CREATE INDEX IF NOT EXISTS idx_opt_actlog_owner_expires ON optimizer_action_log(user_id, expires_at, id)"
+ ],
+ "deferredIndexes": [
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_conversations_meta\n    ON storage_conversations(user_id, updated_at_ms, id, title,\n                             created_at_ms, settings_json, msg_count, rev)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_events_streaming_retention_v2\n    ON storage_events(created_at_ms) WHERE stream_kind = 'task' AND event_type NOT IN ('flow_iteration','messages_snapshot','round_end','round_start','round_usage','tool_wire_projection') AND event_type <> ''\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_events_structural_retention_v2\n    ON storage_events(created_at_ms) WHERE stream_kind = 'task' AND (event_type IN ('flow_iteration','messages_snapshot','round_end','round_start','round_usage','tool_wire_projection') OR event_type = '')\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_log_aggregates_last_seen\n    ON log_aggregates(last_seen, fingerprint)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_integration_owner_ready\n    ON integration_workspaces(user_id, project_root, state, updated_at)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_integration_owner_events\n    ON integration_events(user_id, project_root, id DESC)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_generation_attempts_settled\n    ON storage_generation_attempts(settled_at, attempt_id)\n    WHERE settled_at IS NOT NULL\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_conversation_turns_current_attempt\n    ON storage_conversation_turns(current_attempt_id)\n    ",
+  "\n    CREATE INDEX IF NOT EXISTS idx_storage_conversation_changes_attempt\n    ON storage_conversation_changes(attempt_id)\n    "
+ ],
+ "retiredTables": [
+  "storage_board_tasks",
+  "storage_watch_items",
+  "storage_watch_runs",
+  "storage_watch_responses"
+ ]
+}

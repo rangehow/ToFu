@@ -1,0 +1,61 @@
+{
+ "schema": "tofu.golden-documents.tolerances/v1",
+ "review": "docs/GOLDEN_DOCUMENTS.md#tolerance-list",
+ "rules": {
+  "number": {
+   "abs": 1e-09,
+   "why": "JSON numbers compare by value; 1e-9 absorbs only float formatting/rounding of the same arithmetic (EMU/12700 point conversions), never a different layout."
+  },
+  "raster": {
+   "maxMeanAbsDiff": 2.0,
+   "pixelThreshold": 48,
+   "maxFractionOverThreshold": 0.01,
+   "why": "Rendered pixels (PDF figure clips, Chromium page previews) must have identical dimensions; per-channel mean |difference| over RGBA <= 2/255 and at most 1% of pixels whose largest RGB channel difference exceeds 48 absorb anti-aliasing, resampling and codec differences, while a moved, missing or recoloured element fails."
+  },
+  "ooxml": {
+   "maskedElements": [
+    "{http://purl.org/dc/terms/}created",
+    "{http://purl.org/dc/terms/}modified"
+   ],
+   "why": "A package compares as its part set; .xml/.rels parts by C14N 2.0 canonical form (attribute order, namespace prefixes declaration placement and inter-element whitespace are not semantic) with the creation/modification timestamps masked; ZIP entry order, timestamps and compression are ignored; nested .xlsx/.docx/.pptx parts recurse; .fntdata parts compare as fonts; every other part byte-exact."
+  },
+  "font": {
+   "why": "An embedded font part compares by family/subfamily name and its exact cmap codepoint set (the glyph coverage the subset promises), not by bytes: subsetters legitimately differ in table layout and glyph order."
+  },
+  "bytes": {
+   "why": "Imported media and other opaque blobs are byte-exact (sha256)."
+  },
+  "text": {
+   "why": "Strings, including extracted text, Markdown and HTML, are exact after the per-operation normalizations below. No whitespace or Unicode normalization is tolerated."
+  }
+ },
+ "operations": {
+  "doc.extract": {},
+  "pdf.parse": {
+   "ignore": ["/images/*/sizeKB"],
+   "why": "sizeKB is the encoded size of the figure clip, which depends on the PNG/JPEG encoder; the pixels are compared with the raster rule."
+  },
+  "slides.import_pptx": {},
+  "slides.import_html": {
+   "normalize": ["font-face-url"],
+   "why": "@font-face rules keep family, weight and format; the file:// URL of the host font cache becomes {font-file}."
+  },
+  "slides.pptx_preview": {
+   "numbers": [{"path": "/pages/*/links/*", "abs": 0.002}],
+   "why": "Link boxes are page fractions measured from browser layout; 0.002 of the page is under 3 px at 1280 px."
+  },
+  "slides.inspect_pptx": {
+   "ignore": ["/bytes"],
+   "why": "Package byte size depends on ZIP compression."
+  },
+  "slides.export_pptx": {
+   "ignore": ["/summary/bytes", "/summary/packageValidation/bytes", "/summary/embeddedFontBytes"],
+   "why": "Byte sizes depend on ZIP compression and the font subsetter; the package itself is compared with the ooxml rule."
+  },
+  "slides.render_html": {
+   "normalize": ["font-face-url"],
+   "why": "As slides.import_html."
+  },
+  "slides.render_png": {}
+ }
+}

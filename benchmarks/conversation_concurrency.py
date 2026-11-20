@@ -8,11 +8,13 @@ and restart readback independently. This is not a real-provider capacity claim.
 from __future__ import annotations
 
 import argparse
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 import functools
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -25,7 +27,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.tofudb_perf_compare import _OWNER_ID
 from benchmarks.conversation_authority import ConversationAuthority
-from benchmarks.conversation_acceptance import POLICY, assess
+from benchmarks.conversation_acceptance import POLICY, REPORT_FORMAT, assess
+from benchmarks.conversation_receipts import LATENCY_FIELDS, MAX_CHUNK_BYTES, MAX_CONVERSATIONS, MAX_ROUNDS, percentile_ranks, publish_json
 from benchmarks.conversation_provenance import FORMAT as PROVENANCE_FORMAT, capture_sources
 from scripts.tofudb_bench import _mount_type
 
@@ -52,10 +55,9 @@ def record_readiness_probe(health, reported, *, phase, elapsed_seconds, consecut
 
 def latency_summary(values):
     ordered = sorted(values)
-    return {'count': len(values), 'p95': ordered[min(len(ordered)-1, int(len(ordered)*.95))], 'total_ms': sum(values),
-            'p50': ordered[len(ordered) // 2],
-            'p99': ordered[min(len(ordered) - 1, int(len(ordered) * .99))],
-            'max': ordered[-1]}
+    return {'count': len(ordered), 'total_ms': math.fsum(ordered), **{
+        key: ordered[rank] for key, rank in zip(LATENCY_FIELDS,
+                                               percentile_ranks(len(ordered)), strict=True)}}
 
 
 @contextmanager
@@ -176,12 +178,28 @@ def measure(binary: Path | None, directory: Path, conversations: int, rounds: in
     restarting = threading.Event()
     health = {'probes': 0, 'unhealthy_probes': 0, 'max_consecutive_unhealthy': 0,
               'max_contended_milliseconds': 0, 'failure_examples': []}
+    def observe_sqlite(key, metrics=None):
+        if backend != 'sqlite':
+            return
+        try:
+            witness = engine.sqlite_loaded_artifacts()
+            if metrics is None:
+                metrics = engine._client.metrics(deadline=2.0)
+            if witness['pid'] != engine.pid:
+                raise RuntimeError('SQLite writer configuration crossed a child restart')
+            witness['writer_configuration_at_open'] = metrics.get('writer_configuration_at_open')
+        except (OSError, ValueError, RuntimeError) as exc:
+            witness = {'capture_error': f'{type(exc).__name__}: {exc}'}
+        result.setdefault('sqlite_loaded_artifacts', {})[key] = witness
+
     def observe_metrics(key, boundary, *, quiescent):
         metrics, provenance = capture_storage_metrics(
             engine, incarnation=authority_incarnation,
             boundary=boundary, quiescent=quiescent)
         result[key] = metrics
         result.setdefault('storage_metrics_provenance', {})[key] = provenance
+        if quiescent:
+            observe_sqlite(key, metrics)
 
     def observe_terminal_boundary():
         # Queued stream callbacks may still be running. This is submission's
@@ -192,7 +210,8 @@ def measure(binary: Path | None, directory: Path, conversations: int, rounds: in
                      if terminal_barrier else None)
     started = time.monotonic()
     result = {
-        'format': 'tofu.conversation-concurrency/v2',
+        'format': REPORT_FORMAT,
+        'execution_id': uuid.uuid4().hex,
         'backend': backend, 'restart_while_running': restart_while_running,
         # Requested launch input; system.metrics reports the effective setting.
         'requested_native_profile_every': os.environ.get('TOFU_DB_REQUEST_PROFILE_EVERY', '0')
@@ -236,7 +255,7 @@ def measure(binary: Path | None, directory: Path, conversations: int, rounds: in
             if scheduled_at is not None:
                 observe(label + '_scheduled', scheduled_at)
 
-    def crash_cycle():
+    def crash_cycle(cutpoint):
         nonlocal authority_incarnation
         # No worker uses the client at either barrier. Close its idle sessions
         # before replacing it, without asking the daemon to flush or stop.
@@ -245,7 +264,16 @@ def measure(binary: Path | None, directory: Path, conversations: int, rounds: in
             closer = getattr(engine._client, 'close', None)
             if closer:
                 closer()
-            elapsed = engine.crash_cycle()
+            try:
+                elapsed = engine.crash_cycle()
+            finally:
+                receipt = engine.last_crash_receipt
+                if receipt is not None:
+                    result.setdefault('crash_recovery_receipts', {})[cutpoint] = dict(receipt)
+            if result['authority']['crash_scope'] == 'sigkill':
+                if not receipt or receipt['authority_directory'] != result['authority']['authority_directory']:
+                    raise RuntimeError('SIGKILL receipt missing or reopened authority directory differs')
+            observe_sqlite('reopen_running' if cutpoint == 'all_running_before_stream_release' else 'reopen_final')
             authority_incarnation += 1
             return elapsed
         finally:
@@ -325,6 +353,7 @@ def measure(binary: Path | None, directory: Path, conversations: int, rounds: in
     try:
         engine.start()
         result['authority'] = engine.describe()
+        observe_sqlite('launch')
         result['provenance'].update(declared_artifact=engine.declared_artifact,
                                     artifact_before=engine.artifact_before)
         if engine.declared_artifact is not None:
@@ -387,7 +416,7 @@ def measure(binary: Path | None, directory: Path, conversations: int, rounds: in
                 observe_metrics('admission_storage_metrics',
                                 'admission-before-running-restart', quiescent=True)
                 if restart_while_running and peak_active == conversations:
-                    result['running_restart_ms'] = crash_cycle()
+                    result['running_restart_ms'] = crash_cycle('all_running_before_stream_release')
                     result['engine_logs'].append(engine.log_path)
                     def running_status(row):
                         try:
@@ -427,14 +456,15 @@ def measure(binary: Path | None, directory: Path, conversations: int, rounds: in
                 observe_metrics('storage_metrics',
                                 'completed-before-terminal-restart', quiescent=True)
                 if not errors:
-                    result['restart_ms'] = crash_cycle()
+                    result['restart_ms'] = crash_cycle('after_settlement')
                     result['engine_logs'].append(engine.log_path)
                 def readback(row):
                     conv, turn, attempt, index = row
                     try:
                         restored = turns.get_turn(conv, turn, user_id=_OWNER_ID)
                         expected_content = ''.join(stream_chunk(index, sequence) for sequence in range(rounds))
-                        content_matches = recover_interrupted or restored.get('projection', {}).get('content', '') == expected_content
+                        content = restored.get('projection', {}).get('content', '')
+                        content_matches = recover_interrupted or content == expected_content
                         replay_matches = True
                         if carry_stream_events and not recover_interrupted:
                             rows = engine._client.query('event.list', {
@@ -447,11 +477,12 @@ def measure(binary: Path | None, directory: Path, conversations: int, rounds: in
                             replay_matches = [row['sequence'] for row in rows] == list(range(1, rounds + 2)) \
                                 and [row['event'] for row in rows] == [{'v': 1, **event} for event in expected_events]
                         return (turns.get_attempt(attempt, user_id=_OWNER_ID)['status'],
-                                restored['status'], content_matches, replay_matches)
+                                restored['status'], content_matches, replay_matches,
+                                index, hashlib.sha256(content.encode()).hexdigest())
                     except Exception as exc:
                         with condition:
                             errors.append(f'completion recovery {row}: {type(exc).__name__}: {exc}')
-                        return ('missing', 'missing', False, False)
+                        return ('missing', 'missing', False, False, index, None)
                 readback_started = time.monotonic()
                 with ThreadPoolExecutor(max_workers=min(32, conversations)) as readers:
                     recovered = list(readers.map(readback, attempts))
@@ -463,6 +494,7 @@ def measure(binary: Path | None, directory: Path, conversations: int, rounds: in
                     if carry_stream_events and result['recovered_exact_replay'] != conversations:
                         errors.append(f"recovered exact replay for only {result['recovered_exact_replay']}/{conversations} attempts")
                     result['recovered_exact_content'] = sum(x[2] for x in recovered)
+                    result['recovered_content_sha256_by_index'] = {str(x[4]): x[5] for x in sorted(recovered, key=lambda x: x[4])}
                     if result['recovered_exact_content'] != conversations:
                         errors.append(f"recovered exact content for only {result['recovered_exact_content']}/{conversations} attempts")
                 result['recovered_completed' if not recover_interrupted else 'recovered_interrupted'] = count
@@ -491,6 +523,7 @@ def measure(binary: Path | None, directory: Path, conversations: int, rounds: in
                 errors.append(f'integrity verification: {type(exc).__name__}: {exc}')
             finally:
                 result['phase_ms']['verification'] = (time.monotonic() - verification_started) * 1000
+        observe_sqlite('final')
         freeze_started = time.monotonic()
         engine.freeze()
         result['phase_ms']['final_freeze'] = (time.monotonic() - freeze_started) * 1000
@@ -522,7 +555,9 @@ def measure(binary: Path | None, directory: Path, conversations: int, rounds: in
         result['provenance']['sources_after'] = capture_sources()
     except (OSError, RuntimeError, ValueError) as exc:
         result['provenance']['sources_after'] = {'capture_error': str(exc)}
+    result['measurement_completed'] = True
     result['acceptance'] = assess(result, current_sources=result['provenance']['sources_after'])
+    result['correctness_passed'] = result['acceptance']['correctness_passed']
     result['passed'] = result['acceptance']['passed']
     return result
 
@@ -554,8 +589,8 @@ def main():
         parser.error('--binary is required for tofudb')
     if not 0 <= args.stream_interval_ms <= 60000:
         parser.error('stream-interval-ms must be 0..60000')
-    if (not 1 <= args.conversations <= 4096 or not 1 <= args.rounds <= 100
-            or not 0 <= args.chunk_bytes <= 65536):
+    if (not 1 <= args.conversations <= MAX_CONVERSATIONS or not 1 <= args.rounds <= MAX_ROUNDS
+            or not 0 <= args.chunk_bytes <= MAX_CHUNK_BYTES):
         parser.error('conversations=1..4096, rounds=1..100, chunk-bytes=0..65536')
     try:
         report = measure(args.binary, args.directory, args.conversations, args.rounds,
@@ -565,10 +600,10 @@ def main():
             restart_while_running=args.restart_while_running or args.recover_interrupted,
             recover_interrupted=args.recover_interrupted)
     except Exception as exc:
-        report = {'backend': args.backend, 'passed': False, 'correctness_passed': False,
+        report = {'format': REPORT_FORMAT, 'backend': args.backend, 'measurement_completed': False, 'passed': False, 'correctness_passed': False,
                   'errors': [f'{type(exc).__name__}: {exc}'], 'error_count': 1}
         report['acceptance'] = assess(report)
-    args.output.write_text(json.dumps(report, indent=2) + '\n')
+    publish_json(args.output, report)
     print(json.dumps(report, indent=2))
     return 0 if report['passed'] else 1
 

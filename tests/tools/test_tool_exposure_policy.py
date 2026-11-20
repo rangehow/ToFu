@@ -45,11 +45,11 @@ EAGER = frozenset({
     'list_project_leads',
     'get_router_projects', 'route_to_project', 'router_instruction_cancel',
     'router_instruction_create', 'router_instruction_list', 'restart_server', 'router_project',
-    # R11 owner_settings and R10 router_portfolio: Router-only, like restart_server.
+    # R11 owner_settings and R10 router_portfolio: Router-only.
     # Eager here means registered on the Router's surface; the Router's own 448-byte
     # direct core still decides which are sent eagerly on a Claude round
     # (docs/LLM_COST_OPTIMIZATION.md section 6), and neither is in it. R9 repair_project
-    # likewise, and the R13 broadcast: Router-only and outside the direct core.
+    # and the R13 broadcast are outside the direct core. Repair also supports project-local replacement.
     'owner_settings', 'router_portfolio', 'repair_project', 'broadcast_project_message',
     'channel_configure_thread', 'channel_outbox', 'channel_outbox_approve',
     'channel_read', 'channel_send', 'channel_subscribe', 'channel_threads',

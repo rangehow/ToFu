@@ -9,6 +9,21 @@
     "stagnation_backoff_seconds": 60,
     "growth_fraction": 0.25
   },
+  "process_priority": {
+    "class": "fixed",
+    "owner": "lib/runtime/work_process_priority.py",
+    "description": "Scheduling priority only, never a limit: every accepted job starts and runs. Work Tofu starts (tool and background commands, MCP servers, scheduled jobs, helpers, builds) lowers itself to these kernel extremes before it runs and its descendants inherit them; server processes (supervisor, API host, execution host, storage host and engine) keep the inherited values, so they win CPU and I/O whenever both are runnable. Hardware-independent constants: nice 19 is the highest nice value (setpriority(2)), idle is IOPRIO_CLASS_IDLE (ioprio_set(2)), 1000 is OOM_SCORE_ADJ_MAX (include/uapi/linux/oom.h).",
+    "work_process": {
+      "nice": 19,
+      "io_class": "idle",
+      "oom_score_adj": 1000
+    },
+    "server_process": {
+      "nice": "inherited",
+      "io_class": "inherited",
+      "oom_score_adj": "inherited"
+    }
+  },
   "launch_settings": {
     "TOFU_AGENT_WORKERS": {
       "unit": "count",

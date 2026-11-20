@@ -1622,6 +1622,32 @@ def finish_after_idle_coordinator_wait(
         signature=f'polls={len(calls)}', detector='coordinator_wait', event_reason='coordinator_idle_wait')
 
 
+def finish_after_idle_swarm_wait(
+    task: dict[str, Any], rs: Any, *, message: dict | None, round_num: int, tid: str,
+    dispatch_timed_out: bool = False,
+) -> bool:
+    """End a wait-only round without asking the model to poll the same swarm again."""
+    waits = task.pop('_swarmIdleWaits', [])
+    calls = (message or {}).get('tool_calls') or []
+    if dispatch_timed_out or task.get('aborted') or task.get('error') or len(waits) != 1 or len(calls) != 1:
+        return False
+    rn, call_id, source_id, ids = waits[0]
+    call = calls[0]
+    if (rn != round_num or call.get('id') != call_id
+            or (call.get('function') or {}).get('name') != 'poll'):
+        return False
+    from lib.swarm.integration._autocontinue import can_handoff_idle_wait
+    if not can_handoff_idle_wait(task, source_id, ids):
+        return False
+    if not str(task.get('content') or '').strip():
+        task['content'] = ('Waiting for the required agents to finish. I’ll continue automatically '
+                           'when their batch settles with a result.')
+    return _force_clean_finish(
+        task, rs, round_num=round_num, tid=tid, reason='swarm_idle_wait',
+        detail='The required swarm batch is still working; its settlement owns the next wake.',
+        signature=f'agents={len(ids)}', detector='swarm_wait', event_reason='swarm_idle_wait')
+
+
 def _execute_stagnation_action(
     task: dict[str, Any], rs: Any, state: dict[str, Any],
     messages: list | None, *, action: tuple[str, str], round_num: int,

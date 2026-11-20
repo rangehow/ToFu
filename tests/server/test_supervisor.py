@@ -720,6 +720,72 @@ def test_real_supervisor_reloads_in_place_when_its_closure_definition_changes(tm
             str(project))
 
 
+def test_a_client_that_loaded_an_older_closure_list_still_proves_the_reexec(tmp_path, monkeypatch):
+    """The refreshing client hashes disk with the closure list on disk, not its import.
+
+    Live incident 2026-11-18 18:01: the serving worker had imported
+    supervisor_protocol before a landing added a closure entry. It and the
+    live manager both hashed disk with the older list, so the manager accepted
+    the reload, re-execed under its pid in 0.4 s and then reported the new
+    list's fingerprint. The worker waited 42 s for its own stale digest and
+    refused the owner's restart (restart_supervisor_stale), and every retry was
+    refused with 409 because the reloaded manager's disk digest never matched
+    the worker's.
+    """
+    project = _closure_project(tmp_path)
+    protocol = project / 'supervisor_protocol.py'
+    current = protocol.read_text(encoding='utf-8')
+    removed = "    'bootstrap_pkg/process_roles.py',\n"
+    previous = current.replace(removed, '', 1)
+    assert previous != current
+    protocol.write_text(previous, encoding='utf-8')
+    with _real_supervisor(project) as (process, base, environment, before):
+        protocol.write_text(current, encoding='utf-8')
+        monkeypatch.setattr(supervisor_protocol, 'SUPERVISOR_SOURCE_FILES', tuple(
+            name for name in supervisor_protocol.SUPERVISOR_SOURCE_FILES
+            if name != 'bootstrap_pkg/process_roles.py'))
+
+        refreshed = supervisor_protocol.refresh_supervisor(
+            str(project), environment=environment, timeout=20.0)
+
+        assert refreshed['reloaded'] is True
+        assert refreshed['managerPid'] == process.pid
+        assert process.poll() is None
+        status, after = _req(base + '/health')
+        assert after['startedAt'] > before['startedAt']
+        assert after['sourceFingerprint'] == refreshed['sourceFingerprint']
+        again = supervisor_protocol.refresh_supervisor(
+            str(project), environment=environment, timeout=5.0)
+        assert again['reloaded'] is False
+
+
+def test_refresh_timeout_names_the_generation_the_manager_answers(tmp_path, monkeypatch):
+    """A manager that answers with another generation is not reported as unreachable."""
+    project = tmp_path / 'timeout-project'
+    project.mkdir()
+    answers = iter([supervisor_protocol.SupervisorRefreshError('[Errno 111] Connection refused')])
+
+    def health(_base, path, body=None, *, timeout):
+        if path == '/reload':
+            return {'ok': True, 'reloading': True}
+        try:
+            raise next(answers)
+        except StopIteration:
+            return {'ok': True, 'projects': [str(project)], 'protocolVersion': 1,
+                    'sourceFingerprint': 'f' * 64}
+
+    first = [{'ok': True, 'projects': [str(project)], 'protocolVersion': 1,
+              'sourceFingerprint': 'e' * 64}]
+    monkeypatch.setattr(supervisor_protocol, 'request_supervisor_json',
+                        lambda *a, **k: first.pop() if first else health(*a, **k))
+
+    with pytest.raises(supervisor_protocol.SupervisorRefreshError) as refused:
+        supervisor_protocol.refresh_supervisor(str(project), environment={}, timeout=1.0)
+
+    assert 'refused' not in str(refused.value)
+    assert 'ffffffffffff' in str(refused.value)
+
+
 @pytest.mark.serial
 def test_refresh_waits_out_a_slow_accepted_reexec_without_launching_a_rival(
         tmp_path, monkeypatch):

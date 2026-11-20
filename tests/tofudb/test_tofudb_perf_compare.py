@@ -1435,3 +1435,120 @@ def test_daemon_counter_uses_child_pid_and_folds_each_window_once(monkeypatch, t
     assert report['engine_write_bytes'] == 100
     assert report['engine_write_bytes_complete'] is True
     assert 'shutdown tail excluded' in report['engine_write_bytes_scope']
+
+
+@pytest.mark.parametrize('boundary', ['before', 'after'])
+@pytest.mark.parametrize('change,expected', [
+    ('none', True),
+    ('missing_writer', None),
+    ('empty_writer', None),
+    ('malformed_writer', None),
+    ('noninteger_sync', False),
+    ('missing_sync', None),
+    ('missing_mode', None),
+    ('missing_fastpath', None),
+    ('contradictory_sync', False),
+    ('wrong_mode', False),
+    ('relocated_authority', False),
+    ('native_normal', False),
+    ('raw_wrong_mode', False),
+])
+def test_operation_durability_requires_observed_writer_wal_full(monkeypatch, boundary, change, expected):
+    from copy import deepcopy
+    import benchmarks.conversation_provenance as provenance
+    import scripts.tofudb_perf_compare as bench
+
+    metrics = {
+        'sqlite': {'writer_configuration_at_open': {
+            'synchronous': 2, 'journal_mode': 'wal', 'coalescing_vfs_selected': False},
+            'fastpath': {'active': False},
+            'synchronous': 2, 'journal_mode': 'wal'},
+        'tofudb': {'walDurability': 'strict',
+                   'requestProfile': {'enabled': False, 'sampleEvery': 0}},
+        'rawsqlite': (2, 'wal'),
+    }
+    calls = []
+
+    def sqlite_metrics():
+        calls.append('sqlite.metrics')
+        return deepcopy(metrics['sqlite'])
+
+    def native_metrics(operation, payload, command):
+        assert (operation, payload, command) == ('system.metrics', {}, False)
+        return deepcopy(metrics['tofudb'])
+
+    def raw_execute(sql):
+        calls.append('rawsqlite.pragma')
+        assert sql == ('SELECT s.synchronous, j.journal_mode'
+                       ' FROM pragma_synchronous AS s, pragma_journal_mode AS j')
+        return SimpleNamespace(fetchone=lambda: metrics['rawsqlite'])
+
+    engines = {
+        'sqlite': SimpleNamespace(_client=SimpleNamespace(metrics=sqlite_metrics)),
+        'tofudb': SimpleNamespace(prepare_workload=lambda: None, execute=native_metrics,
+                                 _binary=Path('/unused/synthetic-binary'),
+                                 _build_identity={}, _client_mode='embedded'),
+        'rawsqlite': SimpleNamespace(_conn=SimpleNamespace(execute=raw_execute)),
+    }
+
+    def mutate():
+        sqlite = metrics['sqlite']
+        writer = sqlite['writer_configuration_at_open']
+        if change == 'missing_writer':
+            del sqlite['writer_configuration_at_open']
+        elif change == 'empty_writer':
+            sqlite['writer_configuration_at_open'] = {}
+        elif change == 'malformed_writer':
+            sqlite['writer_configuration_at_open'] = 'source-pinned writer factory'
+        elif change == 'noninteger_sync':
+            writer['synchronous'] = 2.0
+        elif change == 'missing_sync':
+            del writer['synchronous']
+        elif change == 'missing_mode':
+            del writer['journal_mode']
+        elif change == 'missing_fastpath':
+            sqlite['fastpath'] = {}
+        elif change == 'contradictory_sync':
+            writer['synchronous'] = 1
+        elif change == 'wrong_mode':
+            writer['journal_mode'] = 'delete'
+        elif change == 'relocated_authority':
+            sqlite['fastpath']['active'] = True
+        elif change == 'native_normal':
+            metrics['tofudb']['walDurability'] = 'normal'
+        elif change == 'raw_wrong_mode':
+            metrics['rawsqlite'] = (2, 'delete')
+
+    if boundary == 'before':
+        mutate()
+    before = {name: bench._operation_runtime_evidence(name, engine)
+              for name, engine in engines.items()}
+    if boundary == 'after':
+        mutate()
+    monkeypatch.setattr(provenance, 'capture_sources', lambda: {'native_source_sha256': 'synthetic'})
+    monkeypatch.setattr(provenance, 'capture_artifact', lambda *a, **kw: {'binary_sha256': 'synthetic'})
+    report = {'measurement': {'performance_verdict': 'not_assessed'}}
+    bench._finish_operation_evidence(
+        report, engines, {'native_source_sha256': 'synthetic'}, {},
+        {'tofudb': {'binary_sha256': 'synthetic'}}, before)
+    measurement = report['measurement']
+    assert measurement['equivalent_durability'] is expected
+    assert measurement['performance_verdict'] == 'not_assessed'
+    observed = measurement['runtime_policy']['sqlite'][boundary]
+    source = metrics['sqlite'].get('writer_configuration_at_open')
+    assert observed['writer_configuration_at_open'] == source
+    configuration = source if isinstance(source, dict) else {}
+    assert observed['synchronous'] == configuration.get('synchronous')
+    assert observed['journal_mode'] == configuration.get('journal_mode')
+    assert report['env']['sqlite_synchronous'] == before['sqlite']['synchronous']
+    assert calls == ['sqlite.metrics', 'rawsqlite.pragma'] * 2
+
+
+def test_operation_durability_missing_authorities_is_unknown(monkeypatch):
+    import benchmarks.conversation_provenance as provenance
+    import scripts.tofudb_perf_compare as bench
+
+    monkeypatch.setattr(provenance, 'capture_sources', lambda: {})
+    report = {'measurement': {}}
+    bench._finish_operation_evidence(report, {}, {}, {}, {}, {})
+    assert report['measurement']['equivalent_durability'] is None

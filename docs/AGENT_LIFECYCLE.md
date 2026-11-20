@@ -191,13 +191,33 @@ from a successful process restart.
 ### Swarm results outlive their session
 
 - Problem: a swarm session and its agent rows are keyed by the reusable
-  conversation swarm key. TTL eviction (`SESSION_TTL_SECONDS` of inactivity)
+  conversation swarm key. TTL eviction
   and a new wave replacing a terminated session called `swarm.session.delete`,
   silently deleting every agent's final result, which is user state; a
   terminated run left behind by a restart was re-attributed to the next run
   and deleted with it. `get_agent_result` could not name an earlier wave and
   `<swarm-update>` carried no run identity, so a long-lived conversation could
   not recall its delegated results.
+- The session age threshold (`SESSION_TTL_SECONDS`) permits TTL cleanup only
+  after the driver exits, including its settlement callbacks. Task and progress
+  checks can also keep the session resident.
+- `Mailbox input rejected` logs a fixed admission category with bounded
+  owner/conversation/run/Attempt and emitter PID in the text sink, separate
+  from fingerprint text. Unavailable identifiers are `-`; no carrier text or
+  exception details are included. Match the PID and process lifetime to the
+  execution host startup record and its existing `plan.sourceSha256` when
+  retained; do not substitute the current checkout for loaded source.
+- `Swarm mailbox retirement` records whether TTL requested deletion and the
+  observed outcome: `committed` (deletion acknowledged), `noop` (no session
+  deletion acknowledged), `refused` (a definitive authority conflict or not
+  found error), `unknown` (missing proof), or `not_requested`. SQL `exact_run`
+  uses both the delete acknowledgement and the exact lifecycle receipt; a
+  historical disposition alone does not show this request deleted anything.
+  Native `key_only` acknowledges deletion at the session key, not an exact-run
+  disposition; the run in the prefix is caller/archive context, not proven by
+  that acknowledgement. Recent `session_absent` failures cannot be attributed
+  to TTL without naturally occurring matching run and authority evidence.
+  Neither diagnostic changes admission or grants input authority.
 - Decision: the conversation-keyed rows remain resumable state. Every settled
   outcome is also recorded by `lib/swarm/persistence.py` as a portable record
   keyed by owner, `swarm_run_id` and agent ID (owner, tenant, conversation,
@@ -248,6 +268,14 @@ from a successful process restart.
   live-conversation and blocked-main refusals remain. A chain ends when the
   model launches no further work. The count, its env var, the in-memory counter
   and the turn-prelude reset are removed.
+- A single blocking `poll` that times out with no new result may end the
+  current Turn cleanly, without another provider request, when it covers every
+  outstanding required agent in the owned conversation swarm and the durable
+  main-lane policy admits its result-driven continuation. The completed tool
+  batch remains in the checkpoint; normal post-commit handoff rechecks results
+  that arrived during settlement. Partial waits, mixed tool batches, new input,
+  Stop, and disabled or unverified continuation keep their existing paths.
+  Cancellation-only and unknown results do not acquire wake authority.
 - Alternatives rejected: keeping or tuning the count (constraint 5);
   provenance gating that never wakes for continuation-launched work (stalls
   autonomous flows, and differs from Coordinator continuation for no

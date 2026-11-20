@@ -62,7 +62,13 @@ level. Non-route consumers inject `lib.protocols.LLMService` and call
 Public dispatcher lifecycle is `get_dispatcher` / `reset_dispatcher` from
 `lib.llm_dispatch`. HTTP, local_serve, and template supply call `reset_dispatcher`
 after a committed authority mutation. In-package health/autodiscover may rebuild
-the live slot pool in place.
+the live slot pool in place. A reset is process-local, so it is never the only
+invalidation: every `initialize()` also compares the personal owner's
+model-routing change stamp (`model_routing_secrets_stamp_identity`, one `stat`)
+with the identity its published pool was built from and rebuilds when that
+identity moved, so the resident execution host follows routing commits and
+credential rotations made elsewhere. Keep that check a `stat` and keep the
+capture before the authority read; never replace it with a polling interval.
 
 `slot_pool.py` owns live-slot membership and the selection scopes: a pinned
 context reads only its provider/route group, an unpinned one only configured

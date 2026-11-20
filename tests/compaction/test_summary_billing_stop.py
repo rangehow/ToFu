@@ -150,7 +150,7 @@ def test_a_402_fails_one_summary_then_later_summaries_route_around_it(
     assert paid.pool.slots == [paid.parent]
 
 
-def test_stop_recorded_after_selection_is_refused_before_transport(
+def test_stop_after_selection_requalifies_without_sending_to_the_stopped_route(
         paid, billing, monkeypatch):
     """Selection and auxiliary dispatch apply one optional-work admission.
 
@@ -171,9 +171,11 @@ def test_stop_recorded_after_selection_is_refused_before_transport(
     _real_dispatch(paid, monkeypatch, _billing_dead_transport(paid, attempts))
 
     result, usage = _summarize(paid, paid.source)
-    assert result is None
-    assert usage['_summaryRoute']['providerId'] == 'provider-b'
-    assert attempts == [], 'no upstream request challenges a recorded stop'
+    assert result == SUMMARY
+    assert usage['_summaryRoute']['providerId'] == 'provider-a'
+    assert attempts == ['provider-a'], 'no upstream request challenges a recorded stop'
+    assert [(row['providerId'], row['providerReached']) for row in usage['_summaryAttempts']] == [
+        ('provider-a', True)]
     assert paid.pool.slots == [paid.parent]
 
 

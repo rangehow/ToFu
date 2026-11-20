@@ -29,6 +29,18 @@ requires its own end-to-end evidence. Retain adverse results and resolve them
 before promotion rather than hiding them in an aggregate throughput number.
 Unmeasured dimensions remain explicit gaps.
 
+Full-Rust endpoint (owner decision 2026-11-18): the direction is now an
+all-Rust core reached by the incremental strangler route and phased plan in
+[`RUST_REWRITE_EVIDENCE.md`](RUST_REWRITE_EVIDENCE.md), each phase shippable
+and parity-gated by the existing suite. The rules above still govern every
+slice; a big-bang rewrite stays rejected (evidence document, A1). Phase 0
+(contracts first) is delivered: `contracts/api_v1.yaml`,
+`contracts/events_v1.json` and an authored storage operation catalog are the
+sources the Python registries are checked against, and
+`packages/tofu-contracts` holds the generated Rust types. Phase 7's generator
+part has started: `packages/tofu-xtask` renders the outputs of those three
+contracts (`make contracts`, checked by `make contracts-check`).
+
 **Alternatives rejected:** a wholesale rewrite delays useful verified delivery;
 permanent Python/Rust mirroring duplicates costs and authority; selecting Rust
 solely by language or using a faster microbenchmark to waive application,
@@ -186,6 +198,8 @@ see [SDK project retirement](DEVELOPER_RUNTIME.md) for the lifetime boundary.
 | `packages/tofu-db/` | `tofu-db` | certified, selectable personal storage engine (not the default backend) | member `Cargo.toml` |
 | `packages/tofu-search/` | `tofu-search` | standalone, lazily loaded search/fetch capability | member `pyproject.toml` |
 | `packages/tofu-repo-kernel/` | `tofu-repo-kernel` | optional standalone Rust CSR ranking; lazy in-process C ABI | member `pyproject.toml` |
+| `packages/tofu-contracts/` | standalone crate, no runtime consumer yet | serde types generated from `contracts/api_v1.yaml` and `contracts/events_v1.json` (Rust rewrite Phase 0) | member `Cargo.toml`; [`packages/tofu-contracts/AGENTS.md`](../packages/tofu-contracts/AGENTS.md) |
+| `packages/tofu-xtask/` | standalone build tool, not shipped | contract generators: Rust, TypeScript and Python outputs of `api_v1.yaml`, `events_v1.json`, `storage_operations_v1.json` (Rust rewrite Phase 7) | member `Cargo.toml`; [`packages/tofu-xtask/AGENTS.md`](../packages/tofu-xtask/AGENTS.md) |
 | `packages/tofu-workspace/` | standalone prototype | native immutable workspace revisions, WIP and checkout; no application/Git dependency | [`NATIVE_WORKSPACE.md`](NATIVE_WORKSPACE.md) |
 | `packages/tofu-runtime/` | `tofu-native` archive | transient native GNU/Linux agent/stdin composition | root `VERSION`; member crate `Cargo.toml` |
 | `packages/tofu-overleaf-mcp/` | `tofu-overleaf-mcp` | optional isolated Overleaf artifact producer | package `pyproject.toml` |

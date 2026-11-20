@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 use tofu_db::authority::{AuthorityDatabase, MAX_LEGACY_CHECKOUT_BACKFILL};
 use tofu_db::authority_gc::{AuthorityGarbageCollectionBudget, AuthorityGarbageCollectionMetrics};
 use tofu_db::backup::{
-    create_incremental_backup_with_key, prune_backup_with_key, restore_latest_backup_with_key,
+    create_incremental_backup_with_key, prune_backup_with_key, restore_exact_backup_with_key,
+    restore_latest_backup_with_key, ExactBackupManifest,
 };
 use tofu_db::certification::{
     certify_filesystem, read_stage, read_stage_at_rest, write_stage, write_stage_at_rest,
@@ -44,7 +45,7 @@ use zeroize::Zeroize;
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn usage() -> ! {
-    eprintln!("usage: tofu-db <init|inspect> --data-dir <persistent-path>\n       tofu-db serve --data-dir <existing-authority> --owner-id <positive-id> [--tenant-id <positive-id>] [--search-projection-dir <persistent-path>] [--durability strict|normal] [--wal-flush-interval-ms <1..1000>] [--backup-dir <persistent-path>] [--fastpath-dir <existing-local-base> [--fastpath-admission required|auto]] [--fastpath-sync-interval-ms <1000..3600000>]\n       tofu-db fastpath-export --data-dir <durable-seed> --backup-dir <NEW-authority-target>\n       tofu-db <certify-filesystem|{FILESYSTEM_CERTIFICATION_MATRIX_COMMAND}> --data-dir <persistent-empty-path>\n       tofu-db certify-resource-gate --data-dir <persistent-empty-path>\n       tofu-db collect-garbage --data-dir <existing-authority> [--execute [--max-rounds <1..{MAX_AUTHORITY_GC_SESSION_CALLS}>] [--budget-ms <1..{MAX_AUTHORITY_GC_OPERATOR_MILLISECONDS}>]]\n       tofu-db sql --data-dir <existing-authority> --tenant-id <positive-id> --owner-id <positive-id> < query.sql\n       tofu-db backfill-activity-index --data-dir <existing-authority> --tenant-id <positive-id> --owner-id <positive-id> [--maximum-rows <1..256>] --execute\n       tofu-db backfill-integration-checkout-claims --data-dir <existing-authority> --tenant-id <positive-id> --owner-id <positive-id> [--maximum-rows <1..128>] --execute\n       tofu-db migration-session --data-dir <existing-authority> --tenant-id <positive-id> --owner-id <positive-id> --execute\n       tofu-db backup --data-dir <source> --backup-dir <persistent-path>\n       tofu-db verify --data-dir <existing-authority>\n       tofu-db gc-census --data-dir <closed-authority-or-copy>\n       tofu-db rewrite-history-routing --data-dir <existing-authority> [--execute]\n       tofu-db salvage --data-dir <existing-authority> --backup-dir <persistent-empty-target>\n       tofu-db restore --backup-dir <source> --data-dir <restore-target>\n       tofu-db certify-release --manifest <SHA256SUMS> --signature <SHA256SUMS.sig> --binary <packaged-tofu-db> [--pubkey <public-key.json>]\n       tofu-db certify-release-keygen --key-out <secret-key.json> --pubkey-out <public-key.json>");
+    eprintln!("usage: tofu-db <init|inspect> --data-dir <persistent-path>\n       tofu-db serve --data-dir <existing-authority> --owner-id <positive-id> [--tenant-id <positive-id>] [--search-projection-dir <persistent-path>] [--durability strict|normal] [--wal-flush-interval-ms <1..1000>] [--backup-dir <persistent-path>] [--fastpath-dir <existing-local-base> [--fastpath-admission required|auto]] [--fastpath-sync-interval-ms <1000..3600000>]\n       tofu-db fastpath-export --data-dir <durable-seed> --backup-dir <NEW-authority-target>\n       tofu-db <certify-filesystem|{FILESYSTEM_CERTIFICATION_MATRIX_COMMAND}> --data-dir <persistent-empty-path>\n       tofu-db certify-resource-gate --data-dir <persistent-empty-path>\n       tofu-db collect-garbage --data-dir <existing-authority> [--execute [--max-rounds <1..{MAX_AUTHORITY_GC_SESSION_CALLS}>] [--budget-ms <1..{MAX_AUTHORITY_GC_OPERATOR_MILLISECONDS}>]]\n       tofu-db sql --data-dir <existing-authority> --tenant-id <positive-id> --owner-id <positive-id> < query.sql\n       tofu-db backfill-activity-index --data-dir <existing-authority> --tenant-id <positive-id> --owner-id <positive-id> [--maximum-rows <1..256>] --execute\n       tofu-db backfill-integration-checkout-claims --data-dir <existing-authority> --tenant-id <positive-id> --owner-id <positive-id> [--maximum-rows <1..128>] --execute\n       tofu-db migration-session --data-dir <existing-authority> --tenant-id <positive-id> --owner-id <positive-id> --execute\n       tofu-db backup --data-dir <source> --backup-dir <persistent-path>\n       tofu-db verify --data-dir <existing-authority>\n       tofu-db gc-census --data-dir <closed-authority-or-copy>\n       tofu-db rewrite-history-routing --data-dir <existing-authority> [--execute]\n       tofu-db salvage --data-dir <existing-authority> --backup-dir <persistent-empty-target>\n       tofu-db restore --backup-dir <source> --data-dir <restore-target> [--manifest-sha256 <64-hex> --source-control-generation <positive-id>]\n       tofu-db certify-release --manifest <SHA256SUMS> --signature <SHA256SUMS.sig> --binary <packaged-tofu-db> [--pubkey <public-key.json>]\n       tofu-db certify-release-keygen --key-out <secret-key.json> --pubkey-out <public-key.json>");
     std::process::exit(2)
 }
 
@@ -53,6 +54,7 @@ struct Arguments {
     data_dir: PathBuf,
     backup_dir: Option<PathBuf>,
     retain_generations: Option<usize>,
+    exact_backup_manifest: Option<ExactBackupManifest>,
     owner_id: Option<u64>,
     tenant_id: Option<u64>,
     search_projection_dir: Option<PathBuf>,
@@ -79,6 +81,8 @@ fn arguments() -> Arguments {
     let mut data_dir = None;
     let mut backup_dir = None;
     let mut retain_generations = None;
+    let mut manifest_sha256 = None;
+    let mut source_control_generation = None;
     let mut owner_id = None;
     let mut tenant_id = None;
     let mut search_projection_dir = None;
@@ -149,6 +153,25 @@ fn arguments() -> Arguments {
                     usage();
                 }
                 backup_dir = Some(value);
+            }
+            "--manifest-sha256" if command == "restore" && manifest_sha256.is_none() => {
+                let digest = args.next().unwrap_or_else(|| usage());
+                if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                    usage();
+                }
+                manifest_sha256 = Some(digest.to_ascii_lowercase());
+            }
+            "--source-control-generation"
+                if command == "restore" && source_control_generation.is_none() =>
+            {
+                let generation = args
+                    .next()
+                    .unwrap_or_else(|| usage())
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|value| *value > 0)
+                    .unwrap_or_else(|| usage());
+                source_control_generation = Some(generation);
             }
             "--retain-generations" if retain_generations.is_none() => {
                 retain_generations = Some(
@@ -229,7 +252,7 @@ fn arguments() -> Arguments {
                 }
                 gc_budget_ms = Some(value);
             }
-            "--manifest" => path_flag!(manifest),
+            "--manifest" if command != "restore" => path_flag!(manifest),
             "--signature" => path_flag!(signature),
             "--binary" => path_flag!(binary),
             "--pubkey" => path_flag!(pubkey),
@@ -244,6 +267,14 @@ fn arguments() -> Arguments {
     {
         usage();
     }
+    let exact_backup_manifest = match (manifest_sha256, source_control_generation) {
+        (Some(sha256), Some(source_control_generation)) => Some(ExactBackupManifest {
+            source_control_generation,
+            sha256,
+        }),
+        (None, None) => None,
+        _ => usage(),
+    };
     let data_dir = match command.as_str() {
         "prune-backup" | "certify-release" | "certify-release-keygen" if data_dir.is_none() => {
             PathBuf::new()
@@ -394,6 +425,7 @@ fn arguments() -> Arguments {
         data_dir,
         backup_dir,
         retain_generations,
+        exact_backup_manifest,
         owner_id,
         tenant_id,
         search_projection_dir,
@@ -689,15 +721,27 @@ fn run() -> io::Result<()> {
         }
         "restore" => {
             let at_rest_key = tofu_db::at_rest::key_from_launch_environment()?;
-            let manifest = restore_latest_backup_with_key(
-                arguments.backup_dir.as_ref().unwrap(),
-                &arguments.data_dir,
-                at_rest_key,
-            )?;
-            println!(
-                "format=tofu-db.restore.v1 authority_uuid={} durable_sequence={}",
-                manifest.authority_uuid, manifest.durable_sequence
-            );
+            let backup_dir = arguments.backup_dir.as_ref().unwrap();
+            if let Some(exact) = arguments.exact_backup_manifest.as_ref() {
+                let manifest = restore_exact_backup_with_key(
+                    backup_dir,
+                    &arguments.data_dir,
+                    at_rest_key,
+                    exact,
+                )?;
+                println!(
+                    "format=tofu-db.restore.v1 authority_uuid={} durable_sequence={} source_control_generation={} manifest_sha256={}",
+                    manifest.authority_uuid, manifest.durable_sequence,
+                    manifest.source_control_generation, exact.sha256
+                );
+            } else {
+                let manifest =
+                    restore_latest_backup_with_key(backup_dir, &arguments.data_dir, at_rest_key)?;
+                println!(
+                    "format=tofu-db.restore.v1 authority_uuid={} durable_sequence={}",
+                    manifest.authority_uuid, manifest.durable_sequence
+                );
+            }
             return Ok(());
         }
         "prune-backup" => {

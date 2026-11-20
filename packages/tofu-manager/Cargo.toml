@@ -1,0 +1,22 @@
+[package]
+name = "tofu-manager"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Rust lifecycle manager (Phase 2 of docs/RUST_REWRITE_EVIDENCE.md): the supervisor HTTP door, restart commit point, resident-service ownership and engine certification gate"
+
+[[bin]]
+name = "tofu-manager"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+serde_json = { version = "=1.0.151" }
+libc = "0.2"
+sha2 = "0.10"
+# Loopback readiness of a worker served over TLS (TOFU_TLS=1); ring keeps the
+# build free of a C toolchain dependency beyond what the workspace already locks.
+rustls = { version = "=0.23.45", default-features = false, features = ["ring", "std", "tls12"] }

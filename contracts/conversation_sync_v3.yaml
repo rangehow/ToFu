@@ -2539,6 +2539,15 @@ components:
         at: {type: number, minimum: 0}
         detail: {type: string, maxLength: 300}
         failureAttribution: {$ref: '#/components/schemas/JsonObject'}
+    CoordinatorWorkerObservation:
+      type: object
+      additionalProperties: false
+      required: [attemptId, resultRevision, deliveryStatus]
+      properties:
+        attemptId: {type: string, minLength: 1, maxLength: 256}
+        resultRevision: {type: integer, minimum: 0}
+        deliveryStatus:
+          oneOf: [{type: string, maxLength: 64}, {type: 'null'}]
     TurnSettlement:
       type: object
       additionalProperties: false
@@ -2562,6 +2571,41 @@ components:
           items: {$ref: '#/components/schemas/TurnResumeOption'}
         continuation: {$ref: '#/components/schemas/TurnContinuation'}
 
+        retryChain:
+          type: array
+          maxItems: 8
+          items: {$ref: '#/components/schemas/TurnRetryReceipt'}
+          description: Bounded durable receipts for discarded whole-turn automatic retries.
+        coordinatorWorkerObservations:
+          type: object
+          description: Worker result receipts observed by a completed Coordinator Turn, keyed by assignment ID.
+          minProperties: 1
+          propertyNames: {type: string, minLength: 1, maxLength: 256}
+          additionalProperties:
+            $ref: '#/components/schemas/CoordinatorWorkerObservation'
+    AppendSettledTurnSettlement:
+      type: object
+      additionalProperties: false
+      description: Caller-supplied settlement, without authority to record Coordinator Worker observations.
+      properties:
+        outcome: {$ref: '#/components/schemas/TurnOutcome'}
+        cause: {type: string}
+        evidence: {$ref: '#/components/schemas/TurnTerminationEvidence'}
+        streamState:
+          oneOf:
+            - $ref: '#/components/schemas/ProviderStreamState'
+            - {type: 'null'}
+        providerFinishReason:
+          oneOf: [{type: string}, {type: 'null'}]
+        error:
+          oneOf:
+            - $ref: '#/components/schemas/JsonObject'
+            - {type: string}
+            - {type: 'null'}
+        resumeOptions:
+          type: array
+          items: {$ref: '#/components/schemas/TurnResumeOption'}
+        continuation: {$ref: '#/components/schemas/TurnContinuation'}
         retryChain:
           type: array
           maxItems: 8
@@ -3246,7 +3290,7 @@ components:
         status:
           type: string
           enum: [completed, interrupted, truncated, failed]
-        settlement: {$ref: '#/components/schemas/TurnSettlement'}
+        settlement: {$ref: '#/components/schemas/AppendSettledTurnSettlement'}
         createdAt: {type: integer, minimum: 0}
         laneId: {type: string}
         runId: {type: string}

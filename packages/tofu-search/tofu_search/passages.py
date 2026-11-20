@@ -7,12 +7,15 @@ requested output budget. No model calls, network, caches or host dependencies.
 from __future__ import annotations
 
 import heapq
+import importlib
 import re
 from collections import Counter
 
 from tofu_search.lexical import query_subject, tokenize
 
 __all__ = ['select_relevant_passages']
+
+_native = importlib.import_module('tofu_search._native_kernels').native
 
 _LINKS_HEADER = '--- Page Links ---'
 _GAP = '\n\n[... omitted ...]\n\n'
@@ -186,3 +189,10 @@ def select_relevant_passages(
             heapq.heapify(pending)
 
     return _render(chosen, body)[:max_chars].rstrip()
+
+
+# The Python body above is the parity oracle; the native kernel replaces the
+# public name when the extension is installed.
+PYTHON_KERNELS = {'select_relevant_passages': select_relevant_passages}
+if _native is not None:
+    select_relevant_passages = _native.select_relevant_passages

@@ -4,7 +4,9 @@ from lib.llm.llm_errors import RateLimitError
 import os
 import time
 from lib.log import get_logger
-from lib.llm_dispatch._api_errors import DispatchNoAdmissibleSlot, DispatchRateLimitBudgetExceeded
+from lib.llm_dispatch._api_errors import (
+    DispatchNoAdmissibleSlot, DispatchNoCapableSlot, DispatchRateLimitBudgetExceeded,
+)
 
 logger = get_logger('lib.llm_dispatch.api')
 
@@ -206,7 +208,7 @@ def _raise_dispatch_exhausted(last_err, *, max_retries, capability,
     if last_err is not None:
         raise last_err
     target = f'model={prefer_model}' if prefer_model else f'capability={capability}'
-    raise RuntimeError(f'No slot available for {target}; no upstream request was sent')
+    raise DispatchNoCapableSlot(f'No slot available for {target}; no upstream request was sent')
 
 
 def _remember_route_missing_error(previous, route_missing_error):

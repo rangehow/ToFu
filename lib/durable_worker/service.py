@@ -127,6 +127,8 @@ class DurableWorkerService:
         self._lock = threading.Lock()
         self._thread = None
         self._state = 'new'
+        self._startup_done = threading.Event()
+        self._startup_error: BaseException | None = None
         self._active = self._high_water = 0
         # Admission has no I/O or thread effects and rejects an empty/unsafe
         # catalogue before startup can acknowledge a service.
@@ -158,26 +160,35 @@ class DurableWorkerService:
                     'inflight': self._active, 'highWater': self._high_water}
 
     def start(self):
+        """Wait for coordinator setup, never for a claim or an open claim gate."""
         with self._lock:
             if self._state == 'running':
                 return False
-            if self._state != 'new':
+            launched = self._state == 'new'
+            if launched:
+                thread = threading.Thread(target=self._coordinate,
+                    name=self._policy['threadNamePrefix'] + '-coordinator', daemon=True)
+                self._thread, self._state = thread, 'starting'
+                try:
+                    thread.start()
+                except BaseException:
+                    self._thread, self._state = None, 'new'
+                    raise
+            elif self._state != 'starting':
                 raise RuntimeError('A stopped durable worker service cannot restart')
-            thread = threading.Thread(target=self._coordinate,
-                name=self._policy['threadNamePrefix'] + '-coordinator', daemon=True)
-            self._thread, self._state = thread, 'running'
-            try:
-                thread.start()
-            except RuntimeError:
-                self._thread, self._state = None, 'new'
-                raise
-            return True
+        self._startup_done.wait()
+        with self._lock:
+            if self._startup_error is not None:
+                raise self._startup_error
+            if self._state != 'running':
+                raise RuntimeError('Durable worker service stopped during startup')
+            return launched
 
     def stop(self, *, timeout=None):
         with self._lock:
             if self._state == 'new':
                 self._state = 'stopped'
-            elif self._state == 'running':
+            elif self._state in {'starting', 'running'}:
                 self._state = 'stopping'
             thread = self._thread
             self._stop.set()
@@ -249,7 +260,7 @@ class DurableWorkerService:
         policy = self._policy
         futures, pending = {}, None
         due, backoff_until = 0.0, 0.0
-        failed = False
+        failure = None
         unsubscribe = lambda: None
         try:
             unsubscribe = (self._wake_source.start(self._hint) if self._wake_source else
@@ -257,6 +268,11 @@ class DurableWorkerService:
             with DemandThreadPoolExecutor(max_workers=self.max_workers,
                     thread_name_prefix=policy['threadNamePrefix']) as executor:
                 try:
+                    with self._lock:
+                        if self._stop.is_set():
+                            return
+                        self._state = 'running'
+                        self._startup_done.set()
                     while not self._stop.is_set():
                         self._wake.clear()
                         now = time.monotonic()
@@ -297,11 +313,20 @@ class DurableWorkerService:
                     # Contexts revoke dispatch cooperatively. Joining the
                     # executor precedes storage shutdown; no detached effect.
                     executor.shutdown(wait=True, cancel_futures=True)
-        except Exception:
-            failed = True
+        except BaseException as exc:
+            failure = exc
             logger.exception('[DurableWorker] coordinator failed')
         finally:
-            unsubscribe()
-            with self._lock:
-                self._active = 0
-                self._state = 'failed' if failed else 'stopped'
+            try:
+                unsubscribe()
+            except BaseException as exc:
+                if failure is None:
+                    failure = exc
+                logger.exception('[DurableWorker] wake source cleanup failed')
+            finally:
+                with self._lock:
+                    self._active = 0
+                    self._state = 'failed' if failure is not None else 'stopped'
+                    if not self._startup_done.is_set():
+                        self._startup_error = failure
+                        self._startup_done.set()

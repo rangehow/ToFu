@@ -8,6 +8,8 @@ not reach chatgpt.com.
 
 from __future__ import annotations
 
+from lib.oauth.codex import CodexAccessTokenSnapshot
+
 import json
 
 import pytest
@@ -69,10 +71,8 @@ def codex_http(monkeypatch):
                         lambda *args, **kwargs: 'direct')
     monkeypatch.setattr('lib.proxy.subscription_route_candidates',
                         lambda *args, **kwargs: [])
-    monkeypatch.setattr('lib.oauth.codex.codex_get_valid_token',
-                        lambda *args, **kwargs: 'access-tok')
-    monkeypatch.setattr('lib.oauth.token_store.load_token',
-                        lambda *args, **kwargs: {'account_id': 'acc-1'})
+    monkeypatch.setattr('lib.oauth.codex.codex_get_valid_token_snapshot',
+                        lambda *args, **kwargs: CodexAccessTokenSnapshot('access-tok', 'acc-1'))
     monkeypatch.setattr('lib.oauth.codex_catalog.cached_codex_provider_models',
                         lambda: [])
     monkeypatch.setattr('lib.oauth.codex_version.codex_client_version',

@@ -831,6 +831,12 @@ impl PayloadSegmentStore {
         drop(released);
     }
 
+    /// Clear cached descriptors without retiring their segments or changing the budget.
+    #[cfg(test)]
+    pub(crate) fn clear_read_handles_for_test(&self) {
+        self.retain_read_handles(&HashSet::new());
+    }
+
     #[cfg(test)]
     pub(crate) fn set_read_handle_capacity(&self, capacity: usize) {
         let released = self.read_handles.write().unwrap().set_capacity(capacity);

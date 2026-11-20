@@ -202,7 +202,7 @@ def test_assistant_translation_keeps_the_original_turn(lossy_engine, monkeypatch
 
     assert commits == []
     assert len(marked) == 1
-    assert marked[0][:4] == ('conv-1', 'turn-1', 7, 'worker_error')
+    assert marked[0][:4] == ('conv-1', 'turn-1', 7, 'content_refused')
     assert 'verdict=dropped_identifier' in marked[0][4]
     assert task['status'] == 'error'
     assert len(lossy_engine.dispatched) == 3

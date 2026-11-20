@@ -601,11 +601,16 @@ def _settle_error(
 ) -> None:
     from lib.error_envelope import from_exception
     from lib.translate.errors import (
+        CONTENT_GUARD_REFUSAL_KIND,
+        TranslationContentRefused,
         TranslationDeadlineExhausted,
         TranslationNoAdmissibleProvider,
     )
+    refused = isinstance(exc, TranslationContentRefused)
 
-    if isinstance(exc, TranslationNoAdmissibleProvider):
+    if refused:
+        kind = CONTENT_GUARD_REFUSAL_KIND
+    elif isinstance(exc, TranslationNoAdmissibleProvider):
         kind = 'no_slot'
     elif isinstance(exc, TranslationDeadlineExhausted):
         kind = 'timeout'
@@ -619,7 +624,15 @@ def _settle_error(
         source="lib.translate.runtime",
         kind=kind,
     )
-    logger.error("[Translate] task=%s failed: %s", task_log_tag(task_id), exc, exc_info=True)
+    if refused:
+        # A content-quality verdict on the text, not a server fault: recorded
+        # once in the projection, replayed without re-dispatch, and never
+        # re-spawned by the sweep, so it stays out of the ERROR stream.
+        logger.warning("[Translate] task=%s refused by content guard: %s",
+                       task_log_tag(task_id), exc)
+    else:
+        logger.error("[Translate] task=%s failed: %s",
+                     task_log_tag(task_id), exc, exc_info=True)
     # Persist the durable failure verdict for conversation-bound whole-turn
     # translations so a terminal auto-translate that dies here (provider
     # stream premature close, engine exhausted) leaves inspectable,

@@ -201,6 +201,25 @@ def test_side_effect_tools_without_a_declared_port_wait_for_their_response(strea
     assert started == ['delegate_project_work']
 
 
+@pytest.mark.parametrize('mode, starts', [('coordinator', True), ('project', False)])
+def test_a_bound_continuation_starts_its_delegation_and_a_worker_holds_it(streaming, monkeypatch, mode, starts):
+    """Every lead continuation wake runs dispatch-bound; its delegation starts after the
+    same dispatch admission its ordinary dispatch runs. A dispatched Worker holds."""
+    from lib.conversations import coordinator_tools
+    from lib.project_dispatch import admission, scope
+    r = streaming
+    binding = {'assignmentId': 'continuation-1', 'projectPath': '/project', 'owner': 1, 'tenant': 'default'}
+    r.task['config'][admission.KEY] = binding
+    r.task[admission.ROLE_KEY] = {'binding': binding, 'mode': mode, 'coordinatorScope': None}
+    admitted, started = [], []
+    monkeypatch.setattr(scope, 'admit_call', lambda task, name, args, project_path=None, **kw:
+                        admitted.append(name) or (None, object()))
+    monkeypatch.setattr(coordinator_tools, 'start_streamed_call', lambda task, name, args: started.append(name))
+    r.accumulator.on_tool_call_ready({'id': 'call-1', 'function': {
+        'name': 'delegate_project_work', 'arguments': json.dumps(r.args)}})
+    assert started == admitted == (['delegate_project_work'] if starts else [])
+
+
 def test_manual_approval_holds_a_delegation_for_its_response(streaming):
     r = streaming
     r.task['config']['autoApply'] = False

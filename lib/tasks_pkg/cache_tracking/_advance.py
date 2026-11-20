@@ -15,7 +15,7 @@ logger = get_logger(__name__)
 
 def advance_cache_observation(
     prev, client_evidence, wire_evidence, *, scope, observed_read,
-    conv_id, user_id, model, usage, now, cache_read, cache_write, durable,
+    conv_id, user_id, model, usage, now, cache_read, cache_write, input_tokens, durable,
     cache_prefix_hwm_sink, last_turn_cache_read_sink,
 ) -> None:
     """Update the baseline, stage checkpoints, then accumulate usage totals."""
@@ -27,7 +27,9 @@ def advance_cache_observation(
     _cur_wire_field_bytes = wire_evidence.field_bytes
     _cur_wire_region = wire_evidence.region
     _cur_wire_routing = wire_evidence.routing
-    if scope is not None and observed_read is not None:
+    if scope is not None and (observed_read is not None or cache_read is None):
+        # A completed Responses round with unreported reads still sent this
+        # wire. Keep the in-memory gap across turns without staging a zero.
         scope.rounds_seen += 1
     prev.system_hash = client_evidence.system_hash
     prev.tools_hash = client_evidence.tools_hash
@@ -50,6 +52,7 @@ def advance_cache_observation(
         prev.wire_routing = _cur_wire_routing
     prev.model = model
     prev.message_count = client_evidence.message_count
+    prev.last_cache_read_unobserved = cache_read is None
     if observed_read is not None:
         prev.last_cache_read_tokens = observed_read
     prev.last_cache_write_tokens = cache_write
@@ -62,12 +65,10 @@ def advance_cache_observation(
     # Skipped on usage-less rounds (a failed call carries no cache signal
     # and must not open the guard). get_cache_prefix_count's _boundary
     # reads this streak — see COLD_STREAK_GUARD_OPEN in _state.py.
-    if usage:
-        if (cache_read > COLD_ROUND_TOKEN_FLOOR
-                or cache_write > COLD_ROUND_TOKEN_FLOOR):
-            prev.cold_streak = 0
-        elif prev.cold_streak < COLD_STREAK_GUARD_OPEN:
-            prev.cold_streak += 1
+    if (cache_read or 0) > COLD_ROUND_TOKEN_FLOOR or cache_write > COLD_ROUND_TOKEN_FLOOR:
+        prev.cold_streak = 0
+    elif usage and cache_read is not None and prev.cold_streak < COLD_STREAK_GUARD_OPEN:
+        prev.cold_streak += 1
     # ── Advance the DURABLE prefix boundary (survives restart / replica
     #    switch). When THIS round confirms real cache activity (read or
     #    write > 1000 — the same floor the cold-streak bookkeeping uses),
@@ -77,7 +78,7 @@ def advance_cache_observation(
     #    thread/process/replica restores the guard floor instead of
     #    collapsing to 0 and rewriting the still-cached prefix.
     #    Best-effort, monotonic, DB-write only on genuine growth.
-    if durable and (cache_read > 1000 or cache_write > 1000):
+    if durable and ((cache_read or 0) > 1000 or cache_write > 1000):
         _durable_boundary = max(0, client_evidence.message_count)
         if _durable_boundary > 0:
             _boundary_staged = False
@@ -142,8 +143,10 @@ def advance_cache_observation(
     if not prev.first_call_time:
         prev.first_call_time = now
     # Accumulate session-level stats
-    prev.total_cache_read += cache_read
     prev.total_cache_write += cache_write
+    if cache_read is None:
+        return  # no paired read/input measurement for the token-read share
+    prev.total_cache_read += cache_read
     # total_input_tokens is the denominator of [CacheSession]'s
     #   overall_hit%. It must be the TOTAL prompt the provider processed,
     #   which is convention-dependent: on the OpenAI-compat wire
@@ -152,6 +155,8 @@ def advance_cache_observation(
     #   halved the session hit rate. split_input_tokens is the same helper
     #   the cost engine uses (lib/cost.py), so session telemetry, per-round
     #   telemetry and billing all read the prompt size identically.
-    from lib.cost import split_input_tokens as _split_input_tokens
-    prev.total_input_tokens += _split_input_tokens(usage)[1]
+    if input_tokens is None:
+        from lib.cost import split_input_tokens
+        _, input_tokens = split_input_tokens(usage)
+    prev.total_input_tokens += input_tokens
 

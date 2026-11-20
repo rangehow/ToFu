@@ -1,4 +1,5 @@
-"""Real node processes for the chaos suite (one node program: lib.desktop_agent).
+"""Real node processes for the chaos suite (one node program: lib.desktop_agent, or
+its Rust implementation ``tofu node`` with ``program='rust'``).
 
 Responsibility: start, fault and inspect the same headless node a container
 or GPU server runs (``python -m lib.desktop_agent --join <link>``), each with
@@ -29,7 +30,7 @@ NODE_TAG = 'TOFU_CHAOS_NODE'
 class ChaosNode:
     def __init__(self, root: Path, name: str, *, tag: str, proxy: str, config_path: Path | None = None,
                  machine: str = 'chaos-image-machine-id', hostname: str | None = None,
-                 container: str | None = None, python: str = sys.executable):
+                 container: str | None = None, python: str = sys.executable, program: str = 'python'):
         self.root = Path(root) / f'node-{name}'
         self.name = name
         self.tag = tag
@@ -39,6 +40,8 @@ class ChaosNode:
         self.hostname = hostname or f'host-{name}'
         self.container = container if container is not None else hashlib.sha256(name.encode()).hexdigest()
         self.python = python
+        # 'python' = python -m lib.desktop_agent; 'rust' = tofu node (packages/tofu-node).
+        self.program = program
         self.process: subprocess.Popen | None = None
         self.generation = 0
 
@@ -62,7 +65,7 @@ class ChaosNode:
         env = self.environment()
         log = (self.root / f'node-{self.generation}.log').open('ab')
         self.process = subprocess.Popen(
-            [self.python, '-m', 'tests.chaos.node_main', *self._host(), *args, '--allow-exec'],
+            [*self._entry(), *args, '--allow-exec'],
             cwd=str(CHECKOUT), env=env, stdin=subprocess.DEVNULL,
             stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         log.close()
@@ -105,9 +108,16 @@ class ChaosNode:
     def _host(self) -> list[str]:
         return [self.machine, self.hostname, self.container]
 
+    def _entry(self) -> list[str]:
+        """The node program on this node's simulated host identity."""
+        if self.program == 'rust':
+            from tests.support.tofu_node import node_command
+            return node_command('--simulate-host', *self._host())
+        return [self.python, '-m', 'tests.chaos.node_main', *self._host()]
+
     def host_key(self) -> str:
         """This node's slot key, computed exactly as the node does."""
-        return subprocess.run([self.python, '-m', 'tests.chaos.node_main', *self._host(), '--host-key'],
+        return subprocess.run([*self._entry(), '--host-key'],
                               env=self.environment(), cwd=str(CHECKOUT), capture_output=True, text=True,
                               check=True).stdout.strip().splitlines()[-1]
 

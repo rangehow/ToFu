@@ -569,7 +569,7 @@
    },
    "accepted_confirmation": {
     "status": "n/a",
-    "reason": "the platform carries no files natively: a file becomes a note in the text (attachment_degradation)"
+    "reason": "provider ACK settles native files; this history-confirmation case does not apply (test_wechat_file_outbox)"
    },
    "unknown_keeps_its_identity": {
     "status": "n/a",
@@ -581,7 +581,8 @@
     "cause": "the platform keeps no history and no idempotency record: the sender port answers no history (`lib/channels/bots/session.py:81`), so the outbox requeues the unknown item (`lib/channels/outbox.py:573`) and sends a second copy; the protocol holds it instead (P4)"
    },
    "attachment_degradation": {
-    "status": "pass"
+    "status": "n/a",
+    "reason": "the platform carries files natively"
    },
    "echo_loop": {
     "status": "pass"

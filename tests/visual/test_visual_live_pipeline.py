@@ -82,12 +82,10 @@ def test_storage_commit_to_browser_and_responsive_composer(browser, live_server,
                 commits.append({'at': at, 'sequence': event['syncSeq']})
 
     unsubscribe = subscribe_committed_events(committed)
-    # The shipped page reads every conversation through the multiplexed stream.
-    original_frame, original_changes, original_command = (
-        routes._multiplexed_sse_frame, routes._service.changes, client.command)
+    original_frame, original_changes, original_command = routes._sse_frame, routes._service.changes, client.command
 
-    def frame(index, event, **kwargs):
-        result = original_frame(index, event, **kwargs)
+    def frame(event, **kwargs):
+        result = original_frame(event, **kwargs)
         if event.get('conversationId') == cid:
             frames.append({'at': time.perf_counter() * 1000, 'sequence': event.get('syncSeq'),
                 'kind': event['type'], 'bytes': len(result.encode())})
@@ -139,7 +137,7 @@ def test_storage_commit_to_browser_and_responsive_composer(browser, live_server,
             participants.append({'task': peer, 'conversation': peer_cid, 'produced': []})
             client.command('turn.attempt.bind', {'attempt_id': peer['_attemptId'], 'user_id': 1, 'task_id': peer['id']}, peer_cid + ':bind')
             peer['_workerStartedAt'] = time.time()
-        monkeypatch.setattr(routes, '_multiplexed_sse_frame', frame)
+        monkeypatch.setattr(routes, '_sse_frame', frame)
         monkeypatch.setattr(routes._service, 'changes', changes)
         monkeypatch.setattr(client, 'command', command)
         if producer_kind == 'native':

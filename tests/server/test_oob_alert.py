@@ -9,6 +9,7 @@ here contacts a real endpoint or the production application.
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import inspect
 import json
@@ -144,7 +145,7 @@ def test_probe_separates_ready_storage_down_breaker_lifecycle_and_unanswered(tmp
         http, calls = _fake_http(answers)
         observed = oob_alert.probe(config, now=lambda: START, http=http)
         assert (observed.kind, observed.available, observed.latched) == (kind, available, latched), name
-        assert calls[0] == (config.api_url + '/api/ready', oob_alert.READY_PROBE_TIMEOUT_S)
+        assert calls[0] == (config.api_url + '/api/ready', oob_alert.READINESS_PROBE_DEADLINE_SECONDS)
         # The manager is asked only when the API host did not answer.
         assert (len(calls) == 2) == (kind == 'api_unanswered'), name
     assert 'manager status unavailable' in observed.detail
@@ -254,41 +255,70 @@ def test_a_repair_never_races_a_recovery_its_own_signals_show_progressing(tmp_pa
         assert watcher.repairs.started == [f'inc-{int(INCIDENT_0207) + 60}']
 
 
-def _manager_record(root: Path, *, age_s: float, now: float, **fields) -> None:
-    record = root / 'data' / 'server-manager-state.json'
-    record.parent.mkdir(parents=True, exist_ok=True)
-    record.write_text(json.dumps({'desired': 'running', 'observed': 'running', 'unreadySince': 0.0, **fields}))
-    os.utime(record, (now - age_s, now - age_s))
-
-
 TIMED_OUT = (None, None, 'TimeoutError: timed out')
+REFUSED = (None, None, 'ConnectionRefusedError: [Errno 111] Connection refused')
 
 
-def test_a_timed_out_probe_while_the_managers_own_readiness_check_passes_is_slow_not_down(tmp_path):
-    # 2026-11-13 00:22-00:35: every probe timed out under load and the owner got 「Tofu API 无响应已 11 分钟」,
-    # while the manager's own readiness check passed (only 5-6 s blips at 00:20:08 and 00:34:25).
+def _probe_run(config, answers, *, start=START):
+    """One probe per watcher interval, each carrying the previous one, as ``Watcher.tick`` does."""
+    previous, observed = None, []
+    for index, answer in enumerate(answers):
+        at = start + index * oob_alert.PROBE_INTERVAL_S
+        result = oob_alert.probe(config, now=lambda at=at: at, http=_fake_http({'/api/ready': answer})[0],
+                                 previous=previous)
+        previous = dataclasses.asdict(result)
+        observed.append(result)
+    return observed
+
+
+def test_timeouts_shorter_than_the_contract_run_are_slow_not_down(tmp_path):
+    # 2026-11-13 00:22-00:35 and 2026-11-18 15:26-15:29: answers slower than the old 2 s deadline read as outages.
     config = _config(tmp_path)
-    now = time.time()
-    _manager_record(config.tofu_root, age_s=3, now=now)
-    http, calls = _fake_http({'/api/ready': TIMED_OUT})
-    observed = oob_alert.probe(config, now=lambda: now, http=http)
+    short = [TIMED_OUT] * (oob_alert.READINESS_TIMEOUT_RUN - 1)
+    observed = _probe_run(config, [*short, (200, {'ready': True}, ''), *short])
 
-    assert (observed.kind, observed.available) == ('slow', True)
-    assert 'slow, not down' in observed.detail
-    assert len(calls) == 1  # a slow host is not asked twice
+    assert [(item.kind, item.available) for item in observed] == (
+        [('slow', True)] * len(short) + [('ready', True)] + [('slow', True)] * len(short))
+    assert [item.timeouts for item in observed] == [*range(1, len(short) + 1), 0, *range(1, len(short) + 1)]
+    assert all(item.latency is not None and item.latency >= 0 for item in observed)
 
 
-@pytest.mark.parametrize('case', ['manager-says-unready', 'manager-record-stale', 'connection-refused'])
-def test_down_by_the_managers_own_record_or_a_refused_port_is_never_slow(tmp_path, case):
+def test_the_contract_run_of_timeouts_is_down_from_the_first_timeout(tmp_path):
     config = _config(tmp_path)
-    now = time.time()
-    fields = {'observed': 'degraded', 'unreadySince': now - 20} if case == 'manager-says-unready' else {}
-    age = oob_alert.PROBE_INTERVAL_S + 5 if case == 'manager-record-stale' else 3
-    _manager_record(config.tofu_root, age_s=age, now=now, **fields)
-    answer = (None, None, 'ConnectionRefusedError: [Errno 111] Connection refused') if case == 'connection-refused' \
-        else TIMED_OUT
-    observed = oob_alert.probe(config, now=lambda: now, http=_fake_http({'/api/ready': answer})[0])
-    assert (observed.kind, observed.available) == ('api_unanswered', False), case
+    run = oob_alert.READINESS_TIMEOUT_RUN
+    observed = _probe_run(config, [(200, {'ready': True}, '')] + [TIMED_OUT] * run)
+    last = observed[-1]
+
+    assert (last.kind, last.available, last.timeouts) == ('api_unanswered', False, run)
+    assert last.since == START + oob_alert.PROBE_INTERVAL_S  # the run's first timeout
+    assert f'no answer within {oob_alert.READINESS_PROBE_DEADLINE_SECONDS:g} s on {run} consecutive' in last.detail
+    state: dict = {}
+    oob_alert.step(state, last, [])
+    assert state['incident']['openedAt'] == last.since
+
+
+def test_a_refused_port_is_down_at_once(tmp_path):
+    observed = _probe_run(_config(tmp_path), [REFUSED])
+    assert (observed[0].kind, observed[0].available, observed[0].timeouts) == ('api_unanswered', False, 0)
+
+
+def test_watcher_records_latency_and_timeout_run_per_probe(tmp_path):
+    config = _config(tmp_path)
+    answers = iter([TIMED_OUT, TIMED_OUT, (200, {'ready': True}, '')])
+    clock = {'now': START}
+
+    def scripted():
+        return oob_alert.probe(config, now=lambda: clock['now'], http=_fake_http({'/api/ready': next(answers)})[0],
+                               previous=watcher.state.get('lastProbe'))
+    watcher = oob_alert.Watcher(config, tmp_path / 'state', sender=oob_alert.DryRunSender(),
+                                clock=lambda: clock['now'], probe_fn=scripted)
+    for _ in range(3):
+        watcher.tick()
+        clock['now'] += oob_alert.PROBE_INTERVAL_S
+    records = [json.loads(line) for line in (tmp_path / 'state' / 'probes.jsonl').read_text().splitlines()]
+
+    assert [(r['kind'], r['consecutiveTimeouts']) for r in records] == [('slow', 1), ('slow', 2), ('ready', 0)]
+    assert all(isinstance(r['latencySeconds'], float) for r in records)
 
 
 class _ReadyHandler(BaseHTTPRequestHandler):
@@ -563,12 +593,100 @@ def test_vault_reader_decrypts_what_the_vault_module_stores_and_never_mints(tmp_
     assert list(empty.iterdir()) == []
 
 
+class _FakeOpenPlatform:
+    """Token endpoint and group send of the 大象 open platform, in memory."""
+
+    def __init__(self, *, token_status=200, post=None):
+        self.requests: list[tuple[str, dict, bytes]] = []
+        self.token_status = token_status
+        self.post = post
+
+    def __call__(self, method, url, headers, body):
+        self.requests.append((url, headers, body))
+        if url.endswith('/token'):
+            if self.token_status != 200:
+                return self.token_status, b'{"error": "invalid_client"}'
+            return 200, json.dumps({'access_token': 'access', 'token_type': 'Bearer', 'expires_in': 3600}).encode()
+        if self.post is not None:
+            return self.post(url, body)
+        gid = str(json.loads(body)['gid'])
+        return 200, json.dumps({'status': {'code': 0}, 'data': {'messageMap': {gid: 'msg-1'}}}).encode()
+
+
+def _robot_config(tmp_path):
+    return _config(tmp_path, dx_robot={'enabled': True, 'clientId': 'client-1', 'gid': '71158539432',
+                                       'credentialName': 'channel.u1.dx.robot'})
+
+
+def test_robot_sender_posts_the_text_to_the_bound_group(tmp_path):
+    platform = _FakeOpenPlatform()
+    sender = oob_alert.DxRobotSender(_robot_config(tmp_path), transport=platform, secret=lambda: 'secret')
+    outcome, detail = sender.send('告警文本')
+    assert outcome == 'sent' and detail.startswith('gid 71158539432 message msg-1; HTTP 200 ')
+    assert '"messageMap": {"71158539432": "msg-1"}' in detail
+    assert 'access' not in detail  # the token endpoint's answer is never kept
+    token_url, _, token_form = platform.requests[0]
+    assert token_url == 'https://ssosv.internal.example.com/sson/auth/oidc/v1/token' and b'client_id=client-1' in token_form
+    send_url, headers, body = platform.requests[1]
+    assert send_url == 'https://xopen.internal.example.com/open-apis/dx-msg/sendGroupMsgByRobot'
+    assert headers['Authorization'] == 'Bearer access'
+    sent = json.loads(body)
+    assert sent['gid'] == 71158539432 and json.loads(sent['sendMsgInfo']['body']) == {'text': '告警文本'}
+
+
+def test_robot_sender_maps_refusal_to_retry_and_a_lost_answer_to_unknown(tmp_path):
+    refused = oob_alert.DxRobotSender(_robot_config(tmp_path), transport=_FakeOpenPlatform(token_status=401),
+                                      secret=lambda: 'secret')
+    assert refused.send('x')[0] == 'not_sent'
+
+    def lost(url, body):
+        raise TimeoutError('read timed out')
+    unknown = oob_alert.DxRobotSender(_robot_config(tmp_path), transport=_FakeOpenPlatform(post=lost),
+                                      secret=lambda: 'secret')
+    assert unknown.send('x')[0] == 'unknown'
+
+    def missing_secret():
+        raise LookupError('vault entry channel.u1.dx.robot is empty')
+    no_secret = oob_alert.DxRobotSender(_robot_config(tmp_path), transport=_FakeOpenPlatform(),
+                                        secret=missing_secret)
+    assert no_secret.send('x')[0] == 'not_sent'
+
+
+def test_the_watcher_and_its_robot_path_never_import_the_storage_client(tmp_path):
+    script = f"""
+import json, sys
+sys.path.insert(0, {str(REPO)!r})
+from pathlib import Path
+from serverctl_pkg import oob_alert
+config = oob_alert.Config(tofu_root=Path({str(tmp_path)!r}), api_url='http://127.0.0.1:9',
+                          manager_url='http://127.0.0.1:9',
+                          dx_robot={{'enabled': True, 'clientId': 'c', 'gid': '1', 'credentialName': 'n'}})
+def transport(method, url, headers, body):
+    if url.endswith('/token'):
+        return 200, b'{{"access_token": "a", "token_type": "Bearer", "expires_in": 60}}'
+    return 200, b'{{"status": {{"code": 0}}, "data": {{"messageMap": {{"1": "m"}}}}}}'
+sender = oob_alert.DxRobotSender(config, transport=transport, secret=lambda: 's')
+watcher = oob_alert.Watcher(config, Path({str(tmp_path / 'state')!r}), sender=sender)
+watcher.tick()
+print(json.dumps({{'outcome': sender.send('x')[0],
+                  'storage': sorted(m for m in sys.modules if m.startswith('lib.storage'))}}))
+"""
+    env = {key: value for key, value in os.environ.items() if key != 'PYTHONPATH'}
+    result = subprocess.run([sys.executable, '-c', script], capture_output=True, text=True, env=env, timeout=120,
+                            check=True)
+    answer = json.loads(result.stdout.strip().splitlines()[-1])
+    assert answer == {'outcome': 'sent', 'storage': []}
+
+
 def test_named_constants_match_their_owning_sources():
     import server_manager
     from lib.http_transport import client
 
+    from serverctl_pkg import readiness_liveness
+
     readiness = inspect.signature(server_manager.probe_application_readiness).parameters['timeout'].default
-    assert oob_alert.READY_PROBE_TIMEOUT_S == readiness
+    assert oob_alert.READINESS_PROBE_DEADLINE_SECONDS == readiness == readiness_liveness.READINESS_PROBE_DEADLINE_SECONDS
+    assert oob_alert.READINESS_TIMEOUT_RUN == readiness_liveness.READINESS_TIMEOUT_RUN
     assert oob_alert.MANAGER_STATE_FILE == Path('data') / server_manager.MANAGER_STATE_FILE
     assert oob_alert.RESTART_IN_PROGRESS == server_manager.RESTART_IN_PROGRESS
     assert oob_alert.ROBOT_REQUEST_TIMEOUT_S == client._DEFAULT_TIMEOUT
@@ -1061,9 +1179,17 @@ def test_the_default_state_dir_is_off_the_root_overlay_and_private(tmp_path):
     assert (os.stat(loose).st_mode & 0o777) == 0o700
 
 
-# The 大象 robot sender's own cases drive the dx adapter, which only the YourProvider
-# bundle ships: bundles/yourprovider/tests/channels/test_dx_robot_oob_alert.py.
-def test_preflight_without_a_delivery_path_reports_it():
+def test_preflight_proves_the_robot_credentials_without_posting(tmp_path, capsys):
+    platform = _FakeOpenPlatform()
+    sender = oob_alert.DxRobotSender(_robot_config(tmp_path), transport=platform, secret=lambda: 'robot-secret-abcd')
+    passed, detail = sender.preflight()
+    assert passed and 'token minted' in detail and detail.endswith('…abcd; group 71158539432')
+    assert 'robot-secret' not in detail
+    assert [url for url, _, _ in platform.requests] == ['https://ssosv.internal.example.com/sson/auth/oidc/v1/token']
+    refused = oob_alert.DxRobotSender(_robot_config(tmp_path), transport=_FakeOpenPlatform(token_status=401),
+                                      secret=lambda: 'robot-secret-abcd')
+    passed, detail = refused.preflight()
+    assert not passed and detail.startswith('token_rejected')
     assert oob_alert.NoSender().preflight() == (False, 'no delivery path is enabled in config.json')
 
 

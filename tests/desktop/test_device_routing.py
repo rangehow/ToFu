@@ -10,6 +10,7 @@ never retried elsewhere, and a repeated idempotency key never runs twice.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import threading
 import time
@@ -20,6 +21,15 @@ from lib.desktop import bridge as db
 from lib.desktop import device_policy, routing
 
 pytestmark = [pytest.mark.unit, pytest.mark.home_ceiling]
+pytest_plugins = ('tests._credential_sidecar',)
+
+
+def pytest_generate_tests(metafunc):
+    if ('durable_policy' in metafunc.fixturenames
+            and os.environ.get('TOFU_STORAGE_TEST_POSTGRES') == '1'):
+        metafunc.parametrize('credential_storage', ['sqlite', 'postgres'], indirect=True, scope='module')
+
+
 OWNER, OTHER = 7, 8
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -68,7 +78,7 @@ def test_new_device_is_read_only_and_effective_is_the_intersection():
     assert device_policy.effective_tiers(OWNER, 'n1', caps) == {
         'read': True, 'write': False, 'exec': False, 'gui': False, 'egress': False,
         'codex_login': False}
-    _record, rev = device_policy.set_ceiling(OWNER, 'n1', {'write': True, 'gui': True})
+    _record, rev = device_policy.set_ceiling(OWNER, 'n1', {'write': True, 'gui': True}, expected_revision=0)
     assert rev == 1
     effective = device_policy.effective_tiers(OWNER, 'n1', caps)
     # gui is allowed by the Home but not by the device: the Home never raises it.
@@ -77,7 +87,7 @@ def test_new_device_is_read_only_and_effective_is_the_intersection():
 
 
 def test_forgetting_a_node_resets_it_to_read_only_and_clears_defaults():
-    device_policy.set_ceiling(OWNER, 'n1', {'write': True})
+    device_policy.set_ceiling(OWNER, 'n1', {'write': True}, expected_revision=0)
     device_policy.set_defaults(OWNER, {'computer': 'n1'})
     device_policy.forget_node(OWNER, 'n1')
     assert device_policy.home_tiers(OWNER, 'n1')['write'] is False
@@ -86,9 +96,9 @@ def test_forgetting_a_node_resets_it_to_read_only_and_clears_defaults():
 
 def test_ceiling_request_rejects_removing_read_and_unknown_tiers():
     with pytest.raises(ValueError):
-        device_policy.set_ceiling(OWNER, 'n1', {'read': False})
+        device_policy.set_ceiling(OWNER, 'n1', {'read': False}, expected_revision=0)
     with pytest.raises(ValueError):
-        device_policy.set_ceiling(OWNER, 'n1', {'root': True})
+        device_policy.set_ceiling(OWNER, 'n1', {'root': True}, expected_revision=0)
 
 
 def test_unavailable_policy_fails_closed(monkeypatch):
@@ -96,17 +106,17 @@ def test_unavailable_policy_fails_closed(monkeypatch):
 
     def broken(write=False):
         raise StorageError('storage_unavailable', 'down')
-    device_policy.set_ceiling(OWNER, 'n1', {'write': True})
+    device_policy.set_ceiling(OWNER, 'n1', {'write': True}, expected_revision=0)
     device_policy.invalidate()
     monkeypatch.setattr(device_policy, '_default_client', broken)
     assert device_policy.home_tiers(OWNER, 'n1')['write'] is False
 
 
 def test_cached_policy_changes_only_on_explicit_invalidation(policy_records):
-    device_policy.set_ceiling(OWNER, 'n1', {'write': True})
+    device_policy.set_ceiling(OWNER, 'n1', {'write': True}, expected_revision=0)
     assert device_policy.home_tiers(OWNER, 'n1')['write'] is True
     # Another process committed a lower ceiling: this one keeps its cache ...
-    device_policy.set_ceiling(OWNER, 'n1', {}, client=policy_records)
+    device_policy.set_ceiling(OWNER, 'n1', {}, expected_revision=1, client=policy_records)
     device_policy._cache[OWNER] = ({'version': 1, 'owner': OWNER, 'defaults': {
         'computer': None, 'server': None, 'browser': None},
         'ceilings': {'n1': {t: True for t in device_policy.CEILING_TIERS}}}, 1)
@@ -167,7 +177,7 @@ def test_enqueue_refuses_a_tier_outside_ceiling_and_device():
     result, error = db.send_desktop_command('desktop_write_file', {'path': 'x', 'content': ''},
                                             timeout=0, target_agent_id='a1', user_id=str(OWNER))
     assert result is None and error.startswith('permission_denied') and 'Home' in error
-    device_policy.set_ceiling(OWNER, 'a1', {'write': True, 'exec': True})
+    device_policy.set_ceiling(OWNER, 'a1', {'write': True, 'exec': True}, expected_revision=0)
     cmd_id, error = db.enqueue_desktop_command('desktop_write_file', {}, target_agent_id='a1',
                                                user_id=str(OWNER))
     assert error is None and cmd_id
@@ -179,11 +189,11 @@ def test_enqueue_refuses_a_tier_outside_ceiling_and_device():
 
 def test_ceiling_lowered_after_enqueue_withdraws_the_command_before_claim():
     _register('a1', caps={'write': True})
-    device_policy.set_ceiling(OWNER, 'a1', {'write': True})
+    device_policy.set_ceiling(OWNER, 'a1', {'write': True}, expected_revision=0)
     cmd_id, error = db.enqueue_desktop_command('desktop_write_file', {}, target_agent_id='a1',
                                                user_id=str(OWNER))
     assert error is None
-    device_policy.set_ceiling(OWNER, 'a1', {})
+    device_policy.set_ceiling(OWNER, 'a1', {}, expected_revision=1)
     assert db.take_pending_commands(agent_id='a1', user_id=str(OWNER)) == []
     cmd = db.command_queue[cmd_id]
     assert cmd['event'].is_set() and cmd['error'].startswith('permission_denied')
@@ -193,7 +203,7 @@ def test_ceiling_lowered_after_enqueue_withdraws_the_command_before_claim():
 def test_claimed_command_carries_the_home_ceiling_and_the_node_rechecks_it():
     from lib.desktop_agent._dispatch import home_tier_refusal
     _register('a1', caps={'write': True})
-    device_policy.set_ceiling(OWNER, 'a1', {'write': True})
+    device_policy.set_ceiling(OWNER, 'a1', {'write': True}, expected_revision=0)
     db.enqueue_desktop_command('desktop_write_file', {}, target_agent_id='a1',
                                user_id=str(OWNER))
     [wire] = db.take_pending_commands(agent_id='a1', user_id=str(OWNER))
@@ -315,15 +325,37 @@ def test_shard_pool_repeats_device_policy_reconcile_on_every_shard(monkeypatch):
     assert calls == [(1, 'device_policy_reconcile'), (2, 'device_policy_reconcile')]
 
 
+@pytest.fixture
+def durable_policy(monkeypatch):
+    from lib.storage import get_storage_client
+    from uuid import uuid4
+
+    class PolicyClient:
+        def __call__(self, write=False):
+            return self
+
+        def query(self, *args):
+            return get_storage_client().query(*args)
+
+        def command(self, *args):
+            return get_storage_client(write=True).command(*args)
+
+    client = PolicyClient()
+    client.command('record.delete', {'namespace': device_policy.NAMESPACE, 'key': '1'}, uuid4().hex)
+    monkeypatch.setattr(device_policy, '_default_client', client)
+    yield client
+    client.command('record.delete', {'namespace': device_policy.NAMESPACE, 'key': '1'}, uuid4().hex)
+
+
 @pytest.mark.api
-def test_ceiling_and_defaults_routes_are_owner_scoped(flask_client, monkeypatch):
+def test_ceiling_and_defaults_routes_are_owner_scoped(flask_client, durable_policy):
     from lib.api_keys import create_key
     _row, token = create_key(owner_user_id=1, name='devices-routing', scopes=['chat'])
     headers = {'Authorization': f'Bearer {token}'}
     _register('node-1', 'laptop', owner=1, caps={'write': True})
     _register('node-x', 'foreign', owner=2, caps={'write': True})
     resp = flask_client.put('/api/v4/devices/node-1/ceiling', headers=headers,
-                            json={'tiers': {'write': True, 'exec': True}})
+                            json={'expected_revision': 0, 'tiers': {'write': True, 'exec': True}})
     assert resp.status_code == 200, resp.get_json()
     body = resp.get_json()
     body = body.get('data', body)
@@ -331,9 +363,9 @@ def test_ceiling_and_defaults_routes_are_owner_scoped(flask_client, monkeypatch)
     assert body['effective']['write'] is True and body['effective']['exec'] is False
     assert body['execution'] in ('not_split', 'applied')
     assert flask_client.put('/api/v4/devices/node-x/ceiling', headers=headers,
-                            json={'tiers': {'write': True}}).status_code == 404
+                            json={'expected_revision': 0, 'tiers': {'write': True}}).status_code == 404
     assert flask_client.put('/api/v4/devices/node-1/ceiling', headers=headers,
-                            json={'tiers': {'read': False}}).status_code == 400
+                            json={'expected_revision': 0, 'tiers': {'read': False}}).status_code == 400
     listing = flask_client.get('/api/v4/devices/permissions', headers=headers).get_json()
     listing = listing.get('data', listing)
     assert set(listing['permissions']) == {'node-1'} and listing['liveness_window_s'] == 15
@@ -342,6 +374,166 @@ def test_ceiling_and_defaults_routes_are_owner_scoped(flask_client, monkeypatch)
     resp = flask_client.put('/api/v4/devices/defaults', headers=headers,
                             json={'computer': 'node-1'})
     assert resp.status_code == 200
+    written = json.loads(resp.data)['data']
+    device_policy.validate(written, 'DefaultsWriteResponse')
+    assert written['rev'] == listing['rev'] + 1
     got = flask_client.get('/api/v4/devices/defaults', headers=headers).get_json()
     got = got.get('data', got)
     assert got['defaults'] == {'computer': 'node-1', 'server': None, 'browser': None}
+
+
+def test_ceiling_cas_rechecks_client_revision_after_storage_contention(policy_records, monkeypatch):
+    from lib.storage.errors import StorageError
+
+    set_ceiling = device_policy.set_ceiling
+    _, rev = set_ceiling(OWNER, 'n1', {'exec': True}, expected_revision=0)
+    command = policy_records.command
+
+    def collide(*args):
+        monkeypatch.setattr(policy_records, 'command', command)
+        set_ceiling(OWNER, 'n1', {}, expected_revision=rev)
+        return command(*args)
+
+    monkeypatch.setattr(policy_records, 'command', collide)
+    with pytest.raises(device_policy.StaleDevicePolicy):
+        set_ceiling(OWNER, 'n1', {'exec': True, 'gui': True}, expected_revision=rev)
+    listing = device_policy.permissions_listing(OWNER, [])
+    assert listing['rev'] == rev + 1
+    assert listing['permissions']['n1']['home']['exec'] is False
+
+    def lose_ack(*args):
+        command(*args)
+        raise StorageError('database_unavailable', 'ack lost after commit')
+
+    monkeypatch.setattr(policy_records, 'command', lose_ack)
+    with pytest.raises(StorageError, match='ack lost'):
+        set_ceiling(OWNER, 'n1', {'write': True}, expected_revision=rev + 1)
+    # The replay must succeed without reaching the write seam again.
+    _, saved = set_ceiling(OWNER, 'n1', {'write': True}, expected_revision=rev + 1)
+    assert saved == rev + 2
+    assert device_policy.permissions_listing(OWNER, [])['rev'] == saved
+
+
+@pytest.mark.api
+def test_ceiling_http_independent_snapshots_cannot_restore_revoked_tier(
+        flask_app, flask_client, durable_policy):
+    from lib.api_keys import create_key
+    from tests.conftest import _SyncClient
+    clients = [flask_client, _SyncClient(flask_app.test_client())]
+    headers = [{'Authorization': 'Bearer ' + create_key(
+        owner_user_id=1, name=f'devices-{i}', scopes=['chat'])[1]} for i in range(2)]
+    _register('node-1', owner=1, caps={'exec': True, 'write': True})
+    path = '/api/v4/devices/node-1/ceiling'
+
+    def put(i, **body):
+        return clients[i].put(path, headers=headers[i], json=body)
+
+    def read(i):
+        response = clients[i].get('/api/v4/devices/permissions', headers=headers[i])
+        assert response.status_code == 200
+        payload = response.get_json()
+        return payload.get('data', payload)
+
+    assert put(0, tiers={'exec': True}).status_code == 400
+    initial = read(0)['rev']
+    assert put(0, expected_revision=initial, tiers={'exec': True}).status_code == 200
+    stale = read(1)['rev']
+    replay = put(0, expected_revision=initial, tiers={'exec': True})
+    assert replay.status_code == 200
+    payload = replay.get_json()
+    assert payload.get('data', payload)['rev'] == stale == initial + 1
+    assert put(0, expected_revision=stale, tiers={}).status_code == 200
+    assert put(0, expected_revision=initial, tiers={'exec': True}).status_code == 409
+    rejected = put(1, expected_revision=stale, tiers={'exec': True, 'write': True})
+    assert rejected.status_code == 409
+    assert rejected.get_json()['error']['code'] == 'stale_device_policy'
+    fresh = read(1)
+    assert not fresh['permissions']['node-1']['home']['exec']
+    assert put(1, expected_revision=fresh['rev'], tiers={'write': True}).status_code == 200
+    assert not read(0)['permissions']['node-1']['home']['exec']
+
+
+@pytest.mark.api
+def test_committed_revocation_with_lost_storage_ack_reconciles_without_client_retry(
+        flask_client, durable_policy, monkeypatch):
+    from lib.api_keys import create_key
+    from lib.storage.errors import StorageError
+    from routes.api_v1 import devices
+
+    _, token = create_key(owner_user_id=1, name='devices-lost-ack', scopes=['chat'])
+    _register('node-1', owner=1, caps={'exec': True})
+    _, rev = device_policy.set_ceiling(1, 'node-1', {'exec': True}, expected_revision=0)
+    assert device_policy.home_tiers(1, 'node-1')['exec']
+    command = durable_policy.command
+
+    def lose_ack(*args):
+        receipt = command(*args)
+        if args[0] == 'record.device_policy_commit':
+            raise StorageError('database_unavailable', 'ack lost after commit')
+        return receipt
+
+    execution_calls = []
+    monkeypatch.setattr(durable_policy, 'command', lose_ack)
+    monkeypatch.setattr(devices, '_follow_in_execution', execution_calls.append)
+    response = flask_client.put('/api/v4/devices/node-1/ceiling',
+                                headers={'Authorization': f'Bearer {token}'},
+                                json={'expected_revision': rev, 'tiers': {}})
+    assert response.status_code == 503
+    assert response.headers['Content-Type'].startswith('application/problem+json')
+    assert json.loads(response.data)['status'] == 503
+    assert execution_calls == [1]
+    assert not device_policy.home_tiers(1, 'node-1')['exec']
+
+
+@pytest.mark.api
+def test_defaults_503_can_follow_a_commit(flask_client, durable_policy, monkeypatch):
+    from lib.api_keys import create_key
+    from lib.storage.errors import StorageError
+    from routes.api_v1 import devices
+
+    _, token = create_key(owner_user_id=1, name='defaults-lost-ack', scopes=['chat'])
+    headers = {'Authorization': f'Bearer {token}'}
+    path = '/api/v4/devices/defaults'
+    _register('node-1', owner=1)
+    before = json.loads(flask_client.get(path, headers=headers).data)['data']
+    command = durable_policy.command
+
+    def lose_ack(*args):
+        receipt = command(*args)
+        if args[0] == 'record.device_policy_commit':
+            raise StorageError('database_unavailable', 'ack lost after commit')
+        return receipt
+
+    reconciled = []
+    monkeypatch.setattr(durable_policy, 'command', lose_ack)
+    monkeypatch.setattr(devices, '_follow_in_execution', reconciled.append)
+    response = flask_client.put(path, headers=headers, json={'computer': 'node-1'})
+    assert response.status_code == 503
+    assert response.headers['Content-Type'].startswith('application/problem+json')
+    assert json.loads(response.data)['status'] == 503
+    assert reconciled == [1]
+    fresh = json.loads(flask_client.get(path, headers=headers).data)['data']
+    assert fresh['defaults']['computer'] == 'node-1'
+    assert fresh['rev'] == before['rev'] + 1
+
+
+@pytest.mark.api
+def test_defaults_reread_observes_external_commit_despite_cached_policy(
+        flask_client, policy_records):
+    from lib.api_keys import create_key
+
+    _, token = create_key(owner_user_id=1, name='defaults-fresh-read', scopes=['chat'])
+    headers = {'Authorization': f'Bearer {token}'}
+    path = '/api/v4/devices/defaults'
+    record, rev = device_policy.policy(1)
+    record['defaults']['computer'] = 'external-node'
+    policy_records.command('record.put', {
+        'namespace': device_policy.NAMESPACE, 'key': '1', 'value': record,
+        'expected_version': rev,
+    }, 'external-defaults-commit')
+    assert device_policy.policy(1)[1] == rev
+    response = flask_client.get(path, headers=headers)
+    assert response.status_code == 200
+    fresh = json.loads(response.data)['data']
+    assert fresh['rev'] == rev + 1
+    assert fresh['defaults']['computer'] == 'external-node'

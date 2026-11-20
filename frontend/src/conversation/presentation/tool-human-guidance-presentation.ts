@@ -431,7 +431,11 @@ export function createToolHumanGuidancePresentation(
       WITHDRAWN_REASON_UNITS,
     );
     const withdrawn = Boolean(withdrawnReason.value);
-    const badgeHtml = withdrawn
+    /* The owner settled this non-blocking question on its default from a card; the lead was told nothing. */
+    const defaultConfirmed = chatReply && Boolean(field(round, 'guidanceDefaultAccepted'));
+    const badgeHtml = defaultConfirmed
+      ? translatedHtml('toolHumanGuidance.defaultConfirmedBadge')
+      : withdrawn
       ? translatedHtml('toolHumanGuidance.withdrawnBadge')
       : chatReply
         ? translatedHtml('toolHumanGuidance.nonBlockingBadge')
@@ -448,7 +452,7 @@ export function createToolHumanGuidancePresentation(
     const questionBlock = batchSectionsShown
       ? ''
       : `<div class="hg-question">${questionHtml}${displayQuestion.truncated ? limitHtml(QUESTION_UNITS) : ''}</div>`;
-    return `<div class="hg-card${expired && !lateAnswerable ? ' hg-expired' : ''}${withdrawn ? ' hg-withdrawn' : ''}" data-gid="${guidanceIdHtml}"${lateAttributes}${replyAttributes}>
+    return `<div class="hg-card${expired && !lateAnswerable ? ' hg-expired' : ''}${withdrawn ? ' hg-withdrawn' : ''}${defaultConfirmed ? ' hg-default-confirmed' : ''}" data-gid="${guidanceIdHtml}"${lateAttributes}${replyAttributes}>
     <div class="hg-header">
       ${''}
       <span class="hg-title">${translatedHtml('project.hgPanelTitle')}</span>

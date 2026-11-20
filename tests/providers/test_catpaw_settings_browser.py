@@ -88,6 +88,7 @@ def test_catpaw_settings_lifecycle(browser, live_server, scenario):
     def open_catpaw():
         page.locator('[data-tofu-action="openSettings()"]').first.click()
         page.locator('.settings-tab[data-tab="oauth"]').click()
+        page.get_by_role('button', name='CatPaw (Credit Hub)', exact=True).click()
 
     context.route('**/*', handle)
     try:
@@ -118,6 +119,7 @@ def test_catpaw_settings_lifecycle(browser, live_server, scenario):
                                     'installed': True, 'model_count': 0, 'revision': state['revision']})
             status_reads.clear()
             page.locator('.settings-tab[data-tab="oauth"]').click()
+            page.get_by_role('button', name='CatPaw (Credit Hub)', exact=True).click()
             expect(connect).to_be_visible()
             expect(connect).to_be_enabled()
             assert state['deletes'] == 1

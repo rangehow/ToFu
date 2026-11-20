@@ -90,6 +90,8 @@ def _offline_author(monkeypatch, task, *, craft_reads=()):
 
 def test_full_film_is_a_declared_workflow(tmp_path, monkeypatch, record_property):
     task, final = _film(tmp_path, monkeypatch)
+    monkeypatch.setattr(mv, 'burn_in_subtitles',
+                        lambda *args, **kwargs: pytest.fail('unrequested burn'))
     engine.run_motion_task(task)
     assert task['status'] == 'done', task.get('error')
     workflow = next(event['workflow'] for event in task['events']
@@ -108,6 +110,72 @@ def test_full_film_is_a_declared_workflow(tmp_path, monkeypatch, record_property
     assert len(state['stages']) == len(names)
     record_property('film_checkpoint_bytes', state_path.stat().st_size)
     record_property('film_scenes', task['result']['scenes'])
+    assert task['result']['burn_in'] is False
+    assert task['result']['safe_box_checked'] == 0
+    assert task['result']['subtitle_vertical_inconclusive'] == []
+    assert state['stages']['publish']['artifact']['result'] == task['result']
+    assert not any(event['type'] == 'phase' and event.get('phase') == 'burn_in'
+                   for event in task['events'])
+
+
+@pytest.mark.parametrize('evidence', [
+    pytest.param({'ok': True, 'duration': 8.0, 'safe_box_checked': 2,
+                  'subtitle_vertical_inconclusive': []}, id='verified-inside'),
+    pytest.param({'ok': True, 'duration': 8.0, 'safe_box_checked': 0,
+                  'subtitle_vertical_inconclusive': [{
+                      'time_s': 1.5, 'bbox': [200, 340, 440, 359],
+                      'detail': 'subtitle ink touches a vertical frame '
+                                'boundary'}]}, id='ambiguous-vertical-edge'),
+])
+def test_subtitle_visibility_evidence_reaches_the_film_result(
+        tmp_path, monkeypatch, evidence):
+    """A verified inset cue and an ambiguous edge-touching cue must stay
+    distinguishable in the delivered receipt, not only inside the burn."""
+    task, final = _film(tmp_path, monkeypatch)
+    task['burn_in'] = True
+    monkeypatch.setattr(mv, 'burn_in_subtitles',
+                        lambda video, srt, output, **kw: (
+                            Path(output).write_bytes(b'mp4-burned'), evidence)[1])
+    engine.run_motion_task(task)
+    assert task['status'] == 'done', task.get('error')
+    assert final.read_bytes() == b'mp4-burned'
+    result = task['result']
+    assert result['burn_in'] is True
+    assert result['safe_box_checked'] == evidence['safe_box_checked']
+    assert result['subtitle_vertical_inconclusive'] == \
+        evidence['subtitle_vertical_inconclusive']
+    state = json.loads((final.parent / 'film_state.json').read_text())
+    published = state['stages']['publish']['artifact']['result']
+    assert published == result
+    assert result['final_path'] == str(final)
+    [burn] = [event for event in task['events']
+              if event['type'] == 'phase' and event.get('phase') == 'burn_in']
+    assert burn['duration_s'] == evidence['duration']
+    assert burn['auto'] is False
+    assert 'safe_box_checked' not in burn
+    assert 'vertical_inconclusive' not in burn
+    assert sum(event['type'] == 'final' for event in task['events']) == 1
+
+
+def test_failed_subtitle_burn_preserves_published_film(tmp_path, monkeypatch):
+    """A refused burn fails the subtitle stage without publishing a result."""
+    task, final = _film(tmp_path, monkeypatch)
+    task['burn_in'] = True
+    monkeypatch.setattr(mv, 'burn_in_subtitles',
+                        lambda *args, **kwargs: {
+                            'ok': False, 'category': 'subtitle_overflow',
+                            'detail': 'burned subtitle ink spans x[0..1079]'})
+    engine.run_motion_task(task)
+    _assert_not_delivered(task, final)
+    assert not task.get('result')
+    assert not any(event['type'] == 'phase' and event.get('phase') == 'burn_in'
+                   for event in task['events'])
+    [failed] = [event for event in task['events']
+                if event['type'] == 'stage_failed']
+    assert failed['stage'] == 'subtitles'
+    assert 'burned subtitle ink spans x[0..1079]' in failed['detail']
+    state = json.loads((final.parent / 'film_state.json').read_text())
+    assert not {'subtitles', 'verify', 'publish'} & state['stages'].keys()
 
 
 @pytest.mark.parametrize('bad_probe', [None, {'duration': 99.0}, {'width': 640},

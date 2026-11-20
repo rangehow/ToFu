@@ -12,7 +12,8 @@ import hashlib
 import json
 
 from lib.log import get_logger
-from lib.storage.model_continuation import ModelContinuationStore, model_context_revision, settled_witness
+from lib.agent_core.model_context_revision import model_context_revision
+from lib.storage.model_continuation import ModelContinuationStore, settled_witness
 from lib.tasks_pkg.inbox_delivery import UNVERIFIED_INBOX_DELIVERY
 
 logger = get_logger(__name__)
@@ -202,34 +203,99 @@ _PORTABLE_PRIVATE_FIELDS = frozenset({
 })
 
 
-def _portable_messages(messages):
-    """Detach the text-only part of a continuation for another route or effort.
+_TEXT_BLOCK_TYPES = frozenset({'text', 'input_text', 'output_text'})
+# Provider-neutral image blocks and their retained-source records. They were
+# projected for the checkpoint's model (vision support, image and text budgets),
+# so they stay portable only while that model is unchanged.
+_MEDIA_BLOCK_TYPES = frozenset({'image_url'})
+_MEDIA_PRIVATE_FIELDS = frozenset({
+    '_modelImageSources', '_modelImagesPinnedFor', '_modelImagesPinnedOwner',
+})
+# Drifted fields that name a different model; any other portable drift keeps it.
+_MODEL_IDENTITY_FIELDS = frozenset({'model', 'modelRef'})
+
+
+def _content_refusal(content, keep_media):
+    if isinstance(content, (str, type(None))):
+        return None
+    if not isinstance(content, list):
+        return f'content_type={type(content).__name__}'
+    allowed = _TEXT_BLOCK_TYPES | (_MEDIA_BLOCK_TYPES if keep_media else frozenset())
+    refused = sorted({str(block.get('type')) if isinstance(block, dict) else type(block).__name__
+                      for block in content
+                      if not isinstance(block, dict) or block.get('type') not in allowed})
+    return 'content_blocks=' + ','.join(refused) if refused else None
+
+
+def _portable_projection(messages, *, keep_media=False, keep_historical_context=False):
+    """``(projected, None)`` or ``(None, refusal)`` naming the first refused message.
 
     Provider continuation state is stripped: it is valid only for the route
     that produced it, and a cold rebuild never replays it across routes
-    either. Text content, tool calls and results keep their exact bytes.
-    Composer carriers are rebuilt for the destination. Media and unknown
-    private state refuse rather than silently lose evidence.
+    either. Text content (strings or text blocks), tool calls and results keep
+    their exact bytes. Composer carriers are rebuilt for the destination.
+    Media (unless ``keep_media``) and unknown private state refuse rather than
+    silently lose evidence. The refusal holds the message index, role and
+    reason (block types or private field names), never message content.
     """
     import copy
+    private_allowed = _PORTABLE_PRIVATE_FIELDS | (_MEDIA_PRIVATE_FIELDS if keep_media else frozenset())
     projected = []
-    for message in messages:
+    for index, message in enumerate(messages):
         if message.get('_contextComposer'):
+            # A fallback publication is restored under the same ingress
+            # policy. Keep its consumed chronological context at the original
+            # positions. An actual policy migration still rebuilds all carriers.
+            if (keep_historical_context and message.get('role') == 'user'
+                    and message.get('carrier') == 'tail_context'
+                    and _content_refusal(message.get('content'), False) is None):
+                projected.append(copy.deepcopy({
+                    key: message[key] for key in (
+                        'role', 'content', 'carrier', '_isMeta',
+                        '_contextComposer', '_contextBlocks') if key in message
+                }))
             continue
-        if not isinstance(message.get('content', ''), (str, type(None))):
-            return None
+        reason = _content_refusal(message.get('content', ''), keep_media)
         portable = {key: value for key, value in message.items()
                     if key not in _PROVIDER_CONTINUATION_FIELDS}
-        if any(str(key).startswith('_') and key not in _PORTABLE_PRIVATE_FIELDS
-               for key in portable):
-            return None
+        if reason is None:
+            private = sorted(str(key) for key in portable
+                             if str(key).startswith('_') and key not in private_allowed)
+            reason = 'private_fields=' + ','.join(private) if private else None
+        if reason is not None:
+            return None, {'index': index, 'role': message.get('role'), 'reason': reason}
         if (portable.get('role') == 'assistant' and not portable.get('content')
                 and not portable.get('tool_calls')):
             # Only provider state: strict providers reject an empty assistant
             # row, and the cold rebuild drops it as well.
             continue
         projected.append(copy.deepcopy(portable))
-    return projected if projected and projected[-1].get('role') == 'assistant' else None
+    if projected and projected[-1].get('role') == 'assistant':
+        return projected, None
+    return None, {'index': len(messages) - 1, 'role': messages[-1].get('role') if messages else None,
+                  'reason': 'no_final_assistant_text'}
+
+
+def _portable_messages(messages, *, keep_media=False, keep_historical_context=False):
+    """The portable projection (``_portable_projection``), or None when refused."""
+    return _portable_projection(
+        messages, keep_media=keep_media,
+        keep_historical_context=keep_historical_context)[0]
+
+
+def _portable_drift_values(cached, config, drift):
+    """``{field: [checkpoint, request]}`` for drifted route/effort fields.
+
+    Only portable fields reach this diagnosis: model ids, provider ids,
+    routing preferences and effort settings, never instructions or grants.
+    A legacy checkpoint without a field map names only its digest drift.
+    """
+    fields = cached.get('policyFields') if isinstance(cached, dict) else None
+    if not isinstance(fields, list) or len(fields) != 4 or not isinstance(fields[2], dict):
+        return {name: 'unrecorded' for name in drift or ['portablePolicy']}
+    current = _policy_fields(config)[2]
+    return {name: [fields[2].get(name), current.get(name)] for name in drift
+            if name in PORTABLE_DRIFT_FIELDS}
 
 
 def _publication_status(task, reason):
@@ -373,7 +439,8 @@ def _log_history_change(rows, *, conversation_id, user_id, lane_id):
         logger.warning('[ModelReplay] history change diagnosis unavailable: %s', type(exc).__name__)
 
 
-def restore_prefix(rows, config, *, conversation_id, user_id, validated_context=None):
+def restore_prefix(rows, config, *, conversation_id, user_id, validated_context=None,
+                   prospective_resume=False, detached=False):
     """Return (retained model messages, number of covered Turn rows)."""
     config.pop('_goalWorkerState', None)
     config.pop('_modelReplayBase', None)
@@ -381,6 +448,7 @@ def restore_prefix(rows, config, *, conversation_id, user_id, validated_context=
     config.pop('_modelReplayProofPin', None)
     config.pop('_modelReplayProofEligible', None)
     config.pop('_modelReplayToolLatch', None)
+    config.pop('_modelReplayProtectedCount', None)
     config.pop('_modelReplayPolicyFields', None)
     config.pop('_modelReplayPolicyDrift', None)
     config.pop('_modelReplayHistoryHeaders', None)
@@ -389,7 +457,8 @@ def restore_prefix(rows, config, *, conversation_id, user_id, validated_context=
     if not rows:
         config['_modelReplayStatus'] = 'empty_history'
         return [], 0
-    _remember_context_activity(rows, config)
+    if not detached:
+        _remember_context_activity(rows, config)
     if validated_context is None and len(rows) > MAX_TURN_WITNESSES:
         config['_modelReplayStatus'] = 'over_budget'
         return [], 0
@@ -415,22 +484,24 @@ def restore_prefix(rows, config, *, conversation_id, user_id, validated_context=
         config['_modelReplayStatus'] = 'unsupported_mode'
         return [], 0
     target = rows[-1]
-    resume = _has_resume_data(config)
+    resume = prospective_resume or _has_resume_data(config)
     # A resume target carries its interrupted attempt; the resume path, not
     # the completed prefix, owns that projection.
     if not resume and (target.get('projection', {}).get('content')
                        or target.get('projection', {}).get('toolRounds')):
         config['_modelReplayStatus'] = 'resume_target'
         return [], 0
+    if detached and validated_context is None:
+        return [], 0
     try:
         cached = (validated_context.get('continuation') if validated_context is not None
                   else ModelContinuationStore().get(user_id=user_id, conversation_id=conversation_id,
                                                    lane_id=target.get('laneId') or 'main'))
-        if validated_context is not None:
+        if validated_context is not None and not detached:
             _remember_history_headers(rows, config, validated_context, cached)
         if not isinstance(cached, dict):
             reason = (validated_context or {}).get('continuationStatus')
-            if reason == 'history_changed':
+            if reason == 'history_changed' and not detached:
                 _log_history_change(rows, conversation_id=conversation_id, user_id=user_id,
                                     lane_id=target.get('laneId') or 'main')
             config['_modelReplayStatus'] = (reason if reason in {
@@ -444,8 +515,9 @@ def restore_prefix(rows, config, *, conversation_id, user_id, validated_context=
             # Never replay the resumed Turn's own completed publication.
             config['_modelReplayStatus'] = 'checkpoint_not_before_target'
             return [], 0
-        _remember_context_activity([], config, cached=cached,
-                                   conversation_id=conversation_id, user_id=user_id)
+        if not detached:
+            _remember_context_activity([], config, cached=cached,
+                                       conversation_id=conversation_id, user_id=user_id)
         if 'historyProof' in cached:
             proof = cached['historyProof']
             if (not isinstance(proof, dict) or type(proof.get('version')) is not int
@@ -466,8 +538,9 @@ def restore_prefix(rows, config, *, conversation_id, user_id, validated_context=
             # policy: only the spelling changed. A legacy checkpoint without a
             # field map always reports digest drift and never reaches here.
             same_policy = same_prefix_policy = True
-            logger.info('[ModelReplay] conv=%s policy=equivalent (witness spellings differ)',
-                        str(conversation_id))
+            if not detached:
+                logger.info('[ModelReplay] conv=%s policy=equivalent (witness spellings differ)',
+                            str(conversation_id))
         if drift:
             config['_modelReplayPolicyDrift'] = drift
         # Route/effort drift keeps the checkpoint's portable text and rebuilds
@@ -478,7 +551,7 @@ def restore_prefix(rows, config, *, conversation_id, user_id, validated_context=
             or cached.get('portablePolicy') == portable_policy_witness(config)))
         if not same_prefix_policy and not portable:
             config['_modelReplayStatus'] = 'policy_changed'
-            if drift:
+            if drift and not detached:
                 logger.warning(
                     '[ModelReplay] conv=%s restore=policy_changed drift=%s — '
                     'authority-bearing fields differ between the checkpoint and '
@@ -496,12 +569,29 @@ def restore_prefix(rows, config, *, conversation_id, user_id, validated_context=
             config['_modelReplayStatus'] = 'invalid_checkpoint'
             return [], 0
         if portable:
-            messages = _portable_messages(messages)
+            # The checkpoint's own model already accepted its media; only a
+            # field map can prove that model is unchanged.
+            keep_media = (isinstance(cached.get('policyFields'), list) and portable_drift(drift)
+                          and not set(drift) & _MODEL_IDENTITY_FIELDS)
+            messages, refusal = _portable_projection(messages, keep_media=keep_media)
             if messages is None:
                 config['_modelReplayStatus'] = 'nonportable_checkpoint'
+                if detached:
+                    return [], 0
+                logger.warning(
+                    '[ModelReplay] conv=%s restore=nonportable_checkpoint drift=%s '
+                    'first_nonportable=%s keep_media=%s', str(conversation_id),
+                    json.dumps(_portable_drift_values(cached, config, drift),
+                               ensure_ascii=False, sort_keys=True, default=str),
+                    json.dumps(refusal, sort_keys=True), keep_media)
                 return [], 0
-            logger.info('[ModelReplay] conv=%s restore=portable drift=%s',
-                        str(conversation_id), ','.join(drift) or 'route')
+            if not detached:
+                logger.info('[ModelReplay] conv=%s restore=portable drift=%s',
+                            str(conversation_id), ','.join(drift) or 'route')
+        if detached:
+            # The detached caller already admits only plain text with no source
+            # references. Return the selection before live hydration/adoption.
+            return messages, 0
         from lib.knowledge import read_source_path
         for message in messages:
             for source in message.get('_modelImageSources') or []:
@@ -541,11 +631,45 @@ def restore_prefix(rows, config, *, conversation_id, user_id, validated_context=
                     and (message.get('thinking_signature')
                          or message.get('_anthropic_content_blocks'))):
                 message['_reasoning_continuity'] = 'completed_turn'
+        if same_prefix_policy:
+            config['_modelReplayProtectedCount'] = len(messages)
         return messages, len(prior) if validated_context is None or legacy_prefix else 0
     except Exception as exc:
         config['_modelReplayStatus'] = 'unavailable'
-        logger.warning('[ModelReplay] cold rebuild: %s', type(exc).__name__)
+        if not detached:
+            logger.warning('[ModelReplay] cold rebuild: %s', type(exc).__name__)
         return [], 0
+
+
+def select_retained_text_continuation(rows, config, context, *, conversation_id, user_id):
+    """Observe the normal prefix owner on detached, storage-validated text only."""
+    cached = context.get('continuation')
+    status = context.get('continuationStatus')
+    covered = context.get('covered')
+    if (status == 'checkpoint_missing' and 'continuation' in context and cached is None
+            and type(covered) is int and covered == 0):
+        return 'verified_absent', None
+    if (status != 'available' or not isinstance(cached, dict)
+            or type(covered) is not int or not 0 < covered < len(rows)):
+        return 'indeterminate', None
+    from lib.storage.model_continuation import encode_projection
+    from lib.tasks_pkg.message_semantics import has_nested_model_media
+    if encode_projection(cached) is None:
+        return 'indeterminate', None
+    proof = cached.get('historyProof')
+    if (not proof or proof['version'] != 2 or proof['count'] != covered - 1
+            or cached['turns'][0] != settled_witness(rows[covered - 1])):
+        return 'indeterminate', None
+    messages = cached['messages']
+    if (has_nested_model_media(messages)
+            or any(not isinstance(m, dict) or m.get('_modelImageSources') or m.get('attachments')
+                   or not isinstance(m.get('content', ''), str) for m in messages)):
+        return 'indeterminate', None
+    # The caller gets the original record, not the mutable serving view.
+    projected, _ = restore_prefix(rows[covered:], dict(config), conversation_id=conversation_id,
+                                  user_id=user_id, validated_context=context, prospective_resume=True,
+                                  detached=True)
+    return ('selected', cached) if projected else ('indeterminate', None)
 
 
 def _history_fingerprint(context, input_turn_id):
@@ -708,7 +832,7 @@ def prepare_completed_task(task):
             # steers and tool results exist only in this view (the Turn
             # projection keeps a display preview), so publish its text-only
             # portable part rather than force a cold rebuild that loses them.
-            messages = _portable_messages(messages)
+            messages = _portable_messages(messages, keep_historical_context=True)
             if messages is None:
                 _publication_status(task, 'model_changed_during_run')
                 return

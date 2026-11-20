@@ -167,7 +167,10 @@ def _resolve_break_cause(
     The eviction verdict is GATED on evidence, not reached by elimination.
     ``wire_proven_identical`` is True only when the authoritative
     post-translation wire fingerprint (see ``wire_fingerprint.py``) showed the
-    actual sent bytes were byte-for-byte identical to the previous round.
+    shared PREFIX messages (the region compared against the previous round)
+    were byte-for-byte identical. It is NOT whole-request or full-frame
+    equality: top-level fields outside the fingerprinted prefix (max_tokens,
+    metadata, tool_choice, ...) can differ in the same round.
     CRUCIALLY, byte-identity proves only that the miss is NOT a client-side
     prefix change THIS ROUND — it says nothing about the cause. A byte-identical
     prefix that is not read back was not reused upstream; that is an ordinary
@@ -303,18 +306,34 @@ def _resolve_break_cause(
         _base = ('cached prefix bytes changed between turns '
                  f'(non-idempotent history edit) — {_billed}')
         return f'{_base} [changed: {_culprits}]' if _culprits else _base
-    # ── Cache-NAMESPACE switch (byte-identical body, routing flipped) ──
-    # The request BODY was byte-identical to last round, but the cache-namespace
-    # routing changed — the upstream key, the anthropic-beta header (e.g.
-    # extended-cache-ttl presence), or the endpoint. Anthropic caches per
-    # (key + beta + endpoint), so the same prefix bytes hit a COLD namespace →
-    # a guaranteed miss. This is a CLIENT-side cause (dispatch rebind on
-    # cooldown/429, or a per-task TTL-latch flip), NOT a server/gateway fault —
-    # name the exact attribute(s) that flipped so it is never laundered upstream.
+    # ── Cache-NAMESPACE switch (routing flipped) ──
+    # The cache-namespace routing changed — the upstream key, the anthropic-beta
+    # header (e.g. extended-cache-ttl presence), or the endpoint. Anthropic
+    # caches per (key + beta + endpoint), so when the shared PREFIX bytes are
+    # also proven identical the same bytes hit a COLD namespace → a guaranteed
+    # miss. ``wire_proven_identical`` is only a PREFIX claim, so when it does
+    # not hold the verdict must stay hedged rather than assert a byte-identical
+    # body. This is a CLIENT-side cause (dispatch rebind on cooldown/429, or a
+    # per-task TTL-latch flip), NOT a server/gateway fault — name the exact
+    # attribute(s) that flipped so it is never laundered upstream.
     if namespace_switch:
         _ns_names = {'<ns>key': 'upstream API key', '<ns>beta': 'anthropic-beta '
                      'header (e.g. extended-cache-ttl)', '<ns>endpoint': 'endpoint'}
         _flipped = ', '.join(_ns_names.get(c, c) for c in namespace_switch)
+        if not wire_proven_identical:
+            # The routing flip is observed, but the prefix-byte proof did not
+            # hold (bytes changed or the comparison was unavailable). Never
+            # describe this as a byte-identical body; the namespace switch is
+            # one observed change among others, not proof of what caused the
+            # miss.
+            return ('the request was routed to a different cache namespace — '
+                    f'the {_flipped} changed between turns (a client-side '
+                    'dispatch rebind on cooldown/429, or a per-task TTL-latch '
+                    'flip), but the shared prefix bytes were not proven '
+                    'identical (they differed or the comparison was '
+                    'unavailable), so this is not proof that the whole request '
+                    'was unchanged or that the namespace switch alone caused '
+                    'the miss')
         return ('same prefix bytes routed to a different cache namespace — the '
                 f'{_flipped} changed between turns (a client-side dispatch '
                 'rebind on cooldown/429, or a per-task TTL-latch flip), so the '

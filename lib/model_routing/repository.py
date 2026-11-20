@@ -15,7 +15,10 @@ from lib.identity import require_user_id
 from lib.secret_envelope import open_secret, seal_secret
 from lib.utils import sha256_holding_gil
 
-from .change_notifications import notify_model_routing_changed
+from .change_notifications import (
+    mark_model_routing_secrets_changed,
+    notify_model_routing_changed,
+)
 from .credential_envelope import credential_secret_display_hint
 
 from .domain import (
@@ -73,6 +76,8 @@ class RepositoryPort(Protocol):
         *,
         expected_revision: int,
         migration_receipt: Mapping[str, Any] | None = None,
+        cancel_event=None,
+        account_mutation=False,
     ) -> StoredAuthority: ...
 
     def put_secret(
@@ -81,9 +86,10 @@ class RepositoryPort(Protocol):
         plaintext: str,
         *,
         secret_reference: str | None = None,
+        subscription_account=False,
     ) -> dict[str, str]: ...
 
-    def resolve_secret(self, boundary: OwnerBoundary, secret_reference: str) -> str: ...
+    def resolve_secret(self, boundary: OwnerBoundary, secret_reference: str, *, subscription_account=False) -> str: ...
 
     def delete_secret(self, boundary: OwnerBoundary, secret_reference: str) -> bool: ...
 
@@ -193,6 +199,8 @@ class ModelRoutingRepository:
         *,
         expected_revision: int,
         migration_receipt: Mapping[str, Any] | None = None,
+        cancel_event=None,
+        account_mutation=False,
     ) -> StoredAuthority:
         if isinstance(expected_revision, bool) or expected_revision < 0:
             raise ModelRoutingError("expected_revision must be non-negative")
@@ -200,6 +208,8 @@ class ModelRoutingRepository:
         if current.revision != expected_revision:
             raise ModelRoutingError("model-routing aggregate changed concurrently", kind="model_routing_revision_conflict")
         from .registration import prepare_registration_document
+        from .subscription_accounts import retain_private_accounts
+        document = retain_private_accounts(document, current.document, account_mutation=account_mutation)
         admitted = prepare_registration_document(document, previous=current.document)
         normalized = normalize_document(admitted, revision=expected_revision + 1)
         command_id = (
@@ -214,8 +224,11 @@ class ModelRoutingRepository:
         }
         if migration_receipt is not None:
             payload["migration_receipt"] = copy.deepcopy(dict(migration_receipt))
-        row = self._client(write=True).command(
-            "model_routing.commit", payload, command_id)
+        client = self._client(write=True)
+        # Preparation can block. Already dispatched commands are not rolled back.
+        if cancel_event is not None and cancel_event.is_set():
+            raise TimeoutError('model routing publication cancelled before dispatch')
+        row = client.command("model_routing.commit", payload, command_id)
         if row is None:
             raise ModelRoutingError(
                 "model-routing commit returned no authority",
@@ -231,6 +244,8 @@ class ModelRoutingRepository:
         # Every successful commit wakes open settings panels.  Best-effort:
         # the revisioned aggregate remains the only authority.
         notify_model_routing_changed(
+            user_id=boundary.owner_user_id, rev=committed_revision)
+        mark_model_routing_secrets_changed(
             user_id=boundary.owner_user_id, rev=committed_revision)
         return StoredAuthority(
             boundary=boundary,
@@ -275,9 +290,13 @@ class ModelRoutingRepository:
         plaintext: str,
         *,
         secret_reference: str | None = None,
+        subscription_account=False,
     ) -> dict[str, str]:
         value = _validated_secret(plaintext)
-        reference = str(secret_reference or f"mrs_{secrets.token_hex(16)}").strip()
+        if secret_reference is not None and (subscription_account or secret_reference.strip().startswith('oauth_')):
+            raise ModelRoutingError('Subscription account secret references are immutable')
+        prefix = 'oauth' if subscription_account else 'mrs'
+        reference = str(secret_reference or f"{prefix}_{secrets.token_hex(16)}").strip()
         if not reference or len(reference) > 256:
             raise ModelRoutingError(
                 "secret_reference must be 1..256 characters",
@@ -295,18 +314,23 @@ class ModelRoutingRepository:
                 **boundary.payload(),
                 "secret_reference": reference,
                 "ciphertext": ciphertext,
-                "key_hint": credential_secret_display_hint(value),
+                "key_hint": '' if subscription_account else credential_secret_display_hint(value),
                 "updated_at": time.time(),
             },
             f"model_routing.secret.put:{reference}:{secrets.token_hex(8)}",
         )
+        # An in-place rewrite of a referenced secret changes a usable key
+        # without any aggregate commit.
+        mark_model_routing_secrets_changed(user_id=boundary.owner_user_id)
         return {
             "secret_reference": str(row["secret_reference"]),
             "key_hint": str(row.get("key_hint") or ""),
         }
 
-    def resolve_secret(self, boundary: OwnerBoundary, secret_reference: str) -> str:
+    def resolve_secret(self, boundary: OwnerBoundary, secret_reference: str, *, subscription_account=False) -> str:
         reference = str(secret_reference or "").strip()
+        if reference.startswith('oauth_') != subscription_account:
+            raise ModelRoutingError('Credential secret not available', kind='credential_secret_missing')
         if not reference:
             return ""
         row = self._client().query(
@@ -328,7 +352,7 @@ class ModelRoutingRepository:
     def secret_metadata(self, boundary: OwnerBoundary) -> list[dict[str, Any]]:
         rows = self._client().query(
             "model_routing.secret.list", boundary.payload())
-        return [dict(row) for row in rows]
+        return [dict(row) for row in rows if not row['secret_reference'].startswith('oauth_')]
 
     def delete_secret(self, boundary: OwnerBoundary, secret_reference: str) -> bool:
         row = self._client(write=True).command(
@@ -336,6 +360,7 @@ class ModelRoutingRepository:
             {**boundary.payload(), "secret_reference": secret_reference},
             f"model_routing.secret.delete:{secret_reference}:{secrets.token_hex(8)}",
         )
+        mark_model_routing_secrets_changed(user_id=boundary.owner_user_id)
         return bool(row and row.get("deleted"))
 
     def prune_orphan_secrets(
@@ -406,6 +431,8 @@ class InMemoryModelRoutingRepository:
         *,
         expected_revision: int,
         migration_receipt: Mapping[str, Any] | None = None,
+        cancel_event=None,
+        account_mutation=False,
     ) -> StoredAuthority:
         with self._lock:
             current = self._authorities.get(boundary)
@@ -416,10 +443,15 @@ class InMemoryModelRoutingRepository:
                     kind="model_routing_revision_conflict",
                 )
             from .registration import prepare_registration_document
-            admitted = prepare_registration_document(document, previous=current.document if current else empty_document())
+            from .subscription_accounts import retain_private_accounts
+            previous = current.document if current else empty_document()
+            document = retain_private_accounts(document, previous, account_mutation=account_mutation)
+            admitted = prepare_registration_document(document, previous=previous)
             normalized = normalize_document(admitted, revision=expected_revision + 1)
             row = StoredAuthority(
                 boundary, expected_revision + 1, copy.deepcopy(normalized), time.time())
+            if cancel_event is not None and cancel_event.is_set():
+                raise TimeoutError('model routing publication cancelled before dispatch')
             self._authorities[boundary] = row
             if migration_receipt is not None:
                 self._receipts[boundary] = {
@@ -454,17 +486,23 @@ class InMemoryModelRoutingRepository:
         plaintext: str,
         *,
         secret_reference: str | None = None,
+        subscription_account=False,
     ) -> dict[str, str]:
         value = _validated_secret(plaintext)
-        reference = secret_reference or f"mrs_{secrets.token_hex(16)}"
+        if secret_reference is not None and (subscription_account or secret_reference.strip().startswith('oauth_')):
+            raise ModelRoutingError('Subscription account secret references are immutable')
+        prefix = 'oauth' if subscription_account else 'mrs'
+        reference = secret_reference or f"{prefix}_{secrets.token_hex(16)}"
         with self._lock:
             self._secrets[(boundary, reference)] = value
         return {
             "secret_reference": reference,
-            "key_hint": credential_secret_display_hint(value),
+            "key_hint": '' if subscription_account else credential_secret_display_hint(value),
         }
 
-    def resolve_secret(self, boundary: OwnerBoundary, secret_reference: str) -> str:
+    def resolve_secret(self, boundary: OwnerBoundary, secret_reference: str, *, subscription_account=False) -> str:
+        if secret_reference.startswith('oauth_') != subscription_account:
+            raise ModelRoutingError('Credential secret not available', kind='credential_secret_missing')
         try:
             return self._secrets[(boundary, secret_reference)]
         except KeyError as exc:
@@ -481,7 +519,7 @@ class InMemoryModelRoutingRepository:
                     "key_hint": credential_secret_display_hint(value),
                 }
                 for (owner, reference), value in self._secrets.items()
-                if owner == boundary
+                if owner == boundary and not reference.startswith('oauth_')
             ]
 
     def delete_secret(self, boundary: OwnerBoundary, secret_reference: str) -> bool:
@@ -489,7 +527,7 @@ class InMemoryModelRoutingRepository:
             authority = self._authorities.get(boundary)
             if authority is not None and any(
                 row.get("secret_reference") == secret_reference
-                for row in authority.document["credentials"]
+                for row in authority.document["credentials"] + authority.document.get('subscription_accounts', [])
             ):
                 return False
             return self._secrets.pop((boundary, secret_reference), None) is not None

@@ -17,9 +17,7 @@ _AUDIT_SYNTHETIC_REPO_PATHS = (
 
 import pytest
 
-from tests.support.export_toolchain import require_export_toolchain
-
-require_export_toolchain()
+pytest.importorskip('export', reason='export.py is not shipped in opensource builds')
 
 pytestmark = pytest.mark.unit
 
@@ -468,132 +466,6 @@ def test_path_loads_that_cannot_name_a_dropped_repository_file_pass(tmp_path, lo
     _verify_exported_test_surface(dest, src)
 
 
-def test_toolchain_gate_suppresses_later_first_party_dependencies(tmp_path):
-    from export import _verify_exported_test_surface
-
-    src = tmp_path / 'src'
-    src.mkdir()
-    _make_path_loading_src(src)
-    (src / 'export.py').write_text('', encoding='utf-8')
-    dest = tmp_path / 'dest'
-    _make_dest(dest, {'test_gated.py': (
-        'from pathlib import Path\n'
-        'from tests.support.export_toolchain import require_export_toolchain\n'
-        'export = require_export_toolchain()\n'
-        'import tofu_db\n'
-        "ROOT = Path(__file__).resolve().parents[1]\n"
-        "HELPER = ROOT / 'benchmarks' / 'helper.py'\n"
-    )})
-    _verify_exported_test_surface(dest, src)
-
-
-def test_dependency_before_or_beside_a_test_level_toolchain_gate_is_flagged(tmp_path):
-    from export import ExportTestSurfaceError, _verify_exported_test_surface
-
-    src = tmp_path / 'src'
-    src.mkdir()
-    _make_src(src)
-    (src / 'export.py').write_text('', encoding='utf-8')
-    dest = tmp_path / 'dest'
-    _make_dest(dest, {'test_partial.py': (
-        'from tests.support.export_toolchain import require_export_toolchain\n'
-        'import tofu_db\n'
-        'def test_x():\n'
-        '    require_export_toolchain()\n'
-    )})
-    with pytest.raises(ExportTestSurfaceError, match=r'test_partial\.py -> tofu_db'):
-        _verify_exported_test_surface(dest, src)
-
-
-@pytest.mark.parametrize('reference', (
-    "HELPER = ROOT / 'benchmarks' / 'helper.py'\n",
-    "HELPER = ROOT / 'benchmarks/helper.py'\n",
-    "def test_run():\n    subprocess.run([sys.executable, 'benchmarks/helper.py'])\n",
-    "import os\nHELPER = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),"
-    " 'benchmarks', 'helper.py')\n",
-    "SUITE = Path(__file__).parent.parent / 'benchmarks'\nHELPER = SUITE / 'helper.py'\n",
-))
-def test_literal_repository_path_dropped_by_the_export_is_blocked(tmp_path, reference):
-    from export import ExportTestSurfaceError, _verify_exported_test_surface
-
-    src = tmp_path / 'src'
-    src.mkdir()
-    _make_path_loading_src(src)
-    dest = tmp_path / 'dest'
-    source = ('import subprocess, sys\nfrom pathlib import Path\n'
-              'ROOT = Path(__file__).resolve().parents[1]\n' + reference)
-    _make_dest(dest, {'test_measure.py': source})
-    with pytest.raises(ExportTestSurfaceError,
-                       match=r'test_measure\.py -> benchmarks/helper\.py'):
-        _verify_exported_test_surface(dest, src)
-
-    (dest / 'benchmarks').mkdir()
-    (dest / 'benchmarks' / 'helper.py').write_text('VALUE = 1\n', encoding='utf-8')
-    _verify_exported_test_surface(dest, src)
-
-
-@pytest.mark.parametrize('reference', (
-    # Module-relative files, absent source files, docstrings and directories.
-    "HELPER = HERE / 'benchmarks' / 'local.py'\n",
-    "HELPER = ROOT / 'benchmarks' / 'never_existed.py'\n",
-    "'''See benchmarks/helper.py for the measurement.'''\n",
-    "def test_doc():\n    '''benchmarks/helper.py'''\n",
-    "HELPERS = ROOT / 'benchmarks' / 'nested'\n",
-    "NOTE = 'run benchmarks/helper.py by hand'\n",
-    "def test_msg():\n    assert 'benchmarks/helper.py' in str(ROOT)\n",
-    # A synthetic repository is not this repository.
-    "def test_copy(tmp_path):\n    (tmp_path / 'benchmarks' / 'helper.py').write_text('')\n",
-    # An existence probe is the skip guard for an optional file.
-    "def test_probe():\n    helper = ROOT / 'benchmarks' / 'helper.py'\n"
-    "    if not helper.is_file():\n        return\n",
-    "OPTIONAL = (ROOT / 'benchmarks' / 'helper.py').exists()\n",
-    # A file read only when an optional overlay is installed.
-    "def test_overlay():\n    paths = []\n    if overlay_installed():\n"
-    "        paths.append(ROOT / 'benchmarks' / 'helper.py')\n",
-    "def test_overlay_run():\n    if overlay_installed():\n"
-    "        run([sys.executable, '-m', 'benchmarks.helper'])\n",
-    # The module's own availability probe skips everything after it.
-    "import pytest\ntry:\n    probe()\nexcept LookupError:\n"
-    "    pytest.skip('absent', allow_module_level=True)\n"
-    "def test_after():\n    (ROOT / 'benchmarks' / 'helper.py').read_text()\n",
-))
-def test_literal_paths_that_cannot_name_a_dropped_repository_file_pass(tmp_path, reference):
-    from export import _verify_exported_test_surface
-
-    src = tmp_path / 'src'
-    src.mkdir()
-    _make_path_loading_src(src)
-    (src / 'benchmarks' / 'nested').mkdir()
-    (src / 'benchmarks' / 'nested' / 'x.py').write_text('', encoding='utf-8')
-    dest = tmp_path / 'dest'
-    source = ('from pathlib import Path\n'
-              'ROOT = Path(__file__).resolve().parents[1]\n'
-              'HERE = Path(__file__).resolve().parent\n' + reference)
-    _make_dest(dest, {'test_local.py': source})
-    _verify_exported_test_surface(dest, src)
-
-
-def test_module_invocation_dropped_by_the_export_is_blocked(tmp_path):
-    from export import _test_surface_findings
-
-    src = tmp_path / 'src'
-    src.mkdir()
-    _make_path_loading_src(src)
-    dest = tmp_path / 'dest'
-    _make_dest(dest, {'test_run.py': (
-        'import subprocess, sys\n'
-        'def test_run():\n'
-        "    subprocess.run([sys.executable, '-m', 'benchmarks.helper', '--quick'])\n"
-        "    subprocess.run([sys.executable, '-m', 'pytest', '-q'])\n"
-        "    subprocess.run([sys.executable, '-m', 'scripts.gen_x'])\n"
-    )})
-    t = 'tests'
-    assert _test_surface_findings(dest, src) == [(t + '/test_run.py', 'benchmarks.helper')]
-    (dest / 'benchmarks').mkdir()
-    (dest / 'benchmarks' / 'helper.py').write_text('VALUE = 1\n', encoding='utf-8')
-    assert _test_surface_findings(dest, src) == []
-
-
 def test_public_installer_contract_does_not_require_private_export_toolchain(tmp_path):
     from pathlib import Path
     from export_pkg._lists import ROOT
@@ -605,3 +477,344 @@ def test_public_installer_contract_does_not_require_private_export_toolchain(tmp
     (target / test).write_bytes((ROOT / test).read_bytes())
     _verify_exported_test_surface(target, ROOT)
     assert not (target / 'export_pkg').exists()
+
+
+def test_recovery_selector_public_surface_with_synthetic_policy(tmp_path):
+    """Exercise real gate/sanitizer functions without importing secret lists."""
+    import __future__
+    import ast
+    import logging
+    import os
+    from pathlib import Path
+    import re
+    import subprocess
+    import sys
+
+    root = Path(__file__).resolve().parents[2]
+    selector = 'serverctl_pkg/tofudb_restore_selectors.py'
+    behavior_path = 'tests/tofudb/test_restore_selectors.py'
+
+    def public_functions(relative, namespace):
+        tree = ast.parse((root / relative).read_text(encoding='utf-8'))
+        # Imports are excluded so no live policy/secret authority can be loaded.
+        tree.body = [node for node in tree.body
+                     if isinstance(node, (ast.FunctionDef, ast.ClassDef))]
+        exec(compile(tree, relative, 'exec', flags=__future__.annotations.compiler_flag),
+             namespace)
+        return namespace
+
+    verify = public_functions('export_pkg/_verify.py', {
+        'ast': ast, 'os': os, 'Path': Path, 'ROOT': tmp_path,
+        'logger': logging.getLogger(__name__),
+        'C_GREEN': '', 'C_END': '', 'C_RED': '', 'C_DIM': '',
+    })
+    sanitize = public_functions('export_pkg/_sanitize.py', {
+        'os': os, 're': re,
+        '_SECRETS': {'synthetic-policy-secret': 'redacted'},
+        '_ENDPOINTS': {'synthetic-policy.invalid': 'public.example'},
+        '_INTERNAL_DOMAIN_LITERALS': ('.synthetic-policy.invalid',),
+        '_INTERNAL_IDENTIFIER_REPLACEMENTS': (('synthetic_private_id', 'public_id'),),
+    })['_sanitize_source_opensource']
+    probe = sanitize('synthetic-policy-secret synthetic-policy.invalid synthetic_private_id',
+                     'probe.txt')
+    assert probe == 'redacted public.example public_id'
+
+    exclude = public_functions('export_pkg/_excludes.py', {
+        'Path': Path, 'is_agent_artifact': lambda name: name.startswith('.tofu'),
+        '_TOP_LEVEL_ONLY_EXCLUDE_DIRS': set(),
+        'ALWAYS_EXCLUDE_ROOT_ONLY_DIRS': {'data', 'logs'},
+        '_TOP_LEVEL_ONLY_OPENSOURCE_EXCLUDE_DIRS': {'scripts'},
+        '_OPENSOURCE_EXCLUDE_PATHS': set(),
+        'ALWAYS_EXCLUDE_DIRS': {'export_pkg'},
+        'OPENSOURCE_EXTRA_EXCLUDE_DIRS': {'bundles'},
+        'ALWAYS_EXCLUDE_FILES': set(),
+        'ALWAYS_EXCLUDE_ROOT_ONLY_FILES': {'export.py'},
+        'OPENSOURCE_EXTRA_EXCLUDE_FILES': set(), 'ALWAYS_EXCLUDE_GLOBS': set(),
+    })['_should_exclude']
+    assert exclude(selector, Path(selector).name, 'opensource') is None
+    for private in ('scripts/tofudb_restore_selectors.py', 'scripts/private.py',
+                    'export.py', 'export_pkg/private.py', 'data/private.json',
+                    'bundles/private.py'):
+        assert exclude(private, Path(private).name, 'opensource') is not None
+
+    source, staged = tmp_path / 'source', tmp_path / 'staged'
+    for relative in ('serverctl_pkg/__init__.py', selector, behavior_path):
+        assert exclude(relative, Path(relative).name, 'opensource') is None
+        original = (root / relative).read_text(encoding='utf-8')
+        sanitized = sanitize(original, relative)
+        assert sanitized == original
+        for directory, text in ((source, original), (staged, sanitized)):
+            path = directory / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding='utf-8')
+
+    # Recreate precisely the rejected edge, then fix only that edge on the same input.
+    old_module = source / 'scripts/tofudb_restore_selectors.py'
+    old_module.parent.mkdir()
+    old_module.write_text((source / selector).read_text(encoding='utf-8'), encoding='utf-8')
+    behavior = staged / behavior_path
+    current_test = behavior.read_text(encoding='utf-8')
+    behavior.write_text(current_test.replace('from serverctl_pkg.tofudb_restore_selectors',
+                                            'from scripts.tofudb_restore_selectors'),
+                        encoding='utf-8')
+    error = verify['ExportTestSurfaceError']
+    gate = verify['_verify_exported_test_surface']
+    with pytest.raises(error, match=r'test_restore_selectors.py.*scripts.tofudb_restore_selectors'):
+        gate(staged, source)
+    behavior.write_text(current_test, encoding='utf-8')
+    gate(staged, source)
+    assert not (staged / 'scripts').exists()
+    assert not (staged / 'export.py').exists()
+    assert not (staged / 'export_pkg').exists()
+
+    result = subprocess.run(
+        [sys.executable, '-m', 'pytest', '-q', '-c', '/dev/null', '--noconftest',
+         '-o', 'addopts=', '-p', 'no:cacheprovider', behavior_path],
+        cwd=staged, env={'PATH': os.defpath, 'HOME': str(tmp_path),
+                         'TMPDIR': str(tmp_path), 'PYTHONPATH': str(staged),
+                         'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1'},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert '8 passed' in result.stdout
+    assert 'skipped' not in result.stdout
+
+
+def test_private_pilot_cli_ownership_preserves_internal_unit_selection(tmp_path):
+    import shlex
+    import subprocess
+    import sys
+    from pathlib import Path
+    from export_pkg._excludes import _should_exclude
+    from export_pkg._lists import ROOT, _OPENSOURCE_KEEP_FILES
+    from tests.meta.test_gitignore_covers_export_excludes import _EXTRA_KEEPERS
+
+    private = 'tests/longform/test_research_loop_cli.py'
+    public = 'tests/longform/test_experiment_stage.py'
+    assert private in _EXTRA_KEEPERS
+    assert public not in _EXTRA_KEEPERS
+    for mode in ('internal', 'personal'):
+        assert _should_exclude(private, Path(private).name, mode) is None
+        assert _should_exclude('scripts/research_loop.py', 'research_loop.py', mode) is None
+    assert _should_exclude(private, Path(private).name, 'opensource') is not None
+    assert _should_exclude(public, Path(public).name, 'opensource') is None
+    assert 'scripts/research_loop.py' not in _OPENSOURCE_KEEP_FILES
+    assert 'scripts/document_pipeline.py' not in _OPENSOURCE_KEEP_FILES
+    recipe = subprocess.run(['make', '-n', 'test-unit', 'JOBS=2'], cwd=ROOT,
+                            capture_output=True, text=True, check=True).stdout
+    parallel = next(line for line in recipe.splitlines() if 'unit and not serial' in line)
+    command = shlex.split(parallel)
+    command = [sys.executable, *command[command.index('-m'):], private, '--collect-only']
+    result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'test_cli_refuses_without_host_authority_before_dispatch' in result.stdout
+    assert '1 test collected' in result.stdout
+
+
+def test_retained_experiment_host_collects_without_private_launcher(tmp_path):
+    import ast
+    import os
+    from pathlib import Path
+    import shutil
+    import subprocess
+    import sys
+    from export_pkg._excludes import _should_exclude
+    from export_pkg._lists import ROOT
+
+    public = 'tests/longform/test_experiment_stage.py'
+    staged = tmp_path / 'public'
+    paths = subprocess.run(
+        ['git', 'ls-files', '--', '*.py'], cwd=ROOT,
+        capture_output=True, text=True, check=True).stdout.splitlines()
+    for relative in paths:
+        path = Path(relative)
+        if not (relative == public or relative.startswith(('lib/', 'packages/tofu-environments/'))
+                or len(path.parts) == 1):
+            continue
+        if _should_exclude(relative, path.name, 'opensource') is not None:
+            continue
+        target = staged / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / relative, target)
+    tree = ast.parse((staged / public).read_text())
+    imports = [node for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))]
+    assert not any(isinstance(node, ast.ImportFrom) and node.module == 'scripts' for node in imports)
+    assert not (staged / 'scripts').exists()
+    assert not (staged / 'export.py').exists()
+    assert not (staged / 'export_pkg').exists()
+    probe = (
+        'import importlib.util, pathlib, pytest, sys; '
+        'assert importlib.util.find_spec("export") is None; '
+        'assert importlib.util.find_spec("scripts.research_loop") is None '
+        'if importlib.util.find_spec("scripts") else True; '
+        'code = pytest.main(sys.argv[1:]); '
+        'root = pathlib.Path.cwd(); '
+        'assert all(pathlib.Path(m.__file__).is_relative_to(root) '
+        'for n, m in sys.modules.items() '
+        'if n == "lib" or n.startswith(("lib.", "tofu_environments"))); '
+        'raise SystemExit(code)'
+    )
+    result = subprocess.run(
+        [sys.executable, '-c', probe, '--collect-only', '-q', '-c', '/dev/null',
+         '--noconftest', '-o', 'addopts=', '-p', 'no:cacheprovider', public],
+        cwd=staged, env={'PATH': os.defpath, 'HOME': str(tmp_path), 'TMPDIR': str(tmp_path),
+                         'PYTHONPATH': str(staged), 'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1'},
+        capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'test_cli_refuses_without_host_authority_before_dispatch' not in result.stdout
+    for control in ('test_foreign_actor_and_no_authority_refused',
+                    'test_generated_smoke_is_not_executed_with_host_environment',
+                    'test_binding_mismatch_refuses_before_submit'):
+        assert control in result.stdout
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name.startswith('test_'):
+            assert node.name in result.stdout
+    assert 'skipped' not in result.stdout
+
+
+def test_deliverable_exact_private_owner_preserves_unit_selection():
+    import ast
+    from pathlib import Path
+    import subprocess
+
+    root = Path(__file__).resolve().parents[2]
+    private = 'tests/production/test_deliverable_cli.py'
+    public = {'tests/production/test_deliverable_launch.py',
+              'tests/longform/test_portfolio_policy.py'}
+    cases = {'test_document_cli_run_refuses_missing_inputs_before_any_model_request',
+             'test_document_cli_run_goes_through_the_launcher',
+             'test_contract_file_cli_preflight_and_run',
+             'test_cli_propagates_owner_profile_to_real_entrypoint'}
+
+    def literal_set(path, name):
+        tree = ast.parse((root / path).read_text(encoding='utf-8'))
+        node = next(n for n in tree.body if isinstance(n, ast.Assign)
+                    and any(isinstance(t, ast.Name) and t.id == name for t in n.targets))
+        return ast.literal_eval(node.value)
+
+    excludes = literal_set('export_pkg/_lists.py', '_OPENSOURCE_EXCLUDE_PATHS')
+    keepers = literal_set('tests/meta/test_gitignore_covers_export_excludes.py', '_EXTRA_KEEPERS')
+    helpers = literal_set('export_pkg/_lists.py', '_OPENSOURCE_KEEP_FILES')
+    assert private in excludes and private in keepers
+    assert not public & (excludes | keepers)
+    assert not {'scripts/document_pipeline.py', 'scripts/deliverable_run.py'} & helpers
+    tree = ast.parse((root / private).read_text(encoding='utf-8'))
+    assert {n.name for n in tree.body if isinstance(n, ast.FunctionDef)
+            and n.name.startswith('test_')} == cases
+    assert any(isinstance(n, ast.Assign) and any(isinstance(t, ast.Name)
+               and t.id == 'pytestmark' for t in n.targets)
+               and ast.unparse(n.value) == 'pytest.mark.unit' for n in tree.body)
+    for relative in public:
+        tree = ast.parse((root / relative).read_text(encoding='utf-8'))
+        assert not any(isinstance(n, ast.FunctionDef) and n.name in cases for n in tree.body)
+        assert not any(isinstance(n, ast.ImportFrom) and n.module == 'scripts'
+                       for n in ast.walk(tree))
+        assert not any(isinstance(n, ast.Constant) and isinstance(n.value, str)
+                       and ('document_pipeline.py' in n.value or n.value == 'deliverable_run')
+                       for n in ast.walk(tree))
+    recipe = subprocess.run(['make', '-n', 'test-unit', 'JOBS=2'], cwd=root,
+                            capture_output=True, text=True, check=True).stdout
+    parallel = next(line for line in recipe.splitlines() if 'unit and not serial' in line)
+    assert private not in parallel and '--ignore=tests/production' not in parallel
+    assert '--ignore=tests/longform' not in parallel
+    assert 'test-unit' in (root / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+
+
+def test_deliverable_retained_candidate_has_no_private_fallback(tmp_path):
+    import ast
+    from pathlib import Path
+    import shutil
+    import subprocess
+    import sys
+
+    root = Path(__file__).resolve().parents[2]
+    public = ('tests/production/test_deliverable_launch.py',
+              'tests/longform/test_portfolio_policy.py')
+    private = 'tests/production/test_deliverable_cli.py'
+    candidate = tmp_path / 'candidate'
+    paths = subprocess.run(['git', 'ls-files', '--', '*.py'], cwd=root,
+                           capture_output=True, text=True, check=True).stdout.splitlines()
+    exact = {*public, 'tests/__init__.py', 'tests/production/__init__.py',
+             'tests/longform/__init__.py', 'runtime_path_policy.py',
+             'tofu_extensions.py', 'utils.py',
+             'contracts/deliverable_launch_v1.schema.json',
+             'tests/production/test_deliverable_contract_validation.py'}
+    for relative in sorted(set(paths) | exact):
+        if relative not in exact and not relative.startswith('lib/'):
+            continue
+        source = root / relative
+        if not source.is_file():
+            continue
+        target = candidate / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+    probe = '''
+import importlib.abc, importlib.machinery, pathlib, socket, sys
+root = pathlib.Path.cwd()
+class LocalOnly(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in {'scripts', 'export', 'export_pkg', 'evaluations'}:
+            raise ModuleNotFoundError(fullname)
+        if fullname.split('.')[0] in {'lib', 'tests', 'runtime_path_policy',
+                                     'tofu_extensions', 'utils'}:
+            spec = importlib.machinery.PathFinder.find_spec(fullname, path)
+            if spec is None or (spec.origin and not pathlib.Path(spec.origin).is_relative_to(root)):
+                raise ModuleNotFoundError(fullname)
+            return spec
+sys.meta_path.insert(0, LocalOnly())
+def denied(*a, **k):
+    raise AssertionError('offline candidate attempted network')
+socket.socket.connect = denied
+socket.create_connection = denied
+import pytest
+code = pytest.main(sys.argv[1:])
+assert all(pathlib.Path(m.__file__).is_relative_to(root)
+           for n, m in sys.modules.items() if getattr(m, '__file__', None)
+           and (n == 'lib' or n.startswith(('lib.', 'tests.'))))
+assert not any(n.split('.')[0] in {'scripts', 'export', 'export_pkg', 'evaluations'}
+               for n in sys.modules)
+raise SystemExit(code)
+'''
+    environment = {'PATH': str(tmp_path / 'empty-bin'), 'HOME': str(tmp_path),
+                   'TMPDIR': str(tmp_path), 'PYTHONPATH': str(candidate),
+                   'TOFU_DATA_DIR': str(tmp_path / 'state'),
+                   'TOFU_PROJECT_PATH': str(candidate),
+                   'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1'}
+    args = ['-q', '-c', '/dev/null', '--noconftest', '-o', 'addopts=',
+            '-p', 'no:cacheprovider']
+    for absent in ('scripts', 'export.py', 'export_pkg', 'evaluations', 'data'):
+        assert not (candidate / absent).exists()
+    collected = subprocess.run([sys.executable, '-c', probe, *args, '--collect-only', *public],
+                               cwd=candidate, env=environment, capture_output=True,
+                               text=True, check=False)
+    assert collected.returncode == 0, collected.stdout + collected.stderr
+    assert 'skipped' not in collected.stdout
+    for relative in public:
+        tree = ast.parse((candidate / relative).read_text(encoding='utf-8'))
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name.startswith('test_'):
+                assert node.name in collected.stdout
+    pure = subprocess.run([sys.executable, '-c', probe, *args, public[0],
+                           '-k', 'schema_declares or malformed_contracts or relative_paths or '
+                           'document_contract_preserves'], cwd=candidate, env=environment,
+                          capture_output=True, text=True, check=False)
+    assert pure.returncode == 0, pure.stdout + pure.stderr
+    assert '12 passed' in pure.stdout and 'skipped' not in pure.stdout
+    validation = subprocess.run(
+        [sys.executable, '-c', probe, *args,
+         'tests/production/test_deliverable_contract_validation.py'],
+        cwd=candidate, env=environment, capture_output=True, text=True, check=False)
+    assert validation.returncode == 0, validation.stdout + validation.stderr
+    assert '5 passed' in validation.stdout and 'skipped' not in validation.stdout
+    target = candidate / private
+    shutil.copyfile(root / private, target)
+    internal = subprocess.run([sys.executable, '-c', probe, *args, '--collect-only',
+                               '-m', 'unit and not serial', private], cwd=candidate,
+                              env=environment, capture_output=True, text=True, check=False)
+    assert internal.returncode == 0, internal.stdout + internal.stderr
+    assert '4 tests collected' in internal.stdout and 'skipped' not in internal.stdout
+    for name in ('test_document_cli_run_refuses_missing_inputs_before_any_model_request',
+                 'test_document_cli_run_goes_through_the_launcher',
+                 'test_contract_file_cli_preflight_and_run',
+                 'test_cli_propagates_owner_profile_to_real_entrypoint'):
+        assert name in internal.stdout

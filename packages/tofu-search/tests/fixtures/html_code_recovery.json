@@ -1,0 +1,12 @@
+{
+  "html": "<html><body><main><h1>Worker group reference</h1><p>This guide describes how a worker group collects failures. All running workers settle before the group reports the result.</p><pre>sample = \"\"\"```example\n    source\n```\"\"\"\nprint(sample)</pre><pre>sample = \"\"\"```example\n    source\n```\"\"\"\nprint(sample)</pre><pre hidden>private hidden example</pre></main></body></html>",
+  "main_text": "sample = \"\"\"```example source ```\"\"\" print(sample)",
+  "url": "https://docs.example.test/groups",
+  "max_chars": 0,
+  "want_rendering": false,
+  "code": "sample = \"\"\"```example\n    source\n```\"\"\"\nprint(sample)",
+  "expected": [
+    "sample = \"\"\"```example source ```\"\"\" print(sample)\n\n--- Additional source structures ---\n````\nsample = \"\"\"```example\n    source\n```\"\"\"\nprint(sample)\n````",
+    null
+  ]
+}

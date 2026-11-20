@@ -877,7 +877,9 @@ values, redacts non-secrets); redacting only the final text (the capture cut or
 a chunk boundary leaves a fragment); a process-global registry of injected
 values (redacts other commands' output and keeps plaintext for the process
 lifetime). Known limit: exact values only, not encoded forms (base64,
-URL-escaped).
+URL-escaped); the write-time redaction below also covers URL-encoded forms of
+every known credential, injected or not.
+
 
 A background command's record files hold raw output, and a result rebuilt from
 them after a server restart (a command that finished or died while the server
@@ -903,6 +905,147 @@ second secret store beside the vault); names alone (a rotated or deleted entry
 leaves the old value unredacted); a digest of the value (offline-guessable for
 low-entropy secrets); delivering records without evidence unredacted.
 Verification: `tests/project_mod/test_run_command_credential_redaction.py`.
+
+**Known credentials are redacted at write time.**
+
+`lib/tool_results/credential_redaction.py` replaces every *known* credential value with
+`[redacted credential: <label>]` before Tofu persists or re-shows it. The known
+set is exact: every credential-vault entry value (label: its environment
+variable, e.g. `GITHUB_TOKEN`) and every provider key in `server_config.json`
+(`providers[].api_key`, `providers[].api_keys[]`, `mt_provider.api_key`; label
+`provider <id>`), plus, for an explicit owner, every model-routing v2 credential
+key of that owner (label `model-routing <credential_id>`; enabled or not; the
+`api_key` of a `tofu.credential-secret/v1` envelope or a raw `api_key` secret).
+Those keys exist only as sealed per-owner secrets (e.g. the example-corp AppIds added
+in Settings), so they are read through the model-routing owner's own decrypting
+read, `lib/model_routing/known_secrets.owner_credential_keys(boundary)`; nothing
+else decrypts them for redaction. The owner is always explicit: the task owner
+(`task_user_id`) at settlement, the client's bound owner in `storage.v2`, and
+the payload's own `owner_user_id`/`user_id` in the multi-owner SQL `storage.v1`
+channel (a command naming no owner gets the owner-independent set). OAuth providers are skipped (their `oauth-managed` entry is a
+sentinel), and values under 8 characters are not credentials but placeholders
+(`EMPTY`, `none`) whose replacement would rewrite ordinary text; that floor is a
+correctness rule, not a tuning knob. Each value is matched raw (which covers
+`Bearer <value>` and any other prefix) and URL-encoded (`quote`, `quote_plus`).
+
+Two seams apply it:
+
+- **Storage writes.** `StorageClient.command` (SQL `storage.v1`) and
+  `StorageV2Client.command` (native `storage.v2`; in Rust
+  `tofu_storage_client::StorageV2Client::command` through its installed
+  `CredentialRedactor`, which reads the same vault and `server_config.json`
+  and reads an owner's model-routing keys through `ModelRoutingKnownSecrets`,
+  a read-only port of `owner_credential_keys`; with no redactor installed it
+  refuses payload commands)
+  redact every string in the command payload, so tool results, task events, Turn projections, task
+  checkpoints, tool-result artifacts, swarm/worker results and every other
+  durable record carry the marker. Payloads with no known value pass through
+  as the same object. Credential authorities store only ciphertext
+  (`model_routing.secret.*`, `provider.*`), which cannot match.
+- **Tool settlement.** `_settle_tool_result` redacts the result after post-tool
+  hooks through `posthook_result`, so the `role: tool` message, the
+  `tool_complete` event and the round's stored content are redacted in the
+  same round: the model never sees a raw known value in later rounds, whether
+  it came from a shell command, an MCP server or any other tool.
+- **Large-result spool.** `ToolResultArtifactWriter` writes its private 0600
+  spool through `KnownCredentialRedactor.redact_stream`, which holds back the
+  last `longest - 1` characters (and any match crossing that cut) until more
+  text or finalization decides them, so a key split across output chunks never
+  reaches the file. The capture digest (`sha256`) stays that of the raw output.
+
+Matching is an aligned-block filter plus exact verification, and the redactor
+holds no plaintext (the model-routing owner forbids a plaintext cache; vault
+values get the same treatment). Per variant it keeps the length, a keyed
+BLAKE2b digest (random key per build) and the marker, and it indexes the
+built-in (SipHash) hash of every `b`-substring of every variant with its
+offset. With `b` = half the shortest variant (rounded up), every occurrence
+fully contains one of the text's aligned `b`-character blocks; one pass hashes
+those blocks and intersects them with the index, each hit names a candidate
+start that is verified by digest, and accepted matches are replaced longest
+first. The scan is `len/b` hash operations whatever the number of keys.
+
+Within one `redact_value` traversal, repeated references to the same exact
+built-in `str` reuse its redacted result under that redactor snapshot. The
+input/result identity table lives only on that call's stack; neither the
+redactor nor any source cache retains it. Holding the original input in the
+table prevents identity reuse during traversal. Containers are still walked
+at every occurrence, and string subclasses retain their independent calls.
+Every later traversal resolves current source identity again; rotation, owner,
+tenant, request-authority and source-failure rules below are unchanged.
+Problem: an ordinary phase snapshot and its carried event share their detail
+string and scanned it twice. Decision: eliminate only that second immutable
+string scan, not source checks, lock acquisition, freezing or wire encoding.
+Alternatives rejected: cross-call memoization (stale source/authority verdicts)
+and mutable-container memoization (no immutability proof). The small local
+SQLite discriminator, previous-behavior red result and limits are retained in
+[`client-presend-small.md`](../evidence/storage-local-xfs/client-presend-small.md#nonempty-source-discriminator-and-one-call-local-improvement).
+Measured on 16 MB of output (2026-11-18, fingerprint matcher): 10/60/600 known
+values took 147/130/135 ms without a hit and 175-196 ms with one; the shortest
+legal value (8 characters, `b` = 4) costs about 830 ms. For comparison, one
+regex alternation took 145/1,243/19,672 ms and a per-key `str.replace` loop
+20/118/1,049 ms.
+
+The Python task scope carries the admitted owner and tenant even on server
+runs without a request-routing carrier. Durable redaction reads and caches by
+that full boundary, never by numeric owner alone. An owner-only call outside
+that task scope still uses the default (empty) tenant. With a request-routing
+carrier, redaction uses only the admitted repository for model-routing keys,
+keeps fingerprints invocation-local, and consults neither the durable
+repository nor its stamp. Unavailable credential sources refuse that scoped
+execution rather than falling back to durable storage.
+
+The durable set is rebuilt only when a change signal moves, never on a timer:
+the vault store or `server_config.json` (inode, size, mtime), and for an owner
+the per-owner stamp `data/config/model_routing_secrets.<owner>.stamp`. The
+stamp invalidates all cached tenant boundaries for that owner on next use;
+it is a change signal, not a cache key.
+`ModelRoutingRepository` replaces that stamp atomically (new inode, body = owner
+and storage revision, never a secret) after every aggregate commit, secret put
+(an in-place rewrite changes a key without a commit) and secret delete, in
+whichever server process wrote (`change_notifications.mark_model_routing_secrets_changed`;
+the push wake hint reaches only its own process's sockets). A check is about
+3 µs of `stat` per file per write. A failed vault/config reload keeps the
+previous set until the file changes again; a failed model-routing read keeps
+the previous set (or the owner-independent set when there is none) and is
+retried on the next call, so a storage outage at the first write cannot leave
+the owner's keys unknown until the next routing change. Only the exception type
+is logged. Values are never logged.
+
+Existing records are not rewritten and reads are not masked: records written
+before this change keep whatever they held until the credential is rotated.
+
+Problem: only injected vault values were redacted. A command that printed a key
+it read from a file, or an MCP server echoing its configuration, put the live
+value into stored tool outputs and transcripts, which were re-shown to models
+and exported (2026-11-18: a provider AppId in a Worker's stored tool output).
+Decision: exact known-value redaction at the two seams every result and record
+passes. Alternatives rejected: entropy or pattern scanning (heuristic: misses
+opaque values, redacts hashes, needs threshold knobs); one regex alternation or
+a per-key loop (cost grows with the number of keys, 19.7 s for 600 keys on
+16 MB); redacting at each tool (every new tool would have to remember it);
+rewriting existing records (destroys evidence; rotation voids those values).
+For model-routing keys, alternatives rejected: a module-global current user or
+plaintext key cache (the owner's boundary forbids both); re-reading the
+authority on every write (one storage read plus N decryptions per write);
+the browser push hint as the signal (process-local); a periodic refresh (a
+timer knob that still leaves a window).
+
+Remaining gap, not changed now: native checkpoint-journal frames
+(`native_checkpoint_control`) bypass `command()`. Tool results already enter
+them redacted, because settlement redacts before the `role: tool` message is
+appended, and the native gateway settles through the same pipeline. What can
+still reach a frame raw is model- or user-authored text (a key typed into a
+message or tool arguments) and `tool_recovery` metadata. Redacting there is
+unsafe without a native-checkpoint change: journal state is bound by
+`checkpoint_state_digest` across capture, `pending`, ACK and reconciliation
+(`native_file_recovery`, `NativeCheckpointPolicy.reconcile`), and the
+restored state must reproduce the paid prefix exactly; rewriting it in the
+transport would make recovery refuse or diverge from what the provider was
+billed for. Also not covered: live progress streamed before storage, and
+model-routing header-only credentials (`extra_headers` values carry no key
+label to tell a token from an ordinary header value).
+Verification: `tests/credentials_vault/test_known_credential_redaction.py`,
+`tests/credentials_vault/test_model_routing_credential_redaction.py`.
 
 **Children Tofu starts never inherit the running server's storage handles.**
 `inherited_child_environment()` in `lib/tools/process_environment.py` is the
@@ -1011,6 +1154,37 @@ and retained with their configured root. No extra worker, timer, automatic
 installer or reconnect-time tool deletion is introduced. MCP sets
 NODE_USE_ENV_PROXY, retaining explicit options without injecting unsupported
 NODE_OPTIONS flags into old Node runtimes.
+
+**Agent and MCP children resolve the launching instance's data root (2026-11-18).**
+Problem: a command or stdio MCP child receives the tool cache's `XDG_DATA_HOME`
+(`<data>/mcp-cache/share`) and a Worker command starts in a task worktree that
+has no `data/`. Tofu code run there (`policy_path(owner)`, `data_root()`,
+`integration_control._control_root()`) resolved the per-user base
+`<data>/mcp-cache/share/Tofu`, so it read another router home and silently fell
+back to the built-in Hope queue policy instead of the owner's
+`<data>/router/<owner>/HOPE_QUEUE_POLICY.json`. The live guards were not
+affected: hosts compute `TOFU_HOPE_QUEUE_POLICY` and bake it into the `hope`/`mlp`
+launchers from their own base. Decision: `_get_cmd_env` and
+`build_stdio_environment` call `process_environment.bind_runtime_base`, which
+sets `TOFU_DATA_DIR` to the launching process's `<runtime base>/data` unless the
+mapping (an operator's MCP `env`) already names one. Landing verification keeps
+its allowlisted environment and `tests/conftest.py` pins its own data root.
+Alternatives rejected: dropping the `XDG_DATA_HOME` redirect (it is what lets
+`uv` run on a read-only home); deriving a worktree's base from its Git common
+directory (it misses non-worktree children and adds Git parsing to the stdlib
+path policy); a caller-side fallback in the policy readers. Verification:
+`tests/tools/test_hope_queue_policy.py::test_tofu_child_in_a_dataless_worktree_reads_the_launchers_router_policy`.
+
+**Project toolchains are declared, not sourced.** `_get_cmd_env` applies the
+project's `tofu.toolchains.json` after `apply_tool_paths`: installed toolchains'
+directories join the child's PATH (prepended, or appended for prefixes that must
+not shadow system programs) and its declared variables, for every command of
+that project and every Worker checkout. Locations must be on persistent storage
+(`/tmp` is refused), a missing install is skipped and named in
+`TOFU_TOOLCHAINS_MISSING` with a notice on exit 127, and a malformed registry
+refuses the command with the fix. No package is installed at environment-build
+time. Owner and contract: `lib/project_mod/toolchains.py`,
+[PROJECT_TOOLCHAINS.md](../PROJECT_TOOLCHAINS.md).
 
 ## Write and project boundaries
 

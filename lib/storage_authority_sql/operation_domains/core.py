@@ -4,7 +4,11 @@ from lib.project_recent_contract import PROJECT_RELINK_STORAGE_DEADLINE_SECONDS
 from lib.storage_authority_sql import operations as ops
 
 
+from lib.storage_authority_sql.operations_pkg._records import _device_policy_commit
+
+
 OPERATIONS = {
+    "record.device_policy_commit": ops.OperationSpec("command", True, _device_policy_commit),
     "system.schema_version": ops.OperationSpec("query", False, ops._schema_version),
     # Read-only SQL front over the logical namespace model; Tofu-DB engine
     # only (see the stub handler for why the sidecar never executes it).

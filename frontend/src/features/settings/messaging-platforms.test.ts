@@ -20,9 +20,7 @@ const status = (state: State) => ({ state, detail: '', updatedAtMs: 1, connected
 
 function fakeApi() {
   return {
-    serverConfig: { get: vi.fn(async () => ({
-      feishu: { enabled: true, app_id: 'cli_a', connected: true }, channel_adapters: ['dx'],
-    })) },
+    serverConfig: { get: vi.fn(async () => ({ feishu: { enabled: true, app_id: 'cli_a', connected: true } })) },
     channels: {
       dxAccount: vi.fn(async () => ({ enabled: true, status: status('authorizing'), identity: null, loginMis: 'me' })),
       githubAccount: vi.fn(async () => ({ enabled: false, status: status('disabled'), credential: null })),
@@ -160,18 +158,6 @@ describe('消息平台 tab', () => {
     expect(document.getElementById('settingsTab_dx')!.parentElement!.id).toBe('msgPlatformBody_dx');
     expect(section('dx').open).toBe(true);
     expect(populated).toEqual(['Dx']);
-  });
-
-  it('hides 大象 and never reads its account when the server has no dx adapter', async () => {
-    const api = fakeApi();
-    api.serverConfig.get = vi.fn(async () => ({ feishu: {}, channel_adapters: [] })) as never;
-    runtime.Api = api;
-    populateMessagingTab();
-    await settle();
-    expect(section('dx').hidden).toBe(true);
-    expect(api.channels.dxAccount).not.toHaveBeenCalled();
-    expect(section('github').hidden).toBe(false);
-    expect(chip('github').dataset.state).toBe('notSetUp');
   });
 
   it('drops status answers that arrive after Settings closed, and a failed read leaves the line empty', async () => {

@@ -92,7 +92,7 @@ Object.keys(win).forEach((name) => {
 let loadCalls = 0;
 win._loadOrGenerateReport = _loadOrGenerateReport = () => { loadCalls++; };
 win._renderPaperQA = _renderPaperQA = () => {};
-win._initBabelPdfTab = _initBabelPdfTab = () => {};
+win._initFulltextTab = _initFulltextTab = () => {};
 win._teardownReadingTracker = _teardownReadingTracker = () => {};
 // Review path awaits venue resolution before loading — make it resolve fast.
 win._populateReviewVenueDropdown = _populateReviewVenueDropdown = () => Promise.resolve();

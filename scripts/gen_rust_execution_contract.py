@@ -268,10 +268,8 @@ def generate():
     for source_name, target_name in [('_IMAGE_TOKENS_DEFAULT', 'TOKEN_IMAGE_OVERHEAD'), ('_STRUCTURAL_OVERHEAD_TOKENS', 'TOKEN_REQUEST_OVERHEAD')]:
         value = next(n.value for n in token_base.body if isinstance(n, ast.Assign) and n.targets[0].id == source_name)
         output += ['pub const ' + target_name + ': u64 = ' + str(ast.literal_eval(value)) + ';', '']
-    token_counter = ast.parse((ROOT / 'lib/token_counter/tiktoken_counter.py').read_text())
-    counter = next(n for n in token_counter.body if isinstance(n, ast.ClassDef) and n.name == 'TiktokenCounter')
-    count = next(n for n in counter.body if isinstance(n, ast.FunctionDef) and n.name == 'count')
-    overhead = next(n.value for n in ast.walk(count) if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name) and n.targets[0].id == 'per_msg_overhead')
+    overhead = next(n.value for n in token_base.body if isinstance(n, ast.Assign)
+                    and isinstance(n.targets[0], ast.Name) and n.targets[0].id == 'PER_MESSAGE_TOKENS')
     output += ['pub const TOKEN_MESSAGE_OVERHEAD: u64 = ' + str(ast.literal_eval(overhead)) + ';', '']
     tool_projection = json.loads((ROOT / 'contracts/native_agent_stdio_v1.schema.json').read_text())['model_tool_projection']
     assert tool_projection['order']=='catalog' and tool_projection['catalog_name_field']=='name'

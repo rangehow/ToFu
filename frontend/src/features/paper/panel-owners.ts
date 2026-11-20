@@ -9,7 +9,7 @@
 
 import './pdf-responsive';
 import './reader-prefs';
-import './babel';
+import './fulltext';
 import './notes';
 import './deepen';
 import './qa';

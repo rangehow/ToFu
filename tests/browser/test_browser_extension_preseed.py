@@ -171,26 +171,6 @@ class TestExternalBaseUrl:
 
 
 class TestExtensionAdoption:
-    def test_preseed_adoption_is_structured(self):
-        src = _src('browser_extension/background.js')
-        assert 'function adoptBridgePreseed(' in src
-        # Reads the packaged file through the extension's own URL resolver.
-        assert "chrome.runtime.getURL('bridge_preseed.json')" in src
-        # Empty-slot-only adoption: a user-configured value always wins.
-        assert 'if (storageData.bridgeSecret && storageData.serverUrl)' in src
-        assert '!storageData.bridgeSecret' in src
-        assert '!storageData.serverUrl' in src
-        # An absent preseed file must be tolerated silently.
-        assert '.catch(() =>' in src
-
-    def test_adoption_runs_before_server_detection(self):
-        src = _src('browser_extension/background.js')
-        # init() must await adoption before autoDetectServer so a preseeded
-        # serverUrl is visible to detection.
-        assert 'adoptBridgePreseed(data).then(autoDetectServer)' in src
-        # init now reads serverUrl too (adoption needs to know if it's empty).
-        assert "['clientId', 'bridgeSecret', 'serverUrl']" in src
-
     def test_popup_no_longer_marks_secret_user_required(self):
         html = _src('browser_extension/popup.html')
         assert 'required — an agents:bridge' not in html

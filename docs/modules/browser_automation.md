@@ -362,19 +362,83 @@ their address bar (`…/proxy/15000/#/chat`); the old `replace(/\/+$/)` kept the
 hash, so polls went to `…/#/chat/api/browser/poll` and failed. Decision:
 `normalizeTofuServerUrl` trims whitespace, defaults a missing scheme (http for
 loopback/IP/explicit port, else https), refuses non-HTTP schemes and URL
-credentials with a message naming the defect, and drops query, fragment,
-`/index.html`, trailing slashes and anything from `/api/` or `/static/` on — the
-SPA routes by hash and the server serves only `<base>/`. A reverse-proxy prefix
-is kept. `resolveTofuServerUrl` then probes public `GET <candidate>/api/health`
+credentials with a message naming the defect without echoing the pasted input,
+and drops query, fragment, `/index.html` and trailing slashes. A previously
+selected base (including the same-host download preseed or explicit stored
+base) takes precedence over route-name inference: only an exact origin and an
+exact mount or its slash-delimited `/api/` or `/static/` descendant match.
+Thus intermediary `/api/` and `/static/` segments in that mount survive setup,
+restore and subsequent address-bar pastes. Without selected-base context,
+these segments are inherently ambiguous: `/api/health` could itself be a
+proxy mount or an endpoint below another mount. The normalizer refuses such
+input with recovery help rather than silently shortening it or probing a
+guessed base. Ordinary plain paths and `#/chat` pastes without those reserved
+segments remain supported. The selected base supplies parsing context only;
+it grants no origin, credential, navigation or bridge authority. `resolveTofuServerUrl` then probes public `GET <candidate>/api/health`
 (`ok` + `version`) on the address and each path ancestor (plus the other scheme
-when none was typed) in parallel, adopting the most specific confirmed base;
-with no answer it keeps the lexical base and returns a warning. The popup shows
-the verdict and writes the resolved address back. Alternatives considered: a
+when none was typed) in parallel, adopting the most specific confirmed base.
+An explicitly selected base is pinned: only that base is checked, and a failure
+retains it with the existing warning rather than switching to an ancestor app.
+Probe candidates preserve interior slashes in proxy prefixes, rather than
+reconstructing the path from nonempty segments. With no answer the resolver
+keeps the lexical base and returns a warning. The popup shows
+the verdict and writes a successful resolved address back; refusal leaves the
+configured address untouched. Configuration intent is generation-owned in
+`background.js`: initialization claims its generation before its first asynchronous
+boundary and carries it through storage, preseed adoption and fallback detection;
+a lexically valid popup save claims a newer generation before resolution. Invalid
+input is refused by the canonical normalizer without cancelling valid restoration.
+Stale storage/tab callbacks and resolver completions cannot admit a URL write.
+URL commits are serialized: ownership is checked before write admission, and an
+admitted successful write is a committed selection even if a newer edit is queued.
+Its live base and durable base advance together; only a successful newer commit
+replaces it. No rollback write or storage compare-and-swap is assumed. A failed
+replacement retains the last successful selection and reports failure without
+clearing the popup's dirty edit. A rejected commit-time storage read returns a
+sanitized error without changing the selection; the serialization tail settles
+on either outcome so a later save can attempt storage again after recovery.
+If no live selection exists, either write failure or that read failure resumes
+stored restoration under current ownership. Restoring an already-canonical
+stored selection needs no redundant write; failure to persist normalization of
+a valid legacy variant also does not prevent reconnecting to that durable choice.
+This keeps startup and saves coherent without changing normalization or probe policy. Non-string
+persisted server addresses are rejected at storage admission, before normalization,
+preseed adoption or detection; they are never coerced into hostnames.
+Polling requested before initial identity hydration waits for the client ID and
+profile storage callback, independently of URL-intent ownership; stopping polling
+also cancels that deferred start. Popup save completion clears dirty state and
+normalizes the field only if its submitted input revision is still current, so
+a newer unsaved edit survives an older response.
+Confirmed addresses and stored/preseeded bases
+retain their explicit parsing context when normalized again. Alternatives considered: a
 fixed `/proxy/<port>` regex (the previous tab detector) misses other gateway
 prefixes; probing serially multiplies the deadline by path depth. The server's
 `?base=` preseed check (`routes/browser.py::_external_base_url`) stays a strict
-same-host gate; its output is resolved by the same worker authority on adoption.
-Tests: `tests/browser/test_browser_server_url.py`.
+same-host gate; its output is resolved by the same worker authority before
+storage or logging. A rejected preseed address is not used for connection;
+normal startup detection still runs, and a configured address takes priority.
+Tests: `tests/browser/test_browser_server_url.py` and the packaged Chromium
+popup contract in `tests/browser/test_browser_extension_worker_package.py`.
+The server-URL suite also joins the shipped popup's save handler, synthetic
+Chrome storage, startup restore and the next device/profile-scoped poll in a
+JSDOM/worker seam with controlled worker timers and an explicitly driven
+scheduled poll. The neighboring preseed startup probes also control worker timers
+and explicitly drive a scheduled poll. Held full-initialization preseed responses
+(present or absent) cannot replace a completed save or supersede a pending save.
+Proxy and bare-address controls preserve unrelated settings
+and device identity; malformed popup input preserves the attached base, while
+malformed legacy storage on an unattached worker starts no server-health or
+polling requests. All fetches in that seam are stubs, not evidence of real-browser
+or external connectivity.
+The latter also exercises the shipped dev/store workers against an isolated
+loopback proxy with an interior double slash: a real read-only `list_tabs`
+command executes once, malformed response JSON replays its identical result,
+a held response keeps it pending, and a parsed successful
+response acknowledges it so the next poll is empty. This is Linux Chromium
+coverage, not a macOS/Windows browser or production-proxy claim.
+Overlapping initialization callbacks reuse the worker's already-generated
+client ID when both storage snapshots are empty, so install/startup events
+cannot change device identity midway through popup display or polling.
 
 Pairing checks exact HTTP(S) origin and a base-path boundary, both when selecting
 a tab and in the serialized MAIN-world mint function after navigation. A late

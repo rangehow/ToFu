@@ -5,6 +5,7 @@ Responsibility: the rule registry for document types. A rule is one of
   * ``gate``      — enforced by a named stage gate (the rule names the stage);
   * ``checklist`` — an item the independent reviewer must mark pass/fail with
                     a quote; a failed item becomes a revision finding.
+                    Checklist text is reviewer-only, not initial writer guidance.
 Every rule records its ``origin`` (who asked, when). Writer prompts, reviewer
 checklists and stage gates all read this registry, so a correction recorded
 here applies to every later run of its document type.
@@ -20,14 +21,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 __all__ = ['Rule', 'RULES', 'rules_for', 'lint_text', 'reported_numbers',
-           'strip_latex_arguments']
+           'strip_latex_arguments', 'outline_guidance']
 
 
 @dataclass(frozen=True)
 class Rule:
     id: str
     kind: str          # 'lint' | 'gate' | 'checklist'
-    text: str          # instruction shown to the writer and the reviewer
+    text: str          # checklist: reviewer assessment; lint/gate: writer constraint
     origin: str
     stage: str = ''    # gate rules: the stage whose gate enforces it
     phrases: tuple[str, ...] = ()   # lint rules: forbidden phrases (casefolded)
@@ -39,6 +40,8 @@ class Rule:
 
 _PAPER_ORIGIN = ('owner standing paper rules, 2026-11-18 (Global Router route '
                  'note for the writing-pipeline request)')
+_PAPER_FENCE_ORIGIN = ('owner, 2026-11-18 (Coordinator Turn e09572cb): '
+                       '"少宣称自己能做到什么地步，就谨慎地表达，但不要特地用言语再设置围栏"')
 _RESUME_ORIGIN = ('owner corrections to resume v1-v3, 2026-11-17/18 '
                   '(Coordinator conversation, resume Workers 4e66c2f2/82891b57)')
 
@@ -54,6 +57,28 @@ _HEDGES_EN = (
 )
 _HEDGES_ZH = ('可能', '或许', '也许', '一定程度上', '尝试', '初步', '似乎',
               '我们认为', '希望')
+# Paper voice (owner, 2026-11-18): claim less and phrase it carefully, but
+# never add sentences whose only job is to fence the claim off; calibrated
+# hedges ("suggests", "is consistent with", "may") are allowed. Corpus
+# evidence agrees: award/high-citation papers hedge slightly more than matched
+# controls (docs/PAPER_STYLE_EVIDENCE.md, body_hedge_per_k).
+_FENCES_EN = (
+    'we do not claim', "we don't claim", 'we make no claim', 'we caution',
+    'should not be interpreted', 'should not be read as', 'is not intended to',
+    'our scope is limited', 'we stress that', 'merely', 'a first step',
+    'preliminary', 'attempt to', 'attempts to', 'we try to', 'tries to',
+    'we believe', 'we think', 'we hope', 'we feel', 'hopefully',
+    'to some extent', 'to a certain extent', 'in a sense',
+)
+_FENCES_ZH = ('我们并不声称', '不应被理解为', '仅仅', '初步', '尝试', '一定程度上',
+              '我们认为', '希望')
+# Removing a fence must not turn into overclaiming: universal or absolute
+# claims are refused everywhere.
+_OVERCLAIMS_EN = (
+    'always outperforms', 'universally', 'in all cases', 'definitively',
+    'completely solves', 'solves the problem of', 'never fails',
+    'guarantees that', 'without any loss', 'for any task',
+)
 _RESUME_FENCES = (
     'for researchers', '面向研究者', 'directing ai', 'directed ai',
     'by directing', '指挥 ai', '指挥ai', 'not counted', 'rather than overselling',
@@ -83,9 +108,15 @@ RULES: tuple[Rule, ...] = (
     Rule('paper.official-template', 'gate', 'Use the venue\'s newest '
          'official LaTeX template, fetched from its official source in this '
          'run; never an old or vendored copy.', _PAPER_ORIGIN, stage='intake'),
-    Rule('paper.confident-voice', 'lint', 'State contributions and results '
-         'confidently: no hedging or verbal fences.', _PAPER_ORIGIN,
-         phrases=_HEDGES_EN + _HEDGES_ZH, exempt_sections=('limitations',)),
+    Rule('paper.no-fences', 'lint', 'Claim only what the evidence shows and '
+         'phrase it carefully (calibrated words such as "suggests" are fine), '
+         'but never add sentences that fence the claim off ("we do not claim", '
+         '"should not be interpreted as", "merely", "a first step").',
+         _PAPER_FENCE_ORIGIN, phrases=_FENCES_EN + _FENCES_ZH,
+         exempt_sections=('limitations',)),
+    Rule('paper.no-overclaim', 'lint', 'No universal or absolute claims; '
+         'state each result for the settings tested.', _PAPER_FENCE_ORIGIN,
+         phrases=_OVERCLAIMS_EN),
     Rule('paper.solid-experiments', 'gate', 'Every claim is backed by an '
          'experiment, figure or table; each gap becomes an experiment request '
          'to the project lead, not a wording fix.', _PAPER_ORIGIN,
@@ -100,8 +131,10 @@ RULES: tuple[Rule, ...] = (
          _PAPER_ORIGIN),
     Rule('paper.claims-supported', 'checklist', 'Every claim in the text '
          'points to its experiment, figure or table.', _PAPER_ORIGIN),
-    Rule('paper.no-fences', 'checklist', 'No verbal fences or hedging '
-         'outside the Limitations section.', _PAPER_ORIGIN),
+    Rule('paper.calibrated-claims', 'checklist', 'Each claim is stated no '
+         'more strongly than its evidence, with calibrated wording where the '
+         'evidence is moderate, and without fence sentences outside the '
+         'Limitations section.', _PAPER_FENCE_ORIGIN),
     Rule('paper.figure-qa', 'gate', 'Figures are publication quality: vector '
          'or high-resolution raster, embedded fonts, captioned, labelled and '
          'referenced.', _PAPER_ORIGIN, stage='render'),
@@ -168,6 +201,32 @@ def _data_rules() -> tuple[Rule, ...]:
                           exempt_sections=tuple(row.get('exempt_sections') or ()),
                           metric=tuple(sorted(metric.items()))))
     return tuple(rules)
+
+
+def outline_guidance(document_type: str) -> str:
+    """Writer guidance from the data outlines (``style_rules.json`` "outlines").
+
+    Outlines are per paper type (method, benchmark, ...): the abstract move
+    order and introduction paragraph roles of award/high-citation papers of
+    that type, with one exemplar sentence per move. They apply to papers only;
+    the writer picks the type that matches its own paper. Empty when the
+    data has none.
+    """
+    if document_type != 'paper' or not DATA_RULES_PATH.is_file():
+        return ''
+    outlines = json.loads(DATA_RULES_PATH.read_text(encoding='utf-8')).get('outlines') or {}
+    if not outlines:
+        return ''
+    lines = ['Structure of the abstract and introduction, measured on award-winning and '
+             'highly cited papers: first decide which type this paper is, then follow '
+             'that type\'s move order (a move the evidence cannot fill is left out, '
+             'never invented).']
+    for paper_type, row in outlines.items():
+        lines.append(f'- {paper_type} ({row["applies_to"]}): abstract '
+                     + ' -> '.join(row['abstract']) + '; introduction paragraphs '
+                     + ' -> '.join(row['introduction']) + f'; contributions: {row["contributions"]}.')
+        lines += [f'    {move} exemplar: "{quote}"' for move, quote in row.get('exemplars', {}).items()]
+    return '\n'.join(lines)
 
 
 def rules_for(document_type: str) -> tuple[Rule, ...]:

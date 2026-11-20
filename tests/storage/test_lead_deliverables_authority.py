@@ -1,4 +1,5 @@
 """Lead deliverables project from the report and Turn owners on the actual selected authority."""
+import json
 import uuid
 
 import pytest
@@ -107,3 +108,66 @@ def test_report_links_and_automatic_work_reports_project_on_the_authority(semant
     assert 'completion:' + deck not in by_id
     assert by_id['completion:' + resume]['summary'] == 'Final in out/resume.pdf.'
     assert {entry['key']: entry['count'] for entry in page['tasks']} == {resume: 1, deck: 1}
+
+
+@pytest.mark.parametrize('semantic_authority', ['sqlite', 'native'], indirect=True)
+def test_a_repeated_read_reads_only_the_turns_changed_since_and_matches_a_full_walk(semantic_authority, monkeypatch):
+    """A board summary and each expanded task re-read a lead; only the first read walks its lane.
+
+    Later reads ask the authority for the Turns changed since (new, edited, deleted) and must
+    project exactly what a full walk of the lane projects."""
+    factory, owner, _ = semantic_authority
+    from lib import storage, turn_lifecycle
+    monkeypatch.setattr(storage, 'get_storage_client', factory)
+    from lib.conversations import lead_deliverables
+    from lib.conversations.coordinator_reports import CoordinatorReports
+    from lib.conversations.lead_deliverables import DeliverablesPage
+    from lib.conversations.lead_turn_facts import LeadTurnFacts
+    from lib.conversations.project_coordination import ProjectCoordinationRepository
+    monkeypatch.setattr(lead_deliverables, 'notify', lambda *args: None)
+    monkeypatch.setattr(lead_deliverables, 'TURN_FACTS', LeadTurnFacts(lead_deliverables.turn_facts))
+    walks = []
+    lane_walk = turn_lifecycle.lane_turns_newest_first
+
+    def counted(conversation_id, *args, **kwargs):
+        walks.append(conversation_id)
+        return lane_walk(conversation_id, *args, **kwargs)
+    monkeypatch.setattr(turn_lifecycle, 'lane_turns_newest_first', counted)
+    project = '/deliverables-delta/' + uuid.uuid4().hex
+    binding = ProjectCoordinationRepository(owner).create(project, folder_id='test', expected_revision=0,
+                                                          command_id='create')
+    lead = binding['conversationId']
+    scope = {'owner': owner, 'projectPath': project, 'coordinatorId': lead, 'bindingRevision': binding['revision']}
+    reports = CoordinatorReports(owner, project)
+    reports.publish(scope, {'title': 'First', 'message': 'One.', 'kind': 'delivery', 'idempotency_key': 'one'})
+    chatter = turn_lifecycle.append_settled_turn(lead, user_id=owner, command_id='chat', actor='assistant',
+                                                 kind='message', projection={'content': 'Working.'})['turn']
+
+    def read():
+        return DeliverablesPage(owner, lead, artifacts=lambda conversation: []).read(project_path=project)
+
+    def walked():
+        direct = DeliverablesPage(owner, lead, artifacts=lambda conversation: [], turns=lambda conversation: (
+            row for row, _attempt in lane_walk(conversation, user_id=owner)))
+        return direct.read(project_path=project)
+
+    assert [item['title'] for item in read()['items']] == ['First'] and walks == [lead]
+    assert read() == walked() and walks == [lead]
+
+    second = reports.publish(scope, {'title': 'Second', 'message': 'Two.', 'kind': 'delivery',
+                                     'idempotency_key': 'two'})
+    attached = {'artifactId': 'cv-1', 'filename': 'cv.pdf', 'kind': 'file', 'sizeBytes': 9, 'path': 'out/cv.pdf'}
+    turn_lifecycle.append_settled_turn(lead, user_id=owner, command_id='reply', actor='assistant', kind='message',
+                                       projection={'content': 'Reported.', 'toolRounds': [{
+                                           'toolName': 'report_to_user', 'toolContent': json.dumps({
+                                               'conversationId': lead, 'turnId': second['turnId'],
+                                               'published': True, 'files': [attached]})}]})
+    page = read()
+    assert [(item['title'], item.get('files')) for item in page['items']] == [
+        ('Second', [attached]), ('First', None)]
+    assert page == walked() and walks == [lead]
+
+    turn_lifecycle.delete_turns(lead, [second['turnId'], chatter['turnId']], user_id=owner)
+    page = read()
+    assert [item['title'] for item in page['items']] == ['First']
+    assert page == walked() and walks == [lead]

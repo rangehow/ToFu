@@ -76,6 +76,53 @@ def test_installed_probe_rejects_incorrect_computation(monkeypatch):
         probe.main()
 
 
+ORACLE = ROOT / '.github/scripts/native_abi_oracle.py'
+ABSENT = ('internal checker not available in this export; '
+          'native buffering/concurrency checks were not run')
+
+
+def _oracle(tmp_path, *arguments):
+    return subprocess.run([sys.executable, str(ORACLE), *arguments, '--root', str(tmp_path)],
+                          capture_output=True, text=True, timeout=10)
+
+
+def test_raw_native_abi_step_reports_absent_checker_without_passing(tmp_path):
+    output = tmp_path / 'github-output'
+    detect = _oracle(tmp_path, 'detect', '--github-output', str(output))
+    assert detect.returncode == 0
+    assert ABSENT in detect.stdout
+    assert output.read_text() == 'available=false\n'
+    run = _oracle(tmp_path, 'run', '--library', 'unused')
+    assert run.returncode == 78
+    assert run.stdout.strip() == ABSENT
+
+
+def test_raw_native_abi_step_runs_declared_checker_entry(tmp_path):
+    checker = tmp_path / 'benchmarks' / 'repository_index'
+    checker.mkdir(parents=True)
+    called = tmp_path / 'called'
+    (checker / 'check_native_csr.py').write_text(
+        'def check(library):\n'
+        f'    open({str(called)!r}, "w").write(str(library))\n')
+    output = tmp_path / 'github-output'
+    detect = _oracle(tmp_path, 'detect', '--github-output', str(output))
+    assert detect.returncode == 0
+    assert ABSENT not in detect.stdout
+    assert output.read_text() == 'available=true\n'
+    run = _oracle(tmp_path, 'run', '--library', 'built-library')
+    assert run.returncode == 0, run.stderr
+    assert called.read_text() == 'built-library'
+
+
+def test_native_workflow_guards_the_raw_oracle_on_the_declared_checker():
+    workflow = (ROOT / '.github/workflows/native-repo-kernel.yml').read_text()
+    assert 'from check_native_csr import check' not in workflow
+    assert '.github/scripts/native_abi_oracle.py detect' in workflow
+    assert "needs.native-abi-scope.outputs.available == 'true'" in workflow
+    oracle_job = workflow.split('\n  raw-native-abi:', 1)[1]
+    assert '.github/scripts/native_abi_oracle.py run' in oracle_job
+
+
 @pytest.mark.parametrize('compiler', [None, 'gcc', 'rustc'])
 def test_platform_image_gate_rejects_runtime_compilers(tmp_path, compiler):
     workflow = (ROOT / '.github/workflows/publish-developer-runtime.yml').read_text()

@@ -53,30 +53,37 @@ out, `primary_retry` back) and, for a project Worker, a lead-audit
 `model_switch` row with `direction` `fallback`/`primary` (docs/LOGGING.md),
 so a lead follows the switches without opening the transcript.
 
-The one exemption is the refused attempt's OWN tool loop. `_switch` stamps
-the refused history (its length and digest) at the fallback;
-`retry_primary_for_messages` keeps a request on the fallback only when its
-history is exactly that refused history plus the rows the tool loop appends
-between two provider requests (the served assistant tool-call row and its
-tool results). Those rounds answer the same refused payload, so re-probing
-the primary would add one refused, billed request per round of exactly the
-lanes that refuse most. Anything else — a new user message, any other
-injection, a rewritten/shorter prefix, an unknown stamp — returns to the
-primary. The return probe is gated in the dispatch path
-(`_root_agent_loop._dispatch_open_round`) so the body is built for the
-primary, and in `_call._llm_call_with_fallback` for direct callers. The
-review receipt (`project_dispatch` `execution.result.modelFallback`, from
-the Turn's paid `apiRounds`) names the rounds that ran on the fallback.
+The one exemption is the SINGLE request that repeats the refused payload
+plus the fallback's own just-served answer. `_switch` stamps the refused
+history (its length and digest) at the fallback;
+`retry_primary_for_messages` keeps that one request on the fallback —
+re-probing the primary on those exact bytes would refuse the payload the
+fallback already answered. The exemption is consumed by that request
+(`_refusal_skip_left`) and is NOT re-armed by a repeated refusal on the
+return probe, so every subsequent tool round returns to the primary: a
+refusal is per-request, never a latch on the attempt. Anything else — a new
+user message, any other injection, a rewritten/shorter prefix, an unknown
+stamp — also returns to the primary. The return probe is gated in the
+dispatch path (`_root_agent_loop._dispatch_open_round`) so the body is built
+for the primary, and in `_call._llm_call_with_fallback` for direct callers.
+The review receipt (`project_dispatch` `execution.result.modelFallback`,
+from the Turn's paid `apiRounds`) names the rounds that ran on the fallback,
+and its notice reports whether the primary was actually attempted again
+(a later primary row in the ledger, answered or refused) rather than
+claiming a retry unconditionally.
 
 Measured cost: a refused primary attempt returns in about 3 s (median; up to
-38 s under load) and bills its full prompt, so the exemption above is limited
-to one attempt's own tool rounds. Alternatives rejected: latching the
-fallback until the refused history changes (the 2026-11-18 incident — a lead
-whose tool loop only appended rounds never changed the refused prefix, so it
-ran 32+ rounds on the fallback with zero `direction=primary` rows); probing
-the primary on every tool round of the refused attempt (bills a refused
-request per round); a cooldown or retry counter (a knob that does not track
-the actual verdict trigger). A resume still returns to the accepted model.
+38 s under load) and bills its full prompt, so only the single request that
+repeats the exact refused bytes skips the probe. Alternatives rejected:
+latching the fallback for the whole attempt whenever the refused prefix
+stays unchanged (the 2026-11-18 incident — a Global Router Worker whose tool
+loop only appended rounds kept the refused prefix unchanged, so it ran
+R3–R48 on the fallback with zero `direction=primary` rows; the exemption was
+a general latch, not lead-scoped, so Workers were affected too); probing the
+primary on every tool round including the one that repeats the refused
+payload (bills a guaranteed-refused request); a cooldown or retry counter
+(a knob that does not track the actual verdict trigger). A resume still
+returns to the accepted model.
 
 Without a distinct fallback (none configured, `disableModelFallback`, or
 already on it), or when the fallback refuses too, it settles without a
@@ -106,18 +113,6 @@ site fails snapshots or leaves turns spinning, for no presentation the cause
 cannot carry; `failed` — adapters would turn an ordinary provider refusal
 into a server error; resending to the same model — Anthropic documents that
 it usually refuses again.
-
-#### Credentials a fallback may use
-
-The configured fallback attempt, its recovery retries, the refused attempt's
-own tool rounds on the fallback model, and pool rescue dispatch inside
-`fallback_dispatch()`; `LLMDispatcher._selection_scope` then never returns a
-slot whose credential `contracts/experiment_credential_reservations_v1.json`
-reserves for an experiment. A primary attempt, a resume to the accepted
-model and an owner/lead model switch are not scoped. The reservation is
-declared data from the experiment owners' launchers, not a quota knob; see
-[NETWORK.md](../NETWORK.md) "Experiment-reserved credentials" and
-`tests/llm_dispatch/test_fallback_credential_reservation.py`.
 
 #### What the owner can see when the fallback answered
 

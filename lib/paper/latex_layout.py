@@ -38,6 +38,7 @@ import gzip
 import json
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from collections.abc import Iterable
@@ -186,13 +187,35 @@ def _extract_errors(log_text: str, limit: int = 10) -> list[str]:
     return out
 
 
+def kpsewhich(names: list[str]) -> set[str] | None:
+    """The file names (``forloop.sty``) the TeX installation finds; None when
+    there is no ``kpsewhich``."""
+    try:
+        proc = subprocess.run(['kpsewhich', *names], env=_tex_env(), text=True,
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                              timeout=_COMPILE_TIMEOUT_S)
+    except FileNotFoundError:
+        return None
+    return {Path(line.strip()).name for line in proc.stdout.splitlines() if line.strip()}
+
+
+def latex_toolchain() -> str:
+    """Path of the ``latexmk`` that ``compile_project`` would run, or ''."""
+    return shutil.which('latexmk', path=_tex_env().get('PATH')) or ''
+
+
 def compile_project(workdir: str | os.PathLike, engine: str = 'pdflatex',
-                    timeout_s: int = _COMPILE_TIMEOUT_S, main: str = '') -> dict:
+                    timeout_s: int = _COMPILE_TIMEOUT_S, main: str = '',
+                    pretex: str = '', texinputs: tuple[str, ...] = ()) -> dict:
     """Run latexmk on the compile root. Returns a status dict.
 
     ``engine`` is ``'pdflatex'`` or ``'xelatex'``. Synctex is always on —
     the layout map depends on it. ``main`` names the top-level root file when
-    the caller knows it; otherwise it is discovered.
+    the caller knows it; otherwise it is discovered. ``pretex`` is TeX code
+    run before the root file (latexmk ``-usepretex``), e.g. a measurement
+    probe; the sources stay untouched. ``texinputs`` are extra TeX/BibTeX
+    search directories (kpathsea syntax, ``style//`` searches recursively),
+    searched before the installation's own.
     """
     wd = Path(workdir)
     root = wd / main if main else find_compile_root(wd)
@@ -200,11 +223,19 @@ def compile_project(workdir: str | os.PathLike, engine: str = 'pdflatex',
     # -g: force at least one full run. latexmk's fdb records a prior failure
     # and otherwise refuses to retry — which also leaves the .log stale,
     # hiding newly-installed packages from error diagnosis.
-    cmd = ['latexmk', '-g', flag, '-interaction=nonstopmode', '-synctex=1', root.name]
+    cmd = ['latexmk', '-g', flag, '-interaction=nonstopmode', '-synctex=1',
+           *([f'-usepretex={pretex}'] if pretex else []), root.name]
+    env = _tex_env(wd)
+    if texinputs:
+        search = os.pathsep.join(texinputs) + os.pathsep   # trailing: keep defaults
+        env['TEXINPUTS'] = search
+        env['BSTINPUTS'] = search
     try:
         proc = subprocess.run(
-            cmd, cwd=wd, env=_tex_env(wd), timeout=timeout_s,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            cmd, cwd=wd, env=env, timeout=timeout_s,
+            # TeX echoes source bytes in the input encoding (Latin-1 in a
+            # paper's .bbl); a strict decode would crash the compile call.
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors='replace',
         )
     except subprocess.TimeoutExpired:
         return {'status': 'timeout', 'root': root.name, 'errors': [],
@@ -575,7 +606,7 @@ SECTION_LEVELS = [
 ]
 
 SECTION_PATTERN = re.compile(
-    r"\\(" + "|".join(SECTION_LEVELS) + r")(\*?)\s*\{",
+    r"\\(" + "|".join(SECTION_LEVELS) + r")\s*(\*?)\s*(?:\[[^\]]*\]\s*)?\{",
     re.MULTILINE,
 )
 
@@ -610,6 +641,15 @@ def _iter_section_lines(text: str):
         extracted = _extract_braced(text, m.end() - 1)
         title = extracted[0] if extracted else ''
         yield text.count('\n', 0, m.start()) + 1, m.group(1), title
+
+
+def iter_section_headings(text: str):
+    """Shared balanced heading scanner, including paragraph/star/short titles.
+
+    Yields ``(line, command, raw_title)``. Callers normalize formatting as needed;
+    this scans common LaTeX commands, not arbitrary macro expansion.
+    """
+    yield from _iter_section_lines(text)
 
 
 # ── Section page map ────────────────────────────────────────────────────

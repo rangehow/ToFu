@@ -46,7 +46,7 @@ def _truthy(v) -> bool:
     return str(v or '').strip().lower() in ('1', 'true', 'yes', 'on')
 
 
-def _oauth_request_data() -> Mapping[str, object]:
+def _oauth_request_data(*fields: str) -> Mapping[str, object]:
     """Select the legacy GET fallback or the canonical JSON body once.
 
     These endpoints keep GET for proxies that refuse POST to an unfamiliar
@@ -56,8 +56,13 @@ def _oauth_request_data() -> Mapping[str, object]:
     than being relabeled as internal OAuth failures.
     """
     if request.method == 'GET':
+        if any(key not in fields or len(request.args.getlist(key)) != 1
+               for key in request.args):
+            raise BadRequest('Unexpected or duplicate OAuth query parameter')
         return request.args
-    return parse_body(force=True, strict=True)
+    if request.args:
+        raise BadRequest('Send OAuth POST parameters in the JSON body')
+    return parse_body(force=True, strict=True, exact=fields)
 
 
 @oauth_bp.route('/api/oauth/login', methods=['GET', 'POST'])
@@ -74,7 +79,7 @@ def oauth_login():
     GET Query: ?provider=claude|codex
     Returns: { "auth_url": "...", "status": "started", "provider": "...", "callback_port": N }
     """
-    data = _oauth_request_data()
+    data = _oauth_request_data('provider', 'prefer_console', 'reuse_only')
     provider = optional_str(data, 'provider', default='', max_len=16)
     prefer_console = _truthy(data.get('prefer_console'))
     reuse_only = _truthy(data.get('reuse_only'))
@@ -122,7 +127,7 @@ def oauth_callback():
       or: { "provider": "claude" | "codex", "callback_url": "http://localhost:.../callback?code=XXX" }
     GET Query: ?provider=claude|codex&code=XXX or ?provider=...&callback_url=...
     """
-    data = _oauth_request_data()
+    data = _oauth_request_data('provider', 'code', 'callback_url', 'state', 'manual')
     provider = optional_str(data, 'provider', default='', max_len=16)
     code = optional_str(
         data, 'code', default='', strip=False, max_len=16_384)
@@ -181,7 +186,7 @@ def oauth_store_token():
 
     POST Body: { "provider": "claude"|"codex", "token": { ...token JSON... } }
     """
-    data = _oauth_request_data()
+    data = _oauth_request_data('provider', 'token')
     provider = optional_str(data, 'provider', default='', max_len=16)
     token_response = data.get('token')
     if provider not in ('claude', 'codex'):
@@ -219,7 +224,7 @@ def oauth_logout():
     POST Body: { "provider": "claude" | "codex" | "kimi" }
     GET Query: ?provider=claude|codex|kimi
     """
-    data = _oauth_request_data()
+    data = _oauth_request_data('provider')
     provider = optional_str(data, 'provider', default='', max_len=16)
     from lib.oauth.outbound import OAUTH_PROVIDERS
     if provider not in OAUTH_PROVIDERS:

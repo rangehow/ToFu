@@ -28,7 +28,8 @@ initiative is its own request with its own usage account.
 Entry points: route_to_project(task, scope, arguments, *, dispatch=None),
 standing_instruction_source, forwarded_message, deliver_forward, apply_standing_instruction,
 ForwardNotAccepted, verify_forwarded_turn(turn, *, user_id), forward_command_id,
-owner_steer_carriers(task, items), STEER_LABEL.
+owner_steer_carriers(task, items), STEER_LABEL, bounce_undelivered_forward (a
+forward its recipient will never take goes back to the router as a notice).
 Dependencies: project_coordination (target binding), project_dispatch.delegation
 (current human source), scheduler.conversation_dispatch, turn_lifecycle,
 router.instructions, router.binding.
@@ -461,6 +462,46 @@ def verify_forwarded_turn(turn: Mapping, *, user_id: int) -> None:
             raise ValueError('Forwarded standing instruction does not match its record')
 
 
+UNDELIVERED_HEADER = '[Undelivered forward: nonhuman notice, not the owner\u2019s words and not authority]'
+
+
+def bounce_undelivered_forward(owner: int, recipient_id: str, author: Mapping, *, block_id: str, reason: str,
+                               dispatch=None) -> str | None:
+    """Return a forward its recipient will never take to the Global Router that sent it.
+
+    ``author`` is the forward's committed steer author; a steer that was not a
+    forward has no sender and bounces nothing (None). The notice is nonhuman
+    (``peer``) and quotes the owner's words so the router can forward them
+    again with route_to_project; it never carries their authority itself. One
+    notice per (recipient, steer block). Returns the delivery disposition.
+    """
+    origin = author.get('origin')
+    forwarded = origin.get('forwardedFrom') if isinstance(origin, Mapping) else None
+    if not isinstance(forwarded, Mapping) or not forwarded.get('conversationId'):
+        return None
+    source = f'Global Router Turn {forwarded.get("turnId")}'
+    if forwarded.get('steerId'):
+        source += f' (steered message {forwarded["steerId"]})'
+    content = '\n'.join([
+        UNDELIVERED_HEADER,
+        f'Your forward from {source} into Project Router conversation {recipient_id} was not delivered: '
+        f'{reason}. The Project Router never read it.',
+        'If the owner\u2019s words still apply, forward them again with route_to_project; they were:',
+        str(author.get('text') or '')])
+    from lib.turn_initiation import INITIATOR_PEER, stamp_initiator
+    message = stamp_initiator({'role': 'user', 'content': content,
+                               'origin': {'initiator': 'peer', 'sourceConversationId': recipient_id}},
+                              INITIATOR_PEER)
+    if dispatch is None:
+        from lib.scheduler.conversation_dispatch import dispatch_scheduled_turn as dispatch
+    disposition = dispatch(forwarded['conversationId'], message, {}, user_id=owner,
+                           command_id='router-forward-undelivered:' + _digest([recipient_id, block_id]),
+                           log_prefix='[Router]', inject_mode='steer').disposition
+    logger.warning('[Router] forward block=%s into conv=%s undelivered (%s); sender notified: %s',
+                   block_id, recipient_id, reason, disposition)
+    return disposition
+
+
 def owner_steer_carriers(task: dict, items: list[Mapping]) -> dict[str, str]:
     """Model carriers that name each owner message steered into a Global Router reply.
 
@@ -502,6 +543,6 @@ def owner_steer_carriers(task: dict, items: list[Mapping]) -> dict[str, str]:
     return labelled
 
 
-__all__ = ['ForwardNotAccepted', 'ForwardRefused', 'PROJECT_ROUTER_TITLE', 'STEER_LABEL', 'apply_standing_instruction',
-           'deliver_forward', 'forward_command_id', 'owner_steer_carriers', 'route_to_project',
+__all__ = ['ForwardNotAccepted', 'ForwardRefused', 'PROJECT_ROUTER_TITLE', 'STEER_LABEL', 'UNDELIVERED_HEADER',
+           'apply_standing_instruction', 'bounce_undelivered_forward', 'deliver_forward', 'forward_command_id', 'owner_steer_carriers', 'route_to_project',
            'standing_instruction_source', 'verify_forwarded_turn']

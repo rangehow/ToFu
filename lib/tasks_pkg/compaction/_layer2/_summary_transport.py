@@ -63,14 +63,20 @@ class SummaryTransport:
         usage = dict(usage) if isinstance(usage, dict) else {}
         from lib.cost import merge_usage_totals
         from lib.tasks_pkg.compaction._summary_cost import price_summary_call
-        metadata = usage.get('_dispatch') or {}
+        metadata = usage.get('_dispatch')
+        metadata = metadata if isinstance(metadata, dict) else {}
+        declared_pricing = summary_route.get('declaredPricing')
+        if summary_route.get('reason') == 'main_after_auxiliary_route_refusal':
+            # Recovery can reach different Offerings under the same parent pin.
+            # An absent card is unknown, not permission to use the model table.
+            declared_pricing = metadata.get('offering_actual_pricing') or {}
         model_id = (metadata.get('logical_model') or metadata.get('model')
                     or summary_route.get('modelId') or '')
         provider_id = metadata.get('provider_id') or summary_route.get('providerId')
         self._call_rows.append({'model': model_id, 'provider_id': provider_id,
                           'usage': dict(usage), 'cost': price_summary_call(
                               usage, model=model_id, provider_id=provider_id,
-                              declared_pricing=summary_route.get('declaredPricing'))})
+                              declared_pricing=declared_pricing)})
         if isinstance(self.usage_out, dict):
             merged = merge_usage_totals(self.usage_out, usage)
             self.usage_out.clear()

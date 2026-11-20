@@ -300,6 +300,51 @@ def test_a_stdio_request_fails_when_the_adapter_process_ends():
         assert link.close(5.0)
 
 
+_MALFORMED_ADAPTER = r'''
+import json, sys
+malformed = json.loads(sys.argv[1])
+for raw in sys.stdin:
+    request = json.loads(raw)
+    if request['method'] == 'malformed':
+        sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'error': malformed}) + '\n')
+        sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': [1]}) + '\n')
+    else:
+        sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'result': {'ok': True}}) + '\n')
+    sys.stdout.flush()
+'''
+
+
+@pytest.mark.parametrize('malformed', [
+    {'code': 'not-a-number', 'message': 'x'},
+    {'code': [1], 'message': 'x'},
+    {'code': -32000, 'message': 'x', 'data': 'not-an-object'},
+    {'code': -32000, 'message': 'x', 'data': [1, 2]},
+])
+def test_a_malformed_stdio_response_fails_its_request_and_the_link_keeps_answering(malformed):
+    import threading
+    from lib.channels.protocol.stdio import StdioLink
+    link = StdioLink([sys.executable, '-c', _MALFORMED_ADAPTER, json.dumps(malformed)])
+    outcome: dict = {}
+
+    def call(name):
+        try:
+            outcome[name] = link.request(name, {})
+        except ProtocolError as error:
+            outcome[name] = error
+
+    try:
+        for name in ('malformed', 'well_formed'):
+            caller = threading.Thread(target=call, args=(name,), daemon=True)
+            caller.start()
+            caller.join(10)
+            assert not caller.is_alive(), f'the {name} request never settled'
+        assert isinstance(outcome['malformed'], ProtocolError)
+        assert outcome['malformed'].code == ERRORS['internalError']
+        assert outcome['well_formed'] == {'ok': True}
+    finally:
+        assert link.close(5.0)
+
+
 def test_a_stdio_adapter_answers_malformed_lines_and_unknown_methods():
     import io
     import threading

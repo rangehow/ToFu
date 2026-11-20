@@ -369,9 +369,15 @@ def message_losses(msg, protocol, *, replay_reasoning=False, replay_types=frozen
         loss('native_metadata_omitted')
     if protocol != 'anthropic':
         if protocol != 'openai' and msg.get('thinking_signature'):
-            if msg.get('_reasoning_continuity') != 'completed_turn':
+            # Responses cannot execute Messages signatures, even within a
+            # retained failed Turn. They are source-private reasoning, not
+            # task/tool history. Keep the source untouched for native replay;
+            # never pretend the Turn completed to make a model switch work.
+            completed = msg.get('_reasoning_continuity') == 'completed_turn'
+            if protocol != 'responses' and not completed:
                 raise ProtocolConversionError('mandatory_continuity_unrepresentable')
-            loss('historical_thinking_signature_omitted')
+            loss('historical_thinking_signature_omitted' if completed
+                 else 'cross_protocol_reasoning_omitted')
         native = msg.get('_anthropic_content_blocks') or []
         validate_native_blocks(native)
         thinking_blocks = [block for block in native
@@ -393,13 +399,17 @@ def message_losses(msg, protocol, *, replay_reasoning=False, replay_types=frozen
                     and (msg.get('thinking_signature') or msg.get('reasoning_details'))):
                 raise ProtocolConversionError('mandatory_continuity_unrepresentable')
             if (kind in {'thinking', 'redacted_thinking'}
-                    and msg.get('_reasoning_continuity') == 'completed_turn'):
+                    and (protocol == 'responses'
+                         or msg.get('_reasoning_continuity') == 'completed_turn')):
                 validate_native_blocks([block])
-                loss('historical_thinking_block_omitted')
+                loss('historical_thinking_block_omitted'
+                     if msg.get('_reasoning_continuity') == 'completed_turn'
+                     else 'cross_protocol_reasoning_omitted')
                 continue
             if kind in {'thinking', 'redacted_thinking'}:
-                # Active signed reasoning stays mandatory, exactly as the
-                # flat thinking_signature projection above.
+                # A Chat route may replay signed Messages extensions. Without
+                # an exact representation it still refuses, never flattens
+                # distinct native signatures or silently drops their order.
                 raise ProtocolConversionError('mandatory_continuity_unrepresentable')
             # Native text and client tool_use are already represented by
             # the canonical content/tool_calls projection, which the

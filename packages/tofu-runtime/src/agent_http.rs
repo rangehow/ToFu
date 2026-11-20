@@ -3,16 +3,60 @@
 use crate::{
     agent::{Provider, ProviderError},
     http::{Cancellation, Error, Request, Transport},
+    execution_contract::ProviderStreamState,
     provider::{Budget, StreamResult},
     session::ExecutionSession,
 };
 use serde_core::ser::SerializeMap;
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use std::{
     io::{self, Write},
     sync::Arc,
     time::Duration,
 };
+#[derive(serde::Deserialize)]
+struct HistoryShape {
+    input: Option<Vec<serde::de::IgnoredAny>>,
+    messages: Option<Vec<serde::de::IgnoredAny>>,
+}
+
+/// Hash the exact request bytes before the body is moved into the transport.
+fn frame_identity(frame: &[u8]) -> (String, usize) {
+    (format!("{:x}", Sha256::digest(frame)), frame.len())
+}
+
+fn cache_exchange(
+    protocol: &str,
+    items: Option<usize>,
+    frame_sha256: &str,
+    frame_bytes: usize,
+    response: &StreamResult,
+) -> Value {
+    let usage = &response.usage;
+    let (input, cached) = match protocol {
+        "responses" => (
+            usage["_wire_responses_input_tokens"].as_u64(),
+            usage["_wire_responses_cached_tokens"].as_u64(),
+        ),
+        "anthropic" => (
+            usage["_wire_anthropic_input_tokens"].as_u64(),
+            usage["_wire_anthropic_cached_tokens"].as_u64(),
+        ),
+        _ => crate::usage::cache_input_counts(usage),
+    };
+    json!({
+        "protocol": protocol, "transport": "sse",
+        "verified": response.state == ProviderStreamState::ProviderFinished,
+        "logical_input_items": items, "sent_input_items": items,
+        "incremental": false, "reused_connection": false,
+        "reused_idle_connection": false, "full_reason": null,
+        "frame_sha256": frame_sha256, "frame_bytes": frame_bytes,
+        "frame_kind": "full", "frame_reason": null, "frame_content_encoding": "",
+        "provider_input_tokens": input, "provider_cached_tokens": cached
+    })
+}
+
 pub struct Configuration {
     pub headers: reqwest::header::HeaderMap,
     pub template: Map<String, Value>,
@@ -272,6 +316,20 @@ impl HttpProvider<'_> {
         } else { None };
         let headers = prepared_headers.unwrap_or_else(|| c.headers.clone());
         let request_bytes = body.value.len();
+        let (frame_sha256, frame_bytes) = frame_identity(&body.value);
+        let protocol = if self.responses.is_some() {
+            "responses"
+        } else if self.anthropic.is_some() {
+            "anthropic"
+        } else {
+            "openai"
+        };
+        // Count the projected wire array, including folded tool results and
+        // expanded Responses items. Deserialize only its shape and no content.
+        let items = serde_json::from_slice::<HistoryShape>(&body.value)
+            .ok()
+            .and_then(|wire| if protocol == "responses" { wire.input } else { wire.messages })
+            .map(|history| history.len());
         let request = Request {
             headers,
             body: body.value,
@@ -328,7 +386,15 @@ impl HttpProvider<'_> {
             // publication check; retain transport/provider failures below.
             Ok(_) if stop_now(session) || self.cancellation.is_cancelled() =>
                 Err(ProviderError::Stopped),
-            Ok(response) => Ok(response),
+            Ok(mut response) => {
+                let evidence = cache_exchange(
+                    protocol, items, &frame_sha256, frame_bytes, &response,
+                );
+                if let Some(usage) = response.usage.as_object_mut() {
+                    usage.insert("_cache_exchange".into(), evidence);
+                }
+                Ok(response)
+            },
             Err(Error::Cancelled) => Err(ProviderError::Stopped),
             Err(Error::WriteTimeout) => Err(ProviderError::Failed(json!({
                 "kind":"provider_transport", "message":"Request upload timed out",
@@ -338,6 +404,9 @@ impl HttpProvider<'_> {
             }))),
             Err(Error::Provider(error)) => Err(ProviderError::Failed(error.task_error())),
             Err(Error::UnsupportedProviderProfile) => Err(ProviderError::Failed(json!({"kind":"agent_responses_profile_refused"}))),
+            Err(Error::HttpStatus(status)) => Err(ProviderError::Failed(json!({
+                "kind":"provider_http_status", "statusCode":status
+            }))),
             Err(Error::ProviderRejected(error)) => Err(ProviderError::Failed(
                 json!({"kind":"provider_rejection","provider":error}),
             )),
@@ -626,6 +695,93 @@ impl Provider for BudgetedHttpProvider<'_> {
 
 #[cfg(test)]
 mod model_admission_cost {
+    #[test]
+    fn native_cache_exchange_preserves_exact_counters_and_projected_wire_shape() {
+        use super::{
+            cache_exchange, frame_identity, HistoryShape, ProviderStreamState, StreamResult,
+        };
+        use serde_json::json;
+
+        // Exact request bytes: the evidence hash is taken over this fixture and
+        // must stay pinned to the same frame the transport posts.
+        let fixture = br#"{"input":[{"type":"message"},{"type":"function_call"},{"type":"function_call_output"}]}"#;
+        let wire: HistoryShape = serde_json::from_slice(fixture).unwrap();
+        let (frame_sha256, frame_bytes) = frame_identity(fixture);
+        assert_eq!(
+            frame_sha256,
+            "c381c85f7c0d2c451f4154bf9233e4de5897e2d153b9c0fb4d72c9bb3ffdc4b5"
+        );
+        assert_eq!(frame_bytes, fixture.len());
+        let mut response = StreamResult {
+            state: ProviderStreamState::ProviderFinished,
+            message: json!({}),
+            usage: json!({"_wire_responses_input_tokens": 12, "_wire_responses_cached_tokens": 0}),
+            cost: None,
+            finish_reason: None,
+            done_seen: true,
+            malformed_frames: 0,
+        };
+        let evidence = cache_exchange(
+            "responses", wire.input.map(|items| items.len()), &frame_sha256, frame_bytes, &response,
+        );
+        assert_eq!(evidence["logical_input_items"], 3);
+        assert_eq!(evidence["sent_input_items"], 3);
+        assert_eq!(evidence["provider_input_tokens"], 12);
+        assert_eq!(evidence["provider_cached_tokens"], 0);
+
+        let assert_frame_keys = |evidence: &serde_json::Value| {
+            assert_eq!(evidence["frame_sha256"].as_str(), Some(frame_sha256.as_str()));
+            assert_eq!(evidence["frame_bytes"].as_u64(), Some(frame_bytes as u64));
+            assert_eq!(evidence["frame_kind"], "full");
+            assert!(evidence["frame_reason"].is_null());
+            assert_eq!(evidence["frame_content_encoding"], "");
+            assert!(evidence["frame_bytes"].as_u64().unwrap() <= 4096);
+            assert_eq!(evidence["frame_sha256"].as_str().unwrap().len(), 64);
+            assert!(evidence["frame_sha256"]
+                .as_str()
+                .unwrap()
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
+            for key in [
+                "protocol", "transport", "frame_sha256", "frame_bytes",
+                "frame_kind", "frame_reason", "frame_content_encoding",
+            ] {
+                assert!(evidence.get(key).is_some(), "cache exchange lacks {key}");
+            }
+            // Exact key set: presence checks alone let a renamed or extra
+            // field drift past the Python receipt schema and its consumers.
+            let keys: std::collections::BTreeSet<&str> = evidence
+                .as_object()
+                .expect("cache exchange is an object")
+                .keys()
+                .map(String::as_str)
+                .collect();
+            let expected: std::collections::BTreeSet<&str> = [
+                "protocol", "transport", "verified", "logical_input_items",
+                "sent_input_items", "incremental", "reused_connection",
+                "reused_idle_connection", "full_reason", "frame_sha256",
+                "frame_bytes", "frame_kind", "frame_reason",
+                "frame_content_encoding", "provider_input_tokens",
+                "provider_cached_tokens",
+            ]
+            .into_iter()
+            .collect();
+            assert_eq!(keys, expected, "cache exchange key set drifted");
+            assert!(serde_json::to_vec(evidence).unwrap().len() < 2048);
+        };
+        assert_frame_keys(&evidence);
+
+        response.usage = crate::anthropic::convert_usage(json!({
+            "input_tokens": 4, "output_tokens": 2, "cache_creation_input_tokens": 8,
+        }).as_object().unwrap()).unwrap();
+        let evidence = cache_exchange(
+            "anthropic", Some(1), &frame_sha256, frame_bytes, &response,
+        );
+        assert_eq!(evidence["provider_input_tokens"], 12);
+        assert!(evidence["provider_cached_tokens"].is_null());
+        assert_frame_keys(&evidence);
+    }
+
     #[test]
     fn selected_authority_retains_metadata_and_native_leases_stay_inline() {
         println!("selected_admission_inline_bytes={} prior_account_arc_bytes={} selected_lease_inline_bytes={} native_lease_inline_bytes={}",

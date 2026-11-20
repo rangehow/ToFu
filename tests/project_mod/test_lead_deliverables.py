@@ -207,7 +207,8 @@ def test_reports_name_their_board_task_and_pages_filter_and_summarise_by_task():
     resume, deck = {'key': KEY_A, 'title': 'Resume'}, {'key': KEY_B, 'title': 'Deck'}
     turns = [_reply_naming('r1', 1, resume), _report_turn('r1', 2),
              _reply_naming('r2', 3, deck, files=[_report_file('pptx', 'talk.pptx', 'deck')]), _report_turn('r2', 4),
-             _reply_naming('r3', 5, {'key': KEY_A, 'title': 'Resume (final)'}), _report_turn('r3', 6),
+             _reply_naming('r3', 5, {'key': KEY_A, 'title': 'Resume (final)'}),
+             {**_report_turn('r3', 6), 'kind': 'coordinator_report.progress'},
              _reply_naming('r4', 7), _report_turn('r4', 8),
              # A receipt naming a malformed key names no task.
              _reply_naming('r5', 9, {'key': 'nope', 'title': 'x'}), _report_turn('r5', 10)]
@@ -218,8 +219,8 @@ def test_reports_name_their_board_task_and_pages_filter_and_summarise_by_task():
         'report:r1': KEY_A, 'report:r2': KEY_B, 'report:r3': KEY_A, 'report:r4': None, 'report:r5': None,
         'artifact:own': None}
     # Newest first; a task's title is the one its newest item named.
-    assert page['tasks'] == [{'key': KEY_A, 'title': 'Resume (final)', 'count': 2, 'latestAt': 6},
-                             {'key': KEY_B, 'title': 'Deck', 'count': 1, 'latestAt': 4}]
+    assert page['tasks'] == [{'key': KEY_A, 'title': 'Resume (final)', 'count': 2, 'latestAt': 6, 'hasDeliveryReport': True},
+                             {'key': KEY_B, 'title': 'Deck', 'count': 1, 'latestAt': 4, 'hasDeliveryReport': True}]
     assert page['otherCount'] == 3
     only_a = _page(turns, artifacts).read(project_path='/repo', task=KEY_A)
     assert [item['id'] for item in only_a['items']] == ['report:r3', 'report:r1']
@@ -274,6 +275,8 @@ def test_a_completed_task_without_a_delivery_report_gets_its_automatic_work_repo
                            'createdAt': 30, 'source': None, 'summary': 'Final in out/resume.pdf.',
                            'tasks': [{'key': KEY_A, 'title': 'Resume'}]}]
     assert {entry['key']: entry['count'] for entry in page['tasks']} == {KEY_A: 2, KEY_B: 1}
+    assert {entry['key']: entry['hasDeliveryReport'] for entry in page['tasks']} == {KEY_A: False, KEY_B: True}
+    assert all('archivedGroup' not in entry for entry in page['tasks'])
     # No project, no board: nothing automatic.
     assert not [item for item in _page(turns, board_tasks=tasks).read()['items'] if item['kind'] == 'completion']
 
@@ -292,6 +295,19 @@ def test_a_report_link_attaches_an_earlier_report_to_one_or_more_tasks():
         'report:r1']
 
 
+def test_earlier_tasks_use_last_recorded_status_not_report_kind():
+    dropped = {**_history(KEY_A, 'Resume', 'in_progress'), 'onBoard': False, 'dropped': True}
+    cancelled = {**_history(KEY_B, 'Deck', 'cancelled'), 'onBoard': False}
+    names = [{'key': task['key'], 'title': task['title']} for task in (dropped, cancelled)]
+    names.append({'key': KEY_C, 'title': 'Unknown status'})
+    turns = [_reply_naming('r1', 1, names), _report_turn('r1', 2)]
+    page = _page(turns, board_tasks=[dropped, cancelled]).read(project_path='/repo', task='other')
+    assert page['items'] == []  # The summary covers even reports not on this page.
+    by_key = {task['key']: task for task in page['tasks']}
+    assert [by_key[key].get('archivedGroup') for key in (KEY_A, KEY_B, KEY_C)] == ['dropped', 'cancelled', None]
+    assert all(task['hasDeliveryReport'] for task in by_key.values())
+
+
 def test_earlier_task_titles_and_work_reports_carry_the_task_translation():
     translation = {'target': 'Chinese', 'texts': [{'source': 'Resume', 'text': '简历'},
                                                   {'source': 'Final in out/resume.pdf.', 'text': '终稿在 out/resume.pdf。'}]}
@@ -299,5 +315,6 @@ def test_earlier_task_titles_and_work_reports_carry_the_task_translation():
               'onBoard': False, 'translation': translation}]
     page = _page(board_tasks=tasks).read(project_path='/repo')
     assert page['tasks'] == [{'key': KEY_A, 'title': 'Resume', 'count': 1, 'latestAt': 30,
+                              'archivedGroup': 'completed', 'hasDeliveryReport': False,
                               'translation': {'title': '简历'}}]
     assert page['items'][0]['translation'] == {'title': '终稿在 out/resume.pdf。', 'summary': '终稿在 out/resume.pdf。'}

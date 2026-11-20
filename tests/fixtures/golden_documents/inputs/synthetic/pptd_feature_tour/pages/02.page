@@ -1,0 +1,55 @@
+pageType: content
+background:
+  type: solid
+  color: '#FFFFFF'
+elements:
+- elementId: title
+  elementType: text
+  bounds:
+  - 64
+  - 40
+  - 1152
+  - 70
+  content:
+    text: <p>表格：方案对比</p>
+    style: $title
+- elementId: cells
+  elementType: table
+  bounds:
+  - 64
+  - 140
+  - 1152
+  - 400
+  columnWidths:
+  - 0.3
+  - 0.3
+  - 0.4
+  rowHeights:
+  - 0.25
+  - 0.25
+  - 0.25
+  - 0.25
+  rows:
+  - - 方案
+    - 违约率
+    - Notes
+  - - A
+    - 2.8
+    - baseline
+  - - text: B
+      bold: true
+    - text: '3.1'
+    - text: 合并 <b>rich</b>
+  - - C
+    - ''
+    - sparse
+- elementId: source
+  elementType: text
+  bounds:
+  - 64
+  - 660
+  - 1152
+  - 30
+  content:
+    text: <p>来源：synthetic golden corpus</p>
+    style: $caption

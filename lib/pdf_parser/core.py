@@ -3,11 +3,8 @@
 import sys
 
 from lib.log import get_logger
-from lib.pdf_parser._common import (
-    HAS_PYMUPDF4LLM,
-    PYMUPDF4LLM_UNAVAILABLE_REASON,
-    PYMUPDF_LOCK,
-)
+from lib.pdf_parser import _common as _pdf_common
+from lib.pdf_parser._common import PYMUPDF_LOCK
 from lib.pdf_parser.admission import CLASSIC_PDF_ADMISSION
 
 logger = get_logger(__name__)
@@ -105,6 +102,9 @@ def _parse_pdf_without_admission(pdf_bytes: bytes, *,
         max_pages=page_limit,
     )
     text = text or ''
+    # Resolve lazily: importing the PDF domain must not import pymupdf4llm
+    # (its module body disables MuPDF quad corrections process-wide).
+    pymupdf4llm_ok, pymupdf4llm_reason = _pdf_common.pymupdf4llm_status()
 
     with PYMUPDF_LOCK:
         doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
@@ -133,13 +133,13 @@ def _parse_pdf_without_admission(pdf_bytes: bytes, *,
                       'docling': 'docling',
                       'pymupdf-raw': 'pymupdf_raw'}.get(
                           extractor,
-                          'pymupdf4llm' if HAS_PYMUPDF4LLM else 'pymupdf_raw')
+                          'pymupdf4llm' if pymupdf4llm_ok else 'pymupdf_raw')
 
             warnings = []
             if is_scanned:
                 warnings.append('PDF appears scanned / image-only; text may be incomplete.')
-            if not HAS_PYMUPDF4LLM:
-                if PYMUPDF4LLM_UNAVAILABLE_REASON.startswith('version'):
+            if not pymupdf4llm_ok:
+                if pymupdf4llm_reason.startswith('version'):
                     warnings.append('pymupdf4llm unavailable (version/ABI '
                                     'mismatch); tables/headers not preserved.')
                 else:

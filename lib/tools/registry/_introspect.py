@@ -85,6 +85,7 @@ def _reference_context(*, owner_user_id: int = 0) -> ToolContext:
         # REGISTERED, including what's currently invisible to requests.
         enabled_plugins=set(),
         owner_user_id=int(owner_user_id),
+        schema_preview=True,
     )
 
 

@@ -63,14 +63,10 @@ def test_child_browser_owner_device_and_failure_settlement(
         monkeypatch.setattr(queue, 'wait_for_connected_clients', observe)
         with ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(agent.run)
-            # Reaching the wait includes the scripted model round, which a
-            # loaded runner can stretch past any fixed rendezvous; the
-            # per-test hang guard bounds this, and a run that ends first fails.
-            while not waiting.wait(0.05):
-                assert not future.done(), future.result()
+            assert waiting.wait(2)
             mark_poll('parent-device', owner_user_id='771', protocol_version=2,
                       capabilities=sorted(ALL_CAPABILITIES))
-            result = future.result()
+            result = future.result(timeout=3)
     else:
         result = agent.run()
     assert result.status == 'completed', result.error_message
@@ -116,8 +112,7 @@ def test_child_stop_interrupts_browser_reconnect_wait(runtime, monkeypatch):
         abort_check=runtime.stop.is_set)
     with ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(agent.run)
-        while not waiting.wait(0.05):
-            assert not future.done(), future.result()
+        assert waiting.wait(2)
         runtime.stop.set()
         result = future.result(timeout=2)
     assert result.status == 'cancelled'

@@ -5,8 +5,8 @@
  * frame at or below the current seq on the same stream is already reflected and is ignored. Frames that
  * arrive while a snapshot is being read are held and replayed on it. Facts carry identifiers, never content:
  * titles, results and reports are read from their own endpoints by these ids.
- * Pure. Entry points: createFactStore, changedFacts, factsReplaceHints, factQuestions, busyConversations,
- * openAlarms. */
+ * Alarm facts (open Watchdog signals) are the Watchdog's own queue and flag nobody here (model.ts).
+ * Pure. Entry points: createFactStore, changedFacts, factsReplaceHints, factQuestions, busyConversations. */
 import type { RouterOfficeFact, RouterOfficeFacts } from '../../api/router.generated';
 import type { OpenQuestion } from './attention';
 
@@ -101,10 +101,3 @@ export function factQuestions(view: FactsView | null, leadId: string, known: Rea
   return open;
 }
 
-/** Open Watchdog incidents, when alarm facts are complete. */
-export function openAlarms(view: FactsView | null): number | null {
-  if (!view || view.coverage.alarms !== 'complete') return null;
-  let count = 0;
-  for (const fact of view.facts.values()) if (fact.fact === 'alarm') count += 1;
-  return count;
-}

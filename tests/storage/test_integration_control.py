@@ -797,7 +797,7 @@ def test_worker_loop_survives_transient_storage_error(monkeypatch):
 
     calls = {'n': 0}
 
-    def fake_process_ready_once():
+    def fake_dispatch_ready_rows():
         calls['n'] += 1
         if calls['n'] == 1:
             raise StorageError(
@@ -807,9 +807,9 @@ def test_worker_loop_survives_transient_storage_error(monkeypatch):
 
     autorun = iter([True, True, False])
     monkeypatch.setattr(control, '_autorun_enabled', lambda: next(autorun, False))
-    monkeypatch.setattr(control, 'process_ready_once', fake_process_ready_once)
+    monkeypatch.setattr(control, '_dispatch_ready_rows', fake_dispatch_ready_rows)
     # The peek gate (2026-08-19) consults the storage read pool before the
-    # full claim; stub it claimable so the poll reaches process_ready_once
+    # full claim; stub it claimable so the poll reaches the dispatcher
     # without a live store.
     monkeypatch.setattr(control, '_peek_ready', lambda: {'id': 1})
     waits = []
@@ -826,7 +826,7 @@ def test_worker_loop_survives_transient_storage_error(monkeypatch):
 def test_worker_loop_survives_unexpected_error(monkeypatch):
     calls = {'n': 0}
 
-    def fake_process_ready_once():
+    def fake_dispatch_ready_rows():
         calls['n'] += 1
         if calls['n'] == 1:
             raise RuntimeError('boom')
@@ -834,7 +834,7 @@ def test_worker_loop_survives_unexpected_error(monkeypatch):
 
     autorun = iter([True, True, False])
     monkeypatch.setattr(control, '_autorun_enabled', lambda: next(autorun, False))
-    monkeypatch.setattr(control, 'process_ready_once', fake_process_ready_once)
+    monkeypatch.setattr(control, '_dispatch_ready_rows', fake_dispatch_ready_rows)
     monkeypatch.setattr(control, '_peek_ready', lambda: {'id': 1})
     waits = []
     monkeypatch.setattr(
@@ -858,7 +858,7 @@ def test_worker_idle_poll_does_not_repeat_writer_claim(monkeypatch):
     autorun = iter([True, True, False])
     monkeypatch.setattr(control, '_autorun_enabled', lambda: next(autorun, False))
     monkeypatch.setattr(
-        control, 'process_ready_once',
+        control, '_dispatch_ready_rows',
         lambda: calls.__setitem__('n', calls['n'] + 1) or False)
     monkeypatch.setattr(control, '_peek_ready', lambda: None)
     waits = []
@@ -895,7 +895,7 @@ def test_worker_start_stop_is_bounded_and_releases_exact_owner(monkeypatch):
     monkeypatch.setattr(control, '_WORKER_WAKE_GENERATION', 0)
     monkeypatch.setattr(control, '_WORKER_AUTHORITY_ARMED', True)
     monkeypatch.setattr(control, '_autorun_enabled', lambda: True)
-    monkeypatch.setattr(control, 'process_ready_once', lambda: False)
+    monkeypatch.setattr(control, '_dispatch_ready_rows', lambda: False)
     monkeypatch.setattr(control, '_peek_ready', lambda: None)
 
     assert control._start_or_wake_worker() is True
@@ -927,6 +927,45 @@ def test_worker_stop_timeout_retains_owner_and_blocks_duplicate(monkeypatch):
     assert control._WORKER is worker
     assert control._WORKER_STOP_REQUESTED is True
     assert control._start_or_wake_worker() is False
+
+
+def test_integration_rows_of_independent_projects_run_concurrently(
+        repository: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Claims stay one-per-project; independent projects share the wall clock."""
+    import threading
+
+    second = tmp_path / 'second-repo'
+    second.mkdir()
+    _run(second, 'git', 'init')
+    _run(second, 'git', 'config', 'user.name', 'Integration Test')
+    _run(second, 'git', 'config', 'user.email', 'integration@test.invalid')
+    (second / 'shared.txt').write_text('base\n', encoding='utf-8')
+    _run(second, 'git', 'add', 'shared.txt')
+    _run(second, 'git', 'commit', '-m', 'base')
+
+    first_writer = _worktree(repository, tmp_path / 'concurrent-first-writer')
+    (first_writer / 'one.txt').write_text('one\n', encoding='utf-8')
+    second_writer = _worktree(second, tmp_path / 'concurrent-second-writer')
+    (second_writer / 'two.txt').write_text('two\n', encoding='utf-8')
+    control.register_workspace(str(repository), 'first', str(first_writer), user_id=1)
+    control.submit_workspace(str(repository), 'first', user_id=1)
+    control.register_workspace(str(second), 'second', str(second_writer), user_id=1)
+    control.submit_workspace(str(second), 'second', user_id=1)
+
+    both = threading.Barrier(2, timeout=10)
+    seen = []
+    observed = threading.Lock()
+
+    def concurrent(row):
+        with observed:
+            seen.append(str(row['task_id']))
+        both.wait()
+
+    monkeypatch.setattr(control, '_integrate_row', concurrent)
+
+    assert control._dispatch_ready_rows() is True
+    assert control._wait_for_inflight_rows(15) is True
+    assert sorted(seen) == ['first', 'second']
 
 
 def test_unarmed_api_process_cannot_start_integration_worker(monkeypatch):
@@ -1160,6 +1199,29 @@ def test_all_publication_gates_run_outside_repository_admission(
         str(repository), user_id=1)['changed'] is True
     assert control.promote_stable(str(repository), user_id=1)['ok'] is True
     assert len(gates) == 3
+
+
+def test_merge_computation_runs_outside_repository_admission(
+        repository: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    writer = _worktree(repository, tmp_path / 'unlocked-merge-writer')
+    (writer / 'logic.py').write_text('VALUE = 2\n', encoding='utf-8')
+    monkeypatch.setenv('TOFU_INTEGRATION_TEST_CMD', f'{sys.executable} -c pass')
+    control.register_workspace(str(repository), 'unlocked-merge', str(writer), user_id=1)
+    control.submit_workspace(str(repository), 'unlocked-merge', user_id=1)
+    original_merge = control._merge_checkpoint
+    merges = []
+
+    def merge_without_repository_admission(root, candidate, checkpoint, task_id):
+        # A separate descriptor contends with a live flock even in this process.
+        with control._file_lock(str(Path(root).resolve()), wait=False):
+            pass
+        merges.append((candidate, checkpoint))
+        return original_merge(root, candidate, checkpoint, task_id)
+
+    monkeypatch.setattr(control, '_merge_checkpoint', merge_without_repository_admission)
+    assert control.process_ready_once()
+    assert _row(repository, 'unlocked-merge')['state'] == 'merged'
+    assert len(merges) == 1
 
 
 def test_workspace_registration_proceeds_while_integration_gate_runs(

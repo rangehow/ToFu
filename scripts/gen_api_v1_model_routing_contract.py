@@ -147,6 +147,10 @@ def _load_entity_schema() -> dict[str, Any]:
         dict,
     ):
         raise ValueError("model routing v2 entity schema must declare $defs")
+    # The stored aggregate may contain private lifecycle metadata. The public
+    # aggregate contract mirrors public_projection, not the storage document.
+    document['properties'] = {name: spec for name, spec in document['properties'].items()
+                              if not spec.get('x-tofu-private')}
     return document
 
 

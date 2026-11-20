@@ -10,16 +10,20 @@ fallback.
 
 from __future__ import annotations
 
-import hashlib
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 from urllib.parse import urlencode
 
 from lib.config_dir import config_path
 from lib.json_store import locked_path, read_json, write_json_atomic
 from lib.log import get_logger
 from lib.oauth.codex_version import codex_client_version
+
+if TYPE_CHECKING:
+    from lib.model_routing import OwnerBoundary
 
 logger = get_logger(__name__)
 
@@ -56,10 +60,9 @@ def _account_fingerprint(stored: dict | None = None) -> str:
     if stored is None:
         from lib.oauth.token_store import load_token
         stored = load_token('codex') or {}
-    account_id = str((stored or {}).get('account_id') or '').strip()
-    if not account_id:
-        return ''
-    return hashlib.sha256(account_id.encode()).hexdigest()[:16]
+    from lib.oauth.codex import account_fingerprint
+
+    return account_fingerprint((stored or {}).get('account_id'))[:16]
 
 
 def _normalise_models(payload: dict) -> list[dict]:
@@ -235,6 +238,63 @@ def cached_codex_provider_models() -> list[dict]:
     return _provider_models(cached.get('models') or []) if cached else []
 
 
+@dataclass(frozen=True, slots=True)
+class CodexRegistrationEvidence:
+    """One successful live catalog response joined to its exact bearer."""
+
+    boundary: OwnerBoundary
+    observed_revision: int
+    account_fingerprint: str
+    wires: frozenset[str]
+    visible_wires: frozenset[str]
+
+
+@dataclass(frozen=True, slots=True)
+class _CatalogFetch:
+    rows: list[dict]
+    etag: str
+    not_modified: bool
+    account_fingerprint: str = ''
+    evidence: CodexRegistrationEvidence | None = None
+
+
+def _registration_evidence(payload, rows, fingerprint, boundary, observed_revision):
+    # Display tolerates malformed or duplicate rows; a lossy projection
+    # cannot establish novelty or a complete baseline.
+    if not fingerprint or len(payload['models']) != len(rows):
+        return None
+    if any(not isinstance(row.get('slug'), str) or row['slug'] != row['slug'].strip()
+           for row in payload['models']):
+        return None
+    return CodexRegistrationEvidence(
+        boundary, observed_revision, fingerprint, frozenset(row['slug'] for row in rows),
+        frozenset(row['slug'] for row in payload['models'] if row.get('visibility') == 'list'),
+    )
+
+
+def _registration_owner_supported(boundary) -> bool:
+    from lib.identity import PERSONAL_USER_ID
+    from runtime_guards import load_deployment_configuration
+
+    # TODO(enterprise): use an owner-scoped OAuth store before enabling this
+    # in distributed deployments. The present credential source is global.
+    return (boundary is not None and boundary.owner_user_id == PERSONAL_USER_ID
+            and not boundary.tenant_id and load_deployment_configuration().mode == 'personal')
+
+
+def fetch_codex_registration_evidence(boundary, *, expected_revision: int) -> CodexRegistrationEvidence | None:
+    """Fetch unconditional owner-bound evidence; never read the display cache."""
+    if not _registration_owner_supported(boundary):
+        return None
+    return _fetch_catalog({}, user_id=str(boundary.owner_user_id), boundary=boundary,
+                          observed_revision=expected_revision).evidence
+
+
+def staged_codex_registration_evidence() -> CodexRegistrationEvidence | None:
+    """Fresh evidence exists only inside synchronous admission, never cache reads."""
+    return getattr(_staged_catalog, 'evidence', None)
+
+
 def _header(headers: dict, name: str) -> str:
     wanted = name.lower()
     for key, value in (headers or {}).items():
@@ -243,28 +303,62 @@ def _header(headers: dict, name: str) -> str:
     return ''
 
 
-def _fetch_catalog(cache: dict, *, user_id: str = '') -> tuple[list[dict], str, bool]:
+def _fetch_catalog(cache: dict, *, user_id: str = '',
+                   client_version: str | None = None, boundary=None,
+                   observed_revision: int | None = None, account_binding=None,
+                   account_repository=None) -> _CatalogFetch:
+    from lib.oauth.codex import account_fingerprint, codex_access_token_account_id
     from lib.oauth.outbound import resolve_oauth_request
 
+    from lib.oauth.codex import CODEX_OAUTH_CONFIG
+    from lib.desktop import egress as _eg
+
+    endpoint = f"{CODEX_OAUTH_CONFIG['api_base'].rstrip('/')}/models"
+    route = None
+    if account_binding is not None:
+        if boundary != account_binding.boundary or user_id != str(account_binding.boundary.owner_user_id):
+            raise RuntimeError('Codex catalog account scope mismatch')
+        route = _eg.require_server_egress(endpoint, user_id=user_id)
+
     token, headers, _body = resolve_oauth_request(
-        'codex', {}, None, user_id=user_id)
+        'codex', {}, None, user_id=user_id,
+        **({'account_binding': account_binding, 'account_repository': account_repository}
+           if account_binding is not None else {}))
+    account_id = _header(headers, 'chatgpt-account-id')
+    fingerprint = _account_fingerprint({'account_id': account_id})
     headers['Authorization'] = f'Bearer {token}'
     headers['Accept'] = 'application/json'
-    client_version = codex_client_version()
+    client_version = client_version or codex_client_version()
     version_matches = cache.get('client_version') == client_version
-    if cache.get('etag') and version_matches:
+    revalidate = bool(cache.get('etag') and version_matches and fingerprint
+                      and cache.get('account_fingerprint') == fingerprint)
+    if revalidate:
         headers['If-None-Match'] = str(cache['etag'])
 
-    from lib.oauth.codex import CODEX_OAUTH_CONFIG
     query = urlencode({'client_version': client_version})
-    url = f"{CODEX_OAUTH_CONFIG['api_base'].rstrip('/')}/models?{query}"
-
-    from lib.desktop import egress as _eg
-    route = _eg.route_request(url, user_id=user_id)
+    url = f'{endpoint}?{query}'
+    if route is None:
+        route = _eg.route_request(url, user_id=user_id)
     if route == 'direct':
         from lib.oauth.http import http_get
-        response = http_get(url, headers=headers,
-                            timeout=CODEX_CATALOG_TIMEOUT_S)
+        from contextlib import nullcontext
+        from lib.http_transport.outbound import current_wire_send_authority, wire_send_authority
+        from lib.oauth.accounts import SubscriptionAccounts
+
+        scope = nullcontext()
+        if account_binding is not None:
+            accounts = SubscriptionAccounts(account_repository)
+            parent_guard = current_wire_send_authority()
+
+            def check_generation():
+                if parent_guard is not None:
+                    parent_guard()
+                accounts.revalidate(account_binding)
+
+            scope = wire_send_authority(check_generation)
+        with scope:
+            response = http_get(url, headers=headers,
+                                timeout=CODEX_CATALOG_TIMEOUT_S, allow_redirects=False)
     else:
         response = _eg.egress_http(
             url, method='GET', headers=headers,
@@ -272,27 +366,39 @@ def _fetch_catalog(cache: dict, *, user_id: str = '') -> tuple[list[dict], str, 
             agent_id=route)
 
     if response.status_code == 304:
-        if not cache.get('models') or not version_matches:
+        if not cache.get('models') or not revalidate:
             raise RuntimeError(
                 'Codex catalogue returned 304 without a matching client-version cache')
-        return list(cache['models']), cache.get('etag', ''), True
+        return _CatalogFetch(list(cache['models']), cache['etag'], True, fingerprint)
     if response.status_code != 200:
         raise RuntimeError(
             f'Codex catalogue request failed with HTTP {response.status_code}')
     content = getattr(response, 'content', b'') or b''
     if len(content) > _MAX_RESPONSE_BYTES:
         raise RuntimeError('Codex catalogue response exceeded 4 MiB')
-    rows = _normalise_models(response.json())
-    return rows, _header(getattr(response, 'headers', {}), 'etag'), False
+    payload = response.json()
+    rows = _normalise_models(payload)
+    evidence = None
+    if (route == 'direct' and observed_revision is not None
+            and (_registration_owner_supported(boundary) or (account_binding is not None
+                and account_binding.boundary == boundary)) and user_id == str(boundary.owner_user_id)):
+        # Use the same exact bearer account as outbound grant enforcement.
+        # Display still accepts responses that cannot establish entitlement.
+        if account_id and codex_access_token_account_id(token) == account_id:
+            evidence = _registration_evidence(
+                payload, rows, account_fingerprint(account_id), boundary, observed_revision)
+    return _CatalogFetch(rows, _header(getattr(response, 'headers', {}), 'etag'),
+                         False, fingerprint, evidence)
 
 
-def _write_cache(rows: list[dict], etag: str, account_fingerprint: str) -> dict:
+def _write_cache(rows: list[dict], etag: str, account_fingerprint: str,
+                 *, client_version: str | None = None) -> dict:
     cached = {
         'schema_version': _CACHE_SCHEMA_VERSION,
         'fetched_at': _utc_now(),
         'fetched_at_unix': time.time(),
         'etag': etag or '',
-        'client_version': codex_client_version(),
+        'client_version': client_version or codex_client_version(),
         'account_fingerprint': account_fingerprint,
         'models': rows,
     }
@@ -302,12 +408,16 @@ def _write_cache(rows: list[dict], etag: str, account_fingerprint: str) -> dict:
     return cached
 
 
-def _provision_from_best_available() -> bool:
+def _provision_from_best_available(*, boundary=None) -> bool:
     from lib.oauth.outbound import provision_oauth_provider
-    return provision_oauth_provider('codex')
+    if boundary is None:
+        return provision_oauth_provider('codex')
+    return provision_oauth_provider(
+        'codex', owner_user_id=boundary.owner_user_id, tenant_id=boundary.tenant_id)
 
 
-def _admit_catalog(rows: list[dict], etag: str, fingerprint: str) -> bool:
+def _admit_catalog(rows: list[dict], etag: str, fingerprint: str,
+                   *, client_version: str, boundary=None, evidence=None) -> bool:
     """Publish fetched rows only after strict model-routing admission.
 
     A failed attempt keeps the old on-disk catalog (and its ETag) intact.
@@ -319,16 +429,18 @@ def _admit_catalog(rows: list[dict], etag: str, fingerprint: str) -> bool:
     if not fingerprint or _account_fingerprint(load_token('codex') or {}) != fingerprint:
         raise RuntimeError('Codex account changed during catalog admission')
     _staged_catalog.rows = rows
+    _staged_catalog.evidence = evidence
     try:
-        changed = _provision_from_best_available()
+        changed = _provision_from_best_available(boundary=boundary)
     finally:
         del _staged_catalog.rows
+        del _staged_catalog.evidence
     # A logout can complete during the CAS; never write a new cache for a
     # credential that is no longer current. The logout path deprovisions the
     # provider after deleting the token, so it wins a concurrent admission.
     if _account_fingerprint(load_token('codex') or {}) != fingerprint:
         raise RuntimeError('Codex account changed during catalog admission')
-    _write_cache(rows, etag, fingerprint)
+    _write_cache(rows, etag, fingerprint, client_version=client_version)
     return changed
 
 
@@ -353,11 +465,41 @@ def _refresh_access_token_if_due(stored: dict, *, user_id: str) -> None:
         codex_get_valid_token(user_id=user_id)
 
 
+def _registration_authority(boundary):
+    if not _registration_owner_supported(boundary):
+        return None
+    from lib.model_routing import ModelRoutingRepository
+
+    return ModelRoutingRepository().get(boundary)
+
+
+def _registration_requires_catalog(authority, cache, token):
+    if authority is None:
+        return False
+    from lib.oauth.codex import account_fingerprint
+
+    fingerprint = account_fingerprint(token.get('account_id'))
+    wires = {row['slug'] for row in cache.get('models', ())}
+    histories = [row for row in authority.document.get('codex_seen_history', ())
+                 if row['complete'] and row['account_fingerprint'] == fingerprint]
+    if any(not wires <= set(row['wire_model_ids']) for row in histories):
+        return True
+    pending = {wire for row in histories for wire in row['pending_wire_model_ids']}
+    # A registry CAS (not only background research) may have completed a
+    # pending identity while the provider ETag stayed unchanged.
+    return bool(pending) and any(
+        model['creator_id'] == 'openai' and model['model_id'] in pending
+        and model.get('registration_state') == 'ready' for model in authority.document['models'])
+
+
 def refresh_codex_model_catalog(*, force: bool = False,
-                                user_id: str = '') -> dict:
+                                user_id: str = '', boundary=None,
+                                require_full_response: bool = False) -> dict:
     """Refresh once, preserving the last good cache on every failure."""
     from lib.oauth.token_store import load_token
 
+    if boundary is not None:
+        user_id = str(boundary.owner_user_id)
     stored = load_token('codex') or {}
     if not stored.get('access_token'):
         return {
@@ -383,36 +525,53 @@ def refresh_codex_model_catalog(*, force: bool = False,
                  or _pending_catalog['cache_path'] != _cache_path())):
             _pending_catalog = None
         try:
-            if _pending_catalog is not None:
+            if _pending_catalog is not None and not require_full_response:
                 rows = _pending_catalog['rows']
                 etag = _pending_catalog['etag']
-                changed = _admit_catalog(rows, etag, fingerprint)
+                changed = _admit_catalog(
+                    rows, etag, fingerprint, boundary=boundary,
+                    client_version=_pending_catalog['client_version'])
                 _pending_catalog = None
                 catalog_changed = rows != list(cache.get('models') or [])
                 not_modified = False
-            elif (cache and not force and not cache.get('client_version_stale')
+            elif (cache and not force and not require_full_response
+                  and not cache.get('client_version_stale')
                   and _cache_age(cache) <= CODEX_CATALOG_TTL_S):
-                changed = _provision_from_best_available()
+                changed = _provision_from_best_available(boundary=boundary)
                 return dict(codex_catalog_status(), ok=True, changed=changed,
                             not_modified=True, catalog_changed=False)
             else:
                 previous_rows = list(cache.get('models') or [])
-                rows, etag, not_modified = _fetch_catalog(cache, user_id=user_id)
+                # The resolver can advance while the request or admission runs.
+                client_version = codex_client_version()
+                authority = _registration_authority(boundary)
+                validate_cache = (not require_full_response
+                                  and not _registration_requires_catalog(authority, cache, current))
+                fetched = _fetch_catalog(
+                    cache if validate_cache else {}, user_id=user_id,
+                    client_version=client_version, boundary=boundary,
+                    observed_revision=authority.revision if authority is not None else None)
+                rows, etag, not_modified = fetched.rows, fetched.etag, fetched.not_modified
                 catalog_changed = rows != previous_rows
                 # Do not publish a response fetched for a logged-out or
                 # replaced account. This check is after the network wait.
                 latest = load_token('codex') or {}
-                if (not latest.get('access_token') or
-                        (_account_fingerprint(latest) != fingerprint)):
+                if (not latest.get('access_token')
+                        or _account_fingerprint(latest) != fingerprint
+                        or (fetched.account_fingerprint and fetched.account_fingerprint != fingerprint)):
                     return {'ok': False, 'skipped': 'not_authenticated',
                             'catalog_changed': False}
                 try:
-                    changed = _admit_catalog(rows, etag, fingerprint)
+                    changed = _admit_catalog(
+                        rows, etag, fingerprint, client_version=client_version,
+                        boundary=boundary, evidence=fetched.evidence)
+                    _pending_catalog = None
                 except Exception:
                     if (fingerprint and _account_fingerprint(
                             load_token('codex') or {}) == fingerprint):
                         _pending_catalog = {'rows': rows, 'etag': etag,
                                             'fingerprint': fingerprint,
+                                            'client_version': client_version,
                                             'cache_path': _cache_path()}
                     raise
             with _state_lock:
@@ -432,7 +591,7 @@ def refresh_codex_model_catalog(*, force: bool = False,
             # first fetch, provisioning falls back to outbound's static table.
             if _pending_catalog is None:
                 try:
-                    _provision_from_best_available()
+                    _provision_from_best_available(boundary=boundary)
                 except Exception as provision_exc:
                     logger.warning('[CodexCatalog] fallback provision failed: %s',
                                    provision_exc)
@@ -527,7 +686,8 @@ def _research_registrations(boundary) -> dict:
         return {'status': 'unavailable'}
 
 
-def _worker_loop(*, force_initial: bool = False, boundary=None) -> None:
+def _worker_loop(*, force_initial: bool = False, boundary=None,
+                 discover_shared_login: bool = False) -> None:
     global _worker_started, _worker_thread
     interval = float(CODEX_CATALOG_REFRESH_INTERVAL_S)
     next_research = 0.0
@@ -536,12 +696,24 @@ def _worker_loop(*, force_initial: bool = False, boundary=None) -> None:
         if (boundary is not None and result.get('ok') and not _worker_stop.is_set()
                 and (result.get('catalog_changed') or time.monotonic() >= next_research)):
             report = _research_registrations(boundary)
+            if report.get('ready') and not _worker_stop.is_set():
+                # Confirm pending reservations only against fresh supply, not
+                # the rows that happened to be cached before the research.
+                refresh_codex_model_catalog(boundary=boundary, require_full_response=True)
             if report.get('status') != 'busy':
                 next_research = time.monotonic() + CODEX_REGISTRATION_RETRY_INTERVAL_S
     try:
         if _worker_stop.is_set():
             return
-        result = refresh_codex_model_catalog(force=force_initial)
+        if discover_shared_login:
+            from lib.oauth.codex_shared_login import reconcile_shared_login
+            try:
+                reconcile_shared_login(owner_user_id=boundary.owner_user_id)
+            except Exception as exc:
+                logger.warning('[CodexCatalog] shared login discovery failed (%s)', type(exc).__name__)
+        if _worker_stop.is_set():
+            return
+        result = refresh_codex_model_catalog(force=force_initial, boundary=boundary)
         if result.get('skipped') == 'not_authenticated':
             return
         research_if_due(result)
@@ -552,7 +724,7 @@ def _worker_loop(*, force_initial: bool = False, boundary=None) -> None:
             _refresh_wake.clear()
             if _worker_stop.is_set():
                 break
-            result = refresh_codex_model_catalog(force=True)
+            result = refresh_codex_model_catalog(force=True, boundary=boundary)
             if result.get('skipped') == 'not_authenticated':
                 break
             research_if_due(result)
@@ -567,6 +739,7 @@ def _worker_loop(*, force_initial: bool = False, boundary=None) -> None:
 
 
 def start_codex_catalog_refresher(*, force_initial: bool = False,
+                                  discover_shared_login: bool = False,
                                   owner_user_id: int | None = None,
                                   tenant_id: str | None = None) -> bool:
     """Arm one owned refresher; resolve optional shared login on that worker.
@@ -585,7 +758,8 @@ def start_codex_catalog_refresher(*, force_initial: bool = False,
         _worker_stop.clear()
         _refresh_wake.clear()
         _worker_thread = threading.Thread(
-            target=_worker_loop, kwargs={'force_initial': force_initial, 'boundary': boundary},
+            target=_worker_loop, kwargs={'force_initial': force_initial, 'boundary': boundary,
+                                        'discover_shared_login': discover_shared_login},
             daemon=True,
             name='codex-model-catalog-refresher')
         _worker_thread.start()

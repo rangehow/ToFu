@@ -1,5 +1,4 @@
 """Immediate workspace delivery is independent of Git commits/release gates."""
-import os
 from pathlib import Path
 import subprocess
 
@@ -193,20 +192,6 @@ def test_user_commit_can_clean_workspace_after_delivery(repo, monkeypatch):
     assert (root / 'base.txt').read_text() == 'completed task\n'
 
 
-def _held_descriptors() -> int:
-    """Descriptors other than sockets: the xdist worker's storage supervisor
-    opens and closes liveness-probe connections concurrently, while delivery
-    holds only files and pipes."""
-    count = 0
-    for fd in Path('/proc/self/fd').iterdir():
-        try:
-            target = os.readlink(fd)
-        except OSError:
-            continue  # closed between listing and reading
-        count += not target.startswith('socket:')
-    return count
-
-
 def test_workspace_delivery_resource_measurement(repo, monkeypatch):
     import json
     import statistics
@@ -217,12 +202,12 @@ def test_workspace_delivery_resource_measurement(repo, monkeypatch):
         task = f'measured-{number}'
         work = automatic_workspace(repo, monkeypatch, task)
         (work / f'{task}.txt').write_text('owned output\n')
-        before = _held_descriptors()
+        before = len(list(Path('/proc/self/fd').iterdir()))
         started = time.perf_counter()
         result = finish(root, task)
         durations.append((time.perf_counter() - started) * 1000)
         assert result['state'] == 'delivered', result
-        assert _held_descriptors() == before
+        assert len(list(Path('/proc/self/fd').iterdir())) == before
         assert not work.exists()
     print('workspace-delivery-measurement=' + json.dumps({
         'samples': len(durations), 'medianMs': round(statistics.median(durations), 3),

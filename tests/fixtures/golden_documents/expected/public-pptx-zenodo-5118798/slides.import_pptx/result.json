@@ -1,0 +1,1389 @@
+{
+ "deck": {
+  "deck.pptd": {
+   "pages": [
+    "pages/01.page",
+    "pages/02.page",
+    "pages/03.page",
+    "pages/04.page",
+    "pages/05.page",
+    "pages/06.page",
+    "pages/07.page"
+   ],
+   "size": [
+    720,
+    405
+   ],
+   "theme": {
+    "colors": {
+     "accent": "#50B432",
+     "bg": "#FFFFFF",
+     "hairline": "#D8D5CE",
+     "ink": "#000000",
+     "muted": "#8A93A3",
+     "primary": "#058DC7"
+    },
+    "textStyles": {
+     "bignum": {
+      "bold": true,
+      "color": "$accent",
+      "fontSize": 80
+     },
+     "body": {
+      "color": "$ink",
+      "fontFamily": "Arial",
+      "fontSize": 18,
+      "lineHeight": 1.5
+     },
+     "caption": {
+      "color": "$muted",
+      "fontSize": 12
+     },
+     "title": {
+      "bold": true,
+      "color": "$primary",
+      "fontFamily": "Arial",
+      "fontSize": 36
+     }
+    }
+   },
+   "title": "pptx_tables_zenodo5118798_cc0",
+   "version": "v2"
+  },
+  "pages/01.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      79.07,
+      89.93,
+      561.94,
+      210.87
+     ],
+     "content": {
+      "text": "<p style=\"text-align:center\">Tackling information overload: identifying preprint reviewers</p>"
+     },
+     "elementId": "Google Shape;66;p13",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      35.66,
+      349.64,
+      640.18,
+      48.47
+     ],
+     "content": {
+      "fontFamily": "Open Sans",
+      "text": "<p style=\"text-align:center\"><a href=\"http://web.archive.org/web/20210721110009/https://asapbio.org/feedbackasap\">FeedbackASAP</a>  🟢   21 July 2021  🟢   DOI: <a href=\"https://doi.org/10.5281/zenodo.5118798\">10.5281/zenodo.5118798</a></p>\n<p style=\"text-align:center\"><a href=\"https://orcid.org/0000-0001-9488-1870\">Daniel Mietchen</a>  🟢  <a href=\"https://datascience.virginia.edu/people/daniel-mietchen\">daniel.mietchen@virginia.edu</a> 🟢  <a href=\"https://twitter.com/EvoMRI\">@EvoMRI</a></p>"
+     },
+     "elementId": "Google Shape;67;p13",
+     "elementType": "text"
+    }
+   ],
+   "pageType": "content"
+  },
+  "pages/02.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      24.54,
+      -12.96,
+      670.91,
+      58.18
+     ],
+     "content": {
+      "text": "<p style=\"text-align:left\">Key questions to be addressed during peer review</p>"
+     },
+     "elementId": "Google Shape;72;p14",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      75.0,
+      45.22,
+      236.22,
+      236.22
+     ],
+     "columnWidths": [
+      0.2211,
+      0.5481,
+      0.2308
+     ],
+     "elementId": "Google Shape;73;p14",
+     "elementType": "table",
+     "rowHeights": [
+      0.0909,
+      0.0909,
+      0.0909,
+      0.0909,
+      0.0909,
+      0.0909,
+      0.0909,
+      0.0909,
+      0.0909,
+      0.0909,
+      0.0909
+     ],
+     "rows": [
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "text": "preprint"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "criterion"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "manuscript"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "text": "important"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "is the science sound"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "important"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "text": "important"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "is it clearly documented"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "important"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "text": "important"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "is it clearly explained/ contextualized"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "important"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "text": "important"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "are associated materials shared appropriately"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "important"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "text": "important"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "is it reproducible"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "important"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "text": "important"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "is it free of scientific errors/ plagiarism/ fakes"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "important"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "text": "important"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "is it linguistically correct"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "important"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "text": "Not important"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "is it novel"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "important"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "text": "Not important"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "does it fit the scope of the journal"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "important"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "text": "Not important"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "is it likely to have impact"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "important"
+       }
+      ]
+     ]
+    }
+   ],
+   "pageType": "content"
+  },
+  "pages/03.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      24.54,
+      -12.96,
+      670.91,
+      101.81
+     ],
+     "content": {
+      "text": "<p style=\"text-align:left\">Key differences between electronic preprints and manuscripts submitted for journal peer review</p>"
+     },
+     "elementId": "Google Shape;78;p15",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      75.0,
+      82.5,
+      236.22,
+      236.22
+     ],
+     "columnWidths": [
+      0.3333,
+      0.3333,
+      0.3333
+     ],
+     "elementId": "Google Shape;79;p15",
+     "elementType": "table",
+     "rowHeights": [
+      0.1,
+      0.1,
+      0.1,
+      0.1,
+      0.1,
+      0.1,
+      0.1,
+      0.1,
+      0.1,
+      0.1
+     ],
+     "rows": [
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "text": "preprints"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "criterion"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "manuscripts"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "bold": true,
+        "text": "public & online"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "accessibility"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "confidential"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "bold": true,
+        "text": "can be clear"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "licensing"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "unclear"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "bold": true,
+        "text": "often possible"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "mining"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "unclear/ confidential"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "bold": true,
+        "text": "often possible"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "tagging/ annotation"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "unclear/ confidential"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "bold": true,
+        "text": "often possible"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "commenting"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "unclear/ confidential"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "bold": true,
+        "text": "PDF & often web-based"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "file format"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "PDF & usually offline"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "bold": true,
+        "text": "flexible"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "timing of the review"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "narrow window"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "bold": true,
+        "text": "flexible"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "number of reviewers"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "small"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "bold": true,
+        "text": "any part"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "scope of review"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "entire manuscript & add-ons"
+       }
+      ]
+     ]
+    }
+   ],
+   "pageType": "content"
+  },
+  "pages/04.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      8.25,
+      5.04,
+      711.76,
+      58.18
+     ],
+     "content": {
+      "text": "<p style=\"text-align:left\">Criteria that can be leveraged for preprint peer review</p>"
+     },
+     "elementId": "Google Shape;84;p16",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      15.0,
+      70.5,
+      236.22,
+      236.22
+     ],
+     "columnWidths": [
+      0.2467,
+      0.2137,
+      0.5396
+     ],
+     "elementId": "Google Shape;85;p16",
+     "elementType": "table",
+     "rowHeights": [
+      0.0992,
+      0.0992,
+      0.0992,
+      0.1068,
+      0.0992,
+      0.0992,
+      0.0992,
+      0.0992,
+      0.0992,
+      0.0992
+     ],
+     "rows": [
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "text": "preprints"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "criterion"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "Implications for the review process"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "bold": true,
+        "text": "public & online"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "accessibility"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "Reviewers can find, read & comment before they review"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "bold": true,
+        "text": "can be clear"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "licensing"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "Open licenses allow reuse, which increases visibility"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "bold": true,
+        "text": "often possible"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "mining"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "Allows to find and display similar works based on text, ref"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "bold": true,
+        "text": "often possible"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "tagging/ annotation"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "Can be done collaboratively, facilitates exploration"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "bold": true,
+        "text": "often possible"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "commenting"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "Quality of comments predicts quality of potential reviews"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "bold": true,
+        "text": "PDF & often web-based"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "file format"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "PDF often unwieldy; web-based better for engagement"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "bold": true,
+        "text": "flexible"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "timing of the review"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "Can accommodate reviewer availability better"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "bold": true,
+        "text": "flexible"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "number of reviewers"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "Potentially many, with complementing expertise"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "bold": true,
+        "text": "any part"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "scope of review"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "Reviewers can focus on what’s important to them"
+       }
+      ]
+     ]
+    }
+   ],
+   "pageType": "content"
+  },
+  "pages/05.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      8.25,
+      5.04,
+      711.76,
+      58.18
+     ],
+     "content": {
+      "text": "<p style=\"text-align:left\">How to use the criteria to find reviewers for preprints</p>"
+     },
+     "elementId": "Google Shape;90;p17",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      15.0,
+      82.5,
+      236.22,
+      236.22
+     ],
+     "columnWidths": [
+      0.2576,
+      0.2068,
+      0.5356
+     ],
+     "elementId": "Google Shape;91;p17",
+     "elementType": "table",
+     "rowHeights": [
+      0.1,
+      0.1,
+      0.1,
+      0.1,
+      0.1,
+      0.1,
+      0.1,
+      0.1,
+      0.1,
+      0.1
+     ],
+     "rows": [
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "text": "preprints"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "criterion"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "Implications for finding reviewers"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "bold": true,
+        "text": "public & online"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "accessibility"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "Link to the work can be shared widely"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "bold": true,
+        "text": "can be clear"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "licensing"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "Open licenses allow reuse & adaptation, greater visibility"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "bold": true,
+        "text": "often possible"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "mining"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "Can help find reviewers/ commenters of similar work"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "bold": true,
+        "text": "often possible"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "tagging/ annotation"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "Can help navigate/ identify parts of interest"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "bold": true,
+        "text": "often possible"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "commenting"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "Some commenters might be suitable reviewers"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "bold": true,
+        "text": "PDF & often web-based"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "file format"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "Web-based formats can be repackaged into feeds"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "bold": true,
+        "text": "flexible"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "timing of the review"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "Outreach to potential reviewers can happen early & often"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "bold": true,
+        "text": "flexible"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "number of reviewers"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "Perhaps 1-2 per core section, recruited by expertise"
+       }
+      ],
+      [
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "bold": true,
+        "text": "any part"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "text": "scope of review"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": "Reviewers can focus on what’s not been reviewed"
+       }
+      ]
+     ]
+    }
+   ],
+   "pageType": "content"
+  },
+  "pages/06.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      8.25,
+      5.04,
+      711.76,
+      58.18
+     ],
+     "content": {
+      "text": "<p style=\"text-align:left\">How can preprint servers attract reviewers?</p>"
+     },
+     "elementId": "Google Shape;96;p18",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      41.94,
+      78.39,
+      621.59,
+      290.17
+     ],
+     "content": {
+      "fontFamily": "Open Sans",
+      "text": "<p style=\"text-align:left\">Default to open licenses and formats, so as to allow </p>\n<p style=\"text-align:left\">reposting</p>\n<p style=\"text-align:left\">reusing</p>\n<p style=\"text-align:left\">repackaging</p>\n<p style=\"text-align:left\">Make it easy to find out which aspects of a preprint are most in need of review</p>\n<p style=\"text-align:left\">Make it easy to annotate preprints by </p>\n<p style=\"text-align:left\">having HTML versions and </p>\n<p style=\"text-align:left\">enabling Hypothes.is</p>\n<p style=\"text-align:left\">which can also be used for tagging</p>\n<p style=\"text-align:left\">Replace tracking tools like DISQUS with non-tracking ones for commenting</p>\n<p style=\"text-align:left\">Make it easy to subscribe to content alerts using specific filters, e.g. </p>\n<p style=\"text-align:left\">mentions of concept X in section Y, e.g.</p>\n<p style=\"text-align:left\">a particular cell line in the methods section</p>\n<p style=\"text-align:left\">a specific author or institution in the article metadata</p>\n<p style=\"text-align:left\">a specific set of papers or datasets cited in the reference section</p>\n<p style=\"text-align:left\">preprints/ papers with high similarity to a given piece of text (similar to <a href=\"https://jane.biosemantics.org/\">JANE</a>)</p>"
+     },
+     "elementId": "Google Shape;97;p18",
+     "elementType": "text"
+    }
+   ],
+   "pageType": "content"
+  },
+  "pages/07.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      8.25,
+      5.04,
+      711.76,
+      58.18
+     ],
+     "content": {
+      "text": "<p style=\"text-align:center\">Questions &amp; discussion</p>"
+     },
+     "elementId": "Google Shape;102;p19",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      41.94,
+      78.39,
+      621.59,
+      227.6
+     ],
+     "content": {
+      "fontFamily": "Open Sans",
+      "fontSize": 100.0,
+      "text": "<p style=\"text-align:center\"><span style=\"font-size:100.0px\">Thank you!</span></p>"
+     },
+     "elementId": "Google Shape;103;p19",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      35.66,
+      349.64,
+      640.18,
+      48.47
+     ],
+     "content": {
+      "fontFamily": "Open Sans",
+      "text": "<p style=\"text-align:center\"><a href=\"http://web.archive.org/web/20210721110009/https://asapbio.org/feedbackasap\">FeedbackASAP</a>  🟢   21 July 2021  🟢   DOI: <a href=\"https://doi.org/10.5281/zenodo.5118798\">10.5281/zenodo.5118798</a></p>\n<p style=\"text-align:center\"><a href=\"https://orcid.org/0000-0001-9488-1870\">Daniel Mietchen</a>  🟢  <a href=\"https://datascience.virginia.edu/people/daniel-mietchen\">daniel.mietchen@virginia.edu</a> 🟢  <a href=\"https://twitter.com/EvoMRI\">@EvoMRI</a></p>"
+     },
+     "elementId": "Google Shape;104;p19",
+     "elementType": "text"
+    }
+   ],
+   "pageType": "content"
+  }
+ },
+ "report": {
+  "pages": 7,
+  "skipped": [],
+  "theme": {
+   "colors": {
+    "accent": "#50B432",
+    "bg": "#FFFFFF",
+    "hairline": "#D8D5CE",
+    "ink": "#000000",
+    "muted": "#8A93A3",
+    "primary": "#058DC7"
+   },
+   "textStyles": {
+    "bignum": {
+     "bold": true,
+     "color": "$accent",
+     "fontSize": 80
+    },
+    "body": {
+     "color": "$ink",
+     "fontFamily": "Arial",
+     "fontSize": 18,
+     "lineHeight": 1.5
+    },
+    "caption": {
+     "color": "$muted",
+     "fontSize": 12
+    },
+    "title": {
+     "bold": true,
+     "color": "$primary",
+     "fontFamily": "Arial",
+     "fontSize": 36
+    }
+   }
+  }
+ }
+}

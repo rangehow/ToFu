@@ -1558,7 +1558,7 @@ def _project_decoded_result_schema(keep):
     """``keep`` without its private result declaration, described on the wire."""
     # Private catalog metadata never becomes a provider extension.
     # Invalid late metadata removes only the claim, not authority.
-    from lib.tools.contracts import serialize_decoded_result_schema
+    from lib.tools.contracts import decoded_result_description, serialize_decoded_result_schema
     projected = dict(keep)
     declared = projected.pop('decoded_result_schema')
     if declared is not None and isinstance(keep.get('function'), dict):
@@ -1568,10 +1568,8 @@ def _project_decoded_result_schema(keep):
             declared = None
         if declared is not None:
             function = dict(keep['function'])
-            function['description'] = (
-                (function.get('description') or '') +
-                '\nSuccessful decoded JSON value (producer declaration; '
-                'coverage/freshness unknown): ' + declared)
+            function['description'] = decoded_result_description(
+                function.get('description') or '', declared)
             projected['function'] = function
     return projected
 

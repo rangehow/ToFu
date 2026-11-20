@@ -11,7 +11,9 @@ from lib.storage.errors import StorageError
 
 def dispatch_accepted_attempt(attempt_id, *, user_id):
     from lib import turn_lifecycle as turns
-    from lib.conversation_sync.execution_identity import restore_execution_identity
+    from lib.conversation_sync.execution_identity import (
+        restore_execution_identity, restore_manual_detect_admission,
+    )
     attempt = turns.get_attempt(attempt_id, user_id=user_id, include_execution_config=True)
     if not attempt or attempt['status'] != 'pending':
         return
@@ -24,7 +26,10 @@ def dispatch_accepted_attempt(attempt_id, *, user_id):
     if not isinstance(config, Mapping):
         raise ValueError('Accepted attempt config must be an object')
     try:
-        principal, _attended = restore_execution_identity(dict(config, _turnOwnerUserId=user_id))
+        accepted = dict(config, _turnOwnerUserId=user_id,
+                        _turnId=attempt['turnId'], _attemptId=attempt_id)
+        principal, _attended = restore_execution_identity(accepted)
+        restore_manual_detect_admission(accepted, principal, attempt['conversationId'])
     except (PermissionError, TypeError, ValueError) as error:
         from lib.conversation_sync.command_service import AttemptStartFailure, attempt_start_error_envelope
         envelope = attempt_start_error_envelope(error)

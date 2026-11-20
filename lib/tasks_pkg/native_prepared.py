@@ -104,6 +104,8 @@ async def run_native_prepared_task(client,repository,selection,configuration,*,
                 except Exception as error:
                     from lib.log import get_logger
                     get_logger(__name__).warning('native sources-footer backstop failed: %s',error)
+                from lib.tasks_pkg.workspace_reference_delivery import append_workspace_output_links
+                append_workspace_output_links(task, finish_reason=task.get('finishReason'))
         return await run_native_task(client,route,configuration,task=task,executor=executor,
             callbacks={},working_directory=working_directory,gateway=gateway,
             pricing_resolver=pricing_resolver,checkpoint_policy=checkpoint_policy,

@@ -4,9 +4,19 @@ Entry: RecordWorkloads; dependencies are explicit inputs and execution ports.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 
 from scripts.tofudb_workloads.inputs import WorkloadInputs, WorkloadPorts
+
+
+def record_value(i: int) -> dict:
+    return {
+        'n': i,
+        's': f'value-{i}-' + 'x' * 64,
+        'l': [True, None, i],
+        'nested': {'a': i, 'b': f'string-{i}'},
+    }
 
 
 @dataclass(frozen=True)
@@ -14,11 +24,13 @@ class RecordWorkloads:
     inputs: WorkloadInputs
     ports: WorkloadPorts
 
-    def record_put_setup(self, engine):
+    def record_put_setup(self, engine, *, receipts=None):
         for i in range(self.inputs.scale['seed_records']):
-            engine.execute('record.put', {
+            receipt = engine.execute('record.put', {
                 'namespace': self.inputs.namespace, 'key': self.inputs.record_key(i), 'value': self.ports.record_value(i),
             }, command=True)
+            if receipts is not None:
+                receipts.append(deepcopy(receipt))
 
     def record_put_op(self, i):
         return ('record.put', {
@@ -30,6 +42,20 @@ class RecordWorkloads:
         return ('record.get', {
             'namespace': self.inputs.namespace, 'key': self.inputs.record_key(i % self.inputs.scale['seed_records']),
         }, False)
+
+    def record_get_runner(self, engine, setup, operation, iterations):
+        receipts = []
+
+        def seed(engine):
+            setup(engine, receipts=receipts)
+
+        return self.ports.measure(
+            engine, seed, operation, iterations,
+            result_oracle={
+                'namespace': self.inputs.namespace,
+                'seed_records': self.inputs.scale['seed_records'],
+                'seed_receipts': receipts,
+            })
 
     def conv_create_op(self, i):
         return ('conversation.create', {

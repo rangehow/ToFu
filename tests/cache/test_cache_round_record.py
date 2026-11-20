@@ -128,6 +128,97 @@ def test_round_record_emitted_every_round():
             assert k in r, f'record missing field {k}: {r}'
 
 
+def test_responses_read_gap_never_becomes_a_cache_miss():
+    from lib.llm.responses_outbound import responses_response_to_openai
+    from lib.tasks_pkg.cache_tracking._detect import detect_cache_break
+    from lib.tasks_pkg.cache_tracking._health import read_share_split
+    from lib.tasks_pkg.cache_tracking._state import cleanup_cache_state
+
+    conv_id = 'responses-metering-gap'
+    messages = [{'role': 'user', 'content': 'ordinary fixture'}]
+
+    def observe(read, *, write=0):
+        usage = responses_response_to_openai({
+            'status': 'completed', 'output': [], 'usage': {
+                'input_tokens': 30_000, 'output_tokens': 10,
+                'input_tokens_details': {'cached_tokens': read, 'cache_write_tokens': write},
+            },
+        })['usage']
+        usage['_dispatch'] = {'protocol': 'responses'}
+        return detect_cache_break(conv_id, messages, [], 'fixture-wire-model',
+                                  usage, user_id=7, durable=False, prev_turn_cache_read=0)
+
+    try:
+        with _RecordCapture() as cap:
+            assert observe(28_000) is None
+            assert observe(None, write=1_000) is None
+            assert observe(0) is None  # no immediate measured predecessor
+        _, gap, explicit_zero = cap.records
+        assert gap['bucket'] == 'indeterminate'
+        assert gap['cache_read'] is None
+        assert gap['cache_write'] == 1_000  # independent of the absent read
+        assert gap['read_collapsed'] is False
+        assert explicit_zero['cache_read'] == 0
+        assert read_share_split(cap.records, 'lane')['rows'][0]['rounds'] == 1
+    finally:
+        cleanup_cache_state(conv_id, user_id=7)
+
+
+@pytest.mark.parametrize('read', [None, 0])
+@pytest.mark.parametrize(('details', 'write', 'status'), [
+    ({}, None, 'missing'), ({'cache_write_tokens': None}, None, 'null'),
+    ({'cache_write_tokens': 0}, 0, 'observed'),
+    ({'cache_write_tokens': 30_000}, 30_000, 'observed'),
+    ({'cache_write_tokens': '20000'}, None, 'invalid'),
+    pytest.param({'cache_write_tokens': 30_001}, None, 'invalid', id='write-above-input'),
+])
+def test_responses_record_reports_write_independently_of_read(read, details, write, status):
+    from lib.llm.responses_outbound import responses_response_to_openai
+    from lib.tasks_pkg.cache_tracking._detect import detect_cache_break
+    from lib.tasks_pkg.cache_tracking._state import cleanup_cache_state
+
+    conv_id = 'fixture-responses-write'
+    usage = responses_response_to_openai({
+        'status': 'completed', 'output': [], 'usage': {
+            'input_tokens': 30_000, 'output_tokens': 10,
+            'input_tokens_details': {**details, 'cached_tokens': read},
+        },
+    })['usage']
+    try:
+        with _RecordCapture() as cap:
+            detect_cache_break(conv_id, [], [], 'fixture-model', usage,
+                               user_id=7, durable=False, prev_turn_cache_read=0)
+        record, = cap.records
+        assert (record['input_tokens'], record['cache_read'], record['cache_write']) == (
+            30_000, read, write)
+        assert record['responses_usage_status'] == {
+            'input_tokens': 'observed', 'cache_read': 'null' if read is None else 'observed',
+            'cache_write': status,
+        }
+    finally:
+        cleanup_cache_state(conv_id, user_id=7)
+
+
+def test_responses_record_does_not_infer_absent_receipt_from_aliases():
+    from lib.tasks_pkg.cache_tracking._detect import detect_cache_break
+    from lib.tasks_pkg.cache_tracking._state import cleanup_cache_state
+
+    conv_id = 'historical-responses-usage'
+    usage = {'prompt_tokens': 100, 'cache_read_tokens': 10, 'cache_write_tokens': 90,
+             '_dispatch': {'protocol': 'responses'}, 'trace_id': 'fixture-occurrence'}
+    try:
+        with _RecordCapture() as cap:
+            detect_cache_break(conv_id, [], [], 'fixture-model', usage,
+                               user_id=7, durable=False, prev_turn_cache_read=0)
+        record, = cap.records
+        fields = ('input_tokens', 'cache_read', 'cache_write')
+        assert all(record[field] is None for field in fields)
+        assert record['responses_usage_status'] == dict.fromkeys(fields, 'unavailable')
+        assert 'trace_id' not in record  # no valid sealed pair with this occurrence
+    finally:
+        cleanup_cache_state(conv_id, user_id=7)
+
+
 def test_round_record_names_the_whole_conversation():
     """Siblings share long ID prefixes (``worker-<hex>``, ``coordinator-<hex>``):
     an 8-character ``conv`` merged up to ten conversations into one
@@ -163,6 +254,38 @@ def test_round_record_carries_only_complete_request_identity(identity):
         assert record['trace_id'] == 'transport-occurrence'
     else:
         assert 'request_identity' not in record and 'trace_id' not in record
+
+
+def test_round_record_keeps_only_bounded_transport_evidence():
+    from lib.tasks_pkg.cache_tracking._detect import detect_cache_break
+    from lib.tasks_pkg.cache_tracking.replay import build_round_usage
+
+    body = _body()
+    usage = build_round_usage(body, cache_read=9000, cache_write=0)
+    usage['_cache_exchange'] = {
+        'protocol': 'anthropic', 'transport': 'sse', 'verified': True,
+        'sent_input_items': 2, 'logical_input_items': 2,
+        'provider_input_tokens': 10000, 'provider_cached_tokens': 9000,
+        'frame_sha256': 'a' * 64, 'frame_bytes': 4096,
+        'frame_kind': 'reset', 'frame_reason': 'provider_reconnect',
+        'frame_content_encoding': 'zstd',
+        'private': 'secret text', 'full_reason': 'invalid reason with private text',
+    }
+    with _RecordCapture() as cap:
+        detect_cache_break('cache-exchange-record', body['messages'], body['tools'],
+                           body['model'], usage, user_id=7, durable=False)
+    record, = cap.records
+    assert record['exchange']['provider_cached_tokens'] == 9000
+    assert record['exchange']['sent_input_items'] == 2
+    assert record['exchange']['full_reason'] is None
+    # Every frame key survives the marker's bounded projection, so a ledger
+    # consumer can compare the exact sent frame, not just the counters.
+    assert record['exchange']['frame_sha256'] == 'a' * 64
+    assert record['exchange']['frame_bytes'] == 4096
+    assert record['exchange']['frame_kind'] == 'reset'
+    assert record['exchange']['frame_reason'] == 'provider_reconnect'
+    assert record['exchange']['frame_content_encoding'] == 'zstd'
+    assert 'private' not in record['exchange']
 
 
 def test_round_record_labels_namespace_switch():

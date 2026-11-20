@@ -30,3 +30,4 @@ class WorkloadPorts:
     error: type[Exception]
     unsupported_error: type[Exception]
     raw_sqlite_type: type
+    measure: Callable[..., dict]

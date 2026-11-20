@@ -79,6 +79,37 @@ def test_continuation_accepts_its_exact_durable_worker_binding(owned):
     assert c.repo.read(assignment['id'])['execution'] == advanced['execution']
 
 
+def test_predecessor_document_fences_successor_creation_at_commit(owned, monkeypatch):
+    c = owned
+    predecessor = authorize(c, 'predecessor')
+    ident = predecessor['id']
+    successor_id = c.repo.command_identity('successor')
+    commit = SegmentedDispatch.command
+    raced = []
+
+    def revoke_before_commit(store, revision, head, changes, command_id=None):
+        if not raced:
+            raced.append(True)
+            assert store.head()['version'] == revision
+            c.repo.revoke(ident, expected_revision=1)
+            assert store.head()['version'] == revision, 'revoke is a point update, not a head update'
+        return commit(store, revision, head, changes, command_id=command_id)
+
+    monkeypatch.setattr(SegmentedDispatch, 'command', revoke_before_commit)
+
+    def create(value):
+        prior = c.repo._find(value, ident)
+        if prior['grant']['revoked']:
+            raise ProjectDispatchError('Predecessor revoked')
+        value['assignments'].append({**deepcopy(prior), 'id': successor_id})
+
+    with pytest.raises(ProjectDispatchError, match='Predecessor revoked'):
+        c.repo._change(create, selected=c.repo._selection(assignments=[ident]),
+                       fence_documents=[('assignments', ident)])
+    assert c.repo.read(ident)['grant']['revoked']
+    assert [row['id'] for row in c.repo.discover()[0]] == [ident]
+
+
 def test_existing_evidence_migrates_exactly_and_old_repository_fails_closed(owned):
     c = owned; c.repo.storage_version = 1
     before = [authorize(c, str(i)) for i in range(3)]

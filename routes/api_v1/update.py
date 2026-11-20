@@ -356,20 +356,26 @@ def _deferred_reexec(delay: float = 0.3, *, frontend_prevalidated: bool = False,
     notice tells the owner's Global Router at once.
     """
     time.sleep(delay)
-    outcome = server_reexec.perform_server_reexec(
-        'update',
-        frontend_prevalidated=frontend_prevalidated,
-        requested_at=requested_at,
-    )
-    if not outcome.handed_over and precedence is not None:
-        precedence.abandon()
-    if outcome.handed_over or not approval_id:
+    failure = ''
+    keep_precedence = False
+    try:
+        outcome = server_reexec.perform_server_reexec(
+            'update',
+            frontend_prevalidated=frontend_prevalidated,
+            requested_at=requested_at,
+        )
+        failure = server_reexec.await_managed_restart_failure(outcome, requested_at)
+        keep_precedence = outcome.handed_over and not failure
+    finally:
+        if not keep_precedence and precedence is not None:
+            precedence.abandon()
+    if keep_precedence or not approval_id:
         return
     from lib.server.restart_notice import deliver_restart_notice
     try:
         _lca.note_restart_notice(approval_id, failure={
             'code': 'restart_bridge_refused',
-            'detail': outcome.detail})
+            'detail': failure})
     except Exception as e:
         logger.warning('[Update] restart refusal was not recorded on its notice: %s', e)
     deliver_restart_notice(approval_id)
@@ -554,14 +560,19 @@ def update_restart():
             # Accepted: keep new landings back until this process is replaced
             # (or until the handoff thread reports every bridge refused).
             precedence.retain_until_exit()
-            threading.Thread(
+            restart_thread = threading.Thread(
                 target=_deferred_reexec,
                 kwargs={'frontend_prevalidated': True,
                         'requested_at': restart_requested_at,
                         'approval_id': approval_id,
                         'precedence': precedence},
                 name='tofu-restart',
-                daemon=True).start()
+                daemon=True)
+            try:
+                restart_thread.start()
+            except BaseException:
+                precedence.abandon()
+                raise
             return api_ok(response)
     return response
 

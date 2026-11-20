@@ -1,0 +1,104 @@
+/* A small ledger inset in My Day's tofu block, not a generic floating card. */
+.myday-token-costs {
+  margin-block-end: var(--space-4);
+  border: var(--tf-border-sm);
+  box-shadow: var(--tf-shadow-xs);
+  background: var(--tf-white);
+  color: var(--tf-ink);
+}
+
+.myday-token-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  min-block-size: var(--control-h-lg);
+  background: var(--tf-cream);
+  color: var(--tf-ink);
+}
+
+.myday-token-summary:hover { background: var(--tf-skin); }
+.myday-token-summary:focus-visible {
+  outline: var(--tf-border-sm);
+  outline-offset: calc(-1 * var(--space-1));
+}
+
+.myday-token-label {
+  display: grid;
+  gap: var(--space-1);
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-bold);
+  line-height: var(--leading-tight);
+  overflow-wrap: anywhere;
+}
+
+.myday-token-status, .myday-token-note {
+  color: var(--tf-ink-soft);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-body);
+  overflow-wrap: anywhere;
+}
+
+.myday-token-total {
+  font-size: var(--font-size-xl);
+  font-weight: var(--weight-bold);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--leading-tight);
+  text-align: end;
+}
+
+.myday-token-body {
+  border-block-start: var(--tf-border-sm);
+  padding: var(--space-3);
+}
+
+.myday-token-ledger {
+  inline-size: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-title);
+}
+
+.myday-token-ledger th, .myday-token-ledger td {
+  padding: var(--space-2) var(--space-1);
+  text-align: end;
+}
+.myday-token-ledger th:first-child { text-align: start; overflow-wrap: anywhere; }
+.myday-token-ledger thead {
+  background: var(--tf-board);
+  color: var(--tf-white);
+  font-size: var(--font-size-xs);
+}
+.myday-token-ledger tbody tr + tr { border-block-start: 1px solid var(--tf-skin); }
+.myday-token-ledger tbody th { font-weight: var(--weight-medium); }
+.myday-token-ledger td { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.myday-token-note { margin: var(--space-2) 0 0; }
+.myday-token-body > div > .myday-token-note:first-child { margin-block-start: 0; }
+.myday-token-partial {
+  background: var(--tf-cream);
+  border-inline-start: var(--space-1) solid var(--tf-gold-dim);
+  padding: var(--space-1) var(--space-2);
+}
+
+.myday-token-compare {
+  --text-primary: var(--tf-ink);
+  --text-secondary: var(--tf-ink-soft);
+  --text-tertiary: var(--tf-ink-soft);
+  --bg-secondary: var(--tf-white);
+  --border: var(--tf-gold-dim);
+  min-inline-size: 0;
+  border-block-start: 1px solid var(--tf-gold-dim);
+  margin-block-start: var(--space-3);
+  padding-block-start: var(--space-3);
+}
+
+.myday-token-estimate:not([hidden]) {
+  display: block;
+  margin-block-start: var(--space-2);
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-bold);
+  font-variant-numeric: tabular-nums;
+}

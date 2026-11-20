@@ -776,10 +776,24 @@ static void wal_index_function(sqlite3_context *context, int argc, sqlite3_value
       database, (int)(intptr_t)sqlite3_user_data(context)));
 }
 
+/* Registration alone is not evidence that this connection selected the VFS. */
+static void vfs_selected(sqlite3_context *context, int argc, sqlite3_value **argv) {
+  sqlite3_file *file = 0;
+  (void)argc;
+  (void)argv;
+  sqlite3_result_int(context,
+      sqlite3_file_control(sqlite3_context_db_handle(context), "main",
+                           SQLITE_FCNTL_FILE_POINTER, &file) == SQLITE_OK
+      && file != 0 && file->pMethods == &coalesce_io_methods);
+}
+
 static int register_functions(sqlite3 *db, char **error, const sqlite3_api_routines *api) {
   int rc;
   (void)error;
   (void)api;
+  rc = sqlite3_create_function(db, "tofu_wal_coalescing_selected", 0, SQLITE_UTF8,
+                               0, vfs_selected, 0, 0);
+  if (rc != SQLITE_OK) return rc;
   rc = sqlite3_create_function(db, "tofu_wal_frames", 0, SQLITE_UTF8,
                                (void *)(intptr_t)WAL_INDEX_MX_FRAME_OFFSET,
                                wal_index_function, 0, 0);
@@ -830,10 +844,24 @@ int sqlite3_tofuwalcoalesce_init(sqlite3 *db, char **error, const sqlite3_api_ro
   coalesce_vfs.xGetSystemCall = coalesce_get_system_call;
   coalesce_vfs.xNextSystemCall = coalesce_next_system_call;
   {
-    int rc = sqlite3_vfs_register(&coalesce_vfs, 0);
-    if (rc != SQLITE_OK) return rc;
-    rc = sqlite3_auto_extension((void (*)(void))register_functions);
-    if (rc != SQLITE_OK) return rc;
+    void (*register_sql)(void) = (void (*)(void))register_functions;
+    /* This can fail on allocation. Do it before publishing the VFS:
+    ** unregistering cannot revoke pointers from an open already in flight. */
+    int rc = sqlite3_auto_extension(register_sql);
+    if (rc != SQLITE_OK) {
+      if (registry_mutex != 0) sqlite3_mutex_free(registry_mutex);
+      registry_mutex = 0;
+      return rc;
+    }
+    rc = sqlite3_vfs_register(&coalesce_vfs, 0);
+    if (rc != SQLITE_OK) {
+      /* On initialized stock SQLite, VFS registration is a list insertion
+      ** with no allocation. If it nevertheless fails, undo both registrations.
+      ** A racing open may already hold the SQL callback, so keep the library
+      ** resident; the loader checks the missing VFS and uses stock SQLite. */
+      sqlite3_vfs_unregister(&coalesce_vfs);
+      sqlite3_cancel_auto_extension(register_sql);
+    }
   }
   return SQLITE_OK_LOAD_PERMANENTLY;
 }

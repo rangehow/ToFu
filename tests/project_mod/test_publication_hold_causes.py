@@ -250,8 +250,9 @@ def test_a_hold_decided_before_the_accept_is_never_reported_as_held_after_it(
     view = publication.delivery_view(authority.assignment, authority.attempt, state.get_workspace)
     summary = {'status': 'completed', 'review': authority.assignment['review'], 'delivery': view}
     if revoked_after_accept:
-        assert (view['status'], view['reason']) == ('blocked', AUTHORITY_MISSING)
-        assert worker_phase(summary) == 'held'
+        # Final: the cancelled assignment can never publish, so nothing is held for its lead.
+        assert view['status'] == 'closed' and 'assignment cancelled' in view['reason']
+        assert worker_phase(summary) == 'settled'
         return
     assert view['status'] == 'pending'
     assert worker_phase(summary) == 'delivering'

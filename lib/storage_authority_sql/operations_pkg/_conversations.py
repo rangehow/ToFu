@@ -166,8 +166,7 @@ def _turn_to_legacy_message(turn: Mapping[str, Any]) -> dict[str, Any]:
     projection.pop("role", None)
     projection = _with_legacy_compaction_fields(projection)
     created_at = int(turn.get("createdAt") or 0)
-    return {
-        **projection,
+    projection.update({
         "role": _turn_actor_to_legacy_role(str(turn.get("actor") or "")),
         "_turnId": turn.get("turnId"),
         "_attemptId": turn.get("currentAttemptId"),
@@ -179,7 +178,8 @@ def _turn_to_legacy_message(turn: Mapping[str, Any]) -> dict[str, Any]:
         "_commandPending": None,
         "_projectionRevision": int(turn.get("projectionRevision") or 0),
         "timestamp": projection.get("timestamp") or created_at,
-    }
+    })
+    return projection
 
 
 def _derive_turn_messages(session: Session, conv_id: str, user_id: Any) -> list:

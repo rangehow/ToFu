@@ -1,0 +1,56 @@
+{
+ "source": "evaluations/paper_style_corpus (docs/PAPER_STYLE_EVIDENCE.md)",
+ "rules": [
+  {
+   "id": "paper.style.abstract-number",
+   "kind": "checklist",
+   "text": "When the main result is quantitative, the abstract states it as a concrete number taken from the evidence.",
+   "origin": "paper-style corpus analysis (award/high-citation vs matched controls, evaluations/paper_style_corpus), 2026-11-18",
+   "exemplars": [
+    "To capture complex environment dynamics, NWM employs a Conditional Diffusion Transformer (CDiT), trained on a diverse collection of egocentric videos of both human and robotic agents, and scaled up to 1 billion parameters.",
+    "To study the ability of retrieval systems to meet such information needs, we construct QUEST, a dataset of 3357 natural language queries with implicit set operations, that map to a set of entities corresponding to Wikipedia documents.",
+    "Pangu also enables, for the first time, effective few-shot in-context learning for KBQA with large LMs such as Codex.1"
+   ],
+   "evidence": "findings.json top_vs_accepted/abs_has_number: top 0.763 vs accepted 0.594, paired diff +0.169 [95% CI +0.0909, +0.237], dz +0.26, q 0.003, n=308 train pairs; held-out diff +0.0301 n=133 ; rule A/B: preferred 7 vs 4 of 16 held-out units"
+  },
+  {
+   "id": "paper.style.intro-quantified",
+   "kind": "checklist",
+   "text": "The introduction quantifies the main result (the same headline number as the abstract), not only \"significant improvements\".",
+   "origin": "paper-style corpus analysis (award/high-citation vs matched controls, evaluations/paper_style_corpus), 2026-11-18",
+   "exemplars": [
+    "It also achieves a top-1 accuracy of 87.3% on ImageNet-1K image classiﬁcation.",
+    "In two parallel experiments, we demonstrate that integrating awareness of story arcs enhances model diversity (outperforming vanilla prompting by 45%), whereas incorporating turning point information significantly improves narrative suspense and engagement (outperforming vanilla by 40%).",
+    "We show that it can be a viable approach for annotation quality estimation: it is able to provide similar statistical guarantees as confidence intervals while requiring up to 50% less samples."
+   ],
+   "evidence": "findings.json top_vs_accepted/ann_intro_quantified: top 0.599 vs accepted 0.456, paired diff +0.143 [95% CI +0.0717, +0.221], dz +0.21, q 0.008, n=307 train pairs; held-out diff +0.0758 n=132 ; findings.json top_vs_accepted/intro_number_per_k: top 30.8 vs accepted 22.4, paired diff +8.45 [95% CI +3.86, +12.8], dz +0.21, q 0.005, n=308 train pairs; held-out diff +3.49 n=133 ; rule A/B: preferred 4 vs 2 of 16 held-out units"
+  },
+  {
+   "id": "paper.style.caption-takeaway",
+   "kind": "checklist",
+   "text": "Every figure and table caption states its takeaway in a full sentence, not only what is plotted.",
+   "origin": "paper-style corpus analysis (award/high-citation vs matched controls, evaluations/paper_style_corpus), 2026-11-18",
+   "evidence": "findings.json top_vs_accepted/caption_takeaway: top 0.692 vs accepted 0.633, paired diff +0.0593 [95% CI +0.0191, +0.1], dz +0.16, q 0.026, n=299 train pairs; held-out diff +0.0218 n=126 ; structural rule (not testable on abstract+introduction A/B)"
+  },
+  {
+   "id": "paper.style.limitations-section",
+   "kind": "checklist",
+   "text": "A dedicated Limitations section names specific limitations of this work (settings not tested, assumptions), not generic caveats.",
+   "origin": "paper-style corpus analysis (award/high-citation vs matched controls, evaluations/paper_style_corpus), 2026-11-18",
+   "evidence": "findings.json top_vs_accepted/has_limitations: top 0.555 vs accepted 0.494, paired diff +0.0617 [95% CI +0.0195, +0.107], dz +0.16, q 0.018, n=308 train pairs; held-out diff +0.0752 n=133 ; structural rule (not testable on abstract+introduction A/B)"
+  },
+  {
+   "id": "paper.style.intro-findings-first-person",
+   "kind": "checklist",
+   "text": "The introduction states the main findings explicitly in first person (\"we show/find/demonstrate that ...\").",
+   "origin": "paper-style corpus analysis (award/high-citation vs matched controls, evaluations/paper_style_corpus), 2026-11-18",
+   "exemplars": [
+    "Qualitatively, we observe improved video prediction and generation performance on single images (see Figure 1(c)).",
+    "However, current reading comprehension datasets for theory of mind reasoning are simplistic and lack diversity, leading to brittle downstream models which, as we show, fail in the presence of even slight out-of-distribution perturbations.",
+    "We show that simply using BERT-base with Pangu is sufficient for setting a new record on standard KBQA datasets, and larger LMs further bring substantial gains."
+   ],
+   "evidence": "findings.json top_vs_accepted/intro_first_person_findings: top 1.57 vs accepted 1.12, paired diff +0.456 [95% CI +0.191, +0.719], dz +0.19, q 0.008, n=308 train pairs; held-out diff +0.459 n=133 ; rule A/B: preferred 5 vs 2 of 16 held-out units"
+  }
+ ],
+ "outlines": {}
+}

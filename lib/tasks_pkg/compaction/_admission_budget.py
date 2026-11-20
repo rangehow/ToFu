@@ -7,6 +7,13 @@ already bound. Completion policy remains in the canonical body clamp.
 from lib.tasks_pkg.compaction._tokens import _compaction_trigger_threshold, _get_context_limit
 
 
+def admission_ceiling_for_resolved_output(
+    *, window: int, window_safety: int, output: int,
+) -> int:
+    """Combine the canonical window threshold and resolved output reserve."""
+    return min(max(1, window_safety), max(1, window - output))
+
+
 def resolve_admission_budget(task, *, round_num=0, input_tokens=None):
     """Return physical safety limits, independent of economic rewrite targets.
 
@@ -52,7 +59,8 @@ def resolve_admission_budget(task, *, round_num=0, input_tokens=None):
 
         output_source = ('task_config' if type(requested_output) is int
                          and requested_output > 0 else 'model_default')
-    ceiling = min(ceiling, max(1, window - output))
+    ceiling = admission_ceiling_for_resolved_output(
+        window=window, window_safety=window_threshold, output=output)
     if task is not None:
         task['_contextBudgetDecision'] = {
             'contextWindowTokens': window,

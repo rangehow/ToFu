@@ -1599,6 +1599,29 @@ public prefix helpers, with settled and plain messages through growth,
 duplicates and an in-place rewrite; settled history encoded once; a forged
 collision still degrades), `tests/tasks_pkg/test_checkpoint_settled_row_text.py`
 and `tests/conversation_sync/test_settled_rows.py`.
+`tests/storage/test_native_frozen_batch_boundary.py` independently exercises
+production `_prepare_task_event_batch_entry` (with a controlled synthetic
+projection source) → `FrozenPayload` → native request adaptation → the normal
+storage.v2 socketpair transport. Every entry carries its own owner, task,
+attempt, projection update and revision fields. Three synthetic event objects each enter the
+value encoder once during preparation; none enters it again across a refusal,
+an explicit resend and another identical send. The peer checks exact frozen
+request bytes (including Unicode and float spelling), ascending sequences,
+unchanged command identity, distinct correlations and unchanged error/result
+bytes. Complete synthetic results include `task_event` and `task_event_count`;
+the production `_record_task_event_chunk` confirmation path accepts them and
+advances the remembered revision only after all three confirmations. Separate
+controls remove each required confirmation field and require the production
+protocol error without finishing or remembering the batch. A non-finite
+unfrozen field still refuses before any transport byte. The counter measures
+nested event-value encodes, not all envelope serialization or byte copying.
+This is client-boundary work-count evidence, not an engine timing or durability
+measurement. `turn.event.record_batch` is receipt-free under the operation
+catalog; exact-row reconciliation, not a newly introduced receipt, resolves an
+unknown outcome. Engine parsing, owner/order admission and authority-stamped
+stored event encoding remain separate responsibilities. No engine change or
+claim of removing further duplicate whole-batch encoding follows from this test.
+
 `benchmarks/turn_event_persist_encode.py` (300 rounds, Python 3.12.13, identical
 request, row and checkpoint digests in every arm) measured calling-thread CPU
 per event, before/after on the tree that already shares settled rows in lane

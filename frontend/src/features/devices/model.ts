@@ -56,18 +56,25 @@ export interface DevicePermissions {
   home: Tiers;
   device: Tiers | null;
   effective: Tiers;
-  rev?: number;
+  /** Revision of the owner's shared device-policy record (zero before its first write). */
+  rev: number;
 }
 
 export interface PermissionsView {
   permissions: Record<string, DevicePermissions>;
-  rev?: number;
+  rev: number;
   liveness_window_s?: number;
 }
 
 export interface DefaultsView {
   defaults: Partial<Record<DefaultKind, string | null>>;
   rev?: number;
+}
+
+export interface DefaultsWriteResponse {
+  defaults: Record<DefaultKind, string | null>;
+  rev: number;
+  execution: 'applied' | 'refused' | 'unavailable' | 'not_split';
 }
 
 export interface WireBrowserClient {

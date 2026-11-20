@@ -65,6 +65,26 @@ def _stored(scheduler, tmp_path, *, extra_artifact=None):
     return receipt, data
 
 
+def test_start_admits_and_forwards_venue_year(app, monkeypatch):
+    from routes.api_v1 import paper_builds
+    calls = []
+    def start(payload, *, owner_user_id):
+        calls.append((payload, owner_user_id))
+        return {'task_id': 'paper-task', 'document_id': 'a' * 64, 'subscriber_id': 'viewer'}
+    monkeypatch.setattr(paper_builds, 'start_preview', start)
+    async def run():
+        client = app.test_client()
+        response = await client.post('/api/v1/paper/builds', json={
+            'source': 'local', 'conv_id': 'c', 'path': 'main.tex', 'venue_year': 2027,
+            'request_id': 'edit-1', 'subscriber_id': 'viewer'},
+            headers={'X-Test-Owner': '7'})
+        assert response.status_code == 202
+    asyncio.run(run())
+    assert calls == [({'source': 'local', 'conv_id': 'c', 'path': 'main.tex',
+                       'venue_year': 2027, 'request_id': 'edit-1',
+                       'subscriber_id': 'viewer'}, 7)]
+
+
 def test_start_requires_auth_scope_and_explicit_owner(app, monkeypatch):
     from routes.api_v1 import paper_builds
     calls = []

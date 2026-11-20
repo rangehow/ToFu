@@ -94,7 +94,9 @@ def main():
                              ('RouterOwnerDelegationState', 'ownerDelegationState'),
                              ('RouterOwnerDelegationRequest', 'ownerDelegationRequest'),
                              ('RouterOfficeFact', 'officeFact'),
-                             ('RouterOfficeFacts', 'officeFacts')]:
+                             ('RouterOfficeFacts', 'officeFacts'),
+                             ('RouterOwnerQuestionConfirmRequest', 'ownerQuestionConfirmRequest'),
+                             ('RouterOwnerQuestionConfirmation', 'ownerQuestionConfirmation')]:
         router += f'export type {name} = ' + ts(router_schema['$defs'][definition], router_schema) + ';\n'
     for output, generated in ((OUTPUT, content), (ROUTER_OUTPUT, router)):
         if args.check:

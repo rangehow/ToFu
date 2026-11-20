@@ -6,23 +6,41 @@ from uuid import uuid4
 
 import pytest
 
-from lib.storage_authority_sql.operations_pkg import _runs
+from lib.storage.errors import StorageError
+from lib.storage_authority_sql.operations_pkg import _runs, _swarm_teardown
+from lib.swarm.persistence_contract import SWARM_RUN_RESULT_FORMAT, SWARM_RUN_RESULT_NAMESPACE, swarm_run_result_key
 from tests.storage_authority_sql.test_native_checkpoint_storage import backend as backend
 from tests.storage_authority_sql.test_native_checkpoint_handoff import TransactionClient
 
 pytestmark = pytest.mark.unit
 
 
-def save(client, task_id):
-    return client.command('swarm.session.save', dict(swarm_key='swarm', task_id=task_id,
-        specs=[], config={'user_id': 7}, now_ms=1), str(uuid4()))
+def header(task_id):
+    return dict(swarm_key='swarm', task_id=task_id, specs=[], config={'user_id': 7}, now_ms=1)
+
+
+def checkpoint(run_id):
+    return dict(swarm_key='swarm', run_id=run_id, agent_id='worker',
+        status='completed', messages=[], result={'final_answer': 'evidence'},
+        delivered=False, now_ms=2)
 
 
 def seed(client):
-    save(client, 'old')
-    client.command('swarm.agent.save', dict(swarm_key='swarm', agent_id='worker',
-        status='completed', messages=[], result={'final_answer': 'evidence'},
-        delivered=False, now_ms=2), str(uuid4()))
+    client.command('swarm.session.save', header('old'), str(uuid4()))
+    client.command('swarm.agent.save', checkpoint('old'), str(uuid4()))
+    client.command('record.put', dict(namespace=SWARM_RUN_RESULT_NAMESPACE,
+        key=swarm_run_result_key(7, 'old', 'worker'), value=dict(format=SWARM_RUN_RESULT_FORMAT,
+            ownerId=7, tenantId='', conversationId='', swarmKey='swarm', swarmRunId='old',
+            agentId='worker', role='', objective='', status='completed',
+            result={'final_answer': 'evidence'})), str(uuid4()))
+
+
+def replace_run(session, task_id):
+    assert _swarm_teardown.delete_exact(session, dict(swarm_key='swarm', run_id='old',
+        owner_id=7, tenant_id='', conversation_id='', project_path='',
+        disposition='replacement'))['deleted']
+    assert _runs._swarm_session_save(session, {**header(task_id), 'save_mode': 'launch'})['saved']
+    _runs._swarm_agent_save(session, checkpoint(task_id))
 
 
 def acknowledge(client, task_id):
@@ -34,7 +52,11 @@ def acknowledge(client, task_id):
 def test_replacement_refuses_stale_ack_and_current_ack_is_repeatable(backend, current_task):
     client = TransactionClient(backend)
     seed(client)
-    save(client, current_task)
+    with pytest.raises(StorageError, match='exact teardown'):
+        client.command('swarm.session.save', header(current_task), str(uuid4()))
+    backend.command('test.swarm.replace', '', None, 'user',
+                    lambda session: replace_run(session, current_task),
+                    time.monotonic()+20, receipt_required=False)
     assert acknowledge(client, 'old') == {'acknowledged': False, 'changed': 0}
     row = client.query('swarm.session.get', {'swarm_key': 'swarm'})
     assert not row['agents'][0]['delivered']
@@ -48,8 +70,7 @@ def test_replacement_commit_fences_an_ack_already_waiting_on_storage(backend):
     seed(client)
     entered, release, submitted = threading.Event(), threading.Event(), threading.Event()
     def replace(session):
-        _runs._swarm_session_save(session, dict(swarm_key='swarm', task_id='new',
-            specs=[], config={'user_id': 7}, now_ms=3))
+        replace_run(session, 'new')
         entered.set()
         assert release.wait(10)
     def ack():

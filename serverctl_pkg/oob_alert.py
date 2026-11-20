@@ -7,11 +7,12 @@ never signals, restarts or writes a Tofu process or Tofu data. Each tick
 (``PROBE_INTERVAL_S``) it reads:
 
 - ``GET /api/ready`` on the loopback application port, the readiness probe
-  the manager uses (process memory only). 200 is healthy. A 503 carries the
-  storage snapshot (``state``; ``degraded`` once the restart breaker latched).
-  No answer means the API host is not serving, unless the probe only timed
-  out while the manager's own readiness check passes (its state file,
-  written this interval): that is slow, not down (``manager_ready``).
+  the manager uses (process memory only), under the readiness liveness
+  contract (``readiness_liveness``: per-probe deadline, run of consecutive
+  timeouts). 200 is healthy. A 503 carries the storage snapshot (``state``;
+  ``degraded`` once the restart breaker latched). A refused or reset
+  connection means the API host is not serving. A deadline expiry is slow,
+  not down, until the contract's run of consecutive expiries completes.
 - the manager's ``GET /status?probe=0`` (its recorded state; no live probe),
   only while the API host does not answer.
 - the lines appended since the last tick to ``logs/server-console.log``
@@ -86,8 +87,14 @@ from typing import Any, Callable
 # bound let the 628 s outage of 2026-11-13 02:08 pass), a latched breaker at once.
 PROBE_INTERVAL_S = 60.0
 ALERT_AFTER_S = 600.0
-# The manager's readiness probe deadline (server_manager.probe_application_readiness).
-READY_PROBE_TIMEOUT_S = 2.0
+# The readiness liveness contract (serverctl_pkg/readiness_liveness.py; docs/modules/infra_runtime.md,
+# "Readiness liveness contract"). This file also runs as a standalone installed copy, so it mirrors the
+# owner's values; test_named_constants_match_their_owning_sources pins them.
+READINESS_PROBE_DEADLINE_SECONDS = 10.0
+READINESS_TIMEOUT_RUN = 3
+# The manager's recorded state (/status?probe=0): no probe runs, and the manager's own probes run
+# outside its lifecycle lock, so the read itself is the whole wait.
+MANAGER_STATUS_TIMEOUT_S = 2.0
 # The manager's own restart record (server_manager.MANAGER_STATE_FILE under data/, read_restart_outcome):
 # the lastRestart that serverctl status shows, and its in-progress outcomes.
 MANAGER_STATE_FILE = Path('data') / 'server-manager-state.json'
@@ -171,6 +178,9 @@ class Probe:
     detail: str
     latched: str = ''  # why recovery needs a human (a latched breaker), else ''
     restart: dict[str, Any] = dataclasses.field(default_factory=dict)  # planned_restart() when unavailable
+    latency: float | None = None  # seconds to the answer, or to the deadline; None when injected
+    timeouts: int = 0  # consecutive deadline expiries including this probe
+    since: float = 0.0  # first probe of the current timeout run, else 0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -209,7 +219,7 @@ def http_get_json(url: str, timeout: float) -> tuple[int | None, Any, str]:
 def _manager_view(config: Config, http: Callable[[str, float], tuple[int | None, Any, str]]) -> tuple[str, str]:
     """``(detail, latched)`` from the manager's recorded worker state."""
     query = urllib.parse.urlencode({'projectPath': str(config.tofu_root), 'probe': '0'})
-    status, body, error = http(f'{config.manager_url}/status?{query}', READY_PROBE_TIMEOUT_S)
+    status, body, error = http(f'{config.manager_url}/status?{query}', MANAGER_STATUS_TIMEOUT_S)
     if status != 200 or not isinstance(body, dict):
         return f'manager status unavailable ({error or f"HTTP {status}"})', ''
     observed = str(body.get('observed') or 'unknown')
@@ -297,27 +307,19 @@ def planned_restart(tofu_root: Path) -> dict[str, Any]:
             'exitAt': exited, 'message': str(restart.get('message') or '')[:300]}
 
 
-def manager_ready(tofu_root: Path, now: float) -> bool:
-    """Whether the manager's own readiness check passes, by the record it wrote within this probe interval.
-
-    ``server_manager`` probes its worker every few seconds and records the
-    verdict (``observed`` degraded and ``unreadySince`` while unready). A
-    record not written within ``PROBE_INTERVAL_S`` is no evidence: the
-    manager itself may be stuck.
-    """
-    written, state = _manager_state(tofu_root)
-    return (bool(state) and now - written <= PROBE_INTERVAL_S and state.get('desired') == 'running'
-            and state.get('observed') == 'running' and not _seconds(state.get('unreadySince')))
-
-
 def probe(config: Config, *, now: Callable[[], float] = time.time,
           http: Callable[[str, float], tuple[int | None, Any, str]] = http_get_json,
-          restart: Callable[[Path], dict[str, Any]] = planned_restart) -> Probe:
+          restart: Callable[[Path], dict[str, Any]] = planned_restart,
+          previous: dict[str, Any] | None = None) -> Probe:
+    """One readiness probe; ``previous`` is the last probe (``dataclasses.asdict``), which carries the timeout run."""
     at = now()
-    status, body, error = http(config.api_url + '/api/ready', READY_PROBE_TIMEOUT_S)
+    began = time.monotonic()
+    status, body, error = http(config.api_url + '/api/ready', READINESS_PROBE_DEADLINE_SECONDS)
+    latency = round(time.monotonic() - began, 3)
+    run, since = 0, 0.0
     if status is not None and isinstance(body, dict):
         if status == 200 and body.get('ready') is True:
-            return Probe(at, True, 'ready', 'ready')
+            return Probe(at, True, 'ready', 'ready', latency=latency)
         storage = body.get('storage') if isinstance(body.get('storage'), dict) else {}
         if storage and storage.get('ready') is not True:
             state = str(storage.get('state') or 'unknown')
@@ -329,16 +331,27 @@ def probe(config: Config, *, now: Callable[[], float] = time.time,
             detail = f'/api/ready {status}: application {body.get("state") or "unknown"}'
     else:
         answered = f'HTTP {status}, {error}' if status is not None else error
-        if status is None and error.startswith('TimeoutError') and manager_ready(config.tofu_root, at):
-            # Slow, not down (2026-11-13 00:33): the manager's own readiness check is the authority.
-            return Probe(at, True, 'slow', f'/api/ready gave no answer in {READY_PROBE_TIMEOUT_S:g} s while the '
-                                           "manager's own readiness check passes: slow, not down")
+        timed_out = status is None and error.startswith('TimeoutError')
+        earlier = previous or {}
+        run = int(earlier.get('timeouts') or 0) + 1 if timed_out else 0
+        if run:
+            since = (float(earlier.get('since') or 0) if run > 1 else 0.0) or at
+        if 0 < run < READINESS_TIMEOUT_RUN:
+            # Slow is not down (readiness liveness contract; 2026-11-13 00:22 and 2026-11-18 15:26).
+            return Probe(at, True, 'slow', f'/api/ready gave no answer within {READINESS_PROBE_DEADLINE_SECONDS:g} s '
+                                           f'({run} of {READINESS_TIMEOUT_RUN} consecutive timeouts): slow, not down',
+                         latency=latency, timeouts=run, since=since)
         manager, latched = _manager_view(config, http)
-        kind, detail = 'api_unanswered', f'/api/ready did not answer ({answered}); {manager}'
+        if timed_out:
+            detail = (f'/api/ready gave no answer within {READINESS_PROBE_DEADLINE_SECONDS:g} s on {run} consecutive '
+                      f'probes; {manager}')
+        else:
+            detail = f'/api/ready did not answer ({answered}); {manager}'
+        kind = 'api_unanswered'
     record = restart(config.tofu_root)
     if record.get('outcome') == 'paused' and not latched:
         latched = f'planned restart paused by the manager: {record["message"] or "crash budget exhausted"}'
-    return Probe(at, False, kind, detail, latched, record)
+    return Probe(at, False, kind, detail, latched, record, latency=latency, timeouts=run, since=since)
 
 
 def tail_signals(logs_dir: Path, offsets: dict[str, dict[str, int]]) -> list[Signal]:
@@ -494,7 +507,7 @@ def step(state: dict[str, Any], observed: Probe, signals: list[Signal], *,
         state['lastReadyAt'] = observed.at
     else:
         if incident is None:
-            opened = min([observed.at, *(s.at for s in signals if s.kind in _OUTAGE_SIGNALS)])
+            opened = min([observed.since or observed.at, *(s.at for s in signals if s.kind in _OUTAGE_SIGNALS)])
             incident = {'id': f'inc-{int(opened)}', 'openedAt': opened, 'kind': observed.kind,
                         'detail': observed.detail, 'latched': '', 'evidence': {}, 'alert': None}
             state['incident'] = incident
@@ -1039,7 +1052,7 @@ class Watcher:
         _private_dir(state_dir)
         self.sender = sender if sender is not None else configured_sender(config)
         self.clock = clock
-        self.probe_fn = probe_fn or (lambda: probe(config, now=clock))
+        self.probe_fn = probe_fn or (lambda: probe(config, now=clock, previous=self.state.get('lastProbe')))
         self.fail_writes = fail_writes
         self.engine_alive = engine_alive
         self.repairs, self.relay, self.repair_unavailable = None, None, ''
@@ -1130,7 +1143,8 @@ class Watcher:
         self.state['probeLogDay'] = day
         incident = self.state.get('incident') or {}
         record = {'at': _iso(observed.at), 'kind': observed.kind, 'available': observed.available,
-                  'detail': observed.detail, 'incident': incident.get('id')}
+                  'detail': observed.detail, 'incident': incident.get('id'), 'latencySeconds': observed.latency,
+                  'consecutiveTimeouts': observed.timeouts}
         self._best_effort('probes.jsonl', lambda: _append(path, record))
 
     def tick(self) -> list[dict[str, Any]]:
@@ -1260,7 +1274,8 @@ def injected_probe(kind: str, at: float, restart: dict[str, Any] | None = None) 
     if kind == 'ready':
         return Probe(at, True, 'ready', 'ready')
     if kind == 'slow':
-        return Probe(at, True, 'slow', '/api/ready gave no answer in 2 s while the manager says ready (injected)')
+        return Probe(at, True, 'slow', '/api/ready gave no answer within the probe deadline, shorter than the '
+                                       'timeout run (injected)', timeouts=1, since=at)
     if kind in ('storage_unavailable', 'breaker_log'):
         return Probe(at, False, 'storage_unavailable', '/api/ready 503: storage restarting (injected)')
     if kind == 'breaker':
@@ -1354,8 +1369,8 @@ SCENARIOS: dict[str, tuple[list[str], dict[str, Any], list[tuple[str, int]]]] = 
     'failed-planned-restart-alerts-at-once': (
         ['ready', 'planned_down', 'planned_down', 'planned_paused', 'planned_paused', 'ready'],
         {'restart': {'startedAt': -60, 'exitAt': 30}}, [('alert', 3), ('recovery', 5)]),
-    # 2026-11-13 00:22-00:35: probes timed out under load while the manager's own check passed.
-    'slow-api-with-a-ready-manager-is-not-an-outage': (['ready'] + ['slow'] * 13 + ['ready'], {}, []),
+    # 2026-11-13 00:22-00:35 and 2026-11-18 15:26-15:29: slow answers under load, never an outage.
+    'slow-api-is-not-an-outage': (['ready'] + ['slow'] * 13 + ['ready'], {}, []),
 }
 
 

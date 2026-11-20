@@ -165,6 +165,9 @@ class LogicalMutationRecordingSession:
     def worker_lease_authority(self):
         return self._session.worker_lease_authority()
 
+    def utf8_bytes_sql(self, column: str) -> str:
+        return self._session.utf8_bytes_sql(column)
+
     def lock_key(self, namespace: str, key: str) -> None:
         self._session.lock_key(namespace, key)
 

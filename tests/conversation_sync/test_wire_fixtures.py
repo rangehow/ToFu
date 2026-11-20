@@ -152,6 +152,25 @@ def test_modern_sync_fixtures_decode_through_the_real_boundary():
         assert decode(schema_name, payload) is payload, schema_name
 
 
+@pytest.mark.parametrize(('path', 'mutate'), [
+    ('settlement.undeclared', lambda settlement, receipt: settlement.update(undeclared=True)),
+    ('receipt.extra', lambda settlement, receipt: receipt.update(extra=True)),
+    ('receipt.resultRevision', lambda settlement, receipt: receipt.update(resultRevision='1')),
+    ('receipt.deliveryStatus', lambda settlement, receipt: receipt.pop('deliveryStatus')),
+])
+def test_coordinator_observations_do_not_open_the_settlement_schema(path, mutate):
+    payload = _load(FIXTURES / 'sync_v3' / 'ConversationSyncSnapshot.json')
+    settlement = payload['turns'][0]['settlement']
+    observations = settlement['coordinatorWorkerObservations']
+    assignment_id, receipt = next(iter(observations.items()))
+    mutate(settlement, receipt)
+    expected_path = path.replace('receipt.', f'settlement.coordinatorWorkerObservations.{assignment_id}.')
+    with pytest.raises(ContractViolation) as exc:
+        decode('ConversationSyncSnapshot', payload)
+    assert any(problem.startswith(f'$.turns[0].{expected_path}:')
+               for problem in exc.value.violations)
+
+
 def test_legacy_observation_fixtures_fail_closed_then_adapt():
     assert _backfill_legacy_observation_attempt_ids in TURN_READ_ADAPTERS
     for schema_name in SYNC_LEGACY_BOUNDARIES:

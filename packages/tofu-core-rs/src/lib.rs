@@ -11,10 +11,18 @@
 //! (noop read and `run_command`), `store` (TofuDB storage.v2 client over
 //! `tofu_db::protocol`), `round` (the agent loop and its durable events).
 
+pub mod call_ids;
 pub mod canonical;
+pub mod engine;
+pub mod family;
 pub mod provider;
 pub mod pyjson;
+pub mod reasoning;
 pub mod round;
+pub mod route;
+pub mod schema;
 pub mod store;
+pub mod stream;
+pub mod tool_wire;
 pub mod tools;
 pub mod wire;

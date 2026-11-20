@@ -49,14 +49,7 @@ The existing `storage_performance_charter_v1.json` and
 `tofudb_charter_assess.py` own numerical acceptance. Their history-scaling,
 distracted-host and reader/writer-scaling gaps remain visible until matching
 evidence exists. The nightly `check_perf_regression.py` job measures task replay;
-it is not the native-versus-SQLite certification. Its baseline
-(`benchmarks/perf_baseline.json`) was re-recorded 2026-11-15 in the locked
-`uv sync --extra test` environment CI uses: the previous file did not
-reproduce at its own commit (91b4c7e205 measured the same 800/203/363 KiB
-peaks as HEAD, on this host and on GitHub), so it gated every run red. The
-same change stopped the per-task abort watcher from copying the whole process
-environment (`task_abort_signal._distributed_mode` reads only the mode),
-which halved `short_conversation`'s peak (95.6 → 28.7 KiB). Time gates are scaled by host speed (2026-11-18). Problem: perf-nightly failed every workload at 1.5-1.7x on code that passed hours earlier; the passing runs were on westus2/us-west-2 runners and the failing ones on eastus, with the same runner image, and a local A/B of public 75083caa against 6efe816c showed no change. Decision: the benchmark also times fixed product-free interpreter work (`reference_ms`), and current times are divided by current/baseline reference before the unchanged 1.5x gate; memory peaks are not scaled. Alternatives rejected: re-recording the baseline on a slower runner hides a real regression on a fast one; raising the ratio is a tuning knob. Focused comparison-harness
+it is not the native-versus-SQLite certification. Focused comparison-harness
 tests run in the ordinary unit suite. Full native/SQLite, actual-volume and
 process-crash receipts remain explicit verification work; no new background
 benchmark service or automatic production restart is introduced.
@@ -676,6 +669,22 @@ The existing certification source inventory includes the workload package,
 including local edits and new files. Old frozen receipts remain historical;
 omitting the new source inputs cannot qualify a report as the current checkout.
 
+`--output` is optional and names one new operation report for this invocation,
+not an update or resume destination. An occupied file, directory or symlink
+(including a dangling symlink) is refused before database reset, provenance
+capture or engine launch. That preflight is advisory: after engine teardown,
+the complete JSON is staged and synced under a short independent name in the
+existing output parent, then published with an atomic no-replace hard link and
+parent-directory sync. A racing writer cannot replace an accepted report.
+Serialization, write, sync or link failure propagates without a replacement/copy
+fallback or a success
+message. A post-publication sync or cleanup failure can leave a complete report
+at the target while the invocation fails; it does not establish that no engines
+ran. An interrupted writer can leave an unpromoted `.partial` file. The existing
+report schema and nonzero status for retained workload/startup/witness failures
+are unchanged. This single-report rule does not change incremental publication
+or explicit reuse in other runners.
+
 * `tofudb` — the native production stack: either a `tofu-db serve` process over
   storage.v2 or `--native-client embedded` through the loaded C ABI and Python
   adapter. Every report records the chosen transport.
@@ -695,6 +704,75 @@ Footprints are post-workload, before-shutdown observations, not live-payload byt
 In-process counters cover the harness: an upper bound, not device IO or isolated database amplification. Daemon startup/shutdown tails and separate authority init are excluded.
 Verified lifecycle accounting invalidates historical embedded totals reset across reopen; latency and footprint remain separate evidence.
 PostgreSQL is not a benchmark dimension (see below).
+
+Operation-runner durability qualification with `--capture-provenance` retains
+`writer_configuration_at_open` from the existing sidecar metrics receipt: the
+adapter reads PRAGMAs on the actual writer connection before handing it to the
+writer thread. A selected factory or an observer connection is not observation
+of that writer. Both before/after boundaries must observe native strict mode,
+SQLite writer WAL/FULL with fastpath inactive, and raw SQLite WAL/FULL for
+`measurement.equivalent_durability=true`. Missing observations yield `null`
+(unknown), not evidence of unequal durability; observed mismatches yield `false`
+and cannot qualify. The report keeps the raw writer receipt and derives its
+SQLite synchronous/journal fields only from that receipt. No new SQL enters a
+timed loop or observer connection, and no durability setting changes. This is a
+measurement-control repair, not a new score or performance/default verdict.
+DolphinFS comparison remains pending independent preflight; synthetic controls
+do not supply mount evidence or revise prior XFS analysis.
+
+Generic operation timing is execution evidence, not result fidelity. Within the
+existing `tofu.perf_compare.v2` report, `record_get_points` now retains
+`workloads.<name>.<engine>.result_evidence` with format
+`tofu.seeded-record-results/v1`: namespace, seed count, original seed-write
+receipts, warmup count, explicit bare/versioned response shape, and one ordered
+`{iteration, request: [operation, payload, command], result}` per timed sample.
+The oracle reconstructs every seeded key and complete stored value from the
+existing workload inputs; versioned reads must also match the original write
+receipt's version and update time. Both metadata fields must satisfy the
+canonical positive-u64 domain (`1..2**64-1`), excluding booleans, as declared in
+`contracts/tofudb_ir_v1.json`. Every versioned seed receipt is validated,
+including keys not referenced by timed samples: exact receipt shape,
+deterministic key, and positive-u64 metadata are required before sample checks.
+It checks the exact timed population against `iterations` and the ordered
+latency sample count. Clock evidence must be non-boolean, nonnegative and finite
+within the collector's binary64 range; oversized JSON integers produce a
+controlled refusal, not an integer-to-float conversion failure. Requalification
+also recomputes every scalar latency/throughput summary from those retained
+clocks using `scripts/tofudb_workloads/latency.py`, the same pure owner used by
+the collector. Missing or inconsistent mean, percentiles, extrema or throughput
+refuse qualification before either console or offline ratios. Existing rounding
+and percentile-rank rules are unchanged; this work is outside timed intervals. Missing/error/unsupported,
+malformed or mismatched evidence cannot admit an operation ratio. The offline
+charter assessor and console speedup summary each recompute this prerequisite
+from raw evidence for the particular engine pair, not from the collector's
+additive `operation_result_comparison` summary. An unqualified console row
+prints the refusal reason without a ratio or ranking label.
+
+Problem: timing alone previously discarded request results. Decision: support
+only this justified point-read oracle; retain full responses and compare their
+finite JSON exactly, preserving types, list order, duplicates and metadata.
+Object key order is not semantic. Alternatives rejected: a generic digest
+would not establish correctness; stripping record envelopes or timestamps would
+hide real response differences. Consequently production timestamp differences,
+or the raw floor's deliberately narrower response shape, refuse exact-result
+qualification rather than becoming an apparent equality. Other generic phases
+(including mutations, search and custom concurrent/recovery runners) have no
+new oracle and remain unqualified for operation ratios. Charter witness
+collectors retain their existing behavior, including their independent raw
+receipts; the assessor now also withholds witness performance verdicts until a
+justified result oracle is wired through those custom collectors. Existing
+failure/refusal evidence is retained, not replaced by a point-read receipt.
+Footprint accounting is separate and unchanged.
+
+Request snapshots are taken before the start clock; result retention follows
+the end clock; validation/comparison follows the measured loop. Both timing arms
+still contain only the same logical execution call and clock boundaries. Seed
+receipt capture changes no setup operation, payload or count. Small point-read
+copies add untimed collector work and retained bytes; summed-request latency
+still excludes that work and is not end-to-end throughput. Synthetic tests of
+this gate are not new engine measurements, a filesystem result, or a performance
+or ranking claim. Existing SQLite WAL/FULL observations and the retained
+DolphinFS refusal are neither replaced nor relaxed.
 
 Disposable native authorities own a private parent containing their data
 directory and the engine's default sibling backup directory. Problem: owning
@@ -927,6 +1005,54 @@ python3 scripts/tofudb_charter_assess.py <receipt.json> ... --json-output <a.jso
 * **No wall-clock CI gates.** This is a measurement tool, not a timing gate
   (per the script's own docstring). Results inform optimization; they do not
   fail CI.
+
+## Structural work counts (non-timing)
+
+Problem: cross-engine latency numbers answer "how long" without showing
+whether the two stacks did the same work. Decision: measure the structural
+work of one logical operation — storage statements, document decodes and
+per-turn row materializations — before attributing any timing difference.
+This is **work-count evidence, not a performance verdict**: no clock,
+throughput, durability or latency claim follows from it.
+
+The measured owner is `tests/storage_authority_sql/test_backend_structural_work.py`,
+an executable specification over fixture-owned SQLite scratch. It drives the
+real in-process SQL authority's `conversation.get` and reads three existing
+seams: SELECT and mutating statement frames that reach SQLite (`sqlite3` trace
+callback), the JSON-document decoder (`_common._load`, whichever module bound
+it), and the per-Turn row materializer (`_conversations._turn_public`, the name
+that module bound from `_turns_core` at import). The harness's own
+`BEGIN`/`ROLLBACK` and the Sidecar's client/dispatch boundary are excluded, so
+`select_statements` means "SELECT frames inside one in-process handler", not
+client round trips. Nothing in the production path is instrumented; the port
+exists only in the test.
+
+| operation | backend | SELECT statements | mutating statements | document decodes | per-turn row materializations |
+|---|---|---|---|---|---|
+| `conversation.get` full, 1 Turn | SQLite sidecar | 2 | 0 | 3 | 1 |
+| `conversation.get` full, 6 Turns | SQLite sidecar | 2 | 0 | 13 | 6 |
+| `conversation.get` metadata only, 6 Turns | SQLite sidecar | 2 | 0 | 1 | 0 |
+| `conversation.get` window of 2, 6 Turns | SQLite sidecar | 3 | 0 | 5 | 2 |
+| `conversation.get`, any | TofuDB engine | unmeasured | unmeasured | unmeasured | unmeasured |
+
+Structural reading: the sidecar issues one header `SELECT`, then either a
+lane-ordered Turn scan (full read) or a per-conversation `count(*) … GROUP BY`
+(metadata only); a bounded window adds a separate `COUNT(*)` before its
+`LIMIT`/`OFFSET` scan. Document decodes are `1 + 2 × materialized Turns`
+(conversation settings, plus settlement and projection JSON per Turn). A
+window or metadata read therefore decodes only the Turns it returns, not the
+Turns it stores.
+
+The TofuDB column is **unmeasured, not estimated**, and the boundary is
+per-counter: one `client.query('conversation.get')` is one request on both
+stacks (client round trips), but document decodes and Turn-row
+materializations on TofuDB happen inside the Rust engine with no Python seam.
+The native engine is the only seam that can observe them, and no
+source-matched engine is available in this offline environment (a native build
+is out of scope): `verify_current` refuses the installed binary, and a root
+without a source fingerprint is treated as unverifiable rather than matching.
+The test pins that observed refusal reason, so a future report cannot inherit
+estimated native numbers.
 
 ## Measured baseline (2026-09-19, production payloads)
 
@@ -1275,8 +1401,14 @@ Alternatives: larger or launch-derived slot counts retain refusals; capturing ro
 
 ## Active conversation acceptance
 
-Problem: plain reports could qualify instrumented timings, foreign delivery implementations, absent source witnesses or equal filesystem labels. Decision: acceptance checks requested and observed client/native/delivery profiling at every captured boundary, including productive start. The existing pipeline manifest binds coordinator/benchmark aliases to the full source inventory; direct/pipeline and barrier/queued modes cannot be pooled. Physical authority `stat().st_dev` witnesses must match on this same-host runner.
-Current admission requires identical complete source inventories before/after and against a freshly captured checkout, including the actual executor/resource owners, plus unchanged declared/pinned executable and loaded-library build identities. The source/artifact receipt is a provenance witness, not a new native identity implementation. Stable old binaries/coordinators retain `frozen_build_comparable` diagnostic value but not `current_source_qualified`; missing, contradictory or changed evidence refuses qualification. Unqualified pairs emit no speedup ratios. Alternatives rejected: trusting a wrapper's optimistic verdict, file mtime, the thin executor re-export or equal FUSE labels. `tofudb_benchmark_feedback_20261014.json` remains historical.
+The [source-qualified b96f3847 local XFS campaign](evidence/storage-local-xfs/current1000.md) completed two reversed-order 1,000-conversation pairs. All six rows qualified, but all four legs missed the 1 s scheduled-stream P99 ceiling: **scale FAIL**. Native stream ratios were 0.441 and 0.539. Separate diagnostic legs indicate substantial delay beyond native RPC and SQLite transaction commit timings, without isolating its cause. This is not DolphinFS evidence.
+
+The [formal 1,000-conversation, two-repeat XFS comparison](evidence/storage-local-xfs/scale1000.md) **failed scale acceptance**: each leg exceeded the 1 s scheduled-stream P99 ceiling. The pinned runner marked the rows comparable (native/SQLite stream ratios 0.426 and 0.546; repeat-0 settlement ratio 1.021), but the historical receipts do not independently establish SQLite signal exit or loaded-library stability across both repeats. Exact same-store reopen/readbacks and source inventory are independently verified; this is neither an overall win nor DolphinFS evidence.
+
+The paired workload now requires a verified owned-child SIGKILL exit for daemon crash cycles; a clean stop/reopen is not a substitute. Receipts name the killed and reopened children and the unchanged authority directory at the all-running-before-stream-release and after-settlement cutpoints. Neither tests mid-stream crash or power loss. Native daemon logs survive the final verdict, including latency-only failure. Current v5 report admission requires both signal-exit/same-store reopen receipts and a consistent process chain; a verified kill with failed reopen is retained without granting coverage. Replay historical reports with their pinned original checker, not as current qualification. New process witnesses do not retrofit old evidence.
+
+Problem: plain reports could qualify instrumented timings, foreign delivery implementations, absent source witnesses or equal filesystem labels. Decision: acceptance checks requested and observed client/native/delivery profiling at every captured boundary, including productive start. The existing pipeline manifest binds coordinator/benchmark aliases to the full source inventory; direct/pipeline and barrier/queued modes cannot be pooled. Physical authority `stat().st_dev` witnesses must match on this same-host runner. Each leg must have a distinct execution ID, lexically normalized authority path and captured device/inode pair; replay never resolves or stats paths supplied by reports. These are run receipts, not authentication of an untrusted report.
+Current admission requires identical complete source inventories before/after and against a freshly captured checkout, including the actual executor/resource owners, plus unchanged declared/pinned executable and loaded-library build identities. For SQLite, current admission separately requires SHA-256 witnesses of the SQLite and coalescing VFS files behind the owned child's Linux mappings at launch, both reopens and measurement boundaries. A path whose device/inode does not match the mapping, an absent witness, or a changed build refuses current qualification and relative ratios. The paired checker also binds each backend's qualified build across repeats; a changed native executable or SQLite/VFS hash suppresses all ratios for the mixed-build campaign. Coverage requires native `walDurability=strict` at workload metric boundaries. SQLite reports the actual writer connection's WAL/FULL settings and VFS selection at open in each incarnation; the selection probe checks the connection's main database I/O methods, not merely the loaded extension or URI. Boundary receipts bind these open-time settings to the measured process. This is not continuous configuration surveillance, per-ACK sync evidence, a Python import-origin witness, or a power-loss test. The source/artifact receipt is a provenance witness, not a new native identity implementation. Stable old binaries/coordinators retain `frozen_build_comparable` diagnostic value but not `current_source_qualified`; missing, contradictory or changed evidence refuses qualification. The paired checker requires the recorded leg sequence to alternate in runner order and the workload and physical authority device to stay fixed across repeats. SQLite writer-configuration copies at measured boundaries must agree with the source metrics and their PID/incarnation. Unqualified campaigns and rows emit no formal ratios; raw per-leg P99s remain descriptive. Admission requires explicit workload modes, consistent readiness counters and examples, and finite, nonnegative, ordered P50/P95/P99/maximum observations. Sample totals must fit the bounds implied by those statistics at the producer's exact ranks. Disabled terminal barriers must have no terminal metric or origin. Enabled terminal metrics cannot precede the last scheduled stream submission; the live barrier waits for all stream calls to return. Foreground maxima must fit their clock windows: admission through all-running, stream release through join (or the terminal snapshot start), and settlement through join from no earlier than the last scheduled arrival or, for the call clock with a barrier, snapshot completion. Queued pipeline `stream_submission` clocks are foreground calls and end no later than snapshot start when the barrier is enabled; queued `stream` clocks are push callbacks and may extend through caller join. Direct stream clocks remain foreground clocks. Scheduled settlement starts at the last scheduled arrival and includes the mandatory wait through snapshot completion in addition to the settlement call. Current summaries retain the minimum as well as the percentile ranks, maximum, count and total. Replay validates observed workload summaries, including queued aliases, and checks scheduled stream ranks and total against the per-round time available. For complete populations, scheduled stream, submission, push and settlement summaries must dominate their corresponding call or callback summaries in every retained rank and in total, including the settlement wait floor when present. Admission's enclosing total must cover the three serial accept, bind and start call totals; its rank bounds account for each other call's minimum without assuming their ranks align. Binary64 comparisons allow only operand rounding error. These are aggregate consistency bounds, not a reconstruction of individual calls or callback pairings. Only SQLite reports carry mapping witnesses, and only at the collector's declared boundaries; none is emitted at the terminal snapshot. A successful mapping witness cannot also carry a capture error. Replay requires positive Linux `pid_t` values, absolute NUL-free paths with the collector's distinct SQLite and VFS basenames, and a boolean timeout flag when present. The checker independently derives the deterministic synthetic payload hashes by index and checks the retained recovered hashes against them; it does not reopen archived stores. At least two eligible repeats are required per metric. A normal acceptance exit 1 is distinct from abnormal process exit or timeout, and an ineligible comparison is not an observed relative loss. Alternatives rejected: trusting a wrapper's optimistic verdict, file mtime, the thin executor re-export or equal FUSE labels. `tofudb_benchmark_feedback_20261014.json` remains historical.
 
 Problem: single-report assessment scanned the entire checkout even when a
 missing or unsupported provenance receipt made qualification impossible.
@@ -1299,19 +1431,56 @@ Decision. `benchmarks/conversation_compare.py` is the paired application-workloa
 acceptance entry; `conversation_concurrency_contract.json` owns its machine-readable
 coverage and engineering latency budgets. Default: 1,000 simultaneous running
 attempts, four unique 8 KiB chunks each at fixed one-second arrival intervals,
-two paired repeats with reversed backend order, and SIGKILL/reopen both while
-running and after completion. It uses the production executor, Turn facade and
+two paired repeats with reversed backend order, and two SIGKILL/reopen
+cutpoints: all Attempts running before synthetic stream release, and after settlement. It uses the production executor, Turn facade and
 client; the provider is synthetic. Every acknowledged final text is compared
 exactly. SQLite and native authorities use the same explicit scratch volume,
-strict durability, and no SQLite fastpath relocation. The raw-SQLite floor stays
+native Strict and SQLite WAL/FULL with the coalescing VFS selected, and no SQLite fastpath relocation. The raw-SQLite floor stays
 in the separate operation suite because it cannot implement application attempts.
 
-Latency starts at submission for admission, at scheduled provider arrival for stream persistence (including backlog behind preceding events), and at terminal publication for settlement. RPC service latency remains a separate diagnostic. Failed/timed-out calls stay in distributions; missing observations fail acceptance. Recovery coverage requires measured running/final restart durations, the full requested peak and running readback, an explicit crash mechanism, and successful integrity verification. Problem: a requested restart may be skipped after partial admission. Decision: require completed phase evidence. Alternative rejected: trusting request flags would certify an unexecuted crash/reopen phase. Reports also retain `phase_ms`: productive work through settlement, recovery readback, executor shutdown, sampler shutdown, verification, final freeze and temporary-authority cleanup. `verification_phase_ms` separates native freeze from offline integrity traversal, or records SQLite's online integrity check. Nested verification timings must not be added again to their parent duration; `wall_seconds` remains the complete run. `restart_ms` is separate from productive load unless the restart intentionally occurs while attempts are running. The resource-observation scope ends after readback, before offline verification and cleanup. A fast streaming percentile cannot hide a slow verification/teardown phase. Older reports without these fields cannot identify such an outlier's cause; retain the observation without inventing an attribution. Initial budgets: admission P99 ≤ 5 s, scheduled stream P99 ≤ 1 s, settlement P99 ≤ 5 s; these are requirements, not claims that the engine currently meets them. Correctness, coverage, absolute latency and per-metric SQLite parity are separate verdicts. No average score offsets a failure. Readiness failures retain startup/productive phase and bounded component details. The CLI saves each failed leg and returns nonzero for incomplete/slow evidence. Unit CI tests verdict behavior, not machine timing. Standalone embedded SIGKILL: `python3 benchmarks/embedded_process_recovery.py --binary /path/to/tofu-db --directory /scratch --output /tmp/embedded-recovery.json` verifies running/final state; it does not upgrade in-process coverage or certify latency. Success cleans temporary state; `--retain-authority` preserves it. Run operator acceptance:
+Latency starts at submission for admission, at scheduled provider arrival for stream persistence (including backlog behind preceding events), and at entry to the timed settlement `record_task_event` call for `settle`. That call clock excludes prior scheduling and barrier wait; the separate `settle_scheduled` clock starts at the last scheduled provider arrival. Formal settlement parity uses `settle`. RPC service latency remains a separate diagnostic. Failed/timed-out calls stay in distributions; missing observations fail acceptance. Recovery coverage requires measured running/final restart durations, the full requested peak and running readback, an explicit crash mechanism, and successful integrity verification. Problem: a requested restart may be skipped after partial admission. Decision: require completed phase evidence. Alternative rejected: trusting request flags would certify an unexecuted crash/reopen phase. Reports also retain `phase_ms`: productive work through settlement, recovery readback, executor shutdown, sampler shutdown, verification, final freeze and temporary-authority cleanup. `verification_phase_ms` separates native freeze from offline integrity traversal, or records SQLite's online integrity check. Nested verification timings must not be added again to their parent duration; `wall_seconds` remains the complete run. `restart_ms` is separate from productive load unless the restart intentionally occurs while attempts are running. The resource-observation scope ends after readback, before offline verification and cleanup. A fast streaming percentile cannot hide a slow verification/teardown phase. Older reports without these fields cannot identify such an outlier's cause; retain the observation without inventing an attribution. Initial budgets: admission P99 ≤ 5 s, scheduled stream P99 ≤ 1 s, settlement P99 ≤ 5 s; these are requirements, not claims that the engine currently meets them. Correctness, coverage, absolute latency and per-metric SQLite parity are separate verdicts. No average score offsets a failure. Readiness failures retain startup/productive phase and bounded component details. The CLI saves each failed leg and returns nonzero for incomplete/slow evidence. Unit CI tests verdict behavior, not machine timing. Standalone embedded SIGKILL: `python3 benchmarks/embedded_process_recovery.py --binary /path/to/tofu-db --directory /scratch --output /tmp/embedded-recovery.json` verifies running/final state; it does not upgrade in-process coverage or certify latency. Success cleans temporary state; `--retain-authority` preserves it. Run operator acceptance:
 
 ```bash
 python3 benchmarks/conversation_compare.py --binary /path/to/tofu-db \
   --directory /path/on/dolphinfs/scratch --output /tmp/conversation-paired.json
 ```
+
+### Local checkpoint correctness control (not scale acceptance)
+
+The [four-conversation XFS receipts](evidence/storage-local-xfs/README.md) did not exercise a checkpoint (SQLite peaked at 740/773 frames). Use two complementary controls: the existing paired runner with 64 conversations and `--carry-stream-events --repeats 1 --leg-timeout 90` on fresh private XFS, and `tests/storage_authority_sql/test_sqlite_checkpointer.py::test_continuous_writes_restart_the_wal`. Keep four 8-KiB chunks, one-second arrivals, the 30-second RPC contract, no fastpath relocation, native Strict and SQLite WAL/FULL with coalescing VFS. The test's two producers cross the real 4,096-frame threshold behind a pinned reader; it requires actual partial backfill, a stable reader snapshot, complete backfill after release, WAL restart on the next write, exact rows and `integrity_check=ok`. A counter alone is insufficient: writer pass counters record PASSIVE attempts and `writer_frames` charges the requested remainder, not necessarily frames copied. Neither control kills during a live checkpoint or simulates power loss.
+
+[Compact execution receipt](evidence/storage-local-xfs/checkpoint-control.json) and [original 64-conversation evidence archive](evidence/storage-local-xfs/active64-original.tar.gz), observed on `/dev/md0p1` XFS, Python 3.12.13, at `e0fa2da38cb6a9f5e641e99540606ef7723336b1` (tree `a27bcd01f50374ff778e08f5382e46cc499ca50d`):
+
+| Control | WAL / checkpoint evidence | Recovery and integrity |
+|---|---|---|
+| Paired SQLite | Before productive writes: 0/0 background/writer passes. Before final reopen: peak 4,454 frames; 4 background passes, 4,228 frames backfilled, 2 writer attempts (278 requested frames), 0 failed passes, empty last error | 256 stream events; 64/64 running and 64/64 completed after the respective reopens; 64/64 exact texts and carried replays; `ok`, 0 workload errors |
+| Paired TofuDB | Effective `strict`; `walEncodedBytes=18,293,442` at the corresponding pre-final-reopen boundary (bytes, not SQLite frames) | Same counts and exact texts/replays; offline `verify` exit 0, `wal_tail_truncated_bytes=0`, `missing_blocks=0`, 0 workload errors |
+| SQLite pinned reader | WAL index `(5390,349)` under the pinned reader; eventual full backfill at 5,394 frames, then index `(4,0)` after restart; 19 background passes, 5,394 frames backfilled, 2 writer attempts, 0 failed passes, empty last error | Exact 4,666 ordered `(id,payload)` rows, IDs 0–4,665 with 3,500-digit zero-padded decimal payloads; payload concatenation SHA-256 `4972bcd6fad15f82f1ccf674b83b0f75c28aa3b785a5610226c3c827359e6c75`; `integrity_check=ok` |
+
+Historical SQLite signal delivery and exit at both cutpoints are unknown; the v2 runner could stop cleanly and reopen. The exact same-store readbacks and checkpoint counts do not distinguish those mechanisms. Actual historical SQLite writer settings are unknown; WAL/FULL is the runner's policy label. Separately from the zero workload counters, the 64-conversation native console records 64 settlement-drain failures; the SQLite console records one retry and 64 deferred wakes. Their eventual outcomes are unknown, and these logs do not negate the checkpoint observations or exact readbacks.
+
+The historical runner marked both legs current-source qualified, but the pair and both legs exited 1: 64 < 1,000 and one repeat < two; the aggregate's “did not meet SQLite P99” messages are eligibility failures (`comparable=false`, null ratios), not observed relative losses. Keep the formal verdict unchanged and draw no performance winner from this pair. Exact-state and replay counts are the original readback oracle results; the paired disposable authorities were cleaned up, not archived. An exploratory 32-conversation run was also below threshold (2,720 frames) and failed source stability while edits overlapped it; it is not qualified evidence. The paired runner emits hashes of **recovered** content by fixture index. An independent fixture generator (no runner import) used `SHAKE-256(ASCII("index:sequence")).digest(4096).hex()` for sequences 0–3; all 64 per-index hashes matched both runs. Its sorted compact JSON digest is `2baa6e6a67e3ffc76b8fa8cc42a072c3749a38330285d2da3c5c6ea4976ba9ab`. Runner SHA-256 `08ff673ab01aaf4fec2a4861d03cb78b60e720442a4df58ab4b4f172819eb999`; stable canonical source inventory SHA-256 `5c9b86972d5bc71fff2a59c6385a8ce573fc78eb5f7d003c0d32b66d7a845617`. Reused native bytes `566b212bf7aafa30db7f5d2dee6b0f4aadd12cdbb7fb4c0dae76de360be42c1c` matched the prior attestation; the compiled and independently recomputed checkout fingerprint both were `443fdee4ce2136e2fbf90e64e0a0316e9667a898d22645e06106fde1f62b78e1`. Coalescing VFS SHA-256 `dd34ae99db3617770a565b11467784e69a77f2e8e2da4684e964e63424ce9d17`.
+
+For `scripts/tofudb_load_test.py` (a separate workload), the real re-exec uses the declaring checkout's Python source, a private cwd/data/project and source-admitted pinned engine before offline seed or supervisor launch. Ordinary children remove `FAULTFS_*` and the standard `faultfs.so` preload entry; `--faultfs` explicitly restores them for intentional emulation. Preserve `LIBBGFS_*` and other `LD_PRELOAD` entries so this fix does not silently switch the DolphinFS route. The flag governs child staging, not libraries already loaded into the invoking shell/process; start a local control with a clean parent loader environment. Separate explicit fault fixtures remain unchanged. The local staging probes supplied sentinel fault and connection variables: neither actual measuring child nor authority retained them. The SQLite sidecar ran `-m lib.storage_authority_sql`; the native launcher exec'd the pinned bytes (verified via `/proc/<pid>/exe`) and passed the private authority directory. Both staging probes exited 0; ancillary dispatch drains logged unavailable at teardown, so these probes establish route/isolation, not zero errors. The focused suite passed 192 tests, including explicit FaultFS temporary-file and I/O-count fixtures. Local child route and checkpoint controls do not establish DolphinFS allocation, routing or interference safety.
+
+The ordinary `test_launched_synthetic_arm_binds_actual_private_roots_and_staging`
+specification adds launch evidence without a new report receipt or admission rule.
+Both backend labels execute the identical harmless Python fixture under the load
+runner's child environment, not either storage engine. It observes open-directory
+inodes, a bound private Unix endpoint, an actual temporary file and its staging
+parent, and the live child's PID/executable/command through the existing identity
+observer, with a separate equality check between the fixture's PID and the
+observer's PID. A forged matching requested/Popen command still fails against the
+actual child, including when it omits trailing empty arguments. The observer
+removes exactly one cmdline terminator, preserving empty arguments. The tested
+missing `cmdline` and `executable` fields are rejected; this does not assert
+validation of every collected identity field. Existing environment and path
+checks alone would not exercise that boundary. This is executable local
+preparation parity, not a report that qualifies timing, durability, operations or
+relative performance; the existing report qualifiers remain authoritative.
+No fresh DolphinFS disposable allocation and coordination window is established
+by this test or the prior route preflight. A real comparison still requires that
+independent allocation fact; no campaign or production observation is performed.
 
 The settings panel remains a bounded microbenchmark: P99/max/sample/error counts
 are visible, small samples are labeled indicative, and capacity is always
@@ -1828,8 +1997,9 @@ settlement herd. Its throughput falls on the write path:
 - its point reads stay fast only because they bypass the writer;
 - seeding the fixture took 1,049 s, against TofuDB's 46.5 s.
 
-TofuDB wins every latency and throughput row at every scale. It loses on
-resident memory, at 6-16x the Sidecar's RSS. The earlier micro-suite results
+The reported native latency cells were lower and throughput cells higher;
+this was Normal versus SQLite FULL, not an equal-durability result. Native
+resident memory was 6–16× the Sidecar's RSS. The earlier micro-suite results
 still hold: about 2x the Sidecar's durable footprint, and point-read P99
 above raw SQLite.
 
@@ -2043,8 +2213,12 @@ matches the local record: same host, same seed (0.2x, 1,404 Turns, 229 MB),
 r1, Sidecar r2, TofuDB r2). The Sidecar used its optimized defaults (WAL,
 `synchronous=FULL`). TofuDB used the same engine source as the local record
 (`source_sha256` 5cb942c407fe, built with the FMG toolchain and certified
-with `--prepare-only`), production's engine settings and
-`--durability strict`. `faultfs` ran with `FAULTFS_FSYNC_US=0`, so it
+with `--prepare-only`) and production's engine settings. The harness requested
+`--durability strict`, but the pre-fix launcher dropped an explicit Strict
+setting. Effective TofuDB durability is **unverified (likely Normal)**: the
+automatic tier on DolphinFS selected Normal in the later reproduction, and
+these per-leg reports are gone. This is not an equal-durability comparison.
+`faultfs` ran with `FAULTFS_FSYNC_US=0`, so it
 injected nothing and only counted in-scope barriers and the time spent in
 the real call (`medium_ns`).
 
@@ -2097,7 +2271,7 @@ directory with production's preload, against local XFS (p50/p99 ms):
 A bare 4 KiB `fdatasync` costs 0.22-0.26 ms p50. The 72-77 ms measured on
 2026-11-15 is not this volume's behavior today.
 
-Results after the fix, p50/p99 ms, r1 · r2:
+Results after the temporary-file fix, p50/p99 ms, r1 · r2:
 
 | leg | load1 min/median/max | in-scope barriers | time in barriers | mean barrier |
 |---|---|---|---|---|
@@ -2106,7 +2280,7 @@ Results after the fix, p50/p99 ms, r1 · r2:
 | Sidecar r2 | 7.8 / 27.8 / 43.4 | 11,633 | 12.5 s | 1.07 ms |
 | TofuDB r2 | 10.6 / 25.2 / 71.6 | 25,651 | 18.7 s | 0.73 ms |
 
-| op | scale | Sidecar | TofuDB strict |
+| op | scale | Sidecar FULL | TofuDB (effective tier unverified) |
 |---|---|---|---|
 | turn.event.record | 1x | 11.4/281 · 11.3/211 | 1.46/62 · 1.60/64 |
 | | 3x | 13.5/469 · 13.3/942 | 1.48/66 · 1.52/122 |
@@ -2135,42 +2309,25 @@ Results after the fix, p50/p99 ms, r1 · r2:
 | failed requests | | r1 5x: 15 `database_timeout` (settlement herd); otherwise 0 | 0 · 0 |
 | seed (229 MB) | | 103 s · 100 s | 6.9 s · 4.8 s |
 
-The first run, with the temporary-file defect, gave the same ranking. For
-example, Sidecar `claim_next` at 1x was 193/372 · 183/234 ms and its 5x
-throughput 1,432 · 1,428 ops/s, against TofuDB's 8.8/12 · 7.3/29 ms and
-1,689 · 1,689 ops/s, with lower host load (median 7-15). The Sidecar's
-writer-bound tails are therefore not an artifact of that defect or of the
-second run's higher host load. The second run's load was uneven, with
-Sidecar legs at median 28-29 and TofuDB at 11 and 25. Even at its 71.6
-peak it stayed far below the 180 CPUs, and the CPU-starvation signature
-above needs a run queue several times the available CPUs.
+The first run, with the temporary-file defect, reported Sidecar `claim_next`
+at 1x of 193/372 · 183/234 ms and 5x throughput of 1,432 · 1,428 ops/s;
+TofuDB reported 8.8/12 · 7.3/29 ms and 1,689 · 1,689 ops/s. Host load
+also differed: median 7–15 in the first run, versus 28–29 for Sidecar and
+11 and 25 for TofuDB in the second.
 
-Verdict on the real volume:
-
-- **TofuDB wins every write-bound operation by 7-100x at p50, and the gap
-  is several times the emulated one.** Locally, Sidecar `claim_next` was 2x
-  TofuDB's; on DolphinFS it is 8-16x. `complete` is seconds against
-  ~100 ms, and the end-of-phase settlement herd takes 4.6-12 s against
-  44-290 ms. Streamed events are 7-18x faster at p50 (1.5 vs 11-29 ms).
-- **Throughput: TofuDB keeps up at every scale; the Sidecar does not at
-  5x.** At 1x the two are level (335-337 vs 340-341 ops/s). At 3x the
-  Sidecar falls 6% behind (952-955 vs 1,016-1,017 ops/s), and at 5x it
-  completes 1,482-1,545 vs 1,686-1,689 ops/s, 93-108 vs 109 Turns. One
-  Sidecar 5x leg failed 15 settlement writes with `database_timeout`.
-- **Point reads: close at p50; TofuDB has tighter tails.** `record.get` is
-  0.25-0.30 vs 0.22-0.25 ms; p99 at 5x is 2.7-4.6 vs 0.93-0.99 ms. Reads
-  hit both stores' caches, so the medium barely shows.
-- **The Sidecar wins no operation**, as on local disk. TofuDB again issues
-  more barriers (about 26 k vs 11 k).
+These are historical observations as reported, not independently verified
+raw cells. One Sidecar 5x leg reported 15 `database_timeout` failures during
+settlement. No backend ranking follows: Normal can acknowledge before the
+WAL sync that SQLite FULL waits for. Use the qualified November 18 1x
+cohort below for the matched acknowledged-commit boundary.
 
 **Measured sync cost against the 0.77 ms model.** The average in-scope
 barrier cost 0.39-0.73 ms for TofuDB and 1.04-1.07 ms for the Sidecar under
 load, so barrier latency alone brackets the model. A bare 4 KiB `fdatasync`
 is cheaper than the model (0.22-0.26 ms); a Sidecar fsync also flushes the
-WAL frames written before it. Barriers do not explain the Sidecar's
-slowdown, though: they took 11.6-12.5 s over the whole Sidecar leg (seed
-plus three 90 s phases). The model
-charged only barriers and missed the cost of every write call. On DolphinFS
+WAL frames written before it. Sidecar barriers took 11.6-12.5 s over the
+whole leg (seed plus three 90 s phases). These totals do not decompose
+client latency. The model charged only barriers and omitted write calls. On DolphinFS
 a 4 KiB append costs 0.18 ms even without a sync, against 0.001 ms
 locally. A 60 s 1x phase per store, counted with a diagnostic interposer
 on the in-scope calls:
@@ -2180,15 +2337,10 @@ on the in-scope calls:
 | Sidecar | 119,497 `pwrite` (2.4 KB avg) | 25.8 s (0.22 ms each) | 1,198 `fsync` | 1.3 s | 252,810 `pread`, 2.9 s |
 | TofuDB | 2,521 `write` (106 KB avg) | 2.7 s (1.07 ms each) | 2,833 | 1.2 s | 15,767, 1.5 s |
 
-SQLite issues one write per page: a WAL frame per dirty page at commit, and
-again at every checkpoint. Its single writer thread, which also runs the
-inline checkpoints, therefore spent about 40% of the window inside
-`pwrite`. TofuDB appends large sequential buffers,
-about 50x fewer calls for the same bytes. The 0.77 ms model is a fair
-barrier model, but it understates the Sidecar's real DolphinFS cost by
-about 20x, because 95% of that cost is per-write, not per-sync. Seeding shows
-the same thing: on DolphinFS the Sidecar takes 100-103 s against TofuDB's
-5-7 s, while the same Sidecar seed takes 5.8 s on local disk.
+The diagnostic Sidecar leg spent 25.8 s in counted writes versus 1.3 s in
+counted barriers. The 0.77 ms barrier-only model does not include that
+write work. These instrumented call totals are not a decomposition of
+client quantiles or a controlled comparison of backend durability costs.
 
 Not covered: the rerun shared the volume (not the directory) with the live
 production engine. Nothing under the live checkout was opened, but
@@ -2304,12 +2456,13 @@ revision that adds the shim. Nothing else differs. The scratch directory
 checkout and was removed. Host load (1-minute, median) was 4.5 · 7.2 for
 the stock legs and 6.2 · 10.1 for the coalescing legs, so the coalescing
 legs ran on the busier host. No TofuDB legs ran (no engine on production's
-volume); its columns are the TofuDB strict numbers above, from the same host
-and volume earlier the same day. All four legs had 0 failed requests.
+volume); the TofuDB column repeats the earlier same-host, same-volume
+results with unverified effective durability. It is historical context, not a
+paired comparison with coalescing. All four Sidecar legs had 0 failed requests.
 
 p50/p99 ms, r1 · r2:
 
-| op | scale | Sidecar stock | Sidecar coalescing | TofuDB strict (above) |
+| op | scale | Sidecar stock | Sidecar coalescing | TofuDB (effective tier unverified, above) |
 |---|---|---|---|---|
 | turn.event.record | 1x | 11.3/223 · 11.1/199 | 2.82/149 · 2.82/156 | 1.46/62 · 1.60/64 |
 | | 3x | 12.5/730 · 12.3/771 | 3.00/329 · 3.07/250 | 1.48/66 · 1.52/122 |
@@ -2339,27 +2492,26 @@ Verdict:
 
 - **Coalescing is a large, structural win for the Sidecar on DolphinFS.**
   Streamed events are 4-6x faster at p50 (2.8-4.0 against 11-26 ms) with
-  p99 roughly halved. `claim_next` is 2.8-5x faster, heartbeats at 5x
+  paired p99 reductions of 21.6–67.6% (1x r2: 199 → 156 ms). `claim_next` is 2.8-5x faster, heartbeats at 5x
   14-25x, and the 3x/5x settlement herd 1.1-4.7x. Seeding is 2.6x faster. Write calls fall
   2.7x and the time inside them 2.4x. What remains is mostly checkpoint
   writes, which copy scattered pages into the database file one call each,
   and frame writes split by reads that spill back. The shim leaves both to
   stock SQLite on purpose.
 - **Throughput:** +2-3% at 3x and +4-7% at 5x, with about 6% more events at
-  5x. That is 98% of TofuDB's throughput at 3x and 94-96% at 5x, against
-  95% and 89-91% stock.
-- **`worker_job.complete` was bimodal.** p50 improved at 1x and 5x but was
+  5x, comparing the two Sidecar builds only.
+- **`worker_job.complete` varied by round.** p50 improved at 1x and 5x but was
   1,978 ms in coalescing r2 at 3x (stock 192-234 ms).
 - **`turn.create_pair` at 1x regressed**, 444-517 against 106-154 ms p50
   in both rounds.
-- Both had one cause, an inline checkpoint holding the writer; the next
-  section finds it and removes most of its cost.
-- **TofuDB still wins every write-bound operation.** At p50 it is 1.9-2.5x
-  faster for events, 1.3-30x for `complete`, 3-5x for `claim_next` and
-  16-45x for the settlement herd. The remaining Sidecar gap is SQLite's
-  single writer, which also runs the inline checkpoints and the per-page
-  checkpoint writes. Coalescing narrows that gap but does not change the
-  ranking.
+Diagnostic legs observed inline checkpoints holding the writer. This is a
+possible mechanism, not an attribution for the tabulated legs. That would
+require same-leg, timestamp-joined evidence separating checkpoints from
+unrelated host contention. The November 17 raw cells remain unverified.
+
+The TofuDB column is retained only as historical context. It came from a
+separate campaign with unverified durability and does not establish a backend
+ranking or the cause of a cross-backend gap.
 
 Not covered: the legs shared the volume (not the directory) with the live
 production engine. One production `conversation.search` query was already
@@ -2468,20 +2620,17 @@ Verdict:
 - **`turn.create_pair` at 1x is fixed:** 39-40 ms against stock's 111-516.
   At 3x and 5x the fixed arm is at or below stock in three of four cells;
   fixed r2 at 3x (317 ms) is inside stock's 170-330 range.
-- **`worker_job.complete` is no longer seconds-bimodal, but its 1x/5x p50
-  still moves with checkpoint placement.** Every fixed cell is at or below
-  the matching stock round except 1x r1 (403 against 75-161 ms), where a
-  checkpoint landed right after the 1x herd. Its worst p50 fell from
-  1,978 ms (previous coalescing) and 3,325 ms (stock) to 1,234 ms; the
-  remaining spread is the checkpoint the herd's commit triggers, now
-  0.1-0.9 s instead of 0.3-6 s.
+- **`worker_job.complete` still varied.** The largest reported fixed p50
+  was 1,234 ms, against 3,325 ms for stock and 1,978 ms in the separate
+  prior coalescing campaign. Retained quantiles do not establish modality
+  or attribute the spread to checkpoints.
 - **The earlier gains hold and grow:** events 4-8x faster at p50 with p99
-  27-73% lower, the settlement herd 2.4-26x faster, `claim_next` 2.7-3x,
+  12.8–72.3% lower across paired cells (1x r2: 164 → 143 ms), the settlement herd 2.4-26x faster, `claim_next` 2.7-3x,
   heartbeats 17-21x at 5x, seeding 6x, throughput +2-3% at 3x and +8-10%
   at 5x, and write calls 4.1x fewer than stock. Reads are unchanged.
-- What is left of the stall is SQLite's design: one writer that runs the
-  checkpoint inline, with page runs that are only as long as the B-tree
-  allows (about 12 pages on this workload).
+Inline checkpoints can hold SQLite's single writer, as observed in the
+diagnostics. The displayed cells alone do not establish the cause of the
+remaining stalls.
 
 Reproduce: as in the section above, with `--duration 60`; the diagnostic
 commit log and call log were throwaway patches and are not in the tree.
@@ -2556,11 +2705,14 @@ Verdict:
   the paired stock leg in five of eight cells, but a3 1x (142 against 93),
   a4 1x (434 against 117) and a4 3x (673 against 246) are worse. Its
   spread (35-673 ms) is smaller than stock's (93-3,984) but it is still
-  not flat; the diagnostic legs place it on DolphinFS contention between
-  the concurrent copy and the writer, and on writer-side remainders.
-- Streamed events are 2.7-8x faster at p50 in nine of twelve cells (stock
-  a2 aside, which collapsed); the three slower new cells (a1 5x, a4 3x/5x,
-  87-281 ms) ran while host load rose past 119-211.
+  not flat. Diagnostic legs observed checkpoint copies and writer-side
+  remainders; they do not establish causes for these tabulated cells.
+- Streamed-event p50 improved in nine of twelve paired cells, by
+  2.68–547.42×. Excluding the entire stock a2 block leaves six of nine
+  improvements at 2.68–7.58×. The three slower new cells (a1 5x, a4 3x/5x)
+  coincided with high host load. Checkpoint activity and unrelated host
+  contention can both delay the writer; distinguishing them requires
+  same-leg, timestamp-joined evidence.
 - The comparison with the previous coalescing build (`dd9df40406`) was
   not run: host load stayed at 230-310 afterwards and production showed
   storage retries from 20:01.
@@ -2571,6 +2723,262 @@ Verdict:
   150-300. The pre-leg log gate skipped two legs at 18:59.
 
 Reproduce: the ABAB legs as above with `--duration 60 --scales 1,3,5`.
+
+### Low-load (1x) completion and settlement, 600 s legs (2026-11-18)
+
+**Problem:** the earlier 1x `worker_job.complete` legs were short and ran
+on a busy host. Terminal recording at phase stop is a separate outcome from
+natural settlement; completion itself was not split in the pinned harness.
+
+**Method.** `scripts/tofudb_load_test.py --scales 1 --duration 600
+--seed-scale 0.2 --request-profile`, a fresh root per leg in
+`FMG/your-username/tofu-1x-scratch-20261118/` on the production volume
+through production's preload client (removed afterwards; no live root or
+process was touched). Arms: the tuned Sidecar (WAL, `synchronous=FULL`,
+coalescing VFS, checkpoints beside the writer, host-local temporary files)
+and TofuDB `--durability strict`. These match at the acknowledged-commit
+boundary: SQLite FULL syncs the WAL before committing a transaction (a
+writer batch can share one transaction); TofuDB Strict waits for WAL sync
+covering the acknowledged commit (physical syncs may cover multiple commits).
+The arms need not issue the same number of syncs or use the same physical
+transaction grouping. Sidecar timings include its production `storage.v1`
+keep-alive RPC; native timings include its daemon client/transport. The
+client clock spans the storage call through its returned result; terminal
+`record_task_event` also includes caller-side trace/projection work. It is
+not a provider-to-browser or whole-Agent measure. Both ran from one
+`git archive 32892b97b3` export (the commit of the certified engine
+`44455223d8c6`, binary `ef62515fe1c4`) plus the launcher fix below.
+Alternating legs (ABBA after a round boundary), one driver
+(`output/tofudb-1x-completion-20261118/campaign.py`). Validity rule, fixed
+before the first leg: exit 0, 1-minute `/proc/loadavg` sampled every 5 s
+never above 64 (about a third of the 180 CPUs), and, from 16:47, no other
+storage load test on the host. A leg started only after load1 < 30 for
+60 s. The numbered campaign ran from 09:03 to 18:12; six legs qualify for
+the Strict/FULL comparison, plus one supplementary Normal leg:
+
+| excluded | reason |
+|---|---|
+| 01, 04-08, 10-12, 14-16, 22 | load1 peak 104-223 (bursts of 170-220 runnable `python` threads from other agents' test fan-outs, ~15 s each; this campaign's own legs held 0-3 R/D threads) |
+| 02 | engine admission refused: a server restart re-certified `$TOFUDB_BIN` for newer source mid-campaign (no measurement) |
+| 19, 20 | excluded for overlap with another worker's `tofudb_load_test` on the same volume (`tofu-bench-dfs/`); 20 also overlapped this campaign's local-disk caller probe |
+| 23 | both foreign storage load-test overlap and load1 peak 64.36 > 64 |
+| aborted 12-normal | killed when the driver was replaced (no measurement) |
+| 03, 08, 10 | supplementary `--durability normal` arm (production's automatic tier on DolphinFS); dropped from the rotation at 13:15, only 03 valid |
+
+For leg 20, use the ledger start of 16:36:32; the exclusion note says
+16:35:35, which is not corroborated. The foreign sampler records overlap
+from 16:37:27, after either start. The qualifying comparison order was
+native 09, SQLite 13/17/18, native 21/24: not balanced ABBA after exclusions.
+Validity is not evidence of an interference-free leg (see leg 09 below).
+
+Two server restarts happened during the campaign (not caused by it); no
+legs were in flight. The engine split is TofuDB's
+`system.metrics.requestProfile` (dispatch per operation, phase-edge
+deltas). The Sidecar has no per-operation server profile; its writer
+COMMIT latency is cumulative from the seed. The retained native phase metrics
+independently report `walDurability: strict` for legs 09, 21 and 24. The
+harness's SQLite `wal_durability` field is a configured label, not a live
+PRAGMA read; verify WAL/FULL against the pinned writer setup, not that field
+alone. Each qualifying leg seeded the same 1,404 Turns (228,969,071 bytes)
+and used the same workload profile; timed execution and counts can differ.
+
+p50/p90 ms per qualifying leg, load1 before/median/peak/after. This is an
+instrumented configuration comparison: `--request-profile` sets
+`TOFU_DB_REQUEST_PROFILE_EVERY=1` only for native; the SQLite branch returns
+before that setting. Native profiling adds observer overhead; a profile-off
+claim would need a small matched control. The ops/s denominator is elapsed
+wall time from before thread start until after all join attempts, including
+phase-stop drain, not a fixed 600 s.
+
+| leg | arm | load1 | mixed `worker_job.complete` | natural `turn.event.record:terminal` (n) | phase-stop herd p50 | ops/s |
+|---|---|---|---|---|---|---|
+| 09 | TofuDB strict | 5.7 / 6.7 / 17.5 / 7.0 | 1.99 / 8.28 | 26.4 / 60.0 (53) | 54 | 340 |
+| 13 | Sidecar | 15.8 / 15.3 / 37.3 / 20.4 | 3.90 / 60.4 | 18.3 / 63.6 (52) | 471 | 331 |
+| 17 | Sidecar | 19.9 / 17.7 / 28.8 / 20.4 | 4.48 / 86.7 | 19.4 / 66.4 (53) | 222 | 337 |
+| 18 | Sidecar | 21.9 / 27.3 / 44.5 / 49.6 | 5.39 / 583 | 21.6 / 157 (51) | 669 | 336 |
+| 21 | TofuDB strict | 21.1 / 19.9 / 34.2 / 19.9 | 2.97 / 18.9 | 31.2 / 966 (51) | 56 | 336 |
+| 24 | TofuDB strict | 26.5 / 27.4 / 34.3 / 26.4 | 1.99 / 12.5 | 27.0 / 43.9 (52) | 56 | 332 |
+| 03 | TofuDB normal (suppl.) | 14.7 / 11.8 / 18.5 / 15.2 | 1.22 / 10.9 | 26.6 / 52.5 (51) | 54 | 338 |
+
+Per arm, min-max over the three valid legs:
+
+| metric | Sidecar | TofuDB strict |
+|---|---|---|
+| mixed `worker_job.complete` p50 | 3.90-5.39 | 1.99-2.97 |
+| mixed `worker_job.complete` p90 | 60-583 | 8.3-18.9 |
+| natural settlement p50 | 18.3-21.6 | 26.4-31.2 |
+| natural settlement p90 | 64-157 | 44-966 |
+| phase-stop herd p50 | 222-669 | 54-56 |
+| `turn.create_pair` p50 | 4.0-5.1 | 3.5-4.9 |
+| completed ops/s | 331-337 | 332-340 |
+
+**Observed in this cohort:** the retained mixed completion and phase-stop
+herd cells are lower for TofuDB, and the retained natural-settlement p50
+cells are lower for SQLite. This is descriptive, not a backend-wide verdict.
+The pinned harness splits terminal recording but not completion: each leg
+contains 21 phase-stop settlements and 72–74 completions in total. Natural-only
+completion quantiles cannot be recovered; synchronized-stop writer contention
+is a competing explanation for tails. Tag completion at the same natural/stop
+boundary and compare matched blocks before drawing a natural-completion conclusion.
+Regression status is unknown: the November 9 comparison lacks raw data and a
+durability tier. The retained November 18 quantiles are reported summaries,
+not the original samples.
+
+**Pooled profile, not per-settlement attribution.** Phase-edge request-profile
+deltas give the following means: subtract the before snapshot from the
+after snapshot in exclusive stage nanoseconds, then divide by the operation
+request-count delta and by 10⁶. Completion's server denominators are
+73 / 69 / 71, not its client sample counts of 74 / 72 / 73. Native
+`event.list` includes 74/72/73 requests versus 53/51/52 natural terminals.
+
+| Native leg | completion dispatch | `wal_barrier_wait` | `event.list` `vfs_read` | `event.list` `vfs_open` |
+|---|---:|---:|---:|---:|
+| 09 | 1.746 | 1.278 | 32.140 | 7.140 |
+| 21 | 38.058 | 37.521 | 20.201 | 602.921 |
+| 24 | 1.538 | 1.128 | 12.283 | 1.410 |
+
+The completion means do not decompose client p50. SQLite's per-leg writer
+COMMIT maxima (13/17/18: 15,090.682 / 440.879 / 1,229.150 ms) include seed
+and are not joined to completion calls; they do not explain its p90 by
+themselves. Both backends' settlement caller can issue `event.list` while
+folding the trace. Native's roughly 153–158 `vfs_read` instrumentation calls
+per `event.list` request are not verified physical DolphinFS reads. In leg
+21, mean open time substantially exceeded read time. Neither these aggregates
+nor concurrent packing establish that relocated payloads caused the gap.
+A causal comparison needs per-settlement caller spans joined to server
+operations, separating queue, open, routing, payload reads and projection.
+
+**Foreground read scope.** `indexed_stream::list`
+selects positions then reads their stream segments; `stream::read_persisted_positions`
+shares a read for positions in the same segment but reads each distinct
+verified segment separately. Selective projection avoids omitted body
+materialization, not the segment read that verifies its type and timestamp.
+The existing [history routing slices](TOFUDB_BLOCK_READ_PATH.md#history-routing-slices-2026-11-13)
+reduce routing bytes per lookup, not these payload reads. The GC traversal
+batch shares routing work, but is not a foreground range reader. Packed
+blocks are ordered by content ID, not event sequence. A deterministic VFS
+fixture commits four one-event stream blocks and packs them with one
+unrelated block. It takes two two-block selections from the actual pack
+offsets: one same-source contiguous run and two same-source gapped runs.
+The fixture drives the same persisted-position reader as `event.list`, with
+entity directory warmed, the block/index caches disabled, and segment
+read handles cleared. Its verified point-read assertions are one open,
+two index-entry reads and two payload reads in either case. The adjacent
+payload-only probe (resolved offsets supplied as setup) checks two separate
+reads versus one combined read, with one open either way. Splitting the
+combined bytes recovers each verified block and its exact content ID; a
+changed byte fails the ID check. The retired pack's stale range returns
+not-found, and the ordinary reader resolves the replacement and preserves
+sequence and event bytes. The confirmed run recorded one open and zero
+reads at the stale locator, then one open and eight reads on the verified
+replacement path. These are VFS counts in a constructed fixture,
+not physical DolphinFS counts, a frequency estimate for adjacent ranges,
+or latency evidence. No production pack batching change was made.
+
+**Filtered pages: decode only selected index values.** The exact/prefix
+reader still uses bounded scans per type, but merges using sequence numbers
+in the ordered keys before decoding values. Only selected values are
+validated against their key; physical stream integrity and projection
+checks still run. This avoids up to `T × L` typed value decodes for `T`
+dense types and a page of size `L`, without changing the scan count or
+adding a tuning parameter. In the skewed limit-2 fixture, two scans return
+four rows but only two values decode. Malformed B/11 does not fail the
+first page; explicitly paging to it fails, as does a selected key/value
+sequence mismatch. Exact/prefix, cursor and selective payload projection
+are checked against scratch SQLite and native. A one-row-at-a-time merge
+was not needed; it would trade away the existing range-scan efficiency.
+This does not explain the historical 1x settlement result: the trace caller
+uses `payload_types` without a type filter.
+
+Focused verification (disposable fixtures; no deployment or benchmark):
+
+```sh
+python3 scripts/remote_cargo.py -C packages/tofu-db test --locked --offline --lib -- \
+  indexed_stream:: selected_stream_blocks_have_counted_physical_adjacency_and_retirement_fallback event_list_ --nocapture
+python3 scripts/remote_cargo.py -C packages/tofu-db \
+  --after-build debug/tofu-db scripts/tofudb_filtered_page_oracle.sh \
+  build --locked --offline --bin tofu-db
+```
+
+The after-build check exercises identical native-daemon and file-backed
+SQLite Sidecar requests for ordering, continuation, literal prefix matches,
+and selective projection. Corruption is injected separately at each backend's
+own decode seam; the SQLite fault concerns JSON and the native fault concerns
+an index value, not a claim that their on-disk representations are identical.
+
+**Launcher defect found and fixed.** `native_launch._durability_args`
+turned `TOFU_DB_DURABILITY=strict` into no flag, so the engine's automatic
+tier served `normal` on DolphinFS: a `--durability strict` smoke leg here
+reported `walDurability: normal`. An explicit value now reaches the daemon
+(`test_native_launch_durability_unset_keeps_engine_tier_and_strict_is_explicit`).
+Production sets no `TOFU_DB_DURABILITY` and is unaffected. The November 17
+real-DolphinFS columns therefore do not claim verified Strict; the older
+reported values are retained unchanged. The local-disk comparison of record
+probes `strict` and is unaffected.
+
+Not covered: production latency was not monitored during the legs. Its
+`app.log` shows storage retries (`database_unavailable`, waits up to 21 s)
+in bursts at 12:12-12:13, 12:35-12:36 and 13:57-13:58, 40-170 s into
+TofuDB legs 07, 09 and 15 (seed and phase start), and also at 09:32,
+10:23, 12:23, 13:11 and 14:20 with no leg running; none during TofuDB legs
+03, 05, 12, 19, 21 and 24 or after 14:30. The legs may have contributed
+on a loaded host; that is not established.
+
+Raw evidence: `output/tofudb-1x-completion-20261118/` has 23 phase reports
+(`<leg>/report.json`), with phase metrics and per-leg load/run logs where
+recorded. Admission failure 02 and `aborted-12-tofudb-normal` have no phase
+report. Keep `legs.jsonl`, `exclusions.json`, `rd_samples.log`, and
+`foreign_samples.log` for validity and interference checks. Git delivery
+`108f60ac9bdf218f605b6076dc4bc8cefbd2287c` binds assignment
+`bec9bb18-27ff-514d-b310-19d484fef23a` to checkpoint
+`6cf72f55ad6ddb7e3b03010a151588e8fa8a61f4` and records this evidence location.
+
+**Replay the retained analysis, without launching storage.** From a checkout
+with the registered shared `output:` root mounted, set `E` to its
+`tofudb-1x-completion-20261118` directory (not a private worktree's `output/`
+if that is not the registered root). Copy only the analyzer and its
+inputs to fresh host-local scratch. The analyzer writes both summaries in
+the copy; the original evidence stays read-only:
+
+```sh
+E="${SHARED_OUTPUT_ROOT:?set to the registered output root}/tofudb-1x-completion-20261118"
+R=$(mktemp -d /tmp/tofudb-1x-replay.XXXXXXXX)
+(
+  set -eu
+  cp "$E/analyze.py" "$E/legs.jsonl" "$E/exclusions.json" "$R/"
+  for report in "$E"/*/report.json; do
+    leg=$(basename "$(dirname "$report")")
+    mkdir "$R/$leg"
+    cp "$report" "$R/$leg/"
+    metrics="$E/$leg/metrics-1x.json"
+    if [ -f "$metrics" ]; then cp "$metrics" "$R/$leg/"; fi
+  done
+  python3 "$R/analyze.py" > "$R/replay.log"
+)
+```
+
+Read `$R/summary.md` and `$R/summary.json`. The analyzer's rate sums all
+operation rows, including `:error` rows when present; the six qualifying
+Strict/FULL legs had none and zero stragglers. In ledger order their counts
+were 204,296 / 198,538 / 202,430 / 201,953 / 201,337 / 199,320.
+
+The analyzer trusts the ledger and manual exclusions, transcribes stored
+quantiles, and repeats the stale leg 20 exclusion text. It does not verify
+validity, reconstruct percentile ranks, or calculate the stage table. Run
+`python3 scripts/check_tofudb_1x_evidence.py "$E"` for a read-only check
+of the retained cohort, counts and stage table against the source JSON.
+
+**Historical launch inputs, not a replay command.** The RPC deadline is
+20 s per attempt. Each thread gets a separate 120 s join timeout; that is
+not a global drain bound. Base checkout/export:
+`32892b97b3063ec731535c04d1bf5e34a441bc43` with the Strict passthrough fix
+recorded in `91c13e72c14d73a80d9f86d622301984f5af73a5`. The retained
+`tofu-db.pinned` SHA-256 is
+`ef62515fe1c486ca8cc36511ace8254a2ff5b58f1eb048d1d436a16c24afbeff`.
+Do not invoke retained `campaign.py` to replay: it uses the existing
+ledger, binary and fixed volume root and can launch more legs. A fresh
+DolphinFS campaign would require separate approval, a new driver/output and
+scratch root, and a current interference check.
 
 ## TofuDB hot paths on the production DolphinFS client (2026-11-15)
 

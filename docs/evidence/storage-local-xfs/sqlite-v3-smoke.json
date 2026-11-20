@@ -1,0 +1,264 @@
+{
+  "measured_commit": "e30bdb1d89",
+  "scope": "private local-XFS SQLite v3 correctness smoke; not a scale rerun",
+  "exit_code": 1,
+  "format": "tofu.conversation-concurrency/v3",
+  "filesystem": "xfs",
+  "authority": {
+    "backend": "sqlite",
+    "authority_directory": "/tmp/tofu-1500000196-tmp/79d7b6bdbaa4/fairdb-v3-final.DpRvA9k1/db/legacy-perf-sqlite-4c2mw5v_/a1aebb6d",
+    "volume_device": 66314,
+    "filesystem": "xfs",
+    "durability": "strict",
+    "rpc_deadline_seconds": 30,
+    "crash_scope": "sigkill",
+    "sqlite_fastpath": {
+      "active": false,
+      "reason": "disabled by TOFU_STORAGE_FASTPATH=off",
+      "benchmark": {}
+    },
+    "journal": "WAL, synchronous=FULL"
+  },
+  "conversations": 4,
+  "rounds": 4,
+  "observed_stream_events": 16,
+  "recovered_running": 4,
+  "recovered_completed": 4,
+  "recovered_exact_content": 4,
+  "integrity_returncode": 0,
+  "error_count": 0,
+  "crash_recovery_receipts": {
+    "all_running_before_stream_release": {
+      "killed_pid": 190431,
+      "exit_code": -9,
+      "authority_directory": "/tmp/tofu-1500000196-tmp/79d7b6bdbaa4/fairdb-v3-final.DpRvA9k1/db/legacy-perf-sqlite-4c2mw5v_/a1aebb6d",
+      "reopened_pid": 190533
+    },
+    "after_settlement": {
+      "killed_pid": 190533,
+      "exit_code": -9,
+      "authority_directory": "/tmp/tofu-1500000196-tmp/79d7b6bdbaa4/fairdb-v3-final.DpRvA9k1/db/legacy-perf-sqlite-4c2mw5v_/a1aebb6d",
+      "reopened_pid": 191040
+    }
+  },
+  "sqlite_loaded_artifacts": {
+    "launch": {
+      "pid": 190431,
+      "vfs": {
+        "path": "/tmp/tofu-sqlite-vfs-1500000196/33faedec9c01a473f119d01d/tofu_wal_coalesce.so",
+        "sha256": "dd34ae99db3617770a565b11467784e69a77f2e8e2da4684e964e63424ce9d17"
+      },
+      "sqlite": {
+        "path": "/mnt/your-fs",
+        "sha256": "8dff10728c8d99958faa7e724048158b8df05fc1f9836845f42adb48e40afe4a"
+      }
+    },
+    "admission_storage_metrics": {
+      "pid": 190431,
+      "vfs": {
+        "path": "/tmp/tofu-sqlite-vfs-1500000196/33faedec9c01a473f119d01d/tofu_wal_coalesce.so",
+        "sha256": "dd34ae99db3617770a565b11467784e69a77f2e8e2da4684e964e63424ce9d17"
+      },
+      "sqlite": {
+        "path": "/mnt/your-fs",
+        "sha256": "8dff10728c8d99958faa7e724048158b8df05fc1f9836845f42adb48e40afe4a"
+      }
+    },
+    "reopen_running": {
+      "pid": 190533,
+      "vfs": {
+        "path": "/tmp/tofu-sqlite-vfs-1500000196/33faedec9c01a473f119d01d/tofu_wal_coalesce.so",
+        "sha256": "dd34ae99db3617770a565b11467784e69a77f2e8e2da4684e964e63424ce9d17"
+      },
+      "sqlite": {
+        "path": "/mnt/your-fs",
+        "sha256": "8dff10728c8d99958faa7e724048158b8df05fc1f9836845f42adb48e40afe4a"
+      }
+    },
+    "productive_start_storage_metrics": {
+      "pid": 190533,
+      "vfs": {
+        "path": "/tmp/tofu-sqlite-vfs-1500000196/33faedec9c01a473f119d01d/tofu_wal_coalesce.so",
+        "sha256": "dd34ae99db3617770a565b11467784e69a77f2e8e2da4684e964e63424ce9d17"
+      },
+      "sqlite": {
+        "path": "/mnt/your-fs",
+        "sha256": "8dff10728c8d99958faa7e724048158b8df05fc1f9836845f42adb48e40afe4a"
+      }
+    },
+    "storage_metrics": {
+      "pid": 190533,
+      "vfs": {
+        "path": "/tmp/tofu-sqlite-vfs-1500000196/33faedec9c01a473f119d01d/tofu_wal_coalesce.so",
+        "sha256": "dd34ae99db3617770a565b11467784e69a77f2e8e2da4684e964e63424ce9d17"
+      },
+      "sqlite": {
+        "path": "/mnt/your-fs",
+        "sha256": "8dff10728c8d99958faa7e724048158b8df05fc1f9836845f42adb48e40afe4a"
+      }
+    },
+    "reopen_final": {
+      "pid": 191040,
+      "vfs": {
+        "path": "/tmp/tofu-sqlite-vfs-1500000196/33faedec9c01a473f119d01d/tofu_wal_coalesce.so",
+        "sha256": "dd34ae99db3617770a565b11467784e69a77f2e8e2da4684e964e63424ce9d17"
+      },
+      "sqlite": {
+        "path": "/mnt/your-fs",
+        "sha256": "8dff10728c8d99958faa7e724048158b8df05fc1f9836845f42adb48e40afe4a"
+      }
+    },
+    "final": {
+      "pid": 191040,
+      "vfs": {
+        "path": "/tmp/tofu-sqlite-vfs-1500000196/33faedec9c01a473f119d01d/tofu_wal_coalesce.so",
+        "sha256": "dd34ae99db3617770a565b11467784e69a77f2e8e2da4684e964e63424ce9d17"
+      },
+      "sqlite": {
+        "path": "/mnt/your-fs",
+        "sha256": "8dff10728c8d99958faa7e724048158b8df05fc1f9836845f42adb48e40afe4a"
+      }
+    }
+  },
+  "acceptance": {
+    "policy": "tofu.conversation-concurrency-policy/v2",
+    "correctness_passed": true,
+    "current_source_qualified": true,
+    "frozen_build_comparable": true,
+    "provenance": {
+      "current_source_qualified": true,
+      "frozen_build_comparable": true,
+      "failures": [],
+      "frozen_failures": []
+    },
+    "latency_comparison_eligible": true,
+    "latency_passed": true,
+    "coverage_passed": false,
+    "passed": false,
+    "metrics": {
+      "submit_to_running": {
+        "p99_ms": 383.37136059999466,
+        "budget_ms": 5000,
+        "samples": 4,
+        "expected_samples": 4,
+        "passed": true
+      },
+      "stream_scheduled": {
+        "p99_ms": 84.0693861246109,
+        "budget_ms": 1000,
+        "samples": 16,
+        "expected_samples": 16,
+        "passed": true
+      },
+      "settle": {
+        "p99_ms": 45.0524277985096,
+        "budget_ms": 5000,
+        "samples": 4,
+        "expected_samples": 4,
+        "passed": true
+      }
+    },
+    "failures": [],
+    "coverage_gaps": [
+      "conversations: 4 < 1000"
+    ],
+    "uncovered": [
+      "real-provider-capacity",
+      "browser-send-to-visible-feedback",
+      "sustained-soak"
+    ]
+  },
+  "prior_overlapping_edit_smoke": {
+    "exit_code": 1,
+    "sqlite_provenance": {
+      "current_source_qualified": false,
+      "frozen_build_comparable": false,
+      "failures": [
+        "provenance sources changed during measurement",
+        "provenance does not match the complete current checkout source inventory"
+      ],
+      "frozen_failures": [
+        "provenance sources changed during measurement"
+      ]
+    },
+    "sqlite_loaded_artifacts": {
+      "launch": {
+        "pid": 106771,
+        "vfs": {
+          "path": "/tmp/tofu-sqlite-vfs-1500000196/33faedec9c01a473f119d01d/tofu_wal_coalesce.so",
+          "sha256": "dd34ae99db3617770a565b11467784e69a77f2e8e2da4684e964e63424ce9d17"
+        },
+        "sqlite": {
+          "path": "/mnt/your-fs",
+          "sha256": "8dff10728c8d99958faa7e724048158b8df05fc1f9836845f42adb48e40afe4a"
+        }
+      },
+      "admission_storage_metrics": {
+        "pid": 106771,
+        "vfs": {
+          "path": "/tmp/tofu-sqlite-vfs-1500000196/33faedec9c01a473f119d01d/tofu_wal_coalesce.so",
+          "sha256": "dd34ae99db3617770a565b11467784e69a77f2e8e2da4684e964e63424ce9d17"
+        },
+        "sqlite": {
+          "path": "/mnt/your-fs",
+          "sha256": "8dff10728c8d99958faa7e724048158b8df05fc1f9836845f42adb48e40afe4a"
+        }
+      },
+      "reopen_running": {
+        "pid": 107049,
+        "vfs": {
+          "path": "/tmp/tofu-sqlite-vfs-1500000196/33faedec9c01a473f119d01d/tofu_wal_coalesce.so",
+          "sha256": "dd34ae99db3617770a565b11467784e69a77f2e8e2da4684e964e63424ce9d17"
+        },
+        "sqlite": {
+          "path": "/mnt/your-fs",
+          "sha256": "8dff10728c8d99958faa7e724048158b8df05fc1f9836845f42adb48e40afe4a"
+        }
+      },
+      "productive_start_storage_metrics": {
+        "pid": 107049,
+        "vfs": {
+          "path": "/tmp/tofu-sqlite-vfs-1500000196/33faedec9c01a473f119d01d/tofu_wal_coalesce.so",
+          "sha256": "dd34ae99db3617770a565b11467784e69a77f2e8e2da4684e964e63424ce9d17"
+        },
+        "sqlite": {
+          "path": "/mnt/your-fs",
+          "sha256": "8dff10728c8d99958faa7e724048158b8df05fc1f9836845f42adb48e40afe4a"
+        }
+      },
+      "storage_metrics": {
+        "pid": 107049,
+        "vfs": {
+          "path": "/tmp/tofu-sqlite-vfs-1500000196/33faedec9c01a473f119d01d/tofu_wal_coalesce.so",
+          "sha256": "dd34ae99db3617770a565b11467784e69a77f2e8e2da4684e964e63424ce9d17"
+        },
+        "sqlite": {
+          "path": "/mnt/your-fs",
+          "sha256": "8dff10728c8d99958faa7e724048158b8df05fc1f9836845f42adb48e40afe4a"
+        }
+      },
+      "reopen_final": {
+        "pid": 107287,
+        "vfs": {
+          "path": "/tmp/tofu-sqlite-vfs-1500000196/33faedec9c01a473f119d01d/tofu_wal_coalesce.so",
+          "sha256": "dd34ae99db3617770a565b11467784e69a77f2e8e2da4684e964e63424ce9d17"
+        },
+        "sqlite": {
+          "path": "/mnt/your-fs",
+          "sha256": "8dff10728c8d99958faa7e724048158b8df05fc1f9836845f42adb48e40afe4a"
+        }
+      },
+      "final": {
+        "pid": 107287,
+        "vfs": {
+          "path": "/tmp/tofu-sqlite-vfs-1500000196/33faedec9c01a473f119d01d/tofu_wal_coalesce.so",
+          "sha256": "dd34ae99db3617770a565b11467784e69a77f2e8e2da4684e964e63424ce9d17"
+        },
+        "sqlite": {
+          "path": "/mnt/your-fs",
+          "sha256": "8dff10728c8d99958faa7e724048158b8df05fc1f9836845f42adb48e40afe4a"
+        }
+      }
+    }
+  }
+}

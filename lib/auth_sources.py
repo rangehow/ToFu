@@ -428,7 +428,7 @@ def _ensure_loaded() -> None:
 def _persist() -> None:
     global _cache_mtime
     payload = {'version': _STORE_VERSION, 'sources': list(_cache)}
-    update_json_atomic(_STORE_PATH, lambda _: payload, default=payload)
+    update_json_atomic(_STORE_PATH, lambda _: payload, default=payload, mode=0o600)
     # Our own write must not look like someone else's: record the new mtime so
     # the next read trusts the cache we just updated in memory.
     _cache_mtime = _store_mtime()

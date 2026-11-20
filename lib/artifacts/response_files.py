@@ -132,7 +132,8 @@ def envelope(data):
                        'data': base64.b64encode(data).decode('ascii')}, separators=(',', ':'), sort_keys=True)
 
 
-def publish_file(path, title='', *, conv_id, user_id, roots, task_id='', cancelled=None):
+def publish_file(path, title='', *, conv_id, user_id, roots, task_id='', cancelled=None,
+                 expected_output_digest=None):
     """Persist bytes, return stable public receipt; caller emits artifact event."""
     _check_cancelled(cancelled)
     from lib.artifacts.core import create_artifact, public_meta
@@ -140,6 +141,9 @@ def publish_file(path, title='', *, conv_id, user_id, roots, task_id='', cancell
     if not isinstance(title, str) or len(title) > 300:
         raise ValueError('title must be text of at most 300 characters')
     data = read_project_file(path, roots, cancelled=cancelled)
+    if (expected_output_digest is not None
+            and hashlib.blake2b(data, digest_size=32).hexdigest() != expected_output_digest):
+        raise ValueError('File differs from the task write receipt')
     fmt, info = file_info(data, Path(path).name)
     content = envelope(data) if fmt == 'file' else data.decode('utf-8', errors='strict')
     _check_cancelled(cancelled)

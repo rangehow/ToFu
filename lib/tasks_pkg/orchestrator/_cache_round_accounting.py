@@ -45,6 +45,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from lib.cost import is_responses_usage
+from lib.llm.stream_result import ProviderStreamState
 from lib.log import get_logger
 from lib.tasks_pkg.invocation import is_child_invocation
 from lib.tasks_pkg.cache_tracking._detect import detect_cache_break
@@ -136,6 +138,13 @@ def stamp_round_cache_accounting(
     record_model_activity(task)
     if not (task.get('convId') and usage):
         return
+    completed = ProviderStreamState.PROVIDER_FINISHED.value
+    if is_responses_usage(usage) and usage.get('_stream_state', completed) != completed:
+        # Terminal metering on a rejected stream may remain payable, but
+        # is not the cache observation for the adopted round.
+        if api_rounds and api_rounds[-1].get('round') == round_num + 1:
+            bind_round_prompt_admission(task, api_rounds[-1], round_num=round_num)
+        return
 
     owner_user_id = task_user_id(task)
 
@@ -184,6 +193,8 @@ def stamp_round_cache_accounting(
         cache_prefix_hwm_sink=cache_prefix_hwm_sink,
         last_turn_cache_read_sink=last_turn_cache_read_sink,
     )
+    # The verified live observation now owns the L1 boundary.
+    (task.get('config') or {}).pop('_modelReplayProtectedCount', None)
     # Codex's private Responses endpoint can step back exactly one or more
     # 1,024-token implicit breakpoints while the sent wire remains append-only.
     # The generic detector deliberately ignores sub-2k fluctuations, so carry

@@ -83,10 +83,11 @@ class TestParsePdfWarningReflectsCause:
         self._require_pymupdf()
         import lib.pdf_parser.core as core
         # Force the "installed but version-incompatible" state regardless of
-        # the host's actual pymupdf4llm state.
-        monkeypatch.setattr(core, 'HAS_PYMUPDF4LLM', False)
-        monkeypatch.setattr(core, 'PYMUPDF4LLM_UNAVAILABLE_REASON',
-                            'version/ABI mismatch: Requires PyMuPDF 1.27.2.3')
+        # the host's actual pymupdf4llm state. Availability is resolved lazily
+        # on each parse, so patch the resolver core consumes.
+        monkeypatch.setattr(
+            core._pdf_common, 'pymupdf4llm_status',
+            lambda: (False, 'version/ABI mismatch: Requires PyMuPDF 1.27.2.3'))
         result = core.parse_pdf(_tiny_pdf_bytes(), max_images=0)
         joined = ' '.join(result['warnings'])
         assert 'version/ABI mismatch' in joined
@@ -95,9 +96,9 @@ class TestParsePdfWarningReflectsCause:
     def test_not_installed_warning_text(self, monkeypatch):
         self._require_pymupdf()
         import lib.pdf_parser.core as core
-        monkeypatch.setattr(core, 'HAS_PYMUPDF4LLM', False)
-        monkeypatch.setattr(core, 'PYMUPDF4LLM_UNAVAILABLE_REASON',
-                            "not installed: No module named 'pymupdf4llm'")
+        monkeypatch.setattr(
+            core._pdf_common, 'pymupdf4llm_status',
+            lambda: (False, "not installed: No module named 'pymupdf4llm'"))
         result = core.parse_pdf(_tiny_pdf_bytes(), max_images=0)
         joined = ' '.join(result['warnings'])
         assert 'pymupdf4llm not installed;' in joined

@@ -3,8 +3,9 @@
 Specifies the owner's 11-13 contract for the game-led landing (docs/FRONTEND_ARCHITECTURE.md "Tofu office"):
 - the office is the default landing workspace; one always-visible HUD button opens the classic Session UI,
   one top-bar link returns, and the choice persists across reloads; an explicit route is honoured as given;
-- clicking a person opens that person's panel; "Chat" docks the classic ConversationSurface and composer for
-  that person's real conversation, and sending from it works with the classic authority (stub model);
+- clicking a person opens that person's brief (progress and files, no transcript; owner request 11-18); its
+  "full conversation" leaves for the classic view at that person's real conversation, and sending from its
+  composer works with the classic authority (stub model);
 - the office itself reads only: opening people and panels sends no write;
 - the first office facts read waits for a cold server baseline (no client deadline) while the office says it
   is loading, never empty and never an error.
@@ -50,10 +51,7 @@ def _boot(page, url):
 
 @pytest.fixture()
 def office_page(browser, live_server):
-    from urllib.parse import quote
-
     from tests._jsdom import require_shipped_graph
-    from tests.conftest import _server_conversation_ids
 
     require_shipped_graph()
     context = browser.new_context(office=True, viewport={'width': 1440, 'height': 900})
@@ -61,18 +59,9 @@ def office_page(browser, live_server):
     _attach_js_error_capture(page)
     _boot(page, live_server)
     _dismiss_onboarding_modals(page)
-    # This fixture owns its context, so it also owns the page fixture's cleanup:
-    # ensuring the router also provisions its health-check chat, and a chat left
-    # on the session server is the one later specs boot into.
-    origin = live_server.rstrip('/')
-    ids_before = _server_conversation_ids(page, origin)
     try:
         yield page
     finally:
-        # Same mass-deletion guard as the page fixture: no exact baseline, no delete.
-        if ids_before is not None:
-            for conversation_id in (_server_conversation_ids(page, origin) or set()) - ids_before:
-                page.request.delete(f'{origin}/api/v4/conversations/{quote(conversation_id, safe="")}')
         context.close()
 
 
@@ -109,7 +98,7 @@ def test_office_is_the_landing_and_the_classic_choice_persists(office_page, live
     assert page.evaluate(SHELL)['workspace'] in ('', 'chat') and not page.evaluate(SHELL)['office']
 
 
-def test_a_person_opens_their_real_conversation_and_the_classic_composer_sends(office_page, live_server):
+def test_a_person_opens_their_brief_then_the_full_conversation_in_the_classic_view(office_page, live_server):
     page = office_page
     ensured = page.request.post(f'{live_server}/api/v4/router', data={}, headers={'Idempotency-Key': 'world-office-e2e'})
     assert ensured.ok, ensured.text()
@@ -140,11 +129,16 @@ def test_a_person_opens_their_real_conversation_and_the_classic_composer_sends(o
         page.wait_for_timeout(500)
         assert writes == [], 'the office itself reads only'
 
-        page.click('.w-tab >> nth=1')
-        page.wait_for_function("document.body.dataset.conversationDock === 'chat'")
+        # The brief shows progress and files; the office never shows the transcript.
+        page.wait_for_selector('.w-brief:not([hidden]) [data-section="progress"]')
+        assert not page.evaluate(SHELL)['chat'], 'the office shows no transcript'
+
+        page.click('.w-panel-full')
+        page.wait_for_function("document.body.dataset.workspace === 'chat'")
         page.wait_for_selector('#userInput', state='visible')
         page.wait_for_function("(id) => sessionStorage.getItem('tofu_activeConvId') === id", arg=router_id, timeout=15000)
-        assert page.evaluate(SHELL)['office'], 'the office stays beside the docked chat'
+        shell = page.evaluate(SHELL)
+        assert not shell['office'] and shell['chat'] and shell['landing'] == 'world', shell
 
         _select_stub_model(page)
         calls = _SENTINEL['stream_calls']

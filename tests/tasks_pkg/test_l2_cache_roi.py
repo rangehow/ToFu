@@ -114,6 +114,39 @@ def test_l2_roi_emits_both_halves():
         're-billed (cache_write) halves + net')
 
 
+def test_responses_roi_does_not_impute_a_missing_write(monkeypatch):
+    from lib.llm.responses_outbound import responses_response_to_openai
+    from lib.tasks_pkg.cache_tracking import _roi
+    from lib.tasks_pkg.cache_tracking._detect import detect_cache_break
+    from lib.tasks_pkg.cache_tracking._state import cleanup_cache_state
+
+    conv = 'responses-roi-unmetered-write'
+    captured = []
+    monkeypatch.setattr(_roi, 'audit_log', lambda _name, **details: captured.append(details))
+
+    def observe(read):
+        usage = responses_response_to_openai({
+            'status': 'completed', 'output': [], 'usage': {
+                'input_tokens': 30_000, 'output_tokens': 5,
+                'input_tokens_details': {'cached_tokens': read},
+            },
+        })['usage']
+        detect_cache_break(conv, [], [], 'fixture-model', usage,
+                           user_id=1, durable=False, prev_turn_cache_read=0)
+
+    try:
+        observe(25_000)
+        _roi.record_l2_compaction(conv, user_id=1, tokens_before=50_000, tokens_after=30_000,
+                                  msgs_before=10, msgs_after=8)
+        observe(0)
+        pair, = captured
+        assert pair['outcome'] == 'paired'
+        assert pair['cache_write_rebilled'] is None and pair['net_tokens'] is None
+        assert pair['cache_read_next'] == 0 and pair['cache_uncached_next'] == 30_000
+    finally:
+        cleanup_cache_state(conv, user_id=1)
+
+
 def test_execute_compact_tool_fires_recorder():
     """★ WIRING (not just the primitive). The REAL force-compact wrapper must
     CALL record_l2_compaction after injecting the synthetic summary pair, so

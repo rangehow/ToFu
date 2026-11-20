@@ -1,6 +1,8 @@
 """Orchestration and Swarm operation registrations."""
 
 from lib.storage_authority_sql import operations as ops
+from lib.storage_authority_sql.operations_pkg._swarm_teardown import delete_exact, read_lifecycle
+from lib.swarm.persistence_contract import SWARM_DELETE_EXACT_OPERATION, SWARM_LIFECYCLE_GET_OPERATION
 
 
 OPERATIONS = {
@@ -49,6 +51,8 @@ OPERATIONS = {
         'command', True, ops._swarm_session_quarantine_ownerless),
     'swarm.session.delete': ops.OperationSpec(
         'command', True, ops._swarm_session_delete),
+    SWARM_DELETE_EXACT_OPERATION: ops.OperationSpec('command', True, delete_exact),
+    SWARM_LIFECYCLE_GET_OPERATION: ops.OperationSpec('query', False, read_lifecycle),
     'swarm.agent.save': ops.OperationSpec('command', True, ops._swarm_agent_save),
     'swarm.agent.append': ops.OperationSpec('command', True, ops._swarm_agent_append),
     'swarm.agent.checkpoint.mark': ops.OperationSpec(

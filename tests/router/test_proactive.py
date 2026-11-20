@@ -6,6 +6,7 @@ released as one message, and the digest is deterministic (no model call).
 """
 from collections import Counter
 from copy import deepcopy
+from datetime import datetime
 import json
 from types import SimpleNamespace
 import threading
@@ -20,15 +21,17 @@ def router_modules_stay_unpatched():
     """Each spec's fakes are scoped to it: later tests in this process see the real modules."""
     import lib.channels.outbox as outbox_module
     import lib.router.binding as binding_module
+    import lib.router.home as home_module
     import lib.router.projects as projects_module
     import lib.router.proactive.digest as digest_module
     import lib.router.proactive.questions as questions_module
     import lib.router.relay as relay_module
     import lib.router.watchdog.binding as watchdog_binding_module
     attributes = ((binding_module, 'global_router'), (relay_module, '_command_chat'),
+                  (home_module, 'router_home_path'),
                   (questions_module, 'open_questions'), (projects_module, 'router_projects'),
                   (watchdog_binding_module, 'router_watchdog'), (digest_module, 'assemble_digest'),
-                  (outbox_module, 'enqueue'))
+                  (digest_module, '_push_command_chats'), (outbox_module, 'enqueue'))
     real = [getattr(module, name) for module, name in attributes]
     yield
     leaked = [f'{module.__name__}.{name}' for (module, name), value in zip(attributes, real)
@@ -430,20 +433,137 @@ def test_digest_assembles_open_decisions_and_skips_when_empty(monkeypatch):
     assert 'blocking' in text.lower() or '⏸' in text
 
 
-def test_digest_delivery_through_outbox(monkeypatch):
+def test_digest_faults_name_the_error_and_group_repeats():
+    from lib.router.proactive.digest import _fault_section
+    signals = [
+        {'source': 'turn', 'subject': {'conversationId': 'c1', 'role': 'project_router'},
+         'error': {'kind': 'permission', 'detail': 'API HTTP 401: App ID disabled'}},
+        {'source': 'turn', 'subject': {'conversationId': 'c2', 'role': 'worker'},
+         'error': {'kind': 'permission', 'detail': 'API HTTP 401: App ID disabled'}},
+        {'source': 'turn', 'subject': {'conversationId': 'c1', 'role': 'project_router'},
+         'error': {'kind': 'internal', 'detail': 'compaction failed at 4.7M tokens'}},
+    ]
+    text = _fault_section(signals)
+    assert '**3 open fault(s), 2 group(s):**' in text
+    assert '- turn ×2 (permission, 2 conversation(s)): API HTTP 401: App ID disabled' in text
+    assert '- turn ×1 (internal): compaction failed at 4.7M tokens' in text
+    assert not any(line.endswith('turn: ') for line in text.splitlines())
+
+
+def test_fault_signals_iterate_every_open_page():
+    from lib.router.watchdog.signals import FaultSignals
+    signals = FaultSignals(7, client=Store())
+    for i in range(40):
+        signals.record('turn', [f'c{i}', 't', 'a'],
+                       {'role': 'worker', 'conversationId': f'c{i}'},
+                       {'kind': 'permission', 'detail': 'x'})
+    assert len(list(signals.iter_open())) == 40
+
+
+def test_digest_counts_every_open_fault_not_only_one_page(monkeypatch):
+    from lib.router.proactive.digest import assemble_digest
+    signals = [
+        {'source': 'turn', 'subject': {'conversationId': f'c{i}', 'role': 'worker'},
+         'error': {'kind': 'permission', 'detail': 'API HTTP 401'}}
+        for i in range(41)
+    ]
+
+    class FakeFaultSignals:
+        def __init__(self, owner, *, client=None):
+            pass
+
+        def iter_open(self):
+            return iter(signals)
+
+    monkeypatch.setattr('lib.router.watchdog.signals.FaultSignals', FakeFaultSignals)
+    monkeypatch.setattr('lib.router.watchdog.binding.router_watchdog',
+                        lambda owner, **kw: {'availability': 'available'})
+    monkeypatch.setattr('lib.router.proactive.questions.open_questions', lambda owner, **kw: [])
+    monkeypatch.setattr('lib.router.projects.router_projects',
+                        lambda owner, args, **kw: {'projects': []})
+    text, counts = assemble_digest(7, client=Store())
+    assert '**41 open fault(s), 1 group(s):**' in text
+    assert '- turn ×41 (permission, 41 conversation(s)): API HTTP 401' in text
+    assert counts['faults'] == 41
+
+
+def test_digest_delivery_reaches_every_enabled_command_chat(monkeypatch):
     from lib.router.proactive.digest import run_digest
     monkeypatch.setattr('lib.router.proactive.digest.assemble_digest',
                         lambda owner, **kw: ('Test digest text', {'questions': 1}))
     sent = []
-    monkeypatch.setattr('lib.router.relay._command_chat', lambda owner, client: 'dx:gid:12345')
+    monkeypatch.setattr('lib.router.proactive.digest._push_command_chats',
+                        lambda owner, client: [('dx', '大象', 'dx:gid:12345'),
+                                               ('wechat', '微信', 'wechat:uid:abc')])
     monkeypatch.setattr('lib.channels.outbox.enqueue',
                         lambda owner, thread, text, **kw: sent.append((thread, text, kw)))
+    ok, result = run_digest({'user_id': 7}, now=datetime(2026, 11, 19, 21, 0))
+    assert ok, result
+    assert [item[0] for item in sent] == ['dx:gid:12345', 'wechat:uid:abc']
+    assert all(item[1] == 'Test digest text' for item in sent)
+    assert [item[2]['idempotency_key'] for item in sent] == [
+        'digest:7:2026-11-19:dx', 'digest:7:2026-11-19:wechat']
+    assert '大象' in result and '微信' in result
+
+
+def test_digest_one_failing_channel_does_not_block_another(monkeypatch):
+    from lib.router.proactive.digest import run_digest
+    monkeypatch.setattr('lib.router.proactive.digest.assemble_digest',
+                        lambda owner, **kw: ('Test digest text', {'questions': 1}))
+    monkeypatch.setattr('lib.router.proactive.digest._push_command_chats',
+                        lambda owner, client: [('dx', '大象', 'dx:gid:12345'),
+                                               ('wechat', '微信', 'wechat:uid:abc')])
+    sent = []
+
+    def enqueue(owner, thread, text, **kw):
+        if thread.startswith('dx:'):
+            raise RuntimeError('dx unavailable')
+        sent.append((thread, text, kw))
+
+    monkeypatch.setattr('lib.channels.outbox.enqueue', enqueue)
     ok, result = run_digest({'user_id': 7})
     assert ok, result
-    assert len(sent) == 1
-    assert sent[0][0] == 'dx:gid:12345'
-    assert sent[0][1] == 'Test digest text'
-    assert sent[0][2]['idempotency_key'].startswith('digest:7:')
+    assert [item[0] for item in sent] == ['wechat:uid:abc']
+    assert '微信' in result and 'failed: 大象' in result
+
+
+def test_digest_falls_back_in_app_when_no_command_chat_is_enabled(monkeypatch):
+    from lib.router.proactive.digest import run_digest
+    monkeypatch.setattr('lib.router.proactive.digest.assemble_digest',
+                        lambda owner, **kw: ('Test digest text', {'questions': 1}))
+    monkeypatch.setattr('lib.router.proactive.digest._push_command_chats',
+                        lambda owner, client: [])
+    monkeypatch.setattr('lib.router.binding.global_router',
+                        lambda owner, **kw: {'availability': 'available',
+                                             'conversationId': 'router-conv', 'revision': 1})
+    monkeypatch.setattr('lib.router.home.router_home_path', lambda owner: '/router-home')
+    published = []
+    monkeypatch.setattr(
+        'lib.conversations.coordinator_reports.CoordinatorReports.publish',
+        lambda self, scope, report: published.append((scope, report)))
+    ok, result = run_digest({'user_id': 7})
+    assert ok, result
+    assert 'in-app' in result
+    assert published[0][1]['message'] == 'Test digest text'
+
+
+def test_digest_push_channels_are_enabled_accounts_with_a_command_chat(monkeypatch):
+    from lib.router.proactive.digest import _push_command_chats
+    from lib.channels.model import NAMESPACE
+    store = Store()
+
+    def account(channel, *, enabled, identity, chat):
+        store.rows[(NAMESPACE, f'u7/account/{channel}')] = {
+            'value': {'channel': channel, 'enabled': enabled, 'identity': identity,
+                      'commandChat': chat, 'status': {}},
+            'version': 1}
+
+    account('dx', enabled=True, identity={'uid': '1'}, chat='dx:gid:1')
+    account('wechat', enabled=True, identity={'uid': '2'}, chat='wechat:uid:2')
+    account('qq', enabled=False, identity={'uid': '3'}, chat='qq:gid:3')
+    account('github', enabled=True, identity={'uid': '4'}, chat='')
+    assert _push_command_chats(7, store) == [('dx', '大象', 'dx:gid:1'),
+                                             ('wechat', '微信', 'wechat:uid:2')]
 
 
 def test_the_turn_lifecycle_records_answers_for_human_turns_entering_a_lane_only(monkeypatch):

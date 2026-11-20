@@ -48,13 +48,16 @@ Design rules
 
 from __future__ import annotations
 
-import hashlib
 import uuid
 
 from lib.identity import require_user_id
 from lib.log import get_logger
 from lib.swarm.persistence_contract import (
-    SWARM_RUN_RESULT_FIELDS,
+    SWARM_CONTINUE_REBIND_MODE,
+    SWARM_DELETE_EXACT_OPERATION,
+    SWARM_LIFECYCLE_GET_OPERATION,
+    swarm_archive_result,
+    swarm_run_result_key,
     SWARM_RUN_RESULT_FORMAT,
     SWARM_RUN_RESULT_NAMESPACE,
 )
@@ -88,9 +91,88 @@ def _command(operation: str, payload: dict, *, task: dict | None = None,
 #  Session-level
 # ═══════════════════════════════════════════════════════════
 
+def uses_sql_lifecycle() -> bool:
+    """Select shapes for the existing authority, never select an authority."""
+    from lib.storage.client import StorageClient
+    from lib.storage.errors import StorageError
+    try:
+        return isinstance(_storage(), StorageClient)
+    except StorageError:
+        from lib.storage import storage_status
+        if storage_status().get('backend') == 'tofudb':
+            return False  # Native's ordinary writer is still best-effort.
+        raise
+
+
+def exact_run_fields(run_id: str) -> dict:
+    return {'run_id': run_id} if run_id and uses_sql_lifecycle() else {}
+
+
+def _checkpoint_writer_fields(run_id: str, checkpoint_writer_epoch: int) -> dict:
+    fields = exact_run_fields(run_id)
+    if fields:
+        fields['checkpoint_writer_epoch'] = checkpoint_writer_epoch
+    return fields
+
+
+def run_identity(swarm_key: str, row: dict) -> dict:
+    from lib.conversations.project_identity import normalize_project_path
+    config = row['config']
+    parent = config.get('parent_cfg') or {}
+    return dict(swarm_key=swarm_key, run_id=row['task_id'],
+                owner_id=require_user_id(config.get('user_id'), context='swarm lifecycle'),
+                conversation_id=row.get('conv_id') or '', tenant_id=parent.get('_tenant_id') or '',
+                project_path=normalize_project_path(parent.get('canonicalProjectPath')
+                    or parent.get('projectPath') or config.get('project_path') or ''))
+
+
+def read_lifecycle(identity: dict) -> dict | None:
+    return _storage().query(SWARM_LIFECYCLE_GET_OPERATION, identity)
+
+
+def admit_handoff(identity: dict, *, caller_task_id: str, turn_id: str | None,
+                  attempt_id: str | None, stage: str, continue_binding: bool = False,
+                  checkpoint_writer_epoch: int = 0) -> None:
+    """Claim one live handoff; never retry an unconfirmed admission receipt."""
+    result = _command('swarm.session.save', dict(identity, save_mode='admit',
+        caller_task_id=caller_task_id, turn_id=turn_id, attempt_id=attempt_id, stage=stage,
+        **({'continue_binding': True} if continue_binding else {}),
+        **({'checkpoint_writer_epoch': checkpoint_writer_epoch} if checkpoint_writer_epoch else {})))
+    if result != {'admitted': True}:
+        from lib.storage.errors import StorageError
+        raise StorageError('database_protocol_error', 'Swarm handoff not acknowledged')
+
+
+def rebind_continue(identity: dict, snapshot: dict, config: dict, task: dict, *,
+                    activation_failed: bool = False, unbound_only: bool = False) -> int | None:
+    """Retry the same frozen mutation; its ACK is not a scheduler permit."""
+    from lib.storage.errors import StorageError
+    caller = task['config']
+    result = _command('swarm.session.save', dict(identity, save_mode=SWARM_CONTINUE_REBIND_MODE,
+        expected_updated_at=snapshot['updated_at'], config=config, caller_task_id=task['id'],
+        turn_id=caller['_turnId'], attempt_id=caller['_attemptId'],
+        **({'activation_failed': True, 'unbound_only': unbound_only} if activation_failed else {})), task=task)
+    if activation_failed and result == {'failed_activation_recorded': True}:
+        return None
+    epoch = result.get('checkpoint_writer_epoch') if isinstance(result, dict) else None
+    if activation_failed or type(epoch) is not int or epoch <= 0 or result.get('rebound') is not True:
+        raise StorageError('database_protocol_error', 'Swarm Continue rebind not acknowledged')
+    return epoch
+
+
+def has_committed_stop(*, run_id: str, owner_id: int) -> bool:
+    """Observe only the owner's closed Stop outcome by immutable run ID."""
+    if not uses_sql_lifecycle():
+        return False
+    receipt = _storage().query(SWARM_LIFECYCLE_GET_OPERATION,
+                               {'run_id': run_id, 'owner_id': owner_id})
+    return receipt == {'disposition': 'stop'}
+
+
 def save_session(swarm_key: str, *, conv_id: str, task_id: str,
                  specs: list, config: dict, status: str = 'running',
-                 required: bool = False) -> None:
+                 required: bool = False, save_mode: str | None = None,
+                 task: dict | None = None, checkpoint_writer_epoch: int = 0) -> None:
     """Upsert the session row. ``specs`` is a list of ``SubTaskSpec.to_dict()``.
 
     ``config`` carries everything needed to rebuild the sub-agent tool list
@@ -100,7 +182,7 @@ def save_session(swarm_key: str, *, conv_id: str, task_id: str,
         return
     now = _now_ms()
     try:
-        _command('swarm.session.save', {
+        response = _command('swarm.session.save', {
             'swarm_key': swarm_key,
             'conv_id': conv_id,
             'task_id': task_id,
@@ -108,7 +190,12 @@ def save_session(swarm_key: str, *, conv_id: str, task_id: str,
             'specs': specs,
             'config': config,
             'now_ms': now,
-        })
+            **({'save_mode': save_mode} if save_mode is not None else {}),
+            **({'checkpoint_writer_epoch': checkpoint_writer_epoch} if checkpoint_writer_epoch else {}),
+        }, task=task)
+        if required and (not isinstance(response, dict) or response.get('saved') is not True):
+            from lib.storage.errors import StorageError
+            raise StorageError('database_protocol_error', 'Swarm session save not acknowledged')
         logger.debug('[SwarmPersist] saved session key=%s status=%s specs=%d',
                      swarm_key, status, len(specs))
     except Exception as e:
@@ -119,15 +206,18 @@ def save_session(swarm_key: str, *, conv_id: str, task_id: str,
             raise
 
 
-def mark_session_terminated(swarm_key: str) -> None:
+def mark_session_terminated(swarm_key: str, *, run_id: str = '',
+                            checkpoint_writer_epoch: int = 0) -> None:
     """Flag the session row terminated (driver thread exited)."""
     if not swarm_key:
         return
     try:
-        _command('swarm.session.terminate', {
+        result = _command('swarm.session.terminate', {
             'swarm_key': swarm_key, 'now_ms': _now_ms(),
+            **_checkpoint_writer_fields(run_id, checkpoint_writer_epoch),
         })
-        logger.debug('[SwarmPersist] session %s → terminated', swarm_key)
+        if isinstance(result, dict) and result.get('changed') is True:
+            logger.debug('[SwarmPersist] session %s → terminated', swarm_key)
     except Exception as e:
         logger.warning('[SwarmPersist] mark_session_terminated(%s) failed: %s',
                        swarm_key, e)
@@ -160,7 +250,19 @@ def quarantine_ownerless_session(swarm_key: str) -> bool:
     return changed
 
 
-def delete_session(swarm_key: str) -> None:
+def _retirement_refusal(observation, error):
+    from lib.storage.errors import StorageError
+    if (observation is not None and isinstance(error, StorageError)
+            and not error.retryable and error.code in {'database_conflict', 'database_not_found'}):
+        observation['outcome'] = 'refused'
+
+
+def _retirement_ack(observation, ack):
+    if observation is not None and isinstance(ack, dict) and type(ack.get('deleted')) is bool:
+        observation['outcome'] = 'committed' if ack['deleted'] else 'noop'
+
+
+def delete_session(swarm_key: str, *, observation=None) -> None:
     """Remove a session and all its agent rows (TTL eviction / abort).
 
     These rows are resumable state. Callers record every settled outcome as a
@@ -168,11 +270,14 @@ def delete_session(swarm_key: str) -> None:
     """
     if not swarm_key:
         return
+    if observation is not None:
+        observation.update(requested=True, outcome='unknown', scope='key_only')
     try:
-        _command('swarm.session.delete', {'swarm_key': swarm_key})
-        logger.debug('[SwarmPersist] deleted session %s', swarm_key)
+        ack = _command('swarm.session.delete', {'swarm_key': swarm_key})
+        _retirement_ack(observation, ack)
     except Exception as e:
-        logger.warning('[SwarmPersist] delete_session(%s) failed: %s', swarm_key, e)
+        _retirement_refusal(observation, e)
+        logger.warning('[SwarmPersist] delete_session failed')
 
 
 # ═══════════════════════════════════════════════════════════
@@ -184,7 +289,8 @@ def save_agent(swarm_key: str, agent_id: str, *,
                messages: list, result: dict | None = None,
                rounds_used: int = 0, delivered: bool | None = None,
                required: bool = False, task: dict | None = None,
-               cancellable: bool = True, checkpoint_id: str = '') -> dict | None:
+               cancellable: bool = True, checkpoint_id: str = '',
+               run_id: str = '', checkpoint_writer_epoch: int = 0) -> dict | None:
     """Upsert one agent's checkpoint; the authority's acknowledgement, or None.
 
     ``messages`` is the agent's full conversation array — the resumable state.
@@ -214,8 +320,12 @@ def save_agent(swarm_key: str, agent_id: str, *,
     if checkpoint_id:
         payload['checkpoint_id'] = checkpoint_id
     try:
+        payload.update(_checkpoint_writer_fields(run_id, checkpoint_writer_epoch))
         response = _command('swarm.agent.save', payload,
                             task=task if required else None, cancellable=cancellable)
+        if 'run_id' in payload and (not isinstance(response, dict) or response.get('saved') is not True):
+            from lib.storage.errors import StorageError
+            raise StorageError('database_protocol_error', 'Exact swarm checkpoint not acknowledged')
         logger.debug('[SwarmPersist] saved agent key=%s id=%s status=%s rounds=%d msgs=%d',
                      swarm_key, agent_id, status, rounds_used, len(messages or []))
         return dict(response) if isinstance(response, dict) else {}
@@ -232,7 +342,8 @@ def append_agent_checkpoint(swarm_key: str, agent_id: str, *,
                             base_checkpoint_id: str, base_message_count: int,
                             checkpoint_id: str, messages: list, result: dict,
                             status: str, rounds_used: int, task: dict,
-                            cancellable: bool = True) -> bool:
+                            cancellable: bool = True, run_id: str = '',
+                            checkpoint_writer_epoch: int = 0) -> bool:
     """Append ``messages`` to the checkpoint this writer last wrote; True once applied.
 
     The base is that write's ``checkpoint_id`` and message count. The authority
@@ -248,6 +359,7 @@ def append_agent_checkpoint(swarm_key: str, agent_id: str, *,
         response = _command('swarm.agent.append', {
             'swarm_key': swarm_key,
             'agent_id': agent_id,
+            **_checkpoint_writer_fields(run_id, checkpoint_writer_epoch),
             'base_checkpoint_id': base_checkpoint_id,
             'base_message_count': base_message_count,
             'checkpoint_id': checkpoint_id,
@@ -270,7 +382,8 @@ def append_agent_checkpoint(swarm_key: str, agent_id: str, *,
 
 
 def mark_agent_checkpoint(swarm_key: str, agent_id: str, *, rounds_used: int,
-                          result: dict, task: dict | None = None) -> bool:
+                          result: dict, task: dict | None = None, run_id: str = '',
+                          checkpoint_writer_epoch: int = 0) -> bool:
     """Overlay compact result fields on the agent's last full checkpoint.
 
     ``result`` holds only ``SWARM_CHECKPOINT_MARKER_RESULT_FIELDS`` (phase,
@@ -281,7 +394,7 @@ def mark_agent_checkpoint(swarm_key: str, agent_id: str, *, rounds_used: int,
     Storage failures propagate: this is a required write-ahead.
     """
     response = _command('swarm.agent.checkpoint.mark', {
-        'swarm_key': swarm_key,
+        'swarm_key': swarm_key, **_checkpoint_writer_fields(run_id, checkpoint_writer_epoch),
         'agent_id': agent_id,
         'rounds_used': rounds_used,
         'result': result,
@@ -293,7 +406,8 @@ def mark_agent_checkpoint(swarm_key: str, agent_id: str, *, rounds_used: int,
     return marked
 
 
-def mark_delivered(swarm_key: str, agent_ids, *, task_id: str) -> bool:
+def mark_delivered(swarm_key: str, agent_ids, *, task_id: str,
+                   checkpoint_writer_epoch: int = 0) -> bool:
     """Mark the given agents' results as delivered to the main model.
 
     Called from every channel that hands a result to the model: the
@@ -314,6 +428,7 @@ def mark_delivered(swarm_key: str, agent_ids, *, task_id: str) -> bool:
     try:
         result = _command('swarm.agents.acknowledge_results', {
             'swarm_key': swarm_key, 'task_id': task_id, 'agent_ids': ids,
+            **({'checkpoint_writer_epoch': checkpoint_writer_epoch} if checkpoint_writer_epoch else {}),
         })
         return isinstance(result, dict) and result.get('acknowledged') is True
     except Exception as e:
@@ -325,9 +440,13 @@ def mark_delivered(swarm_key: str, agent_ids, *, task_id: str) -> bool:
 #  Point lookup (status route fallback)
 # ═══════════════════════════════════════════════════════════
 
+class SqlSessionSnapshot(dict):
+    """In-process provenance of a loaded SQL snapshot; no new durable field."""
+
+
 def load_session(swarm_key: str, *, required: bool = False,
                  include_agents: bool = True,
-                 agent_id: str | None = None) -> dict | None:
+                 agent_id: str | None = None, identity: dict | None = None) -> dict | None:
     """Fetch one persisted session row (+ every agent row) by swarm key.
 
     Used by ``integration.get_swarm_status`` when the session is NOT in
@@ -356,16 +475,30 @@ def load_session(swarm_key: str, *, required: bool = False,
                             {'swarm_key': swarm_key, 'include_agents': False})
         if not isinstance(row, dict):
             return None
+        if identity is not None and run_identity(swarm_key, row) != identity:
+            return None
         if not include_agents:
             return row
         agents: list[dict] = []
-        page_request = {'swarm_key': swarm_key}
+        cut = {'swarm_key': swarm_key}
+        exact_cut = 'checkpoint_writer_epoch' in row
+        if exact_cut:
+            cut.update(user_id=run_identity(swarm_key, row)['owner_id'],
+                       expected_task_id=row['task_id'], expected_updated_at=row['updated_at'])
+        page_request = cut
         while True:
             page = storage.query('swarm.agents.page', page_request)
             rows = page.get('agents') if isinstance(page, dict) else None
             cursor = page.get('next_after_agent_id') if isinstance(page, dict) else None
             if not isinstance(rows, list):
                 raise StorageError('database_protocol_error', 'Invalid swarm agent page')
+            if exact_cut:
+                token = page.get('snapshot_cut')
+                if (not isinstance(token, str) or len(token) != 64
+                        or any(ch not in '0123456789abcdef' for ch in token)
+                        or ('snapshot_cut' in cut and token != cut['snapshot_cut'])):
+                    raise StorageError('database_protocol_error', 'Invalid swarm snapshot cut response')
+                cut = {**cut, 'snapshot_cut': token}
             agents.extend(rows)
             if cursor is None:
                 break
@@ -373,7 +506,11 @@ def load_session(swarm_key: str, *, required: bool = False,
                     or cursor == page_request.get('after_agent_id')):
                 raise StorageError('database_protocol_error',
                                    'Swarm agent page continuation did not advance')
-            page_request = {'swarm_key': swarm_key, 'after_agent_id': cursor}
+            page_request = {**cut, 'after_agent_id': cursor}
+        from lib.storage.client import StorageClient
+        if ('checkpoint_writer_epoch' in row or isinstance(storage, StorageClient)) and storage.query(
+                'swarm.session.get', {'swarm_key': swarm_key, 'include_agents': False}) != row:
+            raise StorageError('database_conflict', 'Swarm checkpoint cut changed during checkpoint read')
     except Exception as e:
         logger.warning('[SwarmPersist] load_session(%s) failed: %s',
                        swarm_key, e)
@@ -381,7 +518,8 @@ def load_session(swarm_key: str, *, required: bool = False,
         if required:
             raise
         return None
-    return {**row, 'agents': agents}
+    snapshot = {**row, 'agents': agents}
+    return SqlSessionSnapshot(snapshot) if isinstance(storage, StorageClient) else snapshot
 
 
 def _load_agent_state(storage, swarm_key: str, agent_id: str) -> dict | None:
@@ -437,15 +575,13 @@ def _run_result_key(owner_id: int, swarm_run_id: str, agent_id: str) -> str:
     authority whose generic records are not owner-partitioned (SQL). The
     record value carries the readable identities.
     """
-    def digest(value: str) -> str:
-        return hashlib.sha256(value.encode('utf-8')).hexdigest()
-    return f'{owner_id}:{digest(swarm_run_id)}:{digest(agent_id)}'
+    return swarm_run_result_key(owner_id, swarm_run_id, agent_id)
 
 
 def save_run_result(*, owner_id: int, tenant_id, conversation_id: str,
                     swarm_key: str, swarm_run_id: str, agent_id: str,
                     role: str, objective: str, status: str,
-                    result: dict) -> bool:
+                    result: dict, checkpoint_writer_epoch: int = 0) -> bool:
     """Record one agent outcome under its run; True once acknowledged.
 
     ``status`` is the agent's durable status and ``result`` its
@@ -469,8 +605,7 @@ def save_run_result(*, owner_id: int, tenant_id, conversation_id: str,
         'role': role or '',
         'objective': objective or '',
         'status': status or 'unknown',
-        'result': {name: result[name] for name in SWARM_RUN_RESULT_FIELDS
-                   if name in result},
+        'result': swarm_archive_result(result),
         'recordedAtMs': _now_ms(),
     }
     try:
@@ -478,6 +613,7 @@ def save_run_result(*, owner_id: int, tenant_id, conversation_id: str,
             'namespace': SWARM_RUN_RESULT_NAMESPACE,
             'key': _run_result_key(owner, swarm_run_id, agent_id),
             'value': value,
+            **({'checkpoint_writer_epoch': checkpoint_writer_epoch} if checkpoint_writer_epoch else {}),
         })
     except Exception as e:
         logger.error('[SwarmPersist] save_run_result(%s/%s) FAILED — run '
@@ -515,7 +651,43 @@ def load_run_result(*, owner_id: int, swarm_run_id: str,
     return value
 
 
-def archive_session_results(swarm_key: str) -> bool:
+def dispose_run(identity: dict, disposition: str, *, checkpoint_writer_epoch: int | None = None,
+                observation=None) -> bool:
+    """Archive only this run, then let SQL compare and seal its checkpoints."""
+    key = identity['swarm_key']
+    row = load_session(key, required=True, identity=identity)
+    epoch = checkpoint_writer_epoch
+    if row is not None:
+        observed_epoch = row.get('checkpoint_writer_epoch', 0)
+        if epoch is not None and epoch != observed_epoch:
+            return False
+        epoch = observed_epoch
+        if not _archive_snapshot(key, row):
+            return False
+    elif epoch is None and disposition != 'stop':
+        # A disposed receipt can authorize a disposition upgrade, not a new
+        # write against a live successor that reuses the logical run ID.
+        previous = read_lifecycle(identity)
+        if previous and previous.get('disposition'):
+            epoch = previous.get('checkpoint_writer_epoch', 0)
+    if observation is not None:
+        observation.update(requested=True, outcome='unknown', scope='exact_run')
+    try:
+        ack = _command(SWARM_DELETE_EXACT_OPERATION, {**identity, 'disposition': disposition,
+            **({'checkpoint_writer_epoch': epoch} if epoch and disposition != 'stop' else {})})
+    except Exception as error:
+        _retirement_refusal(observation, error)
+        raise
+    # An ACK may describe a historical transaction; observe the exact receipt.
+    receipt = read_lifecycle(identity)
+    if not receipt or not receipt.get('disposition'):
+        return False
+    if receipt.get('identity') == identity:
+        _retirement_ack(observation, ack)
+    return disposition == 'ordinary_retirement' or receipt['disposition'] == disposition
+
+
+def archive_session_results(swarm_key: str, *, correlation: dict | None = None) -> bool:
     """Record every agent row of one durable session as a run result.
 
     Teardown uses this when the resumable rows are reclaimed without an
@@ -532,11 +704,17 @@ def archive_session_results(swarm_key: str) -> bool:
         return False
     if row is None:
         return True
+    return _archive_snapshot(swarm_key, row, correlation=correlation)
+
+
+def _archive_snapshot(swarm_key: str, row: dict, *, correlation: dict | None = None) -> bool:
     config = row.get('config') if isinstance(row.get('config'), dict) else {}
     try:
         owner = require_user_id(config.get('user_id'), context='swarm run archive')
     except ValueError:
         return False
+    if correlation is not None:
+        correlation.update(owner=owner, conversation=row.get('conv_id'), run=row.get('task_id'))
     swarm_run_id = str(row.get('task_id') or '')
     if not swarm_run_id:
         return False
@@ -553,5 +731,7 @@ def archive_session_results(swarm_key: str) -> bool:
             swarm_run_id=swarm_run_id, agent_id=str(agent['agent_id']),
             role=agent.get('role') or '', objective=agent.get('objective') or '',
             status=agent.get('status') or 'unknown',
-            result=agent.get('result') or {}) and recorded
+            result=swarm_archive_result(agent.get('result') or {},
+                                        rounds_used=agent.get('rounds_used')),
+            checkpoint_writer_epoch=row.get('checkpoint_writer_epoch', 0)) and recorded
     return recorded

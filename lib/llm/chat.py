@@ -27,11 +27,16 @@ def http_post(*args, **kwargs):
     return send(*args, **kwargs)
 
 
-def _post_admitted_request(url, headers, body, timeout, oauth):
-    """Send the sealed body through the shared subscription-aware transport."""
+def _post_admitted_request(url, headers, body, timeout, oauth, *, payload=None):
+    """Send the sealed body through the shared subscription-aware transport.
+
+    ``payload`` is the exact bytes the send boundary encoded and framed;
+    passing it keeps a content-encoded body from being compressed twice.
+    """
     from lib.llm.request import transport_body_arguments
     return http_post(url, headers=headers,
-                     **transport_body_arguments(body, transport='requests'),
+                     **transport_body_arguments(
+                         body, transport='requests', payload=payload),
                      timeout=timeout, network_scope='subscription' if oauth else None)
 
 
@@ -72,6 +77,97 @@ def _attempt_headers(*, api_protocol, api_key, extra_headers, oauth, base_url,
     return hdrs
 
 
+def _parse_nonstream_response(resp, *, responses, anthropic, cloak_reverse,
+                              name_reverse, reasoning_replay, model, max_tokens,
+                              log_prefix, credential_present):
+    """Parse, normalize and validate one successful non-stream provider reply.
+
+    Returns ``(data, first_choice, message)``. Protocol converters share the
+    HTTP error envelope, and malformed shapes never become an empty assistant
+    turn.
+    """
+    from lib.llm.llm_errors import (
+        _ERR_BODY_LIMIT, _classify_http_error, decode_error_body,
+        provider_error_http_status,
+    )
+    try:
+        data = timed_call('response_parse', resp.json)
+    except (ValueError, json.JSONDecodeError) as e:
+        raise Exception(
+            f'API returned invalid JSON (HTTP {resp.status_code}): '
+            f'{decode_error_body(resp)[:_ERR_BODY_LIMIT]}'
+        ) from e
+    if not isinstance(data, dict):
+        raise Exception(
+            'API returned invalid response shape: top-level JSON must be an object')
+    if responses:
+        from lib.llm.responses_outbound import responses_response_to_openai
+        data = timed_call('response_normalize', responses_response_to_openai,
+            data, tool_name_reverse=name_reverse, reasoning_replay=reasoning_replay)
+    elif anthropic:
+        from lib.llm.anthropic_outbound import anthropic_response_to_openai
+        data = timed_call('response_normalize', anthropic_response_to_openai, data)
+        if cloak_reverse:
+            from lib.oauth.outbound import restore_claude_tool_names
+            for choice in data.get('choices') or []:
+                restore_claude_tool_names(
+                    (choice.get('message') or {}).get('tool_calls'), cloak_reverse)
+    if data.get('error') is not None:
+        # Do not manufacture an empty assistant turn from malformed provider
+        # JSON, and do not assume the provider's error field is well shaped.
+        converted_error = data.get('error')
+        error_message = (converted_error.get('message', '')
+                         if isinstance(converted_error, dict) else '')
+        if not isinstance(error_message, str) or not error_message:
+            error_message = 'provider returned an invalid response'
+        error_status = provider_error_http_status(converted_error) or 500
+        error_body = (json.dumps({'error': converted_error}, ensure_ascii=False)
+                      if isinstance(converted_error, dict) else error_message)
+        _classify_http_error(error_status, error_body, model, log_prefix,
+                             max_tokens=max_tokens,
+                             credential_present=credential_present)
+    choices = data.get('choices')
+    if choices is None:
+        choices = []
+    if not isinstance(choices, list):
+        raise Exception(
+            'API returned invalid response shape: choices must be an array')
+    if not choices:
+        raise Exception(
+            f'API returned no choices: {json.dumps(data)[:500]}'
+        )
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        raise Exception(
+            'API returned invalid response shape: choices[0] must be an object')
+    raw_message = first_choice.get('message')
+    if raw_message is None:
+        message = {}
+    elif isinstance(raw_message, dict):
+        message = raw_message
+    else:
+        raise Exception(
+            'API returned invalid response shape: choices[0].message must be an object')
+    return data, first_choice, message
+
+
+def _send_nonstream_attempt(budget, body, send, args, kwargs, *, desktop):
+    from lib.llm.request import current_physical_model_dispatch_guard, refuse_unfenced_model_relay
+    guard = current_physical_model_dispatch_guard()
+    if desktop:
+        refuse_unfenced_model_relay(guard)
+    from contextlib import nullcontext
+    authority = nullcontext()
+    if guard is not None:
+        from lib.http_transport.outbound import wire_send_authority
+        guard()
+        authority = wire_send_authority(guard)
+    with authority:
+        if budget is not None:
+            return budget.send(body, send, *args, **kwargs)
+        return send(*args, **kwargs)
+
+
 @budgeted_nonstream_chat
 @timed_stage('chat_total')
 def chat(messages, model=None, *, max_tokens=4096, temperature=0,
@@ -80,7 +176,7 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
          timeout=None, log_prefix='', api_key=None, base_url=None,
          extra_headers=None, max_retries=None, _limit_retry=False,
          thinking_format='', provider_id='', api_protocol='openai', oauth='',
-         adapter=None, responses_feature_profile='', owner_user_id=None,
+         adapter=None, responses_feature_profile='', owner_user_id=None, codex_account_fingerprints=(),
          inference_profile=None, context_window=0, model_budget_admit=None, _budget_scope=None,
          abort_check=None, _repair_state=None, knowledge_model='',
          route_output_limit_key=''):
@@ -117,7 +213,7 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
     # A complete-text API need not use a nonstream wire request. Subscription
     # Responses endpoints require streaming; retain the selected route and let
     # the existing stream owner verify its terminal evidence before returning.
-    if api_protocol == 'responses' and oauth == 'codex':
+    if codex_account_fingerprints or (api_protocol == 'responses' and oauth == 'codex'):
         from lib.llm.chat_stream import complete_subscription_stream
         return complete_subscription_stream(
             messages, model=model or _lib.LLM_MODEL,
@@ -131,7 +227,7 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
             model_budget_admit=model_budget_admit,
             api_key=api_key, base_url=base_url, extra_headers=extra_headers,
             api_protocol=api_protocol, oauth=oauth, adapter=adapter,
-            owner_user_id=owner_user_id, abort_check=abort_check,
+            codex_account_fingerprints=codex_account_fingerprints, owner_user_id=owner_user_id, abort_check=abort_check,
             timeout=timeout, max_retries=max_retries, log_prefix=log_prefix)
 
     import requests
@@ -168,7 +264,6 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
         _classify_http_error,
         _has_outbound_credential,
         attach_provider_rate_signals, decode_error_body,
-        provider_error_http_status,
     )
     from lib.cost import canonicalize_usage_cache_keys
     from lib.model_info import (
@@ -313,6 +408,13 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
             endpoint=url, input_tokens=_input_tokens, local_tokens=_local_tokens,
             semantic_id=_semantic_id, logical_model=knowledge_model or model)
 
+    # Exact bytes each attempt hands to the HTTP client and the frame naming
+    # them. `transport_send` encodes a content-encoded body exactly once and
+    # its returned payload goes unchanged to every send branch; an identity
+    # body reuses its frame across retries.
+    from lib.llm.sent_frame import transport_send
+    _sent_frame = None
+
     if log_prefix:
         logger.debug('%s POST %s model=%s msgs=%d', log_prefix, url, model, len(messages))
 
@@ -327,14 +429,14 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
     resp = None
     resp_trace = ''
     trace_id = ''
+
     def _budget_send(send, *args, **kwargs):
         with timing_stage('provider_send', model=model, provider_id=provider_id,
                 protocol=api_protocol, trace_id=trace_id,
                 transport='adapter' if _adapter else 'desktop_egress'
                     if _egress_route and _egress_route != 'direct' else 'requests'):
-            if _budget_scope is not None:
-                return _budget_scope.send(body, send, *args, **kwargs)
-            return send(*args, **kwargs)
+            return _send_nonstream_attempt(_budget_scope, body, send, args, kwargs,
+                                           desktop=_adapter or _egress_route not in (None, 'direct'))
 
     for attempt in range(1 + retries):
         # Every physical retry re-enters shared route admission. In particular,
@@ -350,6 +452,13 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
                 raise EndpointUnreachableError(str(e), base_url=url) from e
         if _budget_scope is not None:
             body = _budget_scope.prepare(body)
+            # The budget owner may re-seal with a new output limit: only the
+            # bytes of THIS attempt may be framed, never the pre-budget ones.
+            _sent_frame = None
+        # One compression per send: these bytes and this frame are the ones
+        # handed to every transport branch below and into the receipt.
+        _wire_payload, _sent_frame = transport_send(
+            body, transport='http', frame=_sent_frame)
         try:
             trace_id = uuid.uuid4().hex
             hdrs = _attempt_headers(
@@ -373,7 +482,7 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
                             _adapter.get('agent_id', ''),
                             int(_adapter.get('port') or 0),
                             _relay_path, method='POST', headers=hdrs,
-                            body=body.payload,
+                            body=_wire_payload,
                             timeout=min(timeout or 60, 60),
                             user_id=_owner_scope)
                     except _EU as e:
@@ -383,7 +492,7 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
                     try:
                         resp = _budget_send(_eg.egress_http,
                             url, method='POST', headers=hdrs,
-                            body=body.payload,
+                            body=_wire_payload,
                             timeout=min(timeout or 60, 60),
                             user_id=_owner_scope,
                             agent_id=_egress_route)
@@ -392,7 +501,8 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
                             str(e), base_url=url) from e
                 else:
                     resp = _budget_send(_post_admitted_request, url, hdrs, body,
-                                        (CONNECT_TIMEOUT, timeout), oauth)
+                                        (CONNECT_TIMEOUT, timeout), oauth,
+                                        payload=_wire_payload)
             except (requests.exceptions.ConnectionError, requests.exceptions.Timeout,
                     RequestTransportError) as ce:
                 from lib.llm._transport import classify_request_transport_error
@@ -511,65 +621,12 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
             knowledge_model=knowledge_model,
             route_output_limit_key=route_output_limit_key)
 
-    try:
-        data = timed_call('response_parse', resp.json)
-    except (ValueError, json.JSONDecodeError) as e:
-        raise Exception(
-            f'API returned invalid JSON (HTTP {resp.status_code}): '
-            f'{decode_error_body(resp)[:_ERR_BODY_LIMIT]}'
-        ) from e
-    if not isinstance(data, dict):
-        raise Exception(
-            'API returned invalid response shape: top-level JSON must be an object')
-    if _responses:
-        from lib.llm.responses_outbound import responses_response_to_openai
-        data = timed_call('response_normalize', responses_response_to_openai,
-            data, tool_name_reverse=_resp_reverse, reasoning_replay=_resp_replay)
-    elif _anthropic:
-        from lib.llm.anthropic_outbound import anthropic_response_to_openai
-        data = timed_call('response_normalize', anthropic_response_to_openai, data)
-        if _cloak_reverse:
-            from lib.oauth.outbound import restore_claude_tool_names
-            for _ch in data.get('choices') or []:
-                restore_claude_tool_names(
-                    (_ch.get('message') or {}).get('tool_calls'), _cloak_reverse)
-    if data.get('error') is not None:
-        # Protocol converters use the same error envelope as HTTP failures.
-        # Do not manufacture an empty assistant turn from malformed provider
-        # JSON, and do not assume the provider's error field is well shaped.
-        converted_error = data.get('error')
-        error_message = (converted_error.get('message', '')
-                         if isinstance(converted_error, dict) else '')
-        if not isinstance(error_message, str) or not error_message:
-            error_message = 'provider returned an invalid response'
-        error_status = provider_error_http_status(converted_error) or 500
-        error_body = (json.dumps({'error': converted_error}, ensure_ascii=False)
-                      if isinstance(converted_error, dict) else error_message)
-        _classify_http_error(error_status, error_body, model, log_prefix,
-                             max_tokens=max_tokens,
-                             credential_present=_has_outbound_credential(hdrs))
-    choices = data.get('choices')
-    if choices is None:
-        choices = []
-    if not isinstance(choices, list):
-        raise Exception(
-            'API returned invalid response shape: choices must be an array')
-    if not choices:
-        raise Exception(
-            f'API returned no choices: {json.dumps(data)[:500]}'
-        )
-    first_choice = choices[0]
-    if not isinstance(first_choice, dict):
-        raise Exception(
-            'API returned invalid response shape: choices[0] must be an object')
-    raw_message = first_choice.get('message')
-    if raw_message is None:
-        msg = {}
-    elif isinstance(raw_message, dict):
-        msg = raw_message
-    else:
-        raise Exception(
-            'API returned invalid response shape: choices[0].message must be an object')
+    data, first_choice, msg = _parse_nonstream_response(
+        resp, responses=_responses, anthropic=_anthropic,
+        cloak_reverse=_cloak_reverse, name_reverse=_resp_reverse,
+        reasoning_replay=_resp_replay, model=model, max_tokens=max_tokens,
+        log_prefix=log_prefix,
+        credential_present=_has_outbound_credential(hdrs))
     raw_content = msg.get('content', '')
     if raw_content is None:
         content = ''
@@ -587,6 +644,9 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
     # Stamp canonical cache keys from vendor spellings (see _sse_core note).
     canonicalize_usage_cache_keys(usage)
     usage.update(body.usage_evidence(trace_id))
+    from lib.llm.cache_exchange import CACHE_EXCHANGE_KEY, cache_exchange_receipt
+    usage[CACHE_EXCHANGE_KEY] = cache_exchange_receipt(
+        body, usage, transport='http', verified=True, frame=_sent_frame)
     from lib.llm.request_receipt import request_parameter_receipt
     usage['_request_parameters'] = request_parameter_receipt(body)
 

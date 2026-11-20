@@ -15,7 +15,7 @@ from quart import Blueprint, current_app
 
 from lib.api_response import api_bad_request, api_error, api_not_found, api_ok
 from lib.log import get_logger
-from lib.openapi import api_meta
+from lib.openapi import api_meta, media_responses
 from lib.request_parser import BadRequest, parse_body
 from lib.storage.errors import StorageError
 
@@ -35,6 +35,15 @@ def _schema(name: str) -> dict:
 def _json_response(name: str, description: str) -> dict:
     return {'200': {'description': description,
                     'content': {'application/json': {'schema': _schema(name)}}}}
+
+
+def _problem(description: str) -> dict:
+    return {'description': description, 'content': {'application/problem+json': {
+        'schema': {'$ref': '#/components/schemas/Problem'}}}}
+
+
+_UNCERTAIN_WRITE = 'Write outcome may be unknown; reread current policy, do not assume rollback.'
+_POLICY_UNAVAILABLE = 'Device policy storage unavailable; retry the read.'
 
 
 def _failure(error: Exception):
@@ -58,19 +67,26 @@ def _follow_in_execution(owner: int) -> str:
 
 
 def _owned_node(owner: int, node_id: str) -> dict | None:
-    """The owner's node by ID: a known bridge agent, an active node of the Home
-    registry (online or not), else one with a stored ceiling."""
+    """Resolve routing capabilities without treating stale bridge presence as ownership."""
     from lib.desktop import list_agents
-    from lib.desktop.device_policy import policy
-    from lib.desktop.node_registry import NodeRegistry
-    for agent in list_agents(user_id=str(owner)):
-        if agent['agent_id'] == node_id:
-            return agent
-    registered = NodeRegistry(owner).get(node_id)
-    if registered is not None and registered['state'] == 'active':
-        return {'agent_id': node_id, 'capabilities': None, 'kind': registered['kind']}
-    record, _rev = policy(owner)
-    return {'agent_id': node_id, 'capabilities': None} if node_id in record['ceilings'] else None
+    from lib.desktop.node_registry import NodeRegistry, valid_node_id
+    if not valid_node_id(node_id):
+        return None
+    registry = NodeRegistry(owner)
+    target = registry.policy_target(node_id)
+    agents = list_agents(user_id=str(owner))
+    if target is not None:
+        registered, witness = target
+        capabilities = next((agent.get('capabilities') for agent in agents
+                             if agent['agent_id'] == node_id
+                             and agent.get('key_id') == registered['credentialId']), None)
+        return {'capabilities': capabilities, 'kind': registered['kind'], 'witness': witness}
+    # An in-process packaged-app node has no remote credential or registry row.
+    local = next((agent for agent in agents if agent['agent_id'] == node_id
+                  and not agent.get('key_id')), None)
+    if local is not None:
+        return {**local, 'witness': registry.policy_witness(node_id, None)}
+    return None
 
 
 def _owned_browser(owner: int, client_id: str) -> bool:
@@ -84,18 +100,22 @@ def _owned_browser(owner: int, client_id: str) -> bool:
 @api_meta(
     summary="The Home ceiling, device switch and effective permissions of the caller's devices",
     description=('Shape: PermissionsListing in contracts/device_routing_v1.schema.json. '
-                 'Covers every device known to the bridge and every device with a stored '
-                 'ceiling; a device without one is read-only.'),
+                 'Covers bridge devices, confirmed registry nodes (even before their first '
+                 'poll), and stored ceilings; a device without a ceiling is read-only.'),
     tags=['capabilities'],
-    responses=_json_response('PermissionsListing', 'Permissions of every known device'),
+    responses={**_json_response('PermissionsListing', 'Permissions of every known device'),
+               '503': _problem(_POLICY_UNAVAILABLE)},
 )
 def device_permissions():
     """SYNC on purpose: the policy read blocks on storage I/O."""
     from lib.desktop import list_agents
     from lib.desktop.device_policy import permissions_listing
+    from lib.desktop.node_registry import NodeRegistry
     owner = request_principal().require_owner(context='device permissions')
     try:
-        return api_ok(permissions_listing(owner, list_agents(user_id=str(owner))))
+        registered = (node['nodeId'] for node in NodeRegistry(owner).list() if node['state'] == 'active')
+        return api_ok(permissions_listing(owner, list_agents(user_id=str(owner)),
+                                          registered_node_ids=registered))
     except (StorageError, ValueError) as error:
         return _failure(error)
 
@@ -107,25 +127,38 @@ def device_permissions():
     description=('Body: CeilingRequest; response: DevicePermissions plus execution '
                  '(contracts/device_routing_v1.schema.json). Effective permissions are this '
                  'ceiling AND the device\'s own switch; raising the ceiling never raises the '
-                 'device. Applies to running Turns on their next device call.'),
+                 'device. Requires expected_revision from a fresh permissions snapshot. '
+                 'Applies to running Turns on their next device call.'),
     tags=['capabilities'],
     request_body={'required': True, 'content': {'application/json': {
         'schema': _schema('CeilingRequest')}}},
+    responses={**media_responses('application/json'),
+               **_json_response('CeilingResponse', 'Committed device permissions'),
+               '409': _problem('stale_device_policy: reread device permissions'),
+               '503': _problem(_UNCERTAIN_WRITE)},
 )
 def device_ceiling(node_id):
-    from lib.desktop.device_policy import permissions_view, set_ceiling
+    from lib.desktop.device_policy import StaleDevicePolicy, permissions_view, set_ceiling
     owner = request_principal().require_owner(context='device permissions')
     try:
-        body = parse_body(strict=True, exact=('tiers',))
+        body = parse_body(strict=True, exact=('tiers', 'expected_revision'))
         node = _owned_node(owner, node_id)
         if node is None:
             return api_not_found('Device not found')
-        record, rev = set_ceiling(owner, node_id, body.get('tiers'))
+        record, rev = set_ceiling(owner, node_id, body.get('tiers'),
+                                  expected_revision=body.get('expected_revision'),
+                                  nodes=(node['witness'],))
         view = permissions_view(owner, node_id, node.get('capabilities'), record=record,
                                 rev=rev, known=node.get('capabilities') is not None)
+    except StaleDevicePolicy as error:
+        return api_error(str(error), status=409, error_code='stale_device_policy')
     except BadRequest as error:
         return api_bad_request(str(error))
-    except (StorageError, ValueError) as error:
+    except StorageError as error:
+        # Even a failed acknowledgement can hide a committed revocation.
+        _follow_in_execution(owner)
+        return _failure(error)
+    except ValueError as error:
         return _failure(error)
     return api_ok({**view, 'execution': _follow_in_execution(owner)})
 
@@ -137,13 +170,14 @@ def device_ceiling(node_id):
     description=('Shape: DefaultsResponse in contracts/device_routing_v1.schema.json. A call '
                  'that names no device runs on the default of its kind.'),
     tags=['capabilities'],
-    responses=_json_response('DefaultsResponse', 'Default devices'),
+    responses={**_json_response('DefaultsResponse', 'Default devices'),
+               '503': _problem(_POLICY_UNAVAILABLE)},
 )
 def device_defaults():
     from lib.desktop.device_policy import policy
     owner = request_principal().require_owner(context='device defaults')
     try:
-        record, rev = policy(owner)
+        record, rev = policy(owner, fresh=True)
     except (StorageError, ValueError) as error:
         return _failure(error)
     return api_ok({'defaults': record['defaults'], 'rev': rev})
@@ -154,28 +188,39 @@ def device_defaults():
 @api_meta(
     summary="Mark or clear the caller's default device per kind",
     description=('Body: DefaultsRequest (null clears, omitted kinds are unchanged); '
-                 'response: DefaultsResponse plus execution. computer and server name one of '
+                 'response: DefaultsWriteResponse. computer and server name one of '
                  'the caller\'s nodes, browser one of the caller\'s connected browser clients.'),
     tags=['capabilities'],
     request_body={'required': True, 'content': {'application/json': {
         'schema': _schema('DefaultsRequest')}}},
+    responses={**media_responses('application/json'),
+               **_json_response('DefaultsWriteResponse', 'Committed device defaults'),
+               '503': _problem(_UNCERTAIN_WRITE)},
 )
 def update_device_defaults():
     from lib.desktop.device_policy import set_defaults
     owner = request_principal().require_owner(context='device defaults')
     try:
         body = parse_body(strict=True, exact=('computer', 'server', 'browser'))
+        witnesses = {}
         for kind, node_id in body.items():
             if node_id is None:
                 continue
-            owned = (_owned_browser(owner, node_id) if kind == 'browser'
-                     else _owned_node(owner, node_id) is not None)
-            if not owned:
-                return api_not_found(f'Device not found for {kind}')
-        record, rev = set_defaults(owner, body)
+            if kind == 'browser':
+                if not _owned_browser(owner, node_id):
+                    return api_not_found(f'Device not found for {kind}')
+            else:
+                node = _owned_node(owner, node_id)
+                if node is None:
+                    return api_not_found(f'Device not found for {kind}')
+                witnesses.setdefault(node_id, node['witness'])
+        record, rev = set_defaults(owner, body, nodes=tuple(witnesses.values()))
     except BadRequest as error:
         return api_bad_request(str(error))
-    except (StorageError, ValueError) as error:
+    except StorageError as error:
+        _follow_in_execution(owner)
+        return _failure(error)
+    except ValueError as error:
         return _failure(error)
     return api_ok({'defaults': record['defaults'], 'rev': rev,
                    'execution': _follow_in_execution(owner)})

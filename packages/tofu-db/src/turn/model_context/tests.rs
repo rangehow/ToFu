@@ -47,6 +47,7 @@ fn context(db: &AuthorityDatabase, index: usize, replay: bool) -> Value {
         &format!("turn-{index}"),
         replay,
         None,
+        None,
     )
     .unwrap()
     .unwrap();
@@ -131,6 +132,87 @@ fn stored_certificate(db: &AuthorityDatabase) -> Option<frontier::Frontier> {
         .map(|bytes| frontier::Frontier::decode(&key, &bytes).unwrap())
 }
 #[test]
+fn continue_plan_witness_is_snapshot_bound_and_normalizes_the_retained_source() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut db = AuthorityDatabase::initialize(directory.path()).unwrap();
+    append(&mut db, 0);
+    let mut tx = db.begin_with_identity_claim_scopes(7, 11).unwrap();
+    append_settled(
+        &db,
+        &mut tx,
+        &AppendSettledRequest {
+            conversation_id: CONVERSATION.into(),
+            actor: "assistant".into(),
+            status: "interrupted".into(),
+            projection_json: br#"{"toolRounds":[{"toolCallId":"call","toolName":"read","toolContent":"result","status":"done"}]}"#.to_vec(),
+            projection_timestamp: None,
+            settlement_json: br#"{"outcome":"interrupted","cause":"fixture","resumeOptions":["continue"]}"#.to_vec(),
+            lane_id: "main".into(),
+            command_id: "append-source".into(),
+            kind: "reply".into(),
+            run_id: String::new(),
+            turn_id: "turn-1".into(),
+            attempt_id: Some("source-attempt".into()),
+            created_at_ms: 1001,
+            committed_at_ms: 1001,
+            defaults: TurnDefaults {
+                allow_create: false,
+                title: String::new(),
+                settings_json: b"{}".to_vec(),
+                created_at_ms: 1000,
+            },
+        },
+    )
+    .unwrap();
+    db.commit(tx).unwrap();
+    let cold = context(&db, 1, false);
+    let target = &cold["turns"][1];
+    let mut request = json!({
+        "attempt_id": target["currentAttemptId"],
+        "projection_revision": target["projectionRevision"],
+        "history_digest": cold["historyProof"]["digest"],
+    });
+    let observe = |request: &Value| {
+        let request = ContinuePlanRequest::parse(request)?;
+        let mut tx = db.begin_with_identity_claim_scopes(7, 11)?;
+        let bytes = read(
+            &db,
+            &mut tx,
+            CONVERSATION,
+            "turn-1",
+            false,
+            None,
+            Some(&request),
+        )?
+        .unwrap()
+        .into_bytes();
+        Ok::<Value, io::Error>(serde_json::from_slice(&bytes).unwrap())
+    };
+    let witnessed = observe(&request).unwrap();
+    assert_eq!(witnessed["historyProof"], cold["historyProof"]);
+    assert_eq!(witnessed["turns"], cold["turns"]);
+    assert_eq!(
+        witnessed["continuePlan"]["historyDigest"],
+        request["history_digest"]
+    );
+    assert_eq!(
+        witnessed["continuePlan"]["projection"]["toolRounds"][0]["attemptId"],
+        "source-attempt"
+    );
+    request["resume_anchor"] = json!({"type": "wrong"});
+    assert_eq!(
+        observe(&request).unwrap_err().kind(),
+        io::ErrorKind::WouldBlock
+    );
+    request["history_digest"] = json!("a".repeat(64));
+    assert_eq!(
+        conflict_kind(&observe(&request).unwrap_err()),
+        Some(TurnConflictKind::ProjectionStale)
+    );
+    assert_eq!(context(&db, 1, false), cold);
+}
+
+#[test]
 fn a_turn_above_one_projection_page_travels_as_its_page_zero_head() {
     let directory = tempfile::tempdir().unwrap();
     let mut db = AuthorityDatabase::initialize(directory.path()).unwrap();
@@ -174,7 +256,7 @@ fn a_paged_row_names_its_turn_as_the_cursor_and_keeps_the_media_fence() {
     page.full = true;
     let response: Value = serde_json::from_slice(
         &page
-            .respond(0, 1, "0".repeat(64), "replay_disabled", None)
+            .respond(0, 1, "0".repeat(64), "replay_disabled", None, None)
             .unwrap()
             .into_bytes(),
     )
@@ -206,7 +288,7 @@ fn a_context_read_encodes_each_single_page_turn_once() {
         let mut tx = db.begin(7, 11).unwrap();
         crate::response_json::NORMALIZATIONS.with(|count| count.set(0));
         super::super::projection_page::PLANS.with(|count| count.set(0));
-        let response = read(&db, &mut tx, CONVERSATION, "turn-3", replay, None)
+        let response = read(&db, &mut tx, CONVERSATION, "turn-3", replay, None, None)
             .unwrap()
             .unwrap();
         let normalizations = crate::response_json::NORMALIZATIONS.with(|count| count.get());
@@ -718,6 +800,7 @@ fn page_after(
         &format!("turn-{index}"),
         replay,
         Some(after),
+        None,
     )
     .map(|bytes| serde_json::from_slice(&bytes.unwrap().into_bytes()).unwrap())
 }

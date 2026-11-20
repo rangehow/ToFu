@@ -130,6 +130,7 @@ pub mod payload_segment;
 mod plugin;
 mod plugin_migration;
 mod plugin_rows;
+mod portable_import;
 pub mod prefetch;
 mod project_brain;
 mod project_brain_migration;

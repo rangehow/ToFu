@@ -435,3 +435,72 @@ def test_client_tool_choice_and_generation_options_reach_selected_slot(
     assert all(seen[0][key] == value for key, value in options.items())
     assert (request, choice, options) == original
     assert slot.inflight == 0
+
+
+@pytest.mark.unit
+class TestAsyncDispatchStreamPicksOffTheLoop:
+    """The slot pick stats and reads the key-stats store and durable quota
+    alerts on the shared volume; on the event loop one slow read stalled every
+    request (LoopWatch 2026-11-18 14:34:21, ``key_stats/_state.py`` in
+    ``_read_store_snapshot``). The pick runs on a worker thread instead."""
+
+    def test_pick_does_not_run_on_the_event_loop_thread(self, monkeypatch):
+        import threading
+        from lib.llm_dispatch import api
+
+        loop_thread = []
+        pick_threads = []
+
+        class _Recording(_FakeDispatcher):
+            def pick_and_reserve(self, **kwargs):
+                pick_threads.append(threading.get_ident())
+                return super().pick_and_reserve(**kwargs)
+
+        disp = _Recording([_make_slot()])
+        monkeypatch.setattr(api, 'get_dispatcher', lambda: disp)
+
+        async def _fake_astream(body, **kwargs):
+            return 'ok', 'stop', {}
+
+        import lib.llm.astream as astream_mod
+        monkeypatch.setattr(astream_mod, 'async_stream_chat', _fake_astream)
+
+        async def main():
+            loop_thread.append(threading.get_ident())
+            return await api.async_dispatch_stream([{'role': 'user', 'content': 'hi'}])
+
+        assert _run(main())[0] == 'ok'
+        assert pick_threads and loop_thread[0] not in pick_threads
+
+    def test_cancellation_during_the_pick_returns_the_reservation(self, monkeypatch):
+        import threading
+        from lib.llm_dispatch import api
+
+        slot = _make_slot()
+        entered, release = threading.Event(), threading.Event()
+
+        class _Slow(_FakeDispatcher):
+            def pick_and_reserve(self, **kwargs):
+                entered.set()
+                release.wait(10)
+                return super().pick_and_reserve(**kwargs)
+
+        disp = _Slow([slot])
+        monkeypatch.setattr(api, 'get_dispatcher', lambda: disp)
+
+        async def main():
+            task = asyncio.ensure_future(
+                api.async_dispatch_stream([{'role': 'user', 'content': 'hi'}]))
+            await asyncio.get_running_loop().run_in_executor(None, entered.wait, 10)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            release.set()
+            for _ in range(200):
+                if disp.picks and slot.inflight == 0:
+                    break
+                await asyncio.sleep(0.01)
+
+        _run(main())
+        assert disp.picks == 1
+        assert slot.inflight == 0, 'a pick finished after cancellation kept its reservation'

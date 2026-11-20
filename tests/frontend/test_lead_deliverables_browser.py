@@ -120,6 +120,13 @@ def test_classic_task_board_expands_each_task_to_its_reports_and_files(page, mon
     # The in-progress task names its one report; the pending-less finished task its delivery.
     resume = board.locator('.coordinator-progress-task-toggle', has_text='Polish the resume')
     expect(resume.locator('.coordinator-progress-task-count')).to_have_text('1')
+    # A task with a note is two lines tall: its trailing count and chevron are centred on
+    # the row, not pinned to the first line.
+    def centre_y(locator):
+        return locator.evaluate('el => { const r = el.getBoundingClientRect(); return r.top + r.height / 2 }')
+    expect(resume.locator('.coordinator-progress-task-note')).to_have_text('Final pass.')
+    for trailing in ('.coordinator-progress-task-count', '.coordinator-progress-task-chevron'):
+        assert abs(centre_y(resume.locator(trailing)) - centre_y(resume)) <= 1, trailing
     expect(resume).to_have_attribute('aria-expanded', 'false')
     resume.click()
     expect(resume).to_have_attribute('aria-expanded', 'true')
@@ -137,6 +144,8 @@ def test_classic_task_board_expands_each_task_to_its_reports_and_files(page, mon
     board.locator('.coordinator-progress-finished > summary').click()
     login = board.locator('.coordinator-progress-task-toggle', has_text='Fix the Safari login')
     expect(login.locator('.coordinator-progress-task-count')).to_have_text('1')
+    expect(login.locator('.coordinator-progress-task-status')).to_have_text('Marked complete')
+    expect(login.locator('.coordinator-progress-task-evidence')).to_have_text('Delivery report linked')
     login.click()
     delivery = board.locator(f'.coordinator-task-deliverables[data-task="{login.get_attribute("data-task")}"] .lead-deliverable')
     expect(delivery.locator('.lead-deliverable__kind')).to_have_text('Delivered')
@@ -144,14 +153,17 @@ def test_classic_task_board_expands_each_task_to_its_reports_and_files(page, mon
     # A task completed without a report still expands, to its automatic work report.
     backup = board.locator('.coordinator-progress-task-toggle', has_text='Back up the notes')
     expect(backup.locator('.coordinator-progress-task-count')).to_have_text('1')
+    expect(backup.locator('.coordinator-progress-task-status')).to_have_text('Marked complete')
+    expect(backup.locator('.coordinator-progress-task-evidence')).to_have_text('No delivery report linked')
     backup.click()
     work = board.locator(f'.coordinator-task-deliverables[data-task="{backup.get_attribute("data-task")}"] .lead-deliverable')
-    expect(work.locator('.lead-deliverable__kind')).to_have_text('Work report')
+    expect(work.locator('.lead-deliverable__kind')).to_have_text('Automatic board note')
     expect(work.locator('.lead-deliverable__title')).to_have_text('Saved to backup/notes-2026-11.')
     _settle(page)
     board.screenshot(path=str(OUTPUT / 'board-completion-expanded.png'), animations='disabled')
     work.locator('.lead-deliverable__open').click()
     note = page.locator('dialog.lead-deliverable-dialog .lead-deliverable-report--completion')
+    expect(note).to_contain_text('This is not a delivery or verification record.')
     expect(note).to_contain_text('Saved to backup/notes-2026-11.')
     page.locator('dialog.lead-deliverable-dialog').get_by_role('button', name='Close').click()
 
@@ -191,21 +203,15 @@ def test_classic_task_board_expands_each_task_to_its_reports_and_files(page, mon
 
 
 def test_studio_desk_opens_the_delivery_itself(browser, live_server, monkeypatch, tmp_path):
-    from urllib.parse import quote
-
-    from tests.conftest import _attach_js_error_capture, _dismiss_onboarding_modals, _server_conversation_ids
+    from tests.conftest import _attach_js_error_capture, _dismiss_onboarding_modals
     from tests._jsdom import require_shipped_graph
     require_shipped_graph()
     context = browser.new_context(viewport={'width': 1440, 'height': 900})
     page = context.new_page()
     _attach_js_error_capture(page)
-    # This spec owns its context, so it also owns the page fixture's cleanup: a lead
-    # conversation left on the session server is the one later specs boot into.
-    ids_before = None
     try:
         page.goto(live_server, wait_until='domcontentloaded')
         _dismiss_onboarding_modals(page)
-        ids_before = _server_conversation_ids(page, live_server.rstrip('/'))
         _, leader, report_turn, _, _ = _seed(page, tmp_path, monkeypatch)
         OUTPUT.mkdir(parents=True, exist_ok=True)
         page.evaluate('() => { localStorage.setItem("tofu_ui_lang", "en"); localStorage.setItem("tofu_landing_workspace", "world"); }')
@@ -227,15 +233,12 @@ def test_studio_desk_opens_the_delivery_itself(browser, live_server, monkeypatch
         assert page.evaluate('document.body.dataset.conversationDock') != 'chat'
         _settle(page)
         page.screenshot(path=str(OUTPUT / 'studio-report-card.png'), animations='disabled')
+        # The message is the transcript's: it opens in the classic view, never docked in the office.
         dialog.get_by_role('button', name='Go to message').click()
-        page.wait_for_function("document.body.dataset.conversationDock === 'chat'")
+        page.wait_for_function("document.body.dataset.workspace === 'chat'")
         page.wait_for_function('(id) => window.activeConvId === id', arg=leader)
         expect(page.locator(f'[data-turn-id="{report_turn}"], [data-report-turn-id="{report_turn}"]').first).to_be_visible()
         _settle(page)
         page.screenshot(path=str(OUTPUT / 'studio-source-turn.png'), animations='disabled')
     finally:
-        # Same mass-deletion guard as the page fixture: no exact baseline, no delete.
-        if ids_before is not None:
-            for conversation_id in (_server_conversation_ids(page, live_server.rstrip('/')) or set()) - ids_before:
-                context.request.delete(f'{live_server.rstrip("/")}/api/v4/conversations/{quote(conversation_id, safe="")}')
         context.close()

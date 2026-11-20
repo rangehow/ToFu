@@ -297,3 +297,52 @@ def test_managed_reexec_threads_requested_at_to_supervisor(monkeypatch):
         'reason': 'update',
         'requested_at': epoch,
     })]
+
+
+@pytest.mark.unit
+def test_deferred_restart_refusal_releases_precedence(monkeypatch):
+    from routes.api_v1 import update
+    import server_manager
+
+    requested_at = 1789972800.0
+    records = iter((
+        {'requestedAt': requested_at - 1, 'outcome': 'refused'},
+        {'requestedAt': requested_at, 'outcome': 'started'},
+        {'requestedAt': requested_at, 'outcome': 'refused', 'message': 'engine refused'},
+    ))
+    actions = []
+
+    class Precedence:
+        def abandon(self):
+            actions.append('released')
+
+    monkeypatch.setattr(reexec.time, 'sleep', lambda delay: None)
+    monkeypatch.setattr(server_manager, 'read_restart_outcome',
+                        lambda project: next(records))
+    monkeypatch.setattr(reexec, 'perform_server_reexec',
+                        lambda *args, **kwargs: reexec.ServerReexecOutcome(
+                            True, manager_wait_seconds=0))
+    monkeypatch.setattr(update._lca, 'rollback_restart_stamp',
+                        lambda **kwargs: actions.append('rolled back'))
+    update._deferred_reexec(delay=0, requested_at=requested_at,
+                            precedence=Precedence())
+    assert actions == ['rolled back', 'released']
+
+
+@pytest.mark.unit
+def test_deferred_restart_handoff_exception_releases_precedence(monkeypatch):
+    from routes.api_v1 import update
+
+    actions = []
+
+    class Precedence:
+        def abandon(self):
+            actions.append('released')
+
+    def broken_handoff(*args, **kwargs):
+        raise RuntimeError('handoff failed')
+
+    monkeypatch.setattr(reexec, 'perform_server_reexec', broken_handoff)
+    with pytest.raises(RuntimeError, match='handoff failed'):
+        update._deferred_reexec(delay=0, precedence=Precedence())
+    assert actions == ['released']

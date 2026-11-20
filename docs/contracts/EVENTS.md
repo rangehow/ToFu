@@ -5,10 +5,15 @@
 > read [`HEADLESS_API.md` §3.6.1](HEADLESS_API.md#361-streaming-event-contract--the-frontendbackend-sync-interface)
 > instead — that documents the wire vocabulary a client sees.
 
-The event vocabulary is a **single, declared, versioned contract**. There is
-ONE source of truth — [`lib/agent_core/events.py`](../../lib/agent_core/events.py) —
-and ONE way to construct an event. This guide is the rule set that keeps it that
-way.
+The event vocabulary is a **single, declared, versioned contract**. Its
+machine-readable authority is [`contracts/events_v1.json`](../../contracts/events_v1.json)
+(events, phases, push frames, field schemas and envelopes). The emission
+registry in [`lib/agent_core/events.py`](../../lib/agent_core/events.py) is the
+Python implementation of that contract and the ONE way to construct an event;
+`python3 scripts/gen_event_contract.py` fails when an event, phase,
+push frame or field exists on one side only. Add or change an event in the
+contract first, then in the registry. This guide is the rule set that keeps it
+that way.
 
 ---
 
@@ -231,7 +236,7 @@ in `lib/agent_core/events.py` holds each frame's channel, task-id semantics,
 prose fields, and machine-readable `FieldSpec` schema. Emitters construct
 frames through `build_push_frame` (the same construction gate as
 `build_event`: strict under pytest, warn in production), and
-`scripts/gen_event_contract.py` mirrors the registry into
+`make contracts` (`tofu-xtask contracts`) mirrors the contract into
 `frontend/src/api/event-contract.generated.ts` (`ContractedPushFrame`), where
 `frontend/src/core/frame-identity.ts` narrows unknown payloads to the
 declared union. Never hand-assemble a declared frame as a raw dict.
@@ -858,8 +863,12 @@ quota/disk failure instead carries an explicit unretained-overflow state.
 
 ## 2. Adding a NEW event type
 
-Editing one file — `lib/agent_core/events.py` — covers it:
+Declare it in the contract, then implement it in the registry:
 
+0. **Add the event to `contracts/events_v1.json`** (type, category, purpose,
+   flags, prose `fields`, `schema`; contracted schemas also list the shared
+   task-event envelope fields). Then run `make contracts` to rederive the
+   TypeScript and Rust mirrors.
 1. **Add the constant** to the `EventType` class, under the right category
    block.
 2. **Add an `EventSpec`** to the `_SPECS` tuple: its `category`, a one-line
@@ -872,8 +881,9 @@ Editing one file — `lib/agent_core/events.py` — covers it:
    the retired chat task-SSE reducer.
 4. **Emit it** via `build_event(EventType.NEW_THING, ...)`.
 
-That's it — no second registration list, no capabilities-endpoint edit. The
-drift guard (below) confirms you didn't miss a step.
+No capabilities-endpoint edit is needed. `gen_event_contract.py`
+fails until contract and registry agree exactly, and the drift guard (below)
+confirms you didn't miss a step.
 
 `requires_response` is the only interaction list: the Turn records such an
 event as an `interaction_request` attempt event, and task-event delivery keeps
@@ -1101,9 +1111,11 @@ These are component observations, not task or provider latency claims.
 refusal, post-construction mutation, replacement identity, concurrent first
 reads, and the removal of repeated union parsing.
 
-The TypeScript mirror is generated: `scripts/gen_event_contract.py` writes
+The TypeScript and Rust mirrors are generated from `contracts/events_v1.json`:
+`tofu-xtask contracts` (`packages/tofu-xtask`, run by `make contracts`) writes
 `frontend/src/api/event-contract.generated.ts` (one interface per schema'd
-event), wired into `make contracts-check` / `npm run check:event-contract` —
+event) and `packages/tofu-contracts/src/generated_events_v1.rs` (serde types,
+tagged enums and metadata), wired into `make contracts-check` / `npm run check:event-contract` —
 a frontend read of an undeclared field is a *typecheck* error, so the two
 sides cannot drift in either direction. Schema'd events also export their
 `schema` in the `/api/v4/capabilities` `events` block.

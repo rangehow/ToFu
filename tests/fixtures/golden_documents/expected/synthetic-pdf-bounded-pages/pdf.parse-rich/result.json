@@ -1,0 +1,18 @@
+{
+ "extractor": "pymupdf4llm",
+ "images": [],
+ "isScanned": false,
+ "limits": {
+  "maxImageWidth": 1024,
+  "maxImages": null,
+  "maxPages": 0,
+  "maxTextChars": 0
+ },
+ "method": "pymupdf4llm",
+ "processedPages": 5,
+ "text": "page 1 label for bounded extraction\n\nlorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet\n\n\n\n---\n\npage 2 label for bounded extraction\n\nlorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet\n\n\n\n---\n\npage 3 label for bounded extraction\n\nlorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet\n\n\n\n---\n\npage 4 label for bounded extraction\n\nlorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet\n\n\n\n---\n\npage 5 label for bounded extraction\n\nlorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet\n\n",
+ "textLength": 623,
+ "totalPages": 5,
+ "truncated": false,
+ "warnings": []
+}

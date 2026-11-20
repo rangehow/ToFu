@@ -4,7 +4,7 @@
 
    Layout:  Sidebar  = paper library (persistent)
             Main L   = PDF (vertical scroll, largest)
-            Main R   = Q&A / Report / Babel PDF
+            Main R   = Overview / Q&A / Report / Review / Full-text translation
    ═══════════════════════════════════════════ */
 
 // ── State ──
@@ -103,9 +103,9 @@ var _PAPER_REVIEW_VENUE_KEY = 'paper_review_venue_by_id';
 // Review-translation reading view (2026-07-01). A peer review is ALWAYS
 // generated in English (the language the authors/AC read); a Chinese UI can
 // toggle a translated reading view. English stays canonical (cache/export);
-// the translation is produced on demand by the Babel translate task under a
-// DISTINCT composite lang key ``review:<venue>:<lang>`` so it never collides
-// with the whole-paper Babel cache.
+// the translation is produced on demand by the paper text-translation task
+// under a DISTINCT composite lang key ``review:<venue>:<lang>`` so it never
+// collides with a plain whole-paper text translation.
 // Review reading language ('en' | 'zh'). English stays the canonical
 // generated/cached/exported text; 'zh' shows an on-demand translated reading
 // view. Persisted per paper so the last-read language re-opens. The toggle is
@@ -232,7 +232,7 @@ function _reportView(kind) {
       // A peer review is ALWAYS generated in English: conference submissions
       // and the review the authors/AC read are English, so English is the
       // canonical text (cache key, lookup, export). A Chinese UI reads a
-      // translated view produced on demand by the Babel translate task (see
+      // translated view produced on demand by the paper text-translation task (see
       // _setReviewLang) — the English review underneath is never
       // regenerated per-language.
       uiLang: function() { return 'en'; },
@@ -390,7 +390,6 @@ function _showPaperLandingForNew() {
   _paperReviewVenue = '';
   _paperHash = '';
   _paperImages = [];
-  runtimeScope._babelTranslatedPages = {};
   _paperTotalPages = 0;
   _updatePaperTitles();
   runtimeScope._renderPaperLibrary();
@@ -446,7 +445,6 @@ async function _paperUploadFile(file) {
   _paperHash = '';
   _paperPdfFilename = '';
   _paperImages = [];
-  runtimeScope._babelTranslatedPages = {};
   runtimeScope._paperFileName = _paperFileName;
   runtimeScope._paperParsedText = _paperParsedText;
   runtimeScope._paperQAHistory = _paperQAHistory;

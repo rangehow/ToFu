@@ -13,6 +13,112 @@ use sha_state::ShaState;
 #[cfg(test)]
 thread_local! { static SCANNED_HEADERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
+#[derive(Clone, Debug)]
+pub struct ContinuePlanRequest {
+    attempt_id: String,
+    projection_revision: u64,
+    history_digest: String,
+    resume_anchor: Option<Map<String, Value>>,
+    selection: bool,
+}
+
+impl ContinuePlanRequest {
+    pub(crate) fn parse(value: &Value) -> io::Result<Self> {
+        let invalid = || invalid_input("invalid Continue planning request");
+        let fields = value.as_object().ok_or_else(invalid)?;
+        if fields.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "attempt_id"
+                    | "projection_revision"
+                    | "history_digest"
+                    | "resume_anchor"
+                    | "selection"
+            )
+        }) {
+            return Err(invalid());
+        }
+        let attempt_id = fields
+            .get("attempt_id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty() && id.chars().count() <= 128)
+            .ok_or_else(invalid)?
+            .to_owned();
+        let projection_revision = fields
+            .get("projection_revision")
+            .and_then(Value::as_u64)
+            .filter(|revision| i64::try_from(*revision).is_ok())
+            .ok_or_else(invalid)?;
+        let history_digest = fields
+            .get("history_digest")
+            .and_then(Value::as_str)
+            .filter(|digest| {
+                digest.len() == 64
+                    && digest
+                        .bytes()
+                        .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+            })
+            .ok_or_else(invalid)?
+            .to_owned();
+        let resume_anchor = match fields.get("resume_anchor") {
+            None | Some(Value::Null) => None,
+            Some(Value::Object(anchor)) => Some(anchor.clone()),
+            _ => return Err(invalid()),
+        };
+        let selection = match fields.get("selection") {
+            None => false,
+            Some(Value::Bool(value)) => *value,
+            _ => return Err(invalid()),
+        };
+        Ok(Self {
+            selection,
+            attempt_id,
+            projection_revision,
+            history_digest,
+            resume_anchor,
+        })
+    }
+
+    fn observe(
+        &self,
+        database: &AuthorityDatabase,
+        transaction: &mut AuthorityTransaction,
+        conversation_id: &str,
+        public: &Value,
+        stored_status: &Value,
+        digest: &str,
+    ) -> io::Result<Value> {
+        if self.history_digest != digest
+            || public.get("currentAttemptId").and_then(Value::as_str)
+                != Some(self.attempt_id.as_str())
+        {
+            return Err(typed_conflict(TurnConflictKind::ProjectionStale));
+        }
+        let (id, current) =
+            attempt_source(database, transaction, public, self.projection_revision)?;
+        let status = current
+            .as_ref()
+            .and_then(|attempt| attempt.get("status"))
+            .and_then(Value::as_str);
+        if !matches!(status, Some("interrupted" | "truncated" | "failed"))
+            || stored_status.as_str() != status
+        {
+            return Err(conflict("the Continue source is not resumable"));
+        }
+        let anchor = attempt_resume_anchor(public, "continue", self.resume_anchor.as_ref())?;
+        attempt_later_turns(database, transaction, conversation_id, public)?;
+        let (projection, ..) = attempt_resume_projection(
+            database,
+            transaction,
+            public,
+            id.as_deref(),
+            current.as_ref(),
+            true,
+        )?;
+        Ok(json!({"historyDigest": digest, "anchor": anchor, "projection": projection}))
+    }
+}
+
 fn header_encoding(header: &Value) -> io::Result<Vec<u8>> {
     let revision = header
         .get("modelContextRevision")
@@ -213,6 +319,7 @@ struct Row {
     encoded: crate::response_json::EncodedValue,
     turn_id: Option<String>,
     media_free: bool,
+    paged: bool,
 }
 
 impl Row {
@@ -234,6 +341,7 @@ impl Row {
                 .and_then(Value::as_str)
                 .map(str::to_owned),
             media_free,
+            paged: false,
         }
     }
 
@@ -250,7 +358,9 @@ impl Row {
             crate::generated_tofudb_ir::MAX_TURN_RESPONSE_BYTES,
         )
         .map_err(|_| invalid_data("context Turn head cannot be encoded"))?;
-        Ok(Self::new(row.get("pagedTurn").unwrap_or(&row), encoded))
+        let mut row = Self::new(row.get("pagedTurn").unwrap_or(&row), encoded);
+        row.paged = true;
+        Ok(row)
     }
 }
 
@@ -387,6 +497,7 @@ impl<'a> Page<'a> {
         digest: String,
         continuation_status: &str,
         continuation: Option<Value>,
+        continue_plan: Option<Value>,
     ) -> io::Result<crate::response_json::EncodedResponse> {
         if self.after.is_some() {
             return Err(cursor_outside());
@@ -406,6 +517,15 @@ impl<'a> Page<'a> {
         });
         // Move the private continuation; json! would clone a borrowed one.
         result["continuation"] = continuation.unwrap_or(Value::Null);
+        if let Some(mut plan) = continue_plan {
+            if let Some(inputs) = plan
+                .as_object_mut()
+                .and_then(|obj| obj.remove("continueSelectionInputs"))
+            {
+                result["continueSelectionInputs"] = inputs;
+            }
+            result["continuePlan"] = plan;
+        }
         let Value::Object(result) = result else {
             unreachable!("json! object literal")
         };
@@ -431,7 +551,11 @@ pub(crate) fn read(
     turn_id: &str,
     replay: bool,
     after_turn_id: Option<&str>,
+    continue_plan: Option<&ContinuePlanRequest>,
 ) -> io::Result<Option<crate::response_json::EncodedResponse>> {
+    if continue_plan.is_some() && (replay || after_turn_id.is_some()) {
+        return Err(invalid_input("Continue planning needs a cold context head"));
+    }
     let Some(target) = read_selected(database, transaction, conversation_id, turn_id)? else {
         return Ok(None);
     };
@@ -444,34 +568,34 @@ pub(crate) fn read(
         .and_then(Value::as_u64)
         .ok_or_else(|| invalid_data("context target ordinal is malformed"))?;
     let mut target = Some(target);
-    let mut cached: Option<Value> = if replay {
-        crate::model_continuation::execute(
-            database,
-            transaction,
-            &crate::model_continuation::Request::Get {
-                conversation_id: conversation_id.to_owned(),
-                lane_id: "main".to_owned(),
-            },
-        )?
+    let selection = continue_plan.is_some_and(|request| request.selection);
+    let (present, bytes) = if replay || selection {
+        match crate::model_continuation::observe(database, transaction, conversation_id, "main") {
+            Err(error) if selection && unavailable_selection_input(&error) => (true, None),
+            result => result?,
+        }
+    } else {
+        (false, None)
+    };
+    let mut cached: Option<Value> = bytes
         .map(|bytes| {
             serde_json::from_slice(&bytes)
                 .map_err(|_| invalid_data("context continuation is malformed"))
         })
-        .transpose()?
-    } else {
-        None
-    };
-    if let Some(response) = read_certified_suffix(
-        database,
-        transaction,
-        conversation_id,
-        turn_id,
-        target_ordinal,
-        after_turn_id,
-        &mut target,
-        &mut cached,
-    )? {
-        return Ok(Some(response));
+        .transpose()?;
+    if replay {
+        if let Some(response) = read_certified_suffix(
+            database,
+            transaction,
+            conversation_id,
+            turn_id,
+            target_ordinal,
+            after_turn_id,
+            &mut target,
+            &mut cached,
+        )? {
+            return Ok(Some(response));
+        }
     }
     read_uncertified(
         database,
@@ -483,8 +607,16 @@ pub(crate) fn read(
         after_turn_id,
         target,
         cached,
+        selection && present,
+        continue_plan,
     )
     .map(Some)
+}
+
+// An unusable optional record is not a failure of the cold history read.
+// Do not downgrade transient I/O/allocator failures or ordinary replay errors.
+fn unavailable_selection_input(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::InvalidData || crate::resource_exhaustion::is_domain_bound(error)
 }
 
 /// Full-prefix validation: one streamed digest walk over every header. The
@@ -502,6 +634,8 @@ fn read_uncertified(
     after_turn_id: Option<&str>,
     mut target: Option<Selected>,
     cached: Option<Value>,
+    selection_slot_present: bool,
+    continue_plan: Option<&ContinuePlanRequest>,
 ) -> io::Result<crate::response_json::EncodedResponse> {
     let proof = cached.as_ref().and_then(|value| value.get("historyProof"));
     let version2 = proof
@@ -525,10 +659,15 @@ fn read_uncertified(
         .and_then(|value| value.get("count"))
         .and_then(Value::as_u64)
         .filter(|_| version2 && terminal.is_some());
-    let mut continuation_status = if !replay {
+    let selection = continue_plan.is_some_and(|request| request.selection);
+    let mut continuation_status = if !(replay || selection) {
         "replay_disabled"
     } else if cached.is_none() {
-        "checkpoint_missing"
+        if selection_slot_present {
+            "invalid_checkpoint"
+        } else {
+            "checkpoint_missing"
+        }
     } else if proof.is_none() {
         "legacy_checkpoint"
     } else if !version2 {
@@ -536,10 +675,11 @@ fn read_uncertified(
     } else {
         "checkpoint_not_before_target"
     };
-    let legacy = cached
-        .as_ref()
-        .is_some_and(|value| value.get("historyProof").is_none());
-    let mut page = anchor.is_none().then(|| {
+    let legacy = replay
+        && cached
+            .as_ref()
+            .is_some_and(|value| value.get("historyProof").is_none());
+    let mut page = (anchor.is_none() || selection).then(|| {
         Page::new(
             conversation_id,
             turn_id,
@@ -553,7 +693,19 @@ fn read_uncertified(
     let mut index = 0_u64;
     let mut covered = 0_u64;
     let mut cursor_key = None;
+    let mut planning_target = None;
     while let Some(header) = walk.next(database, transaction, turn_id)? {
+        if header.target && continue_plan.is_some() {
+            planning_target = page.as_ref().and_then(|page| {
+                if page.full || page.turns.iter().any(|row| row.paged) {
+                    return None;
+                }
+                page.target.as_ref().map(|selected| {
+                    // The display status may be normalized from the settlement.
+                    (selected.value.clone(), header.value["status"].clone())
+                })
+            });
+        }
         match page.as_mut() {
             Some(page) => page.offer(database, transaction, &header)?,
             None if header.is(after_turn_id) => {
@@ -592,7 +744,7 @@ fn read_uncertified(
                     }
                 }
             }
-            if covered > 0 {
+            if covered > 0 && replay {
                 if cursor_key.is_some() {
                     return Err(cursor_outside());
                 }
@@ -632,12 +784,61 @@ fn read_uncertified(
         }
     };
     let continuation = if covered > 0 || legacy { cached } else { None };
+    let digest = state.digest();
+    // A detached or partial page cannot witness the complete cold context.
+    let plan = match (continue_plan, planning_target) {
+        (Some(request), Some((public, stored_status)))
+            if !page.full && page.turns.last().is_some_and(|row| !row.paged) =>
+        {
+            let mut plan = request.observe(
+                database,
+                transaction,
+                conversation_id,
+                &public,
+                &stored_status,
+                &digest,
+            )?;
+            let size = serde_json::to_vec(&plan)
+                .map_err(|_| invalid_data("Continue planning witness cannot be encoded"))?
+                .len();
+            let remaining = page.limit.saturating_sub(page.bytes);
+            if size > remaining {
+                None
+            } else {
+                if selection {
+                    let archives = match crate::compaction_archive::resume_selection_inputs(
+                        database,
+                        transaction,
+                        conversation_id,
+                    ) {
+                        Err(error) if unavailable_selection_input(&error) => Value::Null,
+                        result => result?,
+                    };
+                    let inputs = json!({"version": 1, "continuationStatus": continuation_status,
+                        "covered": covered, "continuation": continuation.as_ref(), "archives": archives});
+                    let bytes = serde_json::to_vec(&inputs)
+                        .map_err(|_| invalid_data("Continue selection inputs cannot be encoded"))?
+                        .len();
+                    if size.saturating_add(bytes) <= remaining {
+                        plan["continueSelectionInputs"] = inputs;
+                    }
+                }
+                Some(plan)
+            }
+        }
+        _ => None,
+    };
     page.respond(
-        covered,
+        if replay { covered } else { 0 },
         index,
-        state.digest(),
-        continuation_status,
-        continuation,
+        digest,
+        if replay {
+            continuation_status
+        } else {
+            "replay_disabled"
+        },
+        if replay { continuation } else { None },
+        plan,
     )
 }
 
@@ -706,6 +907,7 @@ fn read_certified_suffix(
         state.digest(),
         "available",
         cached.take(),
+        None,
     )
     .map(Some)
 }

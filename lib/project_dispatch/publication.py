@@ -21,7 +21,7 @@ import threading
 from . import admission
 from .repository import (
     DispatchContention, DispatchGrantRevoked, ProjectDispatchError, PublicationAwaitsReview,
-    PublicationResultChanged)
+    PublicationClosed, PublicationResultChanged)
 
 from lib.log import get_logger
 
@@ -162,6 +162,10 @@ def _publication_verdict(row: Mapping, receipt: Mapping, *,
         # Actionable: the source Coordinator re-reviews the current result
         # revision for the same checkpoint; the receiver retries each tick.
         return 'project_publication_result_changed', None
+    except PublicationClosed as closed:
+        cause = PublicationClosed(closed.cause, binding.get('assignmentId'))
+        _ASSIGNMENT_DECIDED[_row_key(row)] = (fingerprint, CLOSED, cause)
+        return CLOSED, cause
     except (DispatchGrantRevoked, PublicationAwaitsReview) as decided:
         # A copy without traceback or context: the entry outlives this frame.
         cause = type(decided)(*decided.args)
@@ -203,6 +207,20 @@ def _publication_verdict(row: Mapping, receipt: Mapping, *,
                      exc_info=True)
         return _checkpoint_failure_reason(failure), failure
     return '', None
+
+
+# The assignment can never publish this result (``PublicationClosed``): the
+# delivery owner settles the receipt as ``closed`` instead of holding it.
+CLOSED = 'project_publication_closed'
+
+
+def closed_cause(row: Mapping, receipt: Mapping, *, afresh: bool = True) -> str:
+    """``cancelled``, ``rejected`` or ``reworked`` when ``row``'s assignment can never publish, else ''.
+
+    ``afresh=False`` reuses the verdict this process just remembered for the row.
+    """
+    reason, cause = _publication_verdict(row, receipt, afresh=afresh)
+    return cause.cause if reason == CLOSED else ''
 
 
 # A check the receiver repeats on every pass: an authority or Git read that did
@@ -402,6 +420,18 @@ def delivery_final(assignment: Mapping, attempt: Mapping | None, workspace_get) 
     return found is not None and found[2].get('state') == 'delivered'
 
 
+# Receipts that settle without delivering (continuation.HELD_DELIVERY).
+HELD_RECEIPTS = frozenset({'blocked', 'failed', 'preserved'})
+
+
+def _final_assignment_cause(assignment: Mapping) -> str:
+    """What ``PublicationClosed`` would name, read from the assignment row alone."""
+    if (assignment.get('grant') or {}).get('revoked'):
+        return 'cancelled'
+    decision = (assignment.get('review') or {}).get('decision')
+    return decision + 'ed' if decision in ('reject', 'rework') else ''
+
+
 def _held_conflict(task_id: str, status: str, checkpoint: str, receipt: Mapping) -> dict | None:
     """The exact files of a real conflict hold and the rework that resolves it.
 
@@ -428,7 +458,7 @@ def _held_conflict(task_id: str, status: str, checkpoint: str, receipt: Mapping)
 
 
 def delivery_view(assignment: Mapping, attempt: Mapping | None, workspace_get, *,
-                  resolve=_resolved) -> dict | None:
+                  resolve=_resolved, diagnostic=False) -> dict | None:
     """Read the exact associated workspace receipt, never infer from candidate.
 
     workspace_get uses the existing (project_root, task_id, user_id=owner) port.
@@ -436,7 +466,9 @@ def delivery_view(assignment: Mapping, attempt: Mapping | None, workspace_get, *
     Status ``delivered`` means the delta is committed on the branch
     (``delivery.canonical_delivery``): a working-tree publication without that
     evidence projects as pending, or blocked once its commit was refused.
-    This is diagnostic projection; publication_reason remains the live fence.
+    diagnostic=True never revalidates publication authority and uses only the
+    receipt's explicit checkpoint, not the workspace's newer checkpoint.
+    publication_reason remains the live fence.
     """
     try:
         found = _associated_receipt(assignment, attempt, workspace_get, resolve=resolve)
@@ -452,15 +484,25 @@ def delivery_view(assignment: Mapping, attempt: Mapping | None, workspace_get, *
         elif status == 'blocked' and reason == CHECK_UNAVAILABLE:
             # The receiver publishes once the read answers; nothing to act on.
             status = 'pending'
-        elif (status == 'blocked' and reason == 'project_publication_authority_missing'
+        elif (not diagnostic and status == 'blocked' and reason == 'project_publication_authority_missing'
               and assignment.get('publication')
               and not _publication_verdict(row, receipt, afresh=True)[0]):
             # A hold decided before the accept's pin, which this assignment read
             # already holds: the review releases it in a later write, else the
             # receiver's next pass delivers. Only a live refusal is held.
             status, reason = 'pending', ''
+        elif status in HELD_RECEIPTS:
+            # A hold written before closing existed, or before its assignment
+            # became final; the receipt closes on its next decision.
+            cause = _final_assignment_cause(assignment)
+            if cause:
+                status, reason = 'closed', f'{CLOSED}: assignment {cause}; the {status} receipt is final'
+        checkpoint = (receipt.get('checkpointSha') if diagnostic else
+                      receipt.get('checkpointSha') or row.get('checkpoint_sha'))
+        if diagnostic and (not isinstance(checkpoint, str) or len(checkpoint) > 256):
+            checkpoint = ''
         view = {'taskId': task_id, 'status': status[:64], 'reason': reason[:1024],
-                'checkpointSha': str(receipt.get('checkpointSha') or row.get('checkpoint_sha') or '')[:256],
+                'checkpointSha': str(checkpoint or '')[:256],
                 'targetSha': str(receipt.get('targetSha') or '')[:256]}
         conflict = _held_conflict(task_id, status, view['checkpointSha'], receipt)
         if conflict:

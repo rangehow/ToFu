@@ -256,3 +256,37 @@ def test_mcp_reconcile_control_queues_on_the_owned_mcp_worker(monkeypatch):
     with pytest.raises(ValueError):
         command_controls.apply_command_control('mcp_reconcile', 'task', user_id=41, server='chaos',
                                                action='connect')
+
+
+def test_retained_source_fingerprint_round_trips_only_to_the_verified_resident():
+    import asyncio
+    from lib.tasks_pkg import command_control_runtime as module
+    from lib.tasks_pkg.command_control_transport import CommandControlServer
+
+    witness = {'sourceSha256': 'a' * 64, 'sourceFiles': 3}
+    calls = []
+
+    def apply(method, task_id, *, user_id, deadline_unix_ms, **params):
+        calls.append((method, task_id, user_id, params))
+        return witness
+
+    async def exercise():
+        server = CommandControlServer('current', apply)
+        endpoint = await server.start()
+        try:
+            app = SimpleNamespace(extensions={})
+            assert module.execution_retained_source_fingerprint(app, user_id=41) is None
+            app.extensions[module._CLIENT_KEY] = module.CommandControls()
+            assert module.execution_retained_source_fingerprint(app, user_id=41) is None
+            for changed in ({'serviceId': 'old'}, {'token': 'wrong'}):
+                app.extensions[module._CLIENT_KEY] = module.CommandControls(
+                    service=_ready_service({**endpoint, **changed}))
+                with pytest.raises(module.CommandControlUnavailable):
+                    await asyncio.to_thread(module.execution_retained_source_fingerprint, app, user_id=41)
+            app.extensions[module._CLIENT_KEY] = module.CommandControls(service=_ready_service(endpoint))
+            assert await asyncio.to_thread(module.execution_retained_source_fingerprint, app, user_id=41) == witness
+        finally:
+            await server.close()
+
+    asyncio.run(exercise())
+    assert calls == [('retained_source_fingerprint', '', 41, {})]

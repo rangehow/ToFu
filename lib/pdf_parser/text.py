@@ -20,7 +20,13 @@ except ImportError:
         # Warning already logged by _common.py — silent here to avoid duplicate noise
 
 from lib.log import get_logger
-from lib.pdf_parser._common import HAS_PYMUPDF4LLM, PYMUPDF_LOCK
+from lib.pdf_parser._common import (
+    HAS_PYMUPDF4LLM,
+    PYMUPDF_LOCK,
+    import_preserving_quad_corrections,
+    pymupdf4llm_available,
+    pymupdf4llm_module,
+)
 from lib.pdf_parser.admission import CLASSIC_PDF_ADMISSION
 from lib.pdf_parser.math import postprocess_math_blocks
 from lib.pdf_parser.policy import (
@@ -138,7 +144,11 @@ def _load_pymupdf_rag():
             import io
             with contextlib.redirect_stdout(io.StringIO()), \
                     contextlib.redirect_stderr(io.StringIO()):
-                from pymupdf4llm.helpers import pymupdf_rag as _rag
+                # The helper's module body calls
+                # TOOLS.unset_quad_corrections(True); restore the caller's
+                # process-global state as soon as the import finishes.
+                _rag = import_preserving_quad_corrections(
+                    'pymupdf4llm.helpers.pymupdf_rag')
             _pymupdf_rag = _rag
         except Exception as e:
             logger.debug('[PDF] pymupdf_rag direct import unavailable, '
@@ -151,8 +161,7 @@ def _to_markdown_classic(md_doc, **kw):
     rag = _load_pymupdf_rag()
     if rag is not None:
         return rag.to_markdown(md_doc, **kw)
-    import pymupdf4llm
-    return pymupdf4llm.to_markdown(md_doc, **kw)
+    return pymupdf4llm_module().to_markdown(md_doc, **kw)
 
 
 def _classic_header_info(md_doc):
@@ -398,7 +407,7 @@ def _extract_pdf_text_with_meta_without_admission(
     # blocking call that leaves the UI stuck with no feedback for 10-60s on
     # larger papers. Cross-page tables may split at page boundaries — an
     # acceptable tradeoff for honest progress reporting.
-    if HAS_PYMUPDF4LLM and mode != 'fast':
+    if HAS_PYMUPDF4LLM and mode != 'fast' and pymupdf4llm_available():
         try:
             with PYMUPDF_LOCK:
                 md_doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")

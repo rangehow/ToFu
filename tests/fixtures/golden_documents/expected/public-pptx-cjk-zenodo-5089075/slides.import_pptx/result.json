@@ -1,0 +1,5264 @@
+{
+ "deck": {
+  "deck.pptd": {
+   "pages": [
+    "pages/01.page",
+    "pages/02.page",
+    "pages/03.page",
+    "pages/04.page",
+    "pages/05.page",
+    "pages/06.page",
+    "pages/07.page",
+    "pages/08.page",
+    "pages/09.page",
+    "pages/10.page",
+    "pages/11.page",
+    "pages/12.page",
+    "pages/13.page",
+    "pages/14.page",
+    "pages/15.page",
+    "pages/16.page",
+    "pages/17.page",
+    "pages/18.page",
+    "pages/19.page",
+    "pages/20.page",
+    "pages/21.page",
+    "pages/22.page",
+    "pages/23.page",
+    "pages/24.page",
+    "pages/25.page",
+    "pages/26.page",
+    "pages/27.page",
+    "pages/28.page",
+    "pages/29.page",
+    "pages/30.page",
+    "pages/31.page",
+    "pages/32.page"
+   ],
+   "size": [
+    960,
+    540
+   ],
+   "theme": {
+    "colors": {
+     "accent": "#FFC000",
+     "bg": "#FFFFFF",
+     "hairline": "#D8D5CE",
+     "ink": "#000000",
+     "muted": "#8A93A3",
+     "primary": "#0070C0"
+    },
+    "textStyles": {
+     "bignum": {
+      "bold": true,
+      "color": "$accent",
+      "fontSize": 80
+     },
+     "body": {
+      "color": "$ink",
+      "fontFamily": "Calibri",
+      "fontSize": 18,
+      "lineHeight": 1.5
+     },
+     "caption": {
+      "color": "$muted",
+      "fontSize": 12
+     },
+     "title": {
+      "bold": true,
+      "color": "$primary",
+      "fontFamily": "Calibri",
+      "fontSize": 36
+     }
+    }
+   },
+   "title": "pptx_cjk_tables_charts_zenodo5089075",
+   "version": "v2"
+  },
+  "media/slide01_04.png": {
+   "$blob": "deck/media/slide01_04.png",
+   "kind": "bytes"
+  },
+  "media/slide15_02.png": {
+   "$blob": "deck/media/slide15_02.png",
+   "kind": "bytes"
+  },
+  "media/slide16_02.png": {
+   "$blob": "deck/media/slide16_02.png",
+   "kind": "bytes"
+  },
+  "media/slide16_04.png": {
+   "$blob": "deck/media/slide16_04.png",
+   "kind": "bytes"
+  },
+  "media/slide16_06.png": {
+   "$blob": "deck/media/slide16_06.png",
+   "kind": "bytes"
+  },
+  "media/slide23_03.png": {
+   "$blob": "deck/media/slide23_03.png",
+   "kind": "bytes"
+  },
+  "media/slide23_04.png": {
+   "$blob": "deck/media/slide23_04.png",
+   "kind": "bytes"
+  },
+  "pages/01.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      43.67,
+      153.2,
+      853.97,
+      58.16
+     ],
+     "content": {
+      "fontSize": 40.0,
+      "text": "<p style=\"text-align:center\"><strong><span style=\"font-size:40.0px\">学習者が犯した誤用の原因は何</span></strong><strong><span style=\"font-size:40.0px\">か</span></strong></p>"
+     },
+     "elementId": "TextBox 23",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      404.67,
+      334.64,
+      470.12,
+      43.62
+     ],
+     "content": {
+      "fontFamily": "微软雅黑",
+      "fontSize": 28.0,
+      "text": "<p style=\"text-align:right\"><strong><span style=\"font-size:28.0px\">南山大学大学院　言語科学専攻 </span></strong><strong><span style=\"font-size:28.0px\">M2</span></strong></p>"
+     },
+     "elementId": "TextBox 29",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      707.98,
+      373.04,
+      116.32,
+      38.77
+     ],
+     "content": {
+      "fontFamily": "微软雅黑",
+      "text": "<p><strong>王　冠亮</strong></p>"
+     },
+     "elementId": "TextBox 31",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      270.2,
+      217.77,
+      400.9,
+      41.2
+     ],
+     "content": {
+      "fontSize": 28.0,
+      "text": "<p><strong><span style=\"font-size:28.0px\">－対のある自他動詞を中心に－</span></strong></p>"
+     },
+     "elementId": "TextBox 1",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      64.01,
+      373.04,
+      98.73,
+      102.84
+     ],
+     "elementId": "图片 9",
+     "elementType": "image",
+     "fit": {
+      "mode": "cover"
+     },
+     "src": "media/slide01_04.png"
+    },
+    {
+     "bounds": [
+      -3.82,
+      496.5,
+      392.7,
+      46.05
+     ],
+     "content": {
+      "fontFamily": "+mn-ea",
+      "fontSize": 16.0,
+      "text": "<p><span style=\"font-size:16.0px\">中国語話者</span><span style=\"font-size:16.0px\">のための日本語</span><span style=\"font-size:16.0px\">教育</span><span style=\"font-size:16.0px\">研究会・第</span><span style=\"font-size:16.0px\">38</span><span style=\"font-size:16.0px\">回研究会</span></p>\n<p><span style=\"font-size:16.0px\">2017</span><span style=\"font-size:16.0px\">年</span><span style=\"font-size:16.0px\">3</span><span style=\"font-size:16.0px\">月</span><span style=\"font-size:16.0px\">4</span><span style=\"font-size:16.0px\">日　　於：名古屋大学</span></p>"
+     },
+     "elementId": "テキスト ボックス 2",
+     "elementType": "text"
+    }
+   ],
+   "pageType": "content"
+  },
+  "pages/02.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      86.87,
+      87.7,
+      788.96,
+      394.0
+     ],
+     "elementId": "圆角矩形 5",
+     "elementType": "shape",
+     "shapeName": "roundRect"
+    },
+    {
+     "bounds": [
+      126.98,
+      139.65,
+      708.74,
+      99.6
+     ],
+     "content": {
+      "fontFamily": "MS Gothic",
+      "fontSize": 28.0,
+      "text": "<p style=\"text-align:justify\"><strong><span style=\"font-size:28.0px\">　対のある自他動詞の習得は簡単ではなく、特に結果</span></strong></p>\n<p style=\"text-align:justify\"><strong><span style=\"font-size:28.0px\">　</span></strong><strong><span style=\"font-size:28.0px\">状態</span></strong><strong><span style=\"font-size:28.0px\">を表す自動詞</span></strong><strong><span style=\"font-size:28.0px\">文の</span></strong><strong><span style=\"font-size:28.0px\">習得が</span></strong><strong><span style=\"font-size:28.0px\">難しい</span></strong></p>"
+     },
+     "elementId": "Rectangle 11",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      126.98,
+      298.59,
+      727.48,
+      143.91
+     ],
+     "content": {
+      "fontFamily": "MS Gothic",
+      "fontSize": 28.0,
+      "text": "<p style=\"text-align:justify\"><strong><span style=\"font-size:28.0px\">　</span></strong><strong><span style=\"font-size:28.0px\">学習者の習得</span></strong><strong><span style=\"font-size:28.0px\">状況</span></strong><strong><span style=\"font-size:28.0px\">に導く</span></strong><strong><span style=\"font-size:28.0px\">理由を言及する研究の中に</span></strong></p>\n<p style=\"text-align:justify\"><strong><span style=\"font-size:28.0px\">　</span></strong><strong><span style=\"font-size:28.0px\">、学習者の「母語の影響」を取り上げるものが多い。</span></strong></p>\n<p style=\"text-align:right\"><strong><span style=\"font-size:20.0px\">（</span></strong><strong><span style=\"font-size:20.0px\">p.2</span></strong><strong><span style=\"font-size:20.0px\">に参照）</span></strong></p>"
+     },
+     "elementId": "Rectangle 11",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      126.98,
+      150.99,
+      38.78,
+      36.35
+     ],
+     "content": {
+      "text": "<p><span style=\"color:#FF0000\">★</span></p>"
+     },
+     "elementId": "TextBox 12",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      129.63,
+      309.75,
+      38.78,
+      36.35
+     ],
+     "content": {
+      "text": "<p><span style=\"color:#FF0000\">★</span></p>"
+     },
+     "elementId": "TextBox 13",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      890.15,
+      488.85,
+      26.69,
+      36.35
+     ],
+     "content": {
+      "text": "<p>1</p>"
+     },
+     "elementId": "TextBox 3",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      125.85,
+      249.07,
+      751.29,
+      26.66
+     ],
+     "content": {
+      "fontSize": 16.0,
+      "text": "<p><span style=\"font-size:16.0px\">（</span><span style=\"font-size:16.0px\">守屋</span><span style=\"font-size:16.0px\">, 1994; </span><span style=\"font-size:16.0px\">小林・直井</span><span style=\"font-size:16.0px\">, 1996; </span><span style=\"font-size:16.0px\">小林</span><span style=\"font-size:16.0px\">, 1996; </span><span style=\"font-size:16.0px\">伊藤</span><span style=\"font-size:16.0px\">, 2012;</span><span style=\"font-size:16.0px\"> </span><span style=\"font-size:16.0px\">王</span><span style=\"font-size:16.0px\">, 2012; </span><span style=\"font-size:16.0px\">杉村</span><span style=\"font-size:16.0px\">, 2013</span><span style=\"font-size:16.0px\">ほか； </span><span style=\"font-size:16.0px\">アブデルラフマーン</span><span style=\"font-size:16.0px\">, 2016</span><span style=\"font-size:16.0px\">;</span><span style=\"font-size:16.0px\">）</span></p>"
+     },
+     "elementId": "TextBox 2",
+     "elementType": "text"
+    }
+   ],
+   "notes": "未导入元素: 组合 7(GROUP (6))",
+   "pageType": "content"
+  },
+  "pages/03.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      890.15,
+      488.85,
+      26.69,
+      36.35
+     ],
+     "content": {
+      "text": "<p>2</p>"
+     },
+     "elementId": "TextBox 3",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      93.62,
+      82.96,
+      775.47,
+      432.0
+     ],
+     "columnWidths": [
+      0.18,
+      0.2485,
+      0.5715
+     ],
+     "elementId": "表格 1",
+     "elementType": "table",
+     "rowHeights": [
+      0.0556,
+      0.0556,
+      0.1111,
+      0.1667,
+      0.1111,
+      0.2222,
+      0.1667,
+      0.1111
+     ],
+     "rows": [
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "件名"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "調査対象者の母語"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "文章"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "守屋（1994）"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "中国語･韓国語･英語"
+       },
+       {
+        "align": [
+         "justify",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "これは母語の干渉を受けた誤用現象かもしれない（p.155）"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "小林（1996）"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "中国語･韓国語･英語･スペイン語"
+       },
+       {
+        "align": [
+         "justify",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "母語干渉が強く、また学習の動機づけも弱い（p.55）"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "杉村（2013）"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "中国語"
+       },
+       {
+        "align": [
+         "justify",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "この場合、学習者にとっては母語である中国語と目標言語である日本語の間に差が生じないため、習得しやすい項目になると考えられる。（p.161）"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "杉村（2016）"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "英語"
+       },
+       {
+        "align": [
+         "justify",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "母語である英語の影響で自動詞の選択率が低くなったと考えられなくもない（p.11）"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "張ほか（2012）"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "中国語"
+       },
+       {
+        "align": [
+         "justify",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "中国語母語話者にとって、母語も日本語も語彙レベルにおいて自他交替ができる自動化動詞対は母語における統語レベルでしか自他交替ができない他動化動詞対より容易に習得できる。（p.102）（筆者訳）"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "王（2012）"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "中国語"
+       },
+       {
+        "align": [
+         "justify",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "日本語学習者は母語の影響と「配慮」文化に対する認識の不足で、有対自動詞の習得が困難で、他動詞、他動詞受身形、他動詞可能形を使う傾向がある。（p.93）（筆者訳）"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "アブデルラフマーン（2016）"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "アラビア語"
+       },
+       {
+        "align": [
+         "justify",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "学習者の誤用と学習者の母語であるアラビア語との関係がはっきり見える。（p.4）"
+       }
+      ]
+     ]
+    },
+    {
+     "bounds": [
+      332.27,
+      53.87,
+      306.74,
+      29.08
+     ],
+     "content": {
+      "fontSize": 18.0,
+      "text": "<p><span style=\"font-size:18.0px\">表 </span><span style=\"font-size:18.0px\">1</span><span style=\"font-size:18.0px\">　母語の影響を主張する先行研究</span></p>"
+     },
+     "elementId": "矩形 4",
+     "elementType": "text"
+    }
+   ],
+   "notes": "未导入元素: 组合 7(GROUP (6))",
+   "pageType": "content"
+  },
+  "pages/04.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      86.87,
+      68.64,
+      788.96,
+      447.52
+     ],
+     "elementId": "圆角矩形 5",
+     "elementType": "shape",
+     "shapeName": "roundRect"
+    },
+    {
+     "bounds": [
+      906.33,
+      488.85,
+      38.86,
+      36.35
+     ],
+     "content": {
+      "text": "<p>3</p>"
+     },
+     "elementId": "TextBox 10",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      160.58,
+      139.65,
+      647.64,
+      192.78
+     ],
+     "columnWidths": [
+      0.2499,
+      0.2499,
+      0.2501,
+      0.2501
+     ],
+     "elementId": "表格 3",
+     "elementType": "table",
+     "rowHeights": [
+      0.2302,
+      0.3079,
+      0.4619
+     ],
+     "rows": [
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "日本語"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "赤い花"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": ""
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": ""
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "他言語"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "붉은 꽃（韓国語）"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "红色的花\n（中国語）"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "Red flower（英語）"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "他言語日本語学習者の日本語発話例"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "赤い花"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "＊赤いの花"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "＊赤いの花"
+       }
+      ]
+     ]
+    },
+    {
+     "bounds": [
+      236.44,
+      104.9,
+      561.32,
+      29.08
+     ],
+     "content": {
+      "fontSize": 18.0,
+      "text": "<p><span style=\"font-size:18.0px\">表 </span><span style=\"font-size:18.0px\">2</span><span style=\"font-size:18.0px\">　奥野（</span><span style=\"font-size:18.0px\">2005</span><span style=\"font-size:18.0px\">）における母語影響の判断の難しさを示す例</span></p>"
+     },
+     "elementId": "矩形 4",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      141.66,
+      352.88,
+      679.39,
+      145.41
+     ],
+     "content": {
+      "fontFamily": "MS PGothic",
+      "fontSize": 18.0,
+      "text": "<p><strong>母語習得中の日本人子供のデータ：</strong></p>\n<p>例1　＊白いの自転車　（Y, 2; 02, 06）　　　　　　　　　　　</p>\n<p style=\"text-align:right\">　　<span style=\"font-size:18.0px\">（</span><span style=\"font-size:18.0px\">坂本</span><span style=\"font-size:18.0px\">,2005:</span><span style=\"font-size:18.0px\">p.278</span><span style=\"font-size:18.0px\">）</span></p>\n<p>例2　＊これ、由紀ちゃんのちっちゃいのコップ　（Y, 2; 06, 04）    </p>\n<p style=\"text-align:right\"><span style=\"font-size:18.0px\"> </span><span style=\"font-size:18.0px\">（同上</span><span style=\"font-size:18.0px\">）</span></p>"
+     },
+     "elementId": "矩形 11",
+     "elementType": "text"
+    }
+   ],
+   "notes": "未导入元素: 组合 7(GROUP (6))",
+   "pageType": "content"
+  },
+  "pages/05.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      86.87,
+      68.64,
+      788.96,
+      447.52
+     ],
+     "elementId": "圆角矩形 5",
+     "elementType": "shape",
+     "shapeName": "roundRect"
+    },
+    {
+     "bounds": [
+      890.15,
+      488.85,
+      77.72,
+      36.35
+     ],
+     "content": {
+      "text": "<p>4</p>"
+     },
+     "elementId": "TextBox 11",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      86.87,
+      105.63,
+      788.96,
+      385.33
+     ],
+     "content": {
+      "text": "<p>　奥野（2005）は母語影響を認証するための必要条件を以下のように提案している。</p>\n<p>１．言語構造を踏まえ、少なくとも3言語以上を対象とすること。</p>\n<p>２．ある特定の現象を扱う場合、母語に関わらず学習者に共通して見られる</p>\n<p>　　可能性や、ある特定の習得レベルに出現するものである可能性があること</p>\n<p>　　から、習得レベルの統制に配慮すること。</p>\n<p>３．第二言語習得過程には様々な要因が関与しており、言語転移はそれらの</p>\n<p>　　要因の一つであることを認識し、言語転移を取り巻く諸要因との関連性も</p>\n<p>　　十分考慮すること。</p>\n<p>４．複数の調査方法を用いて、どのような場合に言語転移が作用するのか、</p>\n<p>　　より深いレベルでの様相を考察し、解明してゆく姿勢が求められる。</p>\n<p style=\"text-align:right\">（p.54）</p>"
+     },
+     "elementId": "矩形 1",
+     "elementType": "text"
+    }
+   ],
+   "notes": "未导入元素: 组合 7(GROUP (6))",
+   "pageType": "content"
+  },
+  "pages/06.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      86.87,
+      58.44,
+      788.96,
+      265.58
+     ],
+     "elementId": "圆角矩形 5",
+     "elementType": "shape",
+     "shapeName": "roundRect"
+    },
+    {
+     "bounds": [
+      890.15,
+      488.85,
+      77.72,
+      36.35
+     ],
+     "content": {
+      "text": "<p>5</p>"
+     },
+     "elementId": "TextBox 11",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      86.87,
+      84.1,
+      788.96,
+      239.92
+     ],
+     "content": {
+      "text": "<p>　坂本（2005）も母語干渉の判定について五つの基準を立てている。</p>\n<p>１．母語習得過程の幼児に現れない誤りか。</p>\n<p>２．他言語を母語とする学習者に見られない誤りか。</p>\n<p>３．その誤りが他言語話者より長期的に渡って現れる、消えにくい誤りか。</p>\n<p>４．その誤用が他言語話者より高頻度で出現するか。</p>\n<p>５．誤りを含む日本文と同じ意味内容のことを学習者の母語で表現させてみ</p>\n<p>　　て、それが日本語の言語表現に似ているか。</p>\n<p style=\"text-align:right\">（pp.284-285）</p>"
+     },
+     "elementId": "矩形 1",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      86.87,
+      380.08,
+      788.96,
+      123.6
+     ],
+     "content": {
+      "text": "<p>　本研究は坂本（2005）と奥野（2005）の観点に従い、「結果状態が注目される自動詞文」に焦点を当て、中国人日本語学習者を対象にしてアンケート調査を行い、学習者の誤用（「を+他動詞」）の原因を探った。</p>"
+     },
+     "elementId": "矩形 10",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      86.87,
+      353.1,
+      788.96,
+      166.44
+     ],
+     "elementId": "圆角矩形 15",
+     "elementType": "shape",
+     "shapeName": "roundRect"
+    }
+   ],
+   "notes": "未导入元素: 组合 7(GROUP (6)), 组合 12(GROUP (6))",
+   "pageType": "content"
+  },
+  "pages/07.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      86.87,
+      87.7,
+      788.96,
+      420.5
+     ],
+     "elementId": "圆角矩形 5",
+     "elementType": "shape",
+     "shapeName": "roundRect"
+    },
+    {
+     "bounds": [
+      128.71,
+      115.41,
+      747.38,
+      63.93
+     ],
+     "content": {
+      "fontFamily": "+mn-ea",
+      "fontSize": 24.0,
+      "text": "<p><span style=\"font-size:24.0px;color:#FF0000\">①</span><span style=\"font-size:24.0px\"> </span><span style=\"font-size:24.0px\">学習者</span><span style=\"font-size:24.0px\">が用いている教科書の進捗状況に応じ、</span><span style=\"font-size:24.0px\">24</span><span style=\"font-size:24.0px\">対の「対のある</span><span style=\"font-size:24.0px\">自他</span></p>\n<p><span style=\"font-size:24.0px\">　</span><span style=\"font-size:24.0px\">　</span><span style=\"font-size:24.0px\">動詞</span><span style=\"font-size:24.0px\">」を選出し、調査の問題に用いた。</span></p>"
+     },
+     "elementId": "Rectangle 11",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      128.71,
+      185.01,
+      747.12,
+      152.68
+     ],
+     "content": {
+      "fontFamily": "+mn-ea",
+      "text": "<p><span style=\"color:#FF0000\">②</span> 調査問題は多肢選択問題の形である。また、「結果状態が注目される</p>\n<p>　　自動詞文」が今回の研究の焦点であるため、問題作成時には、正解　　</p>\n<p>　　を全て「が＋自動詞」だとした。また、学習者に手がかりとならないよう　　</p>\n<p>　　に、問題に出てくる助詞を選択肢に入れ、「分からない」という選択肢</p>\n<p>　　も設けた。</p>"
+     },
+     "elementId": "TextBox 1",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      130.02,
+      338.1,
+      747.12,
+      94.51
+     ],
+     "content": {
+      "fontFamily": "+mn-ea",
+      "text": "<p><span style=\"color:#FF0000\">③</span>　言語使用には一定の文脈が必要なため、すべての問題に適当な文</p>\n<p>　　 脈をつけた。また、学習者の理解に支障がないように、すべての文脈</p>\n<p>　　 情報を学習者の母語（中国語）で提示した。</p>"
+     },
+     "elementId": "TextBox 2",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      890.15,
+      485.52,
+      43.7,
+      36.35
+     ],
+     "content": {
+      "text": "<p>6</p>"
+     },
+     "elementId": "TextBox 11",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      2.68,
+      18.15,
+      119.05,
+      36.35
+     ],
+     "content": {
+      "text": "<p><strong>アンケート</strong></p>"
+     },
+     "elementId": "TextBox 10",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      130.02,
+      438.26,
+      747.12,
+      65.43
+     ],
+     "content": {
+      "fontFamily": "+mn-ea",
+      "text": "<p><span style=\"color:#FF0000\">④</span>　調査する前に、学習者が調査に出ている動詞が自動詞か他動詞か</p>\n<p>　　 知っているかをチェックするため、自他性質判断タスクも設けた。</p>"
+     },
+     "elementId": "TextBox 12",
+     "elementType": "text"
+    }
+   ],
+   "notes": "未导入元素: 组合 7(GROUP (6))",
+   "pageType": "content"
+  },
+  "pages/08.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      99.52,
+      54.61,
+      788.96,
+      420.5
+     ],
+     "elementId": "圆角矩形 5",
+     "elementType": "shape",
+     "shapeName": "roundRect"
+    },
+    {
+     "bounds": [
+      153.64,
+      265.32,
+      731.42,
+      167.22
+     ],
+     "content": {
+      "fontSize": 28.0,
+      "text": "<p><strong>1</strong><strong>　五年ぶりに故郷に帰ったあなたは、町並みが発展していてびっくりしました</strong><strong>。</strong></p>\n<p>　<span style=\"font-size:28.0px\">「ああ、こんなにたくさんビル</span><span style=\"font-size:28.0px\">　　　　　</span><span style=\"font-size:28.0px\">のか。」</span></p>\n<p><span style=\"font-size:28.0px\">答え：① が建てた　 </span><span style=\"font-size:28.0px;color:#FF0000\">② が建った</span><span style=\"font-size:28.0px;color:#FF0000\">   </span><span style=\"font-size:28.0px\">③ を建てた　 </span></p>\n<p><span style=\"font-size:28.0px\">　</span><span style=\"font-size:28.0px\">　　</span><span style=\"font-size:28.0px\">  </span><span style=\"font-size:28.0px\">④ </span><span style=\"font-size:28.0px\">を建った　 </span><span style=\"font-size:28.0px\"> </span><span style=\"font-size:28.0px\">⑤ </span><span style=\"font-size:28.0px\">分からない</span></p>"
+     },
+     "elementId": "TextBox 2",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      172.88,
+      113.49,
+      504.31,
+      100.8
+     ],
+     "columnWidths": [
+      0.2785,
+      0.7215
+     ],
+     "elementId": "表格 3",
+     "elementType": "table",
+     "rowHeights": [
+      0.3333,
+      0.3333,
+      0.3333
+     ],
+     "rows": [
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "通す"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "自动词  □ 他动词"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "壊れる"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "自动词  □ 他动词"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "進める"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "自动词  □ 他动词"
+       }
+      ]
+     ]
+    },
+    {
+     "bounds": [
+      309.24,
+      66.87,
+      415.29,
+      41.2
+     ],
+     "content": {
+      "fontSize": 28.0,
+      "text": "<p><span style=\"font-size:28.0px\">自他性質判断タスク（</span><span style=\"font-size:28.0px\">25</span><span style=\"font-size:28.0px\">対、</span><span style=\"font-size:28.0px\">50</span><span style=\"font-size:28.0px\">問）</span></p>"
+     },
+     "elementId": "TextBox 1",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      380.43,
+      224.12,
+      197.06,
+      41.2
+     ],
+     "content": {
+      "fontSize": 28.0,
+      "text": "<p><span style=\"font-size:28.0px\">本テスト（</span><span style=\"font-size:28.0px\">24</span><span style=\"font-size:28.0px\">問）</span></p>"
+     },
+     "elementId": "TextBox 10",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      890.15,
+      485.52,
+      43.7,
+      36.35
+     ],
+     "content": {
+      "text": "<p>7</p>"
+     },
+     "elementId": "TextBox 12",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      2.68,
+      18.15,
+      119.05,
+      36.35
+     ],
+     "content": {
+      "text": "<p><strong>アンケート</strong></p>"
+     },
+     "elementId": "TextBox 11",
+     "elementType": "text"
+    }
+   ],
+   "notes": "未导入元素: 组合 7(GROUP (6))",
+   "pageType": "content"
+  },
+  "pages/09.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      86.87,
+      87.7,
+      788.96,
+      437.51
+     ],
+     "elementId": "圆角矩形 5",
+     "elementType": "shape",
+     "shapeName": "roundRect"
+    },
+    {
+     "bounds": [
+      128.71,
+      125.1,
+      720.08,
+      34.85
+     ],
+     "content": {
+      "fontFamily": "+mn-ea",
+      "fontSize": 24.0,
+      "text": "<p><strong><span style=\"font-size:24.0px\">期</span></strong><strong><span style=\"font-size:24.0px\">間：</span></strong><strong><span style=\"font-size:24.0px\">2016</span></strong><strong><span style=\"font-size:24.0px\">年</span></strong><strong><span style=\"font-size:24.0px\">4</span></strong><strong><span style=\"font-size:24.0px\">月</span></strong><strong><span style=\"font-size:24.0px\">25</span></strong><strong><span style=\"font-size:24.0px\">日</span></strong><strong><span style=\"font-size:24.0px\">―29</span></strong><strong><span style=\"font-size:24.0px\">日</span></strong></p>"
+     },
+     "elementId": "Rectangle 11",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      128.68,
+      162.28,
+      405.19,
+      36.35
+     ],
+     "content": {
+      "text": "<p><strong>場</strong><strong>所</strong><strong>：中国</strong><strong>安徽省にある</strong><strong>S</strong><strong>大学と</strong><strong>N</strong><strong>大学</strong></p>"
+     },
+     "elementId": "TextBox 1",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      129.93,
+      201.26,
+      731.42,
+      94.51
+     ],
+     "content": {
+      "fontFamily": "MS PGothic",
+      "text": "<p><strong>対象</strong><strong>者</strong><strong>：</strong><strong>S</strong><strong>大学日本語学科三年生</strong><strong>26</strong><strong>人（</strong><strong>S3</strong><strong>組</strong><strong>）</strong><strong>、</strong></p>\n<p><strong>　</strong><strong>　　　　</strong><strong> </strong><strong>N</strong><strong>大学日本語学科二年生</strong><strong>31</strong><strong>人（</strong><strong>N2</strong><strong>組</strong><strong>）</strong><strong>、三年</strong><strong>生</strong><strong>35</strong><strong>人（</strong><strong>N3</strong><strong>組</strong><strong>）</strong><strong>、</strong></p>\n<p style=\"text-align:right\"><strong>計</strong><strong>92</strong><strong>人</strong></p>"
+     },
+     "elementId": "TextBox 2",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      502.93,
+      305.3,
+      345.87,
+      123.6
+     ],
+     "content": {
+      "text": "<p><strong>本調査で調査票を</strong><strong>92</strong><strong>部配布し、有効調査票が</strong><strong><span style=\"color:#FF0000\">85</span></strong><strong>部（内訳：</strong><strong>S</strong><strong>3</strong><strong>組</strong><strong>23</strong><strong>人、</strong><strong>N2</strong><strong>組</strong><strong>30</strong><strong>人、</strong><strong>N3</strong><strong>組</strong><strong>32</strong><strong>人）で</strong><strong>、有効回答率は</strong><strong>92.4</strong><strong>％である。</strong></p>"
+     },
+     "elementId": "TextBox 3",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      616.33,
+      118.14,
+      212.45,
+      41.2
+     ],
+     "content": {
+      "fontSize": 28.0,
+      "text": "<p><span style=\"font-size:28.0px;color:#FF0000\">学習者への調査</span></p>"
+     },
+     "elementId": "TextBox 4",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      890.15,
+      485.52,
+      43.7,
+      36.35
+     ],
+     "content": {
+      "text": "<p>8</p>"
+     },
+     "elementId": "TextBox 138",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      2.68,
+      18.15,
+      119.05,
+      36.35
+     ],
+     "content": {
+      "text": "<p><strong>アンケート</strong></p>"
+     },
+     "elementId": "TextBox 139",
+     "elementType": "text"
+    }
+   ],
+   "notes": "未导入元素: Group 66(GROUP (6)), 组合 7(GROUP (6))",
+   "pageType": "content"
+  },
+  "pages/10.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      86.87,
+      87.7,
+      788.96,
+      437.51
+     ],
+     "elementId": "圆角矩形 5",
+     "elementType": "shape",
+     "shapeName": "roundRect"
+    },
+    {
+     "bounds": [
+      128.71,
+      138.82,
+      720.08,
+      34.85
+     ],
+     "content": {
+      "fontFamily": "+mn-ea",
+      "fontSize": 24.0,
+      "text": "<p><strong><span style=\"font-size:24.0px\">期</span></strong><strong><span style=\"font-size:24.0px\">間：</span></strong><strong><span style=\"font-size:24.0px\">2016</span></strong><strong><span style=\"font-size:24.0px\">年</span></strong><strong><span style=\"font-size:24.0px\">9</span></strong><strong><span style=\"font-size:24.0px\">月</span></strong><strong><span style=\"font-size:24.0px\">2</span></strong><strong><span style=\"font-size:24.0px\">6</span></strong><strong><span style=\"font-size:24.0px\">日</span></strong><strong><span style=\"font-size:24.0px\">―</span></strong><strong><span style=\"font-size:24.0px\">10</span></strong><strong><span style=\"font-size:24.0px\">月</span></strong><strong><span style=\"font-size:24.0px\">07</span></strong><strong><span style=\"font-size:24.0px\">日</span></strong></p>"
+     },
+     "elementId": "Rectangle 11",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      128.68,
+      182.68,
+      151.74,
+      36.35
+     ],
+     "content": {
+      "text": "<p><strong>場</strong><strong>所</strong><strong>：</strong><strong>NZ</strong><strong>大学</strong></p>"
+     },
+     "elementId": "TextBox 1",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      128.71,
+      227.31,
+      731.42,
+      65.43
+     ],
+     "content": {
+      "fontFamily": "MS PGothic",
+      "text": "<p><strong>対象</strong><strong>者</strong><strong>：</strong><strong>日本人母語話者</strong></p>\n<p><strong>　</strong><strong>　　　　</strong><strong> </strong><strong>学部生</strong><strong>30</strong><strong>人（内訳：男性</strong><strong>15</strong><strong>人、女性</strong><strong>15</strong><strong>人）</strong></p>"
+     },
+     "elementId": "TextBox 2",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      128.71,
+      349.44,
+      720.08,
+      65.43
+     ],
+     "content": {
+      "text": "<p><strong>調査問題：日本語学習者対象の調査問題と同じで、</strong><strong><span style=\"color:#FF0000\">文脈説明を</span></strong><strong><span style=\"color:#FF0000\">日本</span></strong><strong><span style=\"color:#FF0000\">　</span></strong></p>\n<p><strong><span style=\"color:#FF0000\">　</span></strong><strong><span style=\"color:#FF0000\">　　　　　　</span></strong><strong><span style=\"color:#FF0000\">語</span></strong><strong><span style=\"color:#FF0000\">にし、選択肢「⑤　分からない」を削除したもの。</span></strong></p>"
+     },
+     "elementId": "TextBox 3",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      616.33,
+      118.14,
+      240.73,
+      41.2
+     ],
+     "content": {
+      "fontSize": 28.0,
+      "text": "<p><span style=\"font-size:28.0px;color:#FF0000\">母語話者への調査</span></p>"
+     },
+     "elementId": "TextBox 4",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      128.68,
+      301.75,
+      220.53,
+      36.35
+     ],
+     "content": {
+      "text": "<p><strong>調査方式：匿名調査</strong></p>"
+     },
+     "elementId": "TextBox 10",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      890.15,
+      485.52,
+      43.7,
+      36.35
+     ],
+     "content": {
+      "text": "<p>9</p>"
+     },
+     "elementId": "TextBox 12",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      2.68,
+      18.15,
+      119.05,
+      36.35
+     ],
+     "content": {
+      "text": "<p><strong>アンケート</strong></p>"
+     },
+     "elementId": "TextBox 13",
+     "elementType": "text"
+    }
+   ],
+   "notes": "未导入元素: 组合 7(GROUP (6))",
+   "pageType": "content"
+  },
+  "pages/11.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      86.87,
+      48.94,
+      788.96,
+      459.26
+     ],
+     "elementId": "圆角矩形 5",
+     "elementType": "shape",
+     "shapeName": "roundRect"
+    },
+    {
+     "bounds": [
+      104.31,
+      150.99,
+      754.1,
+      266.49
+     ],
+     "columnWidths": [
+      0.1468,
+      0.095,
+      0.095,
+      0.095,
+      0.132,
+      0.1278,
+      0.0902,
+      0.1151,
+      0.103
+     ],
+     "elementId": "表格 1",
+     "elementType": "table",
+     "rowHeights": [
+      0.2,
+      0.2,
+      0.2,
+      0.2,
+      0.2
+     ],
+     "rows": [
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "誤用類型"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "正用"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "を＋自動詞"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "が＋他動詞"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "を＋他動詞"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "分からない"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "無回答"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "多肢選択"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "合計"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "S３組(23人)"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "347"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "37"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "46"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "118"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "2"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "1"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "1"
+       },
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "552"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "N２組(30人)"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "410"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "57"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "64"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "185"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "3"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "1"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "0"
+       },
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "720"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "N３組(32人)"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "402"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "74"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "114"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "168"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "10"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "0"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "0"
+       },
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "768"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "総合"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "1159"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "168"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "224"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "471"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "15"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "2"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "1"
+       },
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "2040"
+       }
+      ]
+     ]
+    },
+    {
+     "bounds": [
+      288.85,
+      116.24,
+      380.96,
+      29.08
+     ],
+     "content": {
+      "fontSize": 18.0,
+      "text": "<p><span style=\"font-size:18.0px\">表</span><span style=\"font-size:18.0px\">3</span><span style=\"font-size:18.0px\">　アンケート調査における学習者の選択集計</span></p>"
+     },
+     "elementId": "TextBox 2",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      890.15,
+      485.52,
+      43.7,
+      36.35
+     ],
+     "content": {
+      "text": "<p>10</p>"
+     },
+     "elementId": "TextBox 10",
+     "elementType": "text"
+    }
+   ],
+   "notes": "未导入元素: 组合 7(GROUP (6))",
+   "pageType": "content"
+  },
+  "pages/12.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      86.87,
+      48.94,
+      788.96,
+      459.26
+     ],
+     "elementId": "圆角矩形 5",
+     "elementType": "shape",
+     "shapeName": "roundRect"
+    },
+    {
+     "bounds": [
+      106.04,
+      103.23,
+      731.42,
+      350.67
+     ],
+     "chartType": "line",
+     "data": {
+      "categories": [
+       "正用",
+       "を＋自動詞",
+       "が＋他動詞",
+       "を＋他動詞",
+       "分からない",
+       "無回答",
+       "多肢選択"
+      ],
+      "series": [
+       {
+        "name": "SS組(23人)",
+        "values": [
+         0.6286231884057971,
+         0.06702898550724638,
+         0.08333333333333333,
+         0.213768115942029,
+         0.0036231884057971015,
+         0.0018115942028985507,
+         0.0018115942028985507
+        ]
+       },
+       {
+        "name": "NN組(30人)",
+        "values": [
+         0.5694444444444444,
+         0.07916666666666666,
+         0.08888888888888889,
+         0.2569444444444444,
+         0.004166666666666667,
+         0.001388888888888889,
+         0.0
+        ]
+       },
+       {
+        "name": "NS組(32人)",
+        "values": [
+         0.5234375,
+         0.09635416666666667,
+         0.1484375,
+         0.21875,
+         0.013020833333333334,
+         0.0,
+         0.0
+        ]
+       }
+      ]
+     },
+     "elementId": "图表 10",
+     "elementType": "chart",
+     "options": {
+      "legend": true
+     }
+    },
+    {
+     "bounds": [
+      890.15,
+      485.52,
+      43.7,
+      36.35
+     ],
+     "content": {
+      "text": "<p>11</p>"
+     },
+     "elementId": "TextBox 11",
+     "elementType": "text"
+    }
+   ],
+   "notes": "未导入元素: 组合 7(GROUP (6))",
+   "pageType": "content"
+  },
+  "pages/13.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      502.93,
+      1.41,
+      455.59,
+      268.66
+     ],
+     "chartType": "pie",
+     "data": {
+      "categories": [
+       "正用",
+       "を＋自動詞",
+       "が＋他動詞",
+       "を＋他動詞",
+       "分からない",
+       "無回答",
+       "多肢選択"
+      ],
+      "series": [
+       {
+        "name": "",
+        "values": [
+         410.0,
+         57.0,
+         64.0,
+         185.0,
+         3.0,
+         1.0,
+         0.0
+        ]
+       }
+      ]
+     },
+     "elementId": "图表 36",
+     "elementType": "chart",
+     "options": {
+      "legend": false
+     }
+    },
+    {
+     "bounds": [
+      -0.0,
+      264.39,
+      474.58,
+      276.95
+     ],
+     "chartType": "pie",
+     "data": {
+      "categories": [
+       "正用",
+       "を＋自動詞",
+       "が＋他動詞",
+       "を＋他動詞",
+       "分からない",
+       "無回答",
+       "多肢選択"
+      ],
+      "series": [
+       {
+        "name": "",
+        "values": [
+         402.0,
+         74.0,
+         114.0,
+         168.0,
+         10.0,
+         0.0,
+         0.0
+        ]
+       }
+      ]
+     },
+     "elementId": "图表 37",
+     "elementType": "chart",
+     "options": {
+      "legend": false
+     }
+    },
+    {
+     "bounds": [
+      527.03,
+      336.23,
+      410.23,
+      162.37
+     ],
+     "content": {
+      "fontSize": 32.0,
+      "text": "<p><span style=\"font-size:32.0px;color:#FF0000\">　</span><span style=\"font-size:32.0px;color:#FF0000\">円グラフで、三つのグループにおいても、「を＋他動詞」という誤選択</span><span style=\"font-size:32.0px;color:#FF0000\">が</span><span style=\"font-size:32.0px;color:#FF0000\">一番目立つことが分かる。</span></p>"
+     },
+     "elementId": "TextBox 1",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      890.15,
+      485.52,
+      43.7,
+      36.35
+     ],
+     "content": {
+      "text": "<p>12</p>"
+     },
+     "elementId": "TextBox 6",
+     "elementType": "text"
+    }
+   ],
+   "notes": "未导入元素: 图表 35(unsupported chart)",
+   "pageType": "content"
+  },
+  "pages/14.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      86.87,
+      48.94,
+      788.96,
+      459.26
+     ],
+     "elementId": "圆角矩形 5",
+     "elementType": "shape",
+     "shapeName": "roundRect"
+    },
+    {
+     "bounds": [
+      287.47,
+      117.11,
+      425.92,
+      50.89
+     ],
+     "content": {
+      "fontSize": 18.0,
+      "text": "<p><span style=\"font-size:18.0px\">表</span><span style=\"font-size:18.0px\">4</span><span style=\"font-size:18.0px\">　アンケート調査における学習者の選択集計</span></p>\n<p style=\"text-align:right\"><span style=\"font-size:18.0px\">（</span><span style=\"font-size:18.0px\">自他性質判断タスク誤選択削除</span><span style=\"font-size:18.0px\">）</span></p>"
+     },
+     "elementId": "TextBox 2",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      890.15,
+      485.52,
+      43.7,
+      36.35
+     ],
+     "content": {
+      "text": "<p>13</p>"
+     },
+     "elementId": "TextBox 10",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      94.7,
+      185.01,
+      771.11,
+      226.8
+     ],
+     "columnWidths": [
+      0.1369,
+      0.0844,
+      0.1358,
+      0.1358,
+      0.1358,
+      0.1014,
+      0.1012,
+      0.0805,
+      0.0882
+     ],
+     "elementId": "表格 3",
+     "elementType": "table",
+     "rowHeights": [
+      0.2857,
+      0.1786,
+      0.1786,
+      0.1786,
+      0.1786
+     ],
+     "rows": [
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "誤用類型"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "正用"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "を＋自動詞"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "が＋他動詞"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "を＋他動詞"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "分からない"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "無回答"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "多肢選択"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "合計"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "S3組"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "274"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "19"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "26"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "98"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "1"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "1"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "1"
+       },
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "420"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "N2組"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "359"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "43"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "43"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "132"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "3"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "0"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "0"
+       },
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "580"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "N3組"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "322"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "41"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "79"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "132"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "2"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "0"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "0"
+       },
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "576"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "総合"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "955"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "103"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "148"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "362"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "6"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "1"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "1"
+       },
+       {
+        "align": [
+         "right",
+         "middle"
+        ],
+        "fontSize": 28.0,
+        "text": "1576"
+       }
+      ]
+     ]
+    }
+   ],
+   "notes": "未导入元素: 组合 7(GROUP (6))",
+   "pageType": "content"
+  },
+  "pages/15.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      86.87,
+      48.94,
+      788.96,
+      459.26
+     ],
+     "elementId": "圆角矩形 5",
+     "elementType": "shape",
+     "shapeName": "roundRect"
+    },
+    {
+     "bounds": [
+      890.15,
+      485.52,
+      43.7,
+      36.35
+     ],
+     "content": {
+      "text": "<p>14</p>"
+     },
+     "elementId": "TextBox 11",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      162.32,
+      124.33,
+      638.08,
+      359.59
+     ],
+     "elementId": "图片 1",
+     "elementType": "image",
+     "fit": {
+      "mode": "cover"
+     },
+     "src": "media/slide15_02.png"
+    },
+    {
+     "bounds": [
+      225.1,
+      82.36,
+      481.94,
+      72.7
+     ],
+     "content": {
+      "fontFamily": "+mn-ea",
+      "fontSize": 18.0,
+      "text": "<p style=\"text-align:center\"><span style=\"font-size:18.0px\">図</span><span style=\"font-size:18.0px\">5</span><span style=\"font-size:18.0px\">　</span><span style=\"font-size:18.0px\">三群の学習者の選択</span><span style=\"font-size:18.0px\">傾向</span></p>\n<p style=\"text-align:center\"><span style=\"font-size:18.0px\">（</span><span style=\"font-size:18.0px\">自他性質判断</span><span style=\"font-size:18.0px\">タスク誤選択削除）</span></p>\n<p style=\"text-align:center\"><span style=\"font-size:18.0px\">　</span></p>"
+     },
+     "elementId": "TextBox 1",
+     "elementType": "text"
+    }
+   ],
+   "notes": "未导入元素: 组合 7(GROUP (6))",
+   "pageType": "content"
+  },
+  "pages/16.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      527.03,
+      336.23,
+      410.23,
+      201.15
+     ],
+     "content": {
+      "fontSize": 32.0,
+      "text": "<p><span style=\"font-size:32.0px;color:#FF0000\">　学習者が対のある動詞の自他区別という形態上の違いが分かっていても、具体的な文脈では間違える可能性も十分ある</span></p>"
+     },
+     "elementId": "TextBox 1",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      890.15,
+      485.52,
+      43.7,
+      36.35
+     ],
+     "content": {
+      "text": "<p>15</p>"
+     },
+     "elementId": "TextBox 6",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      43.67,
+      59.2,
+      393.7,
+      216.54
+     ],
+     "elementId": "图片 1",
+     "elementType": "image",
+     "fit": {
+      "mode": "cover"
+     },
+     "src": "media/slide16_02.png"
+    },
+    {
+     "bounds": [
+      51.03,
+      3.46,
+      349.84,
+      50.89
+     ],
+     "content": {
+      "fontSize": 18.0,
+      "text": "<p style=\"text-align:center\"><span style=\"font-size:18.0px\">図</span><span style=\"font-size:18.0px\">6</span><span style=\"font-size:18.0px\">　</span><span style=\"font-size:18.0px\">S3</span><span style=\"font-size:18.0px\">組における選択</span><span style=\"font-size:18.0px\">傾向</span></p>\n<p style=\"text-align:center\"><span style=\"font-size:18.0px\">（</span><span style=\"font-size:18.0px\">自他性質判断</span><span style=\"font-size:18.0px\">タスク誤</span><span style=\"font-size:18.0px\">選択削除）</span></p>"
+     },
+     "elementId": "矩形 2",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      539.63,
+      59.2,
+      385.03,
+      211.66
+     ],
+     "elementId": "图片 1",
+     "elementType": "image",
+     "fit": {
+      "mode": "cover"
+     },
+     "src": "media/slide16_04.png"
+    },
+    {
+     "bounds": [
+      557.22,
+      3.46,
+      349.84,
+      50.89
+     ],
+     "content": {
+      "fontSize": 18.0,
+      "text": "<p style=\"text-align:center\"><span style=\"font-size:18.0px\">図</span><span style=\"font-size:18.0px\">7</span><span style=\"font-size:18.0px\">　</span><span style=\"font-size:18.0px\">N2</span><span style=\"font-size:18.0px\">組</span><span style=\"font-size:18.0px\">における選択</span><span style=\"font-size:18.0px\">傾向</span></p>\n<p style=\"text-align:center\"><span style=\"font-size:18.0px\">（</span><span style=\"font-size:18.0px\">自他性質判断</span><span style=\"font-size:18.0px\">タスク誤</span><span style=\"font-size:18.0px\">選択削除）</span></p>"
+     },
+     "elementId": "矩形 9",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      57.84,
+      315.42,
+      365.35,
+      234.33
+     ],
+     "elementId": "图片 1",
+     "elementType": "image",
+     "fit": {
+      "mode": "cover"
+     },
+     "src": "media/slide16_06.png"
+    },
+    {
+     "bounds": [
+      51.03,
+      265.89,
+      349.84,
+      50.89
+     ],
+     "content": {
+      "fontSize": 18.0,
+      "text": "<p style=\"text-align:center\"><span style=\"font-size:18.0px\">図</span><span style=\"font-size:18.0px\">8</span><span style=\"font-size:18.0px\">　</span><span style=\"font-size:18.0px\">N3</span><span style=\"font-size:18.0px\">組</span><span style=\"font-size:18.0px\">における選択</span><span style=\"font-size:18.0px\">傾向</span></p>\n<p style=\"text-align:center\"><span style=\"font-size:18.0px\">（</span><span style=\"font-size:18.0px\">自他性質判断</span><span style=\"font-size:18.0px\">タスク誤</span><span style=\"font-size:18.0px\">選択削除）</span></p>"
+     },
+     "elementId": "矩形 11",
+     "elementType": "text"
+    }
+   ],
+   "pageType": "content"
+  },
+  "pages/17.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      86.87,
+      48.94,
+      788.96,
+      481.94
+     ],
+     "elementId": "圆角矩形 5",
+     "elementType": "shape",
+     "shapeName": "roundRect"
+    },
+    {
+     "bounds": [
+      113.01,
+      71.62,
+      735.78,
+      123.6
+     ],
+     "content": {
+      "text": "<p>　日本語学習者作文コーパス（http://jhlee.sakura.ne.jp/JC/）において、「動詞」という品詞に関する誤用が２９０５箇所である。その中、単純の自他交替誤用が６３箇所で、さらに、自動詞を使うべきところで、「を＋他動詞」で誤用になるのはわずか3箇所だけである。</p>"
+     },
+     "elementId": "TextBox 2",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      123.3,
+      219.03,
+      731.17,
+      306.15
+     ],
+     "columnWidths": [
+      0.1429,
+      0.1429,
+      0.1429,
+      0.1429,
+      0.1429,
+      0.1429,
+      0.1429
+     ],
+     "elementId": "表格 3",
+     "elementType": "table",
+     "rowHeights": [
+      0.2088,
+      0.0719,
+      0.0719,
+      0.0719,
+      0.0719,
+      0.0719,
+      0.0719,
+      0.0719,
+      0.0719,
+      0.0719,
+      0.0719,
+      0.0719
+     ],
+     "rows": [
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "レベル"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "学習者母語"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "学習環境"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "動詞誤用"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "対のある自他動詞誤用"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "自動詞に関する誤用"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "「を＋他動詞」の数"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "初級"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "中国語"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "国内"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "27"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "1"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "0"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "0"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "初級"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "中国語"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "国外"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "142"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "1"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "1"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "1"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "中級"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "中国語"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "国内"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "170"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "8"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "4"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "2"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "中級"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "中国語"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "国外"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "936"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "26"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "10"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "0"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "上級"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "中国語"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "国内"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "116"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "1"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "1"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "0"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "上級"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "中国語"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "国外"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "348"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "4"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "3"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "0"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "初級"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "韓国語"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "国外"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "99"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "1"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "1"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "0"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "中級"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "韓国語"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "国外"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "529"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "13"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "2"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "0"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "中級"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "韓国語"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "国内"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "6"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "0"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "0"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "0"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "上級"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "韓国語"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "国内"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "33"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "1"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "0"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "0　"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "上級"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "韓国語"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "国外"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "499"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "7"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "1"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 18.0,
+        "text": "0"
+       }
+      ]
+     ]
+    },
+    {
+     "bounds": [
+      259.12,
+      190.68,
+      439.53,
+      29.08
+     ],
+     "content": {
+      "fontSize": 18.0,
+      "text": "<p><span style=\"font-size:18.0px\">表</span><span style=\"font-size:18.0px\">5</span><span style=\"font-size:18.0px\">　日本語学習者作文コーパスにおける「を＋他動詞」</span></p>"
+     },
+     "elementId": "TextBox 4",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      890.15,
+      485.52,
+      43.7,
+      36.35
+     ],
+     "content": {
+      "text": "<p>16</p>"
+     },
+     "elementId": "TextBox 10",
+     "elementType": "text"
+    },
+    {
+     "border": {
+      "color": "#FF0000",
+      "style": "solid",
+      "width": 1.0
+     },
+     "bounds": [
+      752.41,
+      281.4,
+      102.06,
+      240.47
+     ],
+     "elementId": "矩形 1",
+     "elementType": "shape",
+     "shapeName": "rect"
+    }
+   ],
+   "notes": "未导入元素: 组合 7(GROUP (6))",
+   "pageType": "content"
+  },
+  "pages/18.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      86.87,
+      48.94,
+      788.96,
+      481.94
+     ],
+     "elementId": "圆角矩形 5",
+     "elementType": "shape",
+     "shapeName": "roundRect"
+    },
+    {
+     "bounds": [
+      890.15,
+      485.52,
+      43.7,
+      36.35
+     ],
+     "content": {
+      "text": "<p>17</p>"
+     },
+     "elementId": "TextBox 10",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      86.87,
+      48.26,
+      788.96,
+      448.34
+     ],
+     "content": {
+      "fontFamily": "MS PGothic",
+      "fontSize": 28.0,
+      "text": "<p><span style=\"font-size:28.0px\">例</span><span style=\"font-size:28.0px\">3</span><span style=\"font-size:28.0px\">　（</span><span style=\"font-size:28.0px\">CG069</span><span style=\"font-size:28.0px\">・初級・中国語・国外）</span></p>\n<p><span style=\"font-size:28.0px\">           </span><span style=\"font-size:28.0px\">理解</span><span style=\"font-size:28.0px\">と暗記一緒に勉強の</span><span style=\"font-size:28.0px;color:#FF0000\">効率を上げる</span><span style=\"font-size:28.0px\">になってきた。</span></p>\n<p><span style=\"font-size:28.0px\">正用</span><span style=\"font-size:28.0px\">：理解と暗記を一緒に済ませることで勉強の効率が</span><span style=\"font-size:28.0px\">上がって</span></p>\n<p><span style=\"font-size:28.0px\">　</span><span style=\"font-size:28.0px\">　　　</span><span style=\"font-size:28.0px\">きた</span><span style=\"font-size:28.0px\">。</span></p>\n<p><span style=\"font-size:28.0px\">例</span><span style=\"font-size:28.0px\">4</span><span style=\"font-size:28.0px\">　（</span><span style=\"font-size:28.0px\">CN007</span><span style=\"font-size:28.0px\">・中級・中国語・国内）</span></p>\n<p><span style=\"font-size:28.0px\">　　　　</span><span style=\"font-size:28.0px\">少しづつ</span><span style=\"font-size:28.0px\">、自分の英語の</span><span style=\"font-size:28.0px;color:#FF0000\">会話力を高める</span><span style=\"font-size:28.0px\">かもしれない。</span></p>\n<p><span style=\"font-size:28.0px\">正用</span><span style=\"font-size:28.0px\">：少しずつ、自分の英語の会話力が高まるのかもしれない。</span></p>\n<p><span style=\"font-size:28.0px\">例</span><span style=\"font-size:28.0px\">5</span><span style=\"font-size:28.0px\">　（</span><span style=\"font-size:28.0px\">CN318</span><span style=\"font-size:28.0px\">・中級・中国語・国内）</span></p>\n<p><span style=\"font-size:28.0px\">　　　　</span><span style=\"font-size:28.0px\">…</span><span style=\"font-size:28.0px\">に本能でどんどん理解できて、</span><span style=\"font-size:28.0px;color:#FF0000\">意味を伝えて</span><span style=\"font-size:28.0px\">、…</span></p>\n<p><span style=\"font-size:28.0px\">正用</span><span style=\"font-size:28.0px\">：…に本能でどんどん理解できて、意味が伝わって、…</span></p>"
+     },
+     "elementId": "矩形 6",
+     "elementType": "text"
+    }
+   ],
+   "notes": "未导入元素: 组合 7(GROUP (6))",
+   "pageType": "content"
+  },
+  "pages/19.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      86.87,
+      48.94,
+      788.96,
+      481.94
+     ],
+     "elementId": "圆角矩形 5",
+     "elementType": "shape",
+     "shapeName": "roundRect"
+    },
+    {
+     "bounds": [
+      100.37,
+      95.37,
+      498.95,
+      412.95
+     ],
+     "columnWidths": [
+      0.3333,
+      0.4167,
+      0.25
+     ],
+     "elementId": "表格 1",
+     "elementType": "table",
+     "rowHeights": [
+      0.0771,
+      0.046,
+      0.046,
+      0.0872,
+      0.0872,
+      0.0872,
+      0.0872,
+      0.0872,
+      0.0872,
+      0.0872,
+      0.1284,
+      0.046,
+      0.046
+     ],
+     "rows": [
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "地区（誤用数）"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "学習者母語(推定)"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "を＋他動詞"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "台湾（4）"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "中国語"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "1"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "香港（7）"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": ""
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "0"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "中国（12）"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": ""
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "1"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "マレーシア（7）"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "マレーシア語"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "0"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "韓国（10）"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "韓国語"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "0"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "アメリカ（3）"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "英語"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "0"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "インド（7）"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "？"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "2"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "フランス（2）"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "フランス語"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "2"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "ブラジル（2）"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "ポルトカルト語"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "0"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "オーストラリア（1）"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "英語"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "1"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "タイ（1）"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "タイ語"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "0"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "合計（57）"
+       },
+       {
+        "align": [
+         "left",
+         "middle"
+        ],
+        "text": ""
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 24.0,
+        "text": "8"
+       }
+      ]
+     ]
+    },
+    {
+     "bounds": [
+      94.7,
+      506.29,
+      674.72,
+      26.66
+     ],
+     "content": {
+      "fontSize": 16.0,
+      "text": "<p><span style=\"font-size:16.0px\">出典：『外国人学習者の日本語誤用例集』、『日本語誤用例文小辞典』、『日本語誤用辞典』</span></p>"
+     },
+     "elementId": "矩形 6",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      639.01,
+      128.31,
+      217.81,
+      346.55
+     ],
+     "content": {
+      "fontSize": 28.0,
+      "text": "<p><span style=\"font-size:28.0px;color:#FF0000\">　　誤用辞典から見て、中国語系の学習者は「を＋他動詞」という誤用を</span><span style=\"font-size:28.0px;color:#FF0000\">23</span><span style=\"font-size:28.0px;color:#FF0000\">回のうちに</span><span style=\"font-size:28.0px;color:#FF0000\">2</span><span style=\"font-size:28.0px;color:#FF0000\">回しか犯さなく、決してアンケート調査結果のように多くはないことが分かる。</span></p>"
+     },
+     "elementId": "TextBox 10",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      162.73,
+      70.88,
+      391.18,
+      29.08
+     ],
+     "content": {
+      "fontSize": 18.0,
+      "text": "<p><span style=\"font-size:18.0px\">表</span><span style=\"font-size:18.0px\">6</span><span style=\"font-size:18.0px\">　誤用辞典における「を＋他動詞」の誤用集計</span></p>"
+     },
+     "elementId": "TextBox 12",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      890.15,
+      485.52,
+      43.7,
+      36.35
+     ],
+     "content": {
+      "text": "<p>18</p>"
+     },
+     "elementId": "TextBox 11",
+     "elementType": "text"
+    }
+   ],
+   "notes": "未导入元素: 组合 7(GROUP (6))",
+   "pageType": "content"
+  },
+  "pages/20.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      86.87,
+      48.94,
+      788.96,
+      481.94
+     ],
+     "elementId": "圆角矩形 5",
+     "elementType": "shape",
+     "shapeName": "roundRect"
+    },
+    {
+     "bounds": [
+      890.15,
+      485.52,
+      43.7,
+      36.35
+     ],
+     "content": {
+      "text": "<p>19</p>"
+     },
+     "elementId": "TextBox 11",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      86.87,
+      144.36,
+      788.96,
+      278.7
+     ],
+     "content": {
+      "fontFamily": "MS PGothic",
+      "fontSize": 28.0,
+      "text": "<p><span style=\"font-size:28.0px\">例</span><span style=\"font-size:28.0px\">6</span><span style=\"font-size:28.0px\">　私は手紙を書くとき、</span><span style=\"font-size:28.0px;color:#FF0000\">なみだをだします</span><span style=\"font-size:28.0px\">。（フランス）　　</span></p>\n<p style=\"text-align:right\"><span style=\"font-size:28.0px\">（</span><span style=\"font-size:28.0px\">市川</span><span style=\"font-size:28.0px\">, 1997</span><span style=\"font-size:28.0px\">）</span></p>\n<p><span style=\"font-size:28.0px\">例</span><span style=\"font-size:28.0px\">7</span><span style=\"font-size:28.0px\">　大学でもらった成績によって、いい</span><span style=\"font-size:28.0px;color:#FF0000\">仕事を見つける</span><span style=\"font-size:28.0px\">か</span><span style=\"font-size:28.0px\">どうか</span></p>\n<p><span style=\"font-size:28.0px\">        </span><span style=\"font-size:28.0px\">が</span><span style=\"font-size:28.0px\">決まっているからである。（オースラリア）　　　　　</span><span style=\"font-size:28.0px\">　　</span></p>\n<p style=\"text-align:right\"><span style=\"font-size:28.0px\">（</span><span style=\"font-size:28.0px\">市川</span><span style=\"font-size:28.0px\">, 2010</span><span style=\"font-size:28.0px\">）</span></p>\n<p><span style=\"font-size:28.0px\">例</span><span style=\"font-size:28.0px\">8</span><span style=\"font-size:28.0px\">　私まで自然と</span><span style=\"font-size:28.0px;color:#FF0000\">涙を流しました</span><span style=\"font-size:28.0px\">。（インド）　　　　　　</span><span style=\"font-size:28.0px\"> </span><span style=\"font-size:28.0px\">（</span><span style=\"font-size:28.0px\">寺村</span><span style=\"font-size:28.0px\">, 1990</span><span style=\"font-size:28.0px\">）</span></p>"
+     },
+     "elementId": "矩形 2",
+     "elementType": "text"
+    }
+   ],
+   "notes": "未导入元素: 组合 7(GROUP (6))",
+   "pageType": "content"
+  },
+  "pages/21.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      86.87,
+      87.7,
+      788.96,
+      420.5
+     ],
+     "elementId": "圆角矩形 5",
+     "elementType": "shape",
+     "shapeName": "roundRect"
+    },
+    {
+     "bounds": [
+      890.15,
+      485.52,
+      43.7,
+      36.35
+     ],
+     "content": {
+      "text": "<p>20</p>"
+     },
+     "elementId": "TextBox 11",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      -1.43,
+      24.4,
+      172.19,
+      36.35
+     ],
+     "content": {
+      "text": "<p><strong>発話誘</strong><strong>出</strong><strong>タスク</strong></p>"
+     },
+     "elementId": "TextBox 10",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      85.67,
+      135.68,
+      774.47,
+      327.16
+     ],
+     "content": {
+      "text": "<p><strong><span style=\"color:#FF0000\">①</span></strong><strong>　</strong><strong>「</strong><strong>結果状態が注目される自動詞文」が研究焦点であるため、問題</strong><strong>作成</strong></p>\n<p><strong> </strong><strong>      </strong><strong>時</strong><strong>、</strong><strong>すべての</strong><strong>正解を自動詞に設定する</strong><strong>。</strong></p>\n<p><strong><span style=\"color:#FF0000\">②</span></strong><strong>　</strong><strong>動詞対</strong><strong>ごとに適切な場面を想定し、</strong><strong>12</strong><strong>本のビデオ（</strong><strong>2</strong><strong>問は絵）を作る。</strong></p>\n<p><strong><span style=\"color:#FF0000\">③</span></strong><strong>　</strong><strong>調査</strong><strong>は研究者（筆者）と学習者の会話の形にし、学習者にビデオを</strong><strong>見</strong></p>\n<p><strong> </strong><strong>      </strong><strong>せ</strong><strong>、</strong><strong>研究者</strong><strong>の質問に答える半構造インタビューという形にする。</strong></p>\n<p><strong><span style=\"color:#FF0000\">④</span></strong><strong>　</strong><strong>被験者</strong><strong>の心理的な面を分析するため、インタビューの後、</strong><strong>フォローアッ</strong><strong>  </strong></p>\n<p><strong> </strong><strong>       </strong><strong>プ・インタビュー</strong><strong>を実施する。</strong></p>"
+     },
+     "elementId": "TextBox 12",
+     "elementType": "text"
+    }
+   ],
+   "notes": "未导入元素: 组合 7(GROUP (6))",
+   "pageType": "content"
+  },
+  "pages/22.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      86.87,
+      87.7,
+      788.96,
+      437.51
+     ],
+     "elementId": "圆角矩形 5",
+     "elementType": "shape",
+     "shapeName": "roundRect"
+    },
+    {
+     "bounds": [
+      128.71,
+      125.1,
+      720.08,
+      34.85
+     ],
+     "content": {
+      "fontFamily": "+mn-ea",
+      "fontSize": 24.0,
+      "text": "<p><strong><span style=\"font-size:24.0px\">期</span></strong><strong><span style=\"font-size:24.0px\">間：</span></strong><strong><span style=\"font-size:24.0px\">2016</span></strong><strong><span style=\"font-size:24.0px\">年</span></strong><strong><span style=\"font-size:24.0px\">4</span></strong><strong><span style=\"font-size:24.0px\">月</span></strong></p>"
+     },
+     "elementId": "Rectangle 11",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      128.68,
+      162.28,
+      405.19,
+      36.35
+     ],
+     "content": {
+      "text": "<p><strong>場</strong><strong>所</strong><strong>：中国</strong><strong>安徽省にある</strong><strong>S</strong><strong>大学と</strong><strong>N</strong><strong>大学</strong></p>"
+     },
+     "elementId": "TextBox 1",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      129.93,
+      201.26,
+      731.42,
+      94.51
+     ],
+     "content": {
+      "fontFamily": "MS PGothic",
+      "text": "<p><strong>対象</strong><strong>者</strong><strong>：</strong><strong>S</strong><strong>大学日本語学科三年</strong><strong>生</strong><strong>10</strong><strong>人</strong><strong>（</strong><strong>S3</strong><strong>組</strong><strong>）</strong><strong>、</strong></p>\n<p><strong>　</strong><strong>　　　　</strong><strong> </strong><strong>N</strong><strong>大学日本語学科</strong><strong>二年生</strong><strong>9</strong><strong>人</strong><strong>（</strong><strong>N2</strong><strong>組</strong><strong>）</strong><strong>、三年生</strong><strong>10</strong><strong>人</strong><strong>（</strong><strong>N3</strong><strong>組</strong><strong>）</strong><strong>、</strong></p>\n<p style=\"text-align:right\"><strong>計</strong><strong>29</strong><strong>人</strong></p>"
+     },
+     "elementId": "TextBox 2",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      890.15,
+      485.52,
+      43.7,
+      36.35
+     ],
+     "content": {
+      "text": "<p>21</p>"
+     },
+     "elementId": "TextBox 138",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      -1.43,
+      24.4,
+      172.19,
+      36.35
+     ],
+     "content": {
+      "text": "<p><strong>発話誘</strong><strong>出</strong><strong>タスク</strong></p>"
+     },
+     "elementId": "TextBox 140",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      128.68,
+      326.76,
+      703.29,
+      152.68
+     ],
+     "content": {
+      "text": "<p><strong>実施の方法：</strong></p>\n<p><strong><span style=\"color:#FF0000\">１　</span></strong><strong>学習者一人ひとり個別に行った。</strong></p>\n<p><strong><span style=\"color:#FF0000\">２　</span></strong><strong>発話誘出タスク（日本語）＋フォローアップ・インタービュー（中国</strong></p>\n<p><strong>　</strong><strong>　語）との形で調査した。</strong></p>"
+     },
+     "elementId": "TextBox 10",
+     "elementType": "text"
+    }
+   ],
+   "notes": "未导入元素: 组合 7(GROUP (6))",
+   "pageType": "content"
+  },
+  "pages/23.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      86.87,
+      48.94,
+      788.96,
+      481.94
+     ],
+     "elementId": "圆角矩形 5",
+     "elementType": "shape",
+     "shapeName": "roundRect"
+    },
+    {
+     "bounds": [
+      129.89,
+      105.63,
+      703.07,
+      176.91
+     ],
+     "content": {
+      "fontSize": 28.0,
+      "text": "<p><span style=\"font-size:28.0px\">　</span><span style=\"font-size:28.0px\">29</span><span style=\"font-size:28.0px\">人</span><span style=\"font-size:28.0px\">×12</span><span style=\"font-size:28.0px\">問、延べ</span><span style=\"font-size:28.0px\">348</span><span style=\"font-size:28.0px\">問の会話に、自他動詞対いずれも産出できなかった会話は</span><span style=\"font-size:28.0px\">164</span><span style=\"font-size:28.0px\">問、目標自他動詞対どちらか一方産出したのは</span><span style=\"font-size:28.0px\">141</span><span style=\"font-size:28.0px\">問、別の自他動詞対を産出したのは</span><span style=\"font-size:28.0px\">43</span><span style=\"font-size:28.0px\">問。この中に、本研究でいう「を＋他動詞」のような誤用を産出したのは</span><span style=\"font-size:28.0px\">3</span><span style=\"font-size:28.0px\">例</span><span style=\"font-size:28.0px\">である。</span></p>"
+     },
+     "elementId": "TextBox 3",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      890.15,
+      485.52,
+      43.7,
+      36.35
+     ],
+     "content": {
+      "text": "<p>22</p>"
+     },
+     "elementId": "TextBox 10",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      191.08,
+      279.2,
+      221.13,
+      242.67
+     ],
+     "elementId": "图片 1",
+     "elementType": "image",
+     "fit": {
+      "mode": "cover"
+     },
+     "src": "media/slide23_03.png"
+    },
+    {
+     "bounds": [
+      519.94,
+      279.2,
+      216.41,
+      245.19
+     ],
+     "elementId": "图片 1",
+     "elementType": "image",
+     "fit": {
+      "mode": "cover"
+     },
+     "src": "media/slide23_04.png"
+    },
+    {
+     "bounds": [
+      140.84,
+      343.77,
+      45.36,
+      36.35
+     ],
+     "content": {
+      "text": "<p>①</p>"
+     },
+     "elementId": "TextBox 2",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      474.58,
+      343.77,
+      45.36,
+      36.35
+     ],
+     "content": {
+      "text": "<p>②</p>"
+     },
+     "elementId": "TextBox 13",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      270.46,
+      353.7,
+      62.37,
+      26.42
+     ],
+     "elementId": "矩形 4",
+     "elementType": "shape",
+     "shapeName": "rect"
+    },
+    {
+     "bounds": [
+      587.98,
+      353.96,
+      71.35,
+      26.42
+     ],
+     "elementId": "矩形 15",
+     "elementType": "shape",
+     "shapeName": "rect"
+    }
+   ],
+   "notes": "未导入元素: 组合 7(GROUP (6))",
+   "pageType": "content"
+  },
+  "pages/24.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      86.87,
+      48.94,
+      788.96,
+      481.94
+     ],
+     "elementId": "圆角矩形 5",
+     "elementType": "shape",
+     "shapeName": "roundRect"
+    },
+    {
+     "bounds": [
+      890.15,
+      485.52,
+      43.7,
+      36.35
+     ],
+     "content": {
+      "text": "<p>23</p>"
+     },
+     "elementId": "TextBox 10",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      86.87,
+      75.8,
+      788.96,
+      210.84
+     ],
+     "content": {
+      "fontFamily": "MS PGothic",
+      "text": "<p>例9　（誘出目標動詞：付く）</p>\n<p>044　　　王：2枚の写真ですね。（はい）この2枚の写真の違いはな</p>\n<p>　　　　　　　 んですか。</p>\n<p>045  N211：うん、《少し間》その耳を、うん、うん、つきました。</p>\n<p>046  　　王：あっもう一回。</p>\n<p>047  N211：うん、二回目の写真は<span style=\"color:#FF0000\">耳を付け、付けました</span>。</p>\n<p>048  　　王：耳を、（つけました）付けました。</p>"
+     },
+     "elementId": "矩形 1",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      86.94,
+      307.37,
+      788.96,
+      210.84
+     ],
+     "content": {
+      "fontFamily": "MS PGothic",
+      "text": "<p>例10　（誘出目標動詞：付く）</p>\n<p>036  　　王：はい、私の二枚の写真。（はい）この二枚の写真の違いはなんで</p>\n<p>　　　　　　　 すか。</p>\n<p>037  S321：うん。<span style=\"color:#FF0000\">猫の耳を加えてしまいました</span>。</p>\n<p>038  　　王：猫の耳を加えてしまいました。</p>\n<p>039  S321：うん。</p>\n<p>040  　　王：はい。</p>"
+     },
+     "elementId": "矩形 6",
+     "elementType": "text"
+    }
+   ],
+   "notes": "未导入元素: 组合 7(GROUP (6))",
+   "pageType": "content"
+  },
+  "pages/25.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      86.87,
+      48.94,
+      788.96,
+      481.94
+     ],
+     "elementId": "圆角矩形 5",
+     "elementType": "shape",
+     "shapeName": "roundRect"
+    },
+    {
+     "bounds": [
+      890.15,
+      485.52,
+      43.7,
+      36.35
+     ],
+     "content": {
+      "text": "<p>24</p>"
+     },
+     "elementId": "TextBox 10",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      86.87,
+      72.85,
+      788.96,
+      428.95
+     ],
+     "content": {
+      "fontFamily": "MS PGothic",
+      "fontSize": 18.0,
+      "text": "<p>例11　（半月を見て）お月様半分に<span style=\"color:#FF0000\">切ってる</span>なぁ。　（母語話者・2～3歳）</p>\n<p style=\"text-align:right\"><span style=\"font-size:18.0px\">（村杉</span><span style=\"font-size:18.0px\">, 2014: p.36</span><span style=\"font-size:18.0px\">）</span></p>\n<p>例12　もうすぐ、開けるよ。ビデオ屋さん。（Y, 2; 07, 03）　　　　　<span style=\"font-size:18.0px\">（</span><span style=\"font-size:18.0px\">坂本</span><span style=\"font-size:18.0px\">, 2005: </span><span style=\"font-size:18.0px\">p.</span><span style=\"font-size:18.0px\">.</span><span style=\"font-size:18.0px\">279</span><span style=\"font-size:18.0px\">）</span></p>\n<p>例13　（ナイフでホットケーキを切っていて、切ることができたとき）</p>\n<p>　　　　＊<span style=\"color:#FF0000\">切った</span>！　（M, 3:11）　　　　　　　　　　　　　　　　　　　      <span style=\"font-size:18.0px\">（</span><span style=\"font-size:18.0px\">中石</span><span style=\"font-size:18.0px\">, 2016: </span><span style=\"font-size:18.0px\">p</span><span style=\"font-size:18.0px\">.</span><span style=\"font-size:18.0px\">.</span><span style=\"font-size:18.0px\">83</span><span style=\"font-size:18.0px\">）</span></p>\n<p>例14　（タオルを持って来なかったことを怒られて）</p>\n<p>　　　　＊ちょっと向こうにあったから<span style=\"color:#FF0000\">届けなかった</span>んです。（M, 4: 01）</p>\n<p style=\"text-align:right\">　　　<span style=\"font-size:18.0px\">（同上）</span></p>\n<p>例15　＊どうしてトリケラトプスは、トリケラトプスっていう名前が<span style=\"color:#FF0000\">つけた</span>んだろ</p>\n<p>　　　　　　う。（H, 5 00）　　　　　　　　　　　　　　　　　　　　　　　      <span style=\"font-size:18.0px\">（中石</span><span style=\"font-size:18.0px\">, 2016: p.84</span><span style=\"font-size:18.0px\">）</span></p>\n<p>例16　（けん玉をやっていて）</p>\n<p>　　　　＊さっき、<span style=\"color:#FF0000\">載せ</span>そうになったよ！（H, 6: 05）　　　　　　　　　　</p>\n<p style=\"text-align:right\"><span style=\"font-size:18.0px\">（同上）</span></p>\n<p>例17　（床に足をつけようとして）</p>\n<p>　　　　＊足がしびれて、<span style=\"color:#FF0000\">つけない</span>。　（H, 7: 11）　　　　　　　　      <span style=\"font-size:18.0px\">（</span><span style=\"font-size:18.0px\">中石</span><span style=\"font-size:18.0px\">, 2016: p.84</span><span style=\"font-size:18.0px\">）</span></p>"
+     },
+     "elementId": "矩形 1",
+     "elementType": "text"
+    }
+   ],
+   "notes": "未导入元素: 组合 7(GROUP (6))",
+   "pageType": "content"
+  },
+  "pages/26.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      86.87,
+      48.94,
+      788.96,
+      481.94
+     ],
+     "elementId": "圆角矩形 5",
+     "elementType": "shape",
+     "shapeName": "roundRect"
+    },
+    {
+     "bounds": [
+      890.15,
+      485.52,
+      43.7,
+      36.35
+     ],
+     "content": {
+      "text": "<p>25</p>"
+     },
+     "elementId": "TextBox 10",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      106.98,
+      155.29,
+      750.78,
+      92.09
+     ],
+     "content": {
+      "fontFamily": "MS PGothic",
+      "fontSize": 28.0,
+      "text": "<p><span style=\"font-size:28.0px\">　</span>動詞の習得と文化について、就学前期までに、自－他の区別がほぼ完全に形成されていることを確認する。</p>\n<p style=\"text-align:right\"><span style=\"font-size:18.0px\">（国</span><span style=\"font-size:18.0px\">立国語</span><span style=\"font-size:18.0px\">研究所</span><span style=\"font-size:18.0px\">, 1977:p.324</span><span style=\"font-size:18.0px\">）</span></p>"
+     },
+     "elementId": "矩形 2",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      106.98,
+      321.09,
+      750.71,
+      65.43
+     ],
+     "content": {
+      "fontSize": 18.0,
+      "text": "<p>例文19　（夜、洗面所に一人で行ったが、困って母のところに帰ってきた）</p>\n<p>　　　　　　＊えーとね、電気<span style=\"color:#FF0000\">が</span>つけん。　（H, 3:03）　　　　　　　<span style=\"font-size:18.0px\">（</span><span style=\"font-size:18.0px\">中石</span><span style=\"font-size:18.0px\">, 2016: p.84</span><span style=\"font-size:18.0px\">）</span></p>"
+     },
+     "elementId": "矩形 3",
+     "elementType": "text"
+    }
+   ],
+   "notes": "未导入元素: 组合 7(GROUP (6))",
+   "pageType": "content"
+  },
+  "pages/27.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      86.87,
+      48.94,
+      788.96,
+      481.94
+     ],
+     "elementId": "圆角矩形 5",
+     "elementType": "shape",
+     "shapeName": "roundRect"
+    },
+    {
+     "bounds": [
+      450.24,
+      202.02,
+      62.37,
+      70.87
+     ],
+     "elementId": "下箭头 6",
+     "elementType": "shape",
+     "shapeName": "downArrow"
+    },
+    {
+     "bounds": [
+      890.15,
+      485.52,
+      43.7,
+      36.35
+     ],
+     "content": {
+      "text": "<p>26</p>"
+     },
+     "elementId": "TextBox 13",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      86.94,
+      315.42,
+      788.96,
+      162.37
+     ],
+     "content": {
+      "fontSize": 32.0,
+      "text": "<p><span style=\"font-size:32.0px;color:#FF0000\">結論</span><span style=\"font-size:32.0px;color:#FF0000\">1</span><span style=\"font-size:32.0px\">：「を＋自動詞」類の誤用は中国人母語話者だけが犯す誤用ではなく、学習者の母語と関係なく、言語内の誤用の可能性が大きい</span><span style=\"font-size:32.0px\">。つまり、日本語を第二言語とする言語習得中の誤用である。</span></p>"
+     },
+     "elementId": "TextBox 1",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      86.87,
+      99.96,
+      788.96,
+      123.6
+     ],
+     "content": {
+      "fontSize": 32.0,
+      "text": "<p><span style=\"font-size:32.0px;color:#FF0000\">１</span><span style=\"font-size:32.0px\">　母語話者の子どもは犯さない</span></p>\n<p><span style=\"font-size:32.0px;color:#FF0000\">２</span><span style=\"font-size:32.0px\">　</span><span style=\"font-size:32.0px\">中国人</span><span style=\"font-size:32.0px\">学習者</span><span style=\"font-size:32.0px\">だけでなく</span><span style=\"font-size:32.0px\">、他言語を母語とする学習者</span></p>\n<p><span style=\"font-size:32.0px\">　</span><span style=\"font-size:32.0px\">　も犯す</span></p>"
+     },
+     "elementId": "TextBox 10",
+     "elementType": "text"
+    }
+   ],
+   "notes": "未导入元素: 组合 7(GROUP (6))",
+   "pageType": "content"
+  },
+  "pages/28.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      86.87,
+      48.94,
+      788.96,
+      481.94
+     ],
+     "elementId": "圆角矩形 5",
+     "elementType": "shape",
+     "shapeName": "roundRect"
+    },
+    {
+     "bounds": [
+      405.97,
+      255.14,
+      62.37,
+      70.87
+     ],
+     "elementId": "下箭头 6",
+     "elementType": "shape",
+     "shapeName": "downArrow"
+    },
+    {
+     "bounds": [
+      890.15,
+      485.52,
+      43.7,
+      36.35
+     ],
+     "content": {
+      "text": "<p>27</p>"
+     },
+     "elementId": "TextBox 13",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      106.04,
+      128.31,
+      750.78,
+      277.83
+     ],
+     "columnWidths": [
+      0.3288,
+      0.1711,
+      0.2613,
+      0.2388
+     ],
+     "elementId": "表格 2",
+     "elementType": "table",
+     "rowHeights": [
+      0.2,
+      0.2,
+      0.2,
+      0.2,
+      0.2
+     ],
+     "rows": [
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "データ"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "言語形式"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "収集方法"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "「を＋他動詞」の数"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "アンケート調査"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "理解レベル"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "文法テスト"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "多い"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "学習者作文コーパス"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "産出レベル"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "学習者作文"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "少ない"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "学習者誤用辞典"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "産出レベル"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "学習者作文など書き言葉"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "少ない"
+       }
+      ],
+      [
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "発話誘出タスク"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "産出レベル"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "学習者の発話"
+       },
+       {
+        "align": [
+         "center",
+         "middle"
+        ],
+        "fontSize": 20.0,
+        "text": "少ない"
+       }
+      ]
+     ]
+    },
+    {
+     "bounds": [
+      273.31,
+      95.99,
+      390.05,
+      29.08
+     ],
+     "content": {
+      "fontSize": 18.0,
+      "text": "<p><span style=\"font-size:18.0px\">表 </span><span style=\"font-size:18.0px\">7</span><span style=\"font-size:18.0px\">　データ別「を＋他動詞」の誤用に関する比較</span></p>"
+     },
+     "elementId": "矩形 3",
+     "elementType": "text"
+    }
+   ],
+   "notes": "未导入元素: 组合 7(GROUP (6))",
+   "pageType": "content"
+  },
+  "pages/29.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      86.87,
+      48.94,
+      788.96,
+      481.94
+     ],
+     "elementId": "圆角矩形 5",
+     "elementType": "shape",
+     "shapeName": "roundRect"
+    },
+    {
+     "bounds": [
+      890.15,
+      485.52,
+      43.7,
+      36.35
+     ],
+     "content": {
+      "text": "<p>28</p>"
+     },
+     "elementId": "TextBox 13",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      127.17,
+      94.29,
+      664.32,
+      181.76
+     ],
+     "content": {
+      "text": "<p>【自然な言語行動】</p>\n<p>言いたい内容　→　言語化</p>\n<p>【穴埋めテストの解答行動】</p>\n<p>空欄のある問題文を読む　→　不完全な文の意味を想像する</p>\n<p>→　想像した意味に合うように空欄を補充する</p>"
+     },
+     "elementId": "矩形 1",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      648.08,
+      287.07,
+      143.41,
+      29.08
+     ],
+     "content": {
+      "fontSize": 18.0,
+      "text": "<p><span style=\"font-size:18.0px\">小林（</span><span style=\"font-size:18.0px\">2001:p.68</span><span style=\"font-size:18.0px\">）</span></p>"
+     },
+     "elementId": "矩形 4",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      428.15,
+      314.03,
+      62.37,
+      70.87
+     ],
+     "elementId": "下箭头 11",
+     "elementType": "shape",
+     "shapeName": "downArrow"
+    },
+    {
+     "bounds": [
+      114.61,
+      390.27,
+      707.45,
+      123.6
+     ],
+     "content": {
+      "fontSize": 32.0,
+      "text": "<p><span style=\"font-size:32.0px;color:#FF0000\">結論</span><span style=\"font-size:32.0px;color:#FF0000\">2</span><span style=\"font-size:32.0px\">：「を＋他動詞」類誤用がアンケート調査で大量に出ているのは、アンケート調査のような不自然な言語活動を原因とする。</span></p>"
+     },
+     "elementId": "矩形 10",
+     "elementType": "text"
+    }
+   ],
+   "notes": "未导入元素: 组合 7(GROUP (6))",
+   "pageType": "content"
+  },
+  "pages/30.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      86.87,
+      48.94,
+      788.96,
+      481.94
+     ],
+     "elementId": "圆角矩形 5",
+     "elementType": "shape",
+     "shapeName": "roundRect"
+    },
+    {
+     "bounds": [
+      890.15,
+      485.52,
+      43.7,
+      36.35
+     ],
+     "content": {
+      "text": "<p>29</p>"
+     },
+     "elementId": "TextBox 13",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      86.87,
+      183.87,
+      788.96,
+      210.84
+     ],
+     "content": {
+      "fontSize": 28.0,
+      "text": "<p><span style=\"font-size:28.0px\">１．坂本（</span><span style=\"font-size:28.0px\">2005</span><span style=\"font-size:28.0px\">）と奥野（</span><span style=\"font-size:28.0px\">2005</span><span style=\"font-size:28.0px\">）で指摘されたように、「母語の影響」</span></p>\n<p><span style=\"font-size:28.0px\">　</span><span style=\"font-size:28.0px\">　を判断するのは簡単ではなく、様々なデータで複眼的に捉えな</span></p>\n<p><span style=\"font-size:28.0px\">　</span><span style=\"font-size:28.0px\">　ければならない。</span></p>\n<p><span style=\"font-size:28.0px\">２．学習者の習得状況を把握する時、データの収集方法も結果に</span></p>\n<p><span style=\"font-size:28.0px\">　</span><span style=\"font-size:28.0px\">　影響を与えるので、慎重に判断する必要がある。</span></p>"
+     },
+     "elementId": "TextBox 2",
+     "elementType": "text"
+    }
+   ],
+   "notes": "未导入元素: 组合 7(GROUP (6))",
+   "pageType": "content"
+  },
+  "pages/31.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      0.0,
+      0.0,
+      213.76,
+      540.13
+     ],
+     "elementId": "矩形 1",
+     "elementType": "shape",
+     "shapeName": "rect"
+    },
+    {
+     "bounds": [
+      11.29,
+      174.77,
+      202.47,
+      77.55
+     ],
+     "content": {
+      "fontFamily": "微软雅黑",
+      "fontSize": 28.0,
+      "text": "<p style=\"text-align:right\"><strong><span style=\"font-size:28.0px\">参考文献</span></strong><strong><span style=\"font-size:28.0px\">REFERENCE</span></strong></p>"
+     },
+     "elementId": "TextBox 86",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      213.76,
+      0.0,
+      746.74,
+      511.35
+     ],
+     "content": {
+      "fontFamily": "MS PGothic",
+      "fontSize": 16.0,
+      "text": "<p><span style=\"font-size:16.0px\">（</span><span style=\"font-size:16.0px\">1</span><span style=\"font-size:16.0px\">）</span><span style=\"font-size:16.0px\">アブデルラフマーン</span><span style=\"font-size:16.0px\">（</span><span style=\"font-size:16.0px\">2016</span><span style=\"font-size:16.0px\">）「アラビア語を母語とする日本語学習者における自動詞・他動詞の習得研究</span><span style=\"font-size:16.0px\">―</span></p>\n<p><span style=\"font-size:16.0px\">　</span><span style=\"font-size:16.0px\">　　　　</span><span style=\"font-size:16.0px\">母語</span><span style=\"font-size:16.0px\">の影響をめぐって―」</span><span style=\"font-size:16.0px\">2016</span><span style=\"font-size:16.0px\">年日本語教育国際研究大会口頭発表（於：バリ島　</span><span style=\"font-size:16.0px\">Nusa </span><span style=\"font-size:16.0px\">Dua</span><span style=\"font-size:16.0px\"> </span></p>\n<p><span style=\"font-size:16.0px\">　</span><span style=\"font-size:16.0px\">　　　　</span><span style=\"font-size:16.0px\">Convention </span><span style=\"font-size:16.0px\">Centre</span><span style=\"font-size:16.0px\">、</span><span style=\"font-size:16.0px\">9</span><span style=\"font-size:16.0px\">月</span><span style=\"font-size:16.0px\">10</span><span style=\"font-size:16.0px\">日）</span></p>\n<p><span style=\"font-size:16.0px\">（</span><span style=\"font-size:16.0px\">2</span><span style=\"font-size:16.0px\">）</span><span style=\"font-size:16.0px\">市</span><span style=\"font-size:16.0px\">川保子（</span><span style=\"font-size:16.0px\">1997</span><span style=\"font-size:16.0px\">）『日本語誤用例文小辞典』凡人社</span></p>\n<p><span style=\"font-size:16.0px\">（</span><span style=\"font-size:16.0px\">3</span><span style=\"font-size:16.0px\">）</span><span style=\"font-size:16.0px\">市川</span><span style=\"font-size:16.0px\">保子（</span><span style=\"font-size:16.0px\">2010</span><span style=\"font-size:16.0px\">）『日本語誤用辞典』スリーエーネットワーク</span></p>\n<p><span style=\"font-size:16.0px\">（</span><span style=\"font-size:16.0px\">4</span><span style=\"font-size:16.0px\">）</span><span style=\"font-size:16.0px\">伊藤</span><span style=\"font-size:16.0px\">秀明（</span><span style=\"font-size:16.0px\">2012a</span><span style=\"font-size:16.0px\">）「学習者は『対のある自他動詞』をどうのように使っているか―中国人日本語学習者</span><span style=\"font-size:16.0px\">の</span></p>\n<p><span style=\"font-size:16.0px\">　</span><span style=\"font-size:16.0px\">　　　　</span><span style=\"font-size:16.0px\"> </span><span style=\"font-size:16.0px\">中級</span><span style=\"font-size:16.0px\">から超級に注目して―」『国際日本研究』</span><span style=\"font-size:16.0px\">4, 43-52, </span><span style=\"font-size:16.0px\">筑波大学人文社会科学研究科国際日本</span><span style=\"font-size:16.0px\">研究</span></p>\n<p><span style=\"font-size:16.0px\"> </span><span style=\"font-size:16.0px\">    </span><span style=\"font-size:16.0px\">　　　</span><span style=\"font-size:16.0px\"> </span><span style=\"font-size:16.0px\">専攻</span><span style=\"font-size:16.0px\">.</span></p>\n<p><span style=\"font-size:16.0px\">（</span><span style=\"font-size:16.0px\">5</span><span style=\"font-size:16.0px\">）</span><span style=\"font-size:16.0px\">伊藤</span><span style=\"font-size:16.0px\">克敏（</span><span style=\"font-size:16.0px\">1990</span><span style=\"font-size:16.0px\">）『こどものことば―習得と創造』勁草書房</span></p>\n<p><span style=\"font-size:16.0px\">（</span><span style=\"font-size:16.0px\">6</span><span style=\"font-size:16.0px\">）</span><span style=\"font-size:16.0px\">奥野</span><span style=\"font-size:16.0px\">由紀子（</span><span style=\"font-size:16.0px\">2005</span><span style=\"font-size:16.0px\">）『第二言語習得過程における言語転移の研究』風間書房</span></p>\n<p><span style=\"font-size:16.0px\">（</span><span style=\"font-size:16.0px\">7</span><span style=\"font-size:16.0px\">）</span><span style=\"font-size:16.0px\">王冠</span><span style=\"font-size:16.0px\">華（</span><span style=\"font-size:16.0px\">2012</span><span style=\"font-size:16.0px\">）「中国日語学習者有対自動詞習得状況的実証研究」『日語学習与研究』</span><span style=\"font-size:16.0px\">5</span><span style=\"font-size:16.0px\">，</span><span style=\"font-size:16.0px\">86-94, </span><span style=\"font-size:16.0px\">対外経</span><span style=\"font-size:16.0px\">済</span></p>\n<p><span style=\"font-size:16.0px\"> </span><span style=\"font-size:16.0px\">           </span><span style=\"font-size:16.0px\">貿</span><span style=\"font-size:16.0px\">易大学</span><span style=\"font-size:16.0px\">.</span></p>\n<p><span style=\"font-size:16.0px\">（</span><span style=\"font-size:16.0px\">8</span><span style=\"font-size:16.0px\">）</span><span style=\"font-size:16.0px\">国</span><span style=\"font-size:16.0px\">立国語研究所（</span><span style=\"font-size:16.0px\">1977</span><span style=\"font-size:16.0px\">）『幼児の文法能力』東京書籍</span></p>\n<p><span style=\"font-size:16.0px\">（</span><span style=\"font-size:16.0px\">9</span><span style=\"font-size:16.0px\">）</span><span style=\"font-size:16.0px\">小林</span><span style=\"font-size:16.0px\">典子</span><span style=\"font-size:16.0px\">•</span><span style=\"font-size:16.0px\">直井恵理子（</span><span style=\"font-size:16.0px\">1996</span><span style=\"font-size:16.0px\">）「相対自他動詞の習得は可能か</span><span style=\"font-size:16.0px\">―</span><span style=\"font-size:16.0px\">スペイン語話者の場合</span><span style=\"font-size:16.0px\">―</span><span style=\"font-size:16.0px\">」『筑波大学</span><span style=\"font-size:16.0px\">留学</span><span style=\"font-size:16.0px\">          </span></p>\n<p><span style=\"font-size:16.0px\"> </span><span style=\"font-size:16.0px\">           </span><span style=\"font-size:16.0px\">生</span><span style=\"font-size:16.0px\">センター日本語教育論集』</span><span style=\"font-size:16.0px\">11, 83-98, </span><span style=\"font-size:16.0px\">筑波大学留学生センター</span><span style=\"font-size:16.0px\">.</span></p>\n<p><span style=\"font-size:16.0px\">（</span><span style=\"font-size:16.0px\">10</span><span style=\"font-size:16.0px\">）</span><span style=\"font-size:16.0px\">小林</span><span style=\"font-size:16.0px\">典子（</span><span style=\"font-size:16.0px\">1996</span><span style=\"font-size:16.0px\">）「相対自動詞による結果・状態表現</span><span style=\"font-size:16.0px\">―</span><span style=\"font-size:16.0px\">日本語学習者の習得状況</span><span style=\"font-size:16.0px\">― </span><span style=\"font-size:16.0px\">」『文芸言語研究・</span><span style=\"font-size:16.0px\">言</span></p>\n<p><span style=\"font-size:16.0px\"> </span><span style=\"font-size:16.0px\">             </span><span style=\"font-size:16.0px\">語篇</span><span style=\"font-size:16.0px\">』</span><span style=\"font-size:16.0px\">29, 41-56, </span><span style=\"font-size:16.0px\">筑波大学</span><span style=\"font-size:16.0px\">.</span></p>\n<p><span style=\"font-size:16.0px\">（</span><span style=\"font-size:16.0px\">11</span><span style=\"font-size:16.0px\">）</span><span style=\"font-size:16.0px\">小林</span><span style=\"font-size:16.0px\">典子（</span><span style=\"font-size:16.0px\">2001</span><span style=\"font-size:16.0px\">）「第</span><span style=\"font-size:16.0px\">4</span><span style=\"font-size:16.0px\">章　誤用の隠れた原因」</span><span style=\"font-size:16.0px\">, </span><span style=\"font-size:16.0px\">野田尚史・迫田久美子・渋谷勝己・小林典子［編］『</span><span style=\"font-size:16.0px\">日本語</span></p>\n<p><span style=\"font-size:16.0px\"> </span><span style=\"font-size:16.0px\">             </span><span style=\"font-size:16.0px\">学習者</span><span style=\"font-size:16.0px\">の文法習得』</span><span style=\"font-size:16.0px\">63-82, </span><span style=\"font-size:16.0px\">大修館書店</span><span style=\"font-size:16.0px\">.</span></p>\n<p><span style=\"font-size:16.0px\">（</span><span style=\"font-size:16.0px\">12</span><span style=\"font-size:16.0px\">）</span><span style=\"font-size:16.0px\">小柳</span><span style=\"font-size:16.0px\">かおる（</span><span style=\"font-size:16.0px\">2004</span><span style=\"font-size:16.0px\">）『日本語教師のための新しい言語習得概論』</span><span style=\"font-size:16.0px\">スリーエーネットワーク</span></p>\n<p><span style=\"font-size:16.0px\">（</span><span style=\"font-size:16.0px\">13</span><span style=\"font-size:16.0px\">）</span><span style=\"font-size:16.0px\">坂本</span><span style=\"font-size:16.0px\">正（</span><span style=\"font-size:16.0px\">2005</span><span style=\"font-size:16.0px\">）「母語干渉判定基準</span><span style=\"font-size:16.0px\">―</span><span style=\"font-size:16.0px\">五つの提案</span><span style=\"font-size:16.0px\">―</span><span style=\"font-size:16.0px\">」</span><span style=\"font-size:16.0px\">, </span><span style=\"font-size:16.0px\">鎌田修・筒井通雄・畑佐由紀子・ナズキアン富</span><span style=\"font-size:16.0px\">美子</span></p>\n<p><span style=\"font-size:16.0px\"> </span><span style=\"font-size:16.0px\">            </span><span style=\"font-size:16.0px\">・</span><span style=\"font-size:16.0px\">岡まゆみ［編］『言語教育の新展開　牧野成一教授古稀記念論集』</span><span style=\"font-size:16.0px\">275-287, </span><span style=\"font-size:16.0px\">ひつじ</span><span style=\"font-size:16.0px\">書房</span><span style=\"font-size:16.0px\">.</span></p>\n<p><span style=\"font-size:16.0px\">（</span><span style=\"font-size:16.0px\">14</span><span style=\"font-size:16.0px\">）</span><span style=\"font-size:16.0px\">坂本</span><span style=\"font-size:16.0px\">杏子･中石ゆうこ･龍盛艶･酒井弘（</span><span style=\"font-size:16.0px\">2010</span><span style=\"font-size:16.0px\">）「第二言語の動詞学習における意味推論のための</span><span style=\"font-size:16.0px\">手がかり</span><span style=\"font-size:16.0px\"> </span></p>\n<p><span style=\"font-size:16.0px\"> </span><span style=\"font-size:16.0px\">             ―</span><span style=\"font-size:16.0px\">中国語を母語とする日本語学習者を対象として</span><span style=\"font-size:16.0px\">―</span><span style=\"font-size:16.0px\">」『電子情報通信学会技術研究報告</span><span style=\"font-size:16.0px\">. TL, </span><span style=\"font-size:16.0px\">思考</span></p>\n<p><span style=\"font-size:16.0px\"> </span><span style=\"font-size:16.0px\">             </span><span style=\"font-size:16.0px\">と言語</span><span style=\"font-size:16.0px\">』</span><span style=\"font-size:16.0px\">110</span><span style=\"font-size:16.0px\">（</span><span style=\"font-size:16.0px\">163</span><span style=\"font-size:16.0px\">）</span><span style=\"font-size:16.0px\">, 7-12, </span><span style=\"font-size:16.0px\">一般社団法人電子情報通信学会</span><span style=\"font-size:16.0px\">.</span></p>\n<p><span style=\"font-size:16.0px\">（</span><span style=\"font-size:16.0px\">15</span><span style=\"font-size:16.0px\">）</span><span style=\"font-size:16.0px\">迫田</span><span style=\"font-size:16.0px\">久美子（</span><span style=\"font-size:16.0px\">2002</span><span style=\"font-size:16.0px\">）『日本語教育に生かす第二言語習得研究』</span><span style=\"font-size:16.0px\">アルク</span></p>"
+     },
+     "elementId": "矩形 3",
+     "elementType": "text"
+    }
+   ],
+   "pageType": "content"
+  },
+  "pages/32.page": {
+   "background": {
+    "color": "#FFFFFF",
+    "type": "solid"
+   },
+   "elements": [
+    {
+     "bounds": [
+      0.0,
+      0.0,
+      213.76,
+      540.13
+     ],
+     "elementId": "矩形 1",
+     "elementType": "shape",
+     "shapeName": "rect"
+    },
+    {
+     "bounds": [
+      11.29,
+      174.77,
+      202.47,
+      77.55
+     ],
+     "content": {
+      "fontFamily": "微软雅黑",
+      "fontSize": 28.0,
+      "text": "<p style=\"text-align:right\"><strong><span style=\"font-size:28.0px\">参考文献</span></strong><strong><span style=\"font-size:28.0px\">REFERENCE</span></strong></p>"
+     },
+     "elementId": "TextBox 86",
+     "elementType": "text"
+    },
+    {
+     "bounds": [
+      213.61,
+      0.0,
+      746.74,
+      414.41
+     ],
+     "content": {
+      "fontFamily": "MS PGothic",
+      "fontSize": 16.0,
+      "text": "<p><span style=\"font-size:16.0px\">（</span><span style=\"font-size:16.0px\">16</span><span style=\"font-size:16.0px\">）</span><span style=\"font-size:16.0px\">迫田</span><span style=\"font-size:16.0px\">久美子（</span><span style=\"font-size:16.0px\">2016</span><span style=\"font-size:16.0px\">）「コーパスを利用した第二言語習得研究の可能性と課題</span><span style=\"font-size:16.0px\">―</span><span style=\"font-size:16.0px\">他言語母語の日本語</span><span style=\"font-size:16.0px\">学習</span></p>\n<p><span style=\"font-size:16.0px\"> </span><span style=\"font-size:16.0px\">             </span><span style=\"font-size:16.0px\">者</span><span style=\"font-size:16.0px\">横断コーパス（</span><span style=\"font-size:16.0px\">I-JAS</span><span style=\"font-size:16.0px\">）の構築に向けて</span><span style=\"font-size:16.0px\">―</span><span style=\"font-size:16.0px\">」『第二言語としての日本語の習得研究』</span><span style=\"font-size:16.0px\">19, 5-28, </span><span style=\"font-size:16.0px\">第二</span></p>\n<p><span style=\"font-size:16.0px\"> </span><span style=\"font-size:16.0px\">             </span><span style=\"font-size:16.0px\">言語</span><span style=\"font-size:16.0px\">習得研究会</span><span style=\"font-size:16.0px\">.</span></p>\n<p><span style=\"font-size:16.0px\">（</span><span style=\"font-size:16.0px\">17</span><span style=\"font-size:16.0px\">）</span><span style=\"font-size:16.0px\">白畑</span><span style=\"font-size:16.0px\">知彦・若林茂則・村野井仁（</span><span style=\"font-size:16.0px\">2010</span><span style=\"font-size:16.0px\">）『詳説 第二言語習得研究―理論から研究法まで―』研究社</span></p>\n<p><span style=\"font-size:16.0px\">（</span><span style=\"font-size:16.0px\">18</span><span style=\"font-size:16.0px\">）</span><span style=\"font-size:16.0px\">周</span><span style=\"font-size:16.0px\">平・陳小芬編著（</span><span style=\"font-size:16.0px\">2009</span><span style=\"font-size:16.0px\">）『新編日語』（全四巻）上海外語教育出版社</span></p>\n<p><span style=\"font-size:16.0px\">（</span><span style=\"font-size:16.0px\">19</span><span style=\"font-size:16.0px\">）</span><span style=\"font-size:16.0px\">杉村</span><span style=\"font-size:16.0px\">泰（</span><span style=\"font-size:16.0px\">2013</span><span style=\"font-size:16.0px\">）</span><span style=\"font-size:16.0px\">「中国語話者における日本語の有対動詞の自動詞・他動詞・受身の選択について―</span><span style=\"font-size:16.0px\">動作</span></p>\n<p><span style=\"font-size:16.0px\"> </span><span style=\"font-size:16.0px\">             </span><span style=\"font-size:16.0px\">主</span><span style=\"font-size:16.0px\">の不注意による対象の変化を表す場合―」『ことばの科学』</span><span style=\"font-size:16.0px\">26, 153-170, </span><span style=\"font-size:16.0px\">名古屋大学言語文化</span><span style=\"font-size:16.0px\">研</span></p>\n<p><span style=\"font-size:16.0px\"> </span><span style=\"font-size:16.0px\">             </span><span style=\"font-size:16.0px\">究会</span><span style=\"font-size:16.0px\">.</span></p>\n<p><span style=\"font-size:16.0px;color:#FF0000\">（</span><span style=\"font-size:16.0px;color:#FF0000\">20</span><span style=\"font-size:16.0px;color:#FF0000\">）</span><span style=\"font-size:16.0px;color:#FF0000\">杉村泰（</span><span style=\"font-size:16.0px;color:#FF0000\">2016</span><span style=\"font-size:16.0px;color:#FF0000\">）「英語を母語とする日本語学習者における日本語の自動詞・他動詞・受身の選択に</span><span style=\"font-size:16.0px;color:#FF0000\">ついて</span></p>\n<p><span style=\"font-size:16.0px;color:#FF0000\">　</span><span style=\"font-size:16.0px;color:#FF0000\">　　　　　</span><span style=\"font-size:16.0px;color:#FF0000\"> </span><span style=\"font-size:16.0px;color:#FF0000\">─</span><span style=\"font-size:16.0px;color:#FF0000\">非人為的事態の場合─」</span><span style=\"font-size:16.0px;color:#FF0000\">『</span><span style=\"font-size:16.0px;color:#FF0000\">名古屋大学言語文化論集</span><span style=\"font-size:16.0px;color:#FF0000\">』38</span><span style=\"font-size:16.0px;color:#FF0000\">（</span><span style=\"font-size:16.0px;color:#FF0000\">1</span><span style=\"font-size:16.0px;color:#FF0000\">） </span><span style=\"font-size:16.0px;color:#FF0000\">, 3</span><span style=\"font-size:16.0px;color:#FF0000\">－</span><span style=\"font-size:16.0px;color:#FF0000\">16, </span><span style=\"font-size:16.0px;color:#FF0000\">名古屋大学大学院国際</span><span style=\"font-size:16.0px;color:#FF0000\">言</span></p>\n<p><span style=\"font-size:16.0px;color:#FF0000\"> </span><span style=\"font-size:16.0px;color:#FF0000\">             </span><span style=\"font-size:16.0px;color:#FF0000\">語</span><span style=\"font-size:16.0px;color:#FF0000\">文化研究科</span><span style=\"font-size:16.0px;color:#FF0000\">.</span></p>\n<p><span style=\"font-size:16.0px;color:#FF0000\">（</span><span style=\"font-size:16.0px;color:#FF0000\">21</span><span style=\"font-size:16.0px;color:#FF0000\">）</span><span style=\"font-size:16.0px;color:#FF0000\">張</span><span style=\"font-size:16.0px;color:#FF0000\">鵬・朱虹・雷鳴（</span><span style=\"font-size:16.0px;color:#FF0000\">2012</span><span style=\"font-size:16.0px;color:#FF0000\">）「中国日語学習者</span><span style=\"font-size:16.0px;color:#FF0000\">『</span><span style=\"font-size:16.0px;color:#FF0000\">自－他対応動詞</span><span style=\"font-size:16.0px;color:#FF0000\">』</span><span style=\"font-size:16.0px;color:#FF0000\">習得的実証研究」</span><span style=\"font-size:16.0px;color:#FF0000\">『</span><span style=\"font-size:16.0px;color:#FF0000\">外語教学与研究</span><span style=\"font-size:16.0px;color:#FF0000\">』44</span><span style=\"font-size:16.0px;color:#FF0000\">（</span><span style=\"font-size:16.0px;color:#FF0000\">1</span><span style=\"font-size:16.0px;color:#FF0000\">）</span><span style=\"font-size:16.0px;color:#FF0000\">，</span></p>\n<p><span style=\"font-size:16.0px;color:#FF0000\"> </span><span style=\"font-size:16.0px;color:#FF0000\">             95-104</span><span style=\"font-size:16.0px;color:#FF0000\">, </span><span style=\"font-size:16.0px;color:#FF0000\">北京外国語大学</span><span style=\"font-size:16.0px;color:#FF0000\">.</span></p>\n<p><span style=\"font-size:16.0px\">（</span><span style=\"font-size:16.0px\">22</span><span style=\"font-size:16.0px\">）</span><span style=\"font-size:16.0px\">寺村</span><span style=\"font-size:16.0px\">秀夫（</span><span style=\"font-size:16.0px\">1990</span><span style=\"font-size:16.0px\">）『外国人学習者の日本語誤用例集』（大阪大学；</span><span style=\"font-size:16.0px\">PDF</span><span style=\"font-size:16.0px\">版、国立国語研究所、</span><span style=\"font-size:16.0px\">2011</span><span style=\"font-size:16.0px\">年）</span></p>\n<p><span style=\"font-size:16.0px\">（</span><span style=\"font-size:16.0px\">23</span><span style=\"font-size:16.0px\">）</span><span style=\"font-size:16.0px\">中石</span><span style=\"font-size:16.0px\">ゆうこ（</span><span style=\"font-size:16.0px\">2016</span><span style=\"font-size:16.0px\">）「日本語を母語とする二幼児の自動詞･他動詞の誤用」『県立広島大学人間文化</span><span style=\"font-size:16.0px\">学部</span></p>\n<p><span style=\"font-size:16.0px\"> </span><span style=\"font-size:16.0px\">             </span><span style=\"font-size:16.0px\">紀要</span><span style=\"font-size:16.0px\">』</span><span style=\"font-size:16.0px\">11, 75-85, </span><span style=\"font-size:16.0px\">広島大学</span><span style=\"font-size:16.0px\">.</span></p>\n<p><span style=\"font-size:16.0px\">（</span><span style=\"font-size:16.0px\">24</span><span style=\"font-size:16.0px\">）</span><span style=\"font-size:16.0px\">村杉</span><span style=\"font-size:16.0px\">恵子（</span><span style=\"font-size:16.0px\">2014</span><span style=\"font-size:16.0px\">）『ことばとこころ―入門心理言語学―』</span><span style=\"font-size:16.0px\">み</span><span style=\"font-size:16.0px\">みずく</span><span style=\"font-size:16.0px\">舎</span></p>\n<p><span style=\"font-size:16.0px\">（</span><span style=\"font-size:16.0px\">25</span><span style=\"font-size:16.0px\">）</span><span style=\"font-size:16.0px\">守屋</span><span style=\"font-size:16.0px\">三千代（</span><span style=\"font-size:16.0px\">1994</span><span style=\"font-size:16.0px\">）「日本語の自動詞・他動詞の選択条件―習得状況の分析を参考に」『講座日本語教育</span><span style=\"font-size:16.0px\">』</span></p>\n<p><span style=\"font-size:16.0px\"> </span><span style=\"font-size:16.0px\">                 </span><span style=\"font-size:16.0px\">第</span><span style=\"font-size:16.0px\">29</span><span style=\"font-size:16.0px\">分冊</span><span style=\"font-size:16.0px\">, 151</span><span style=\"font-size:16.0px\">－</span><span style=\"font-size:16.0px\">165, </span><span style=\"font-size:16.0px\">早稲田大学日本語教育センター</span><span style=\"font-size:16.0px\">.</span></p>"
+     },
+     "elementId": "矩形 3",
+     "elementType": "text"
+    }
+   ],
+   "pageType": "content"
+  }
+ },
+ "report": {
+  "pages": 32,
+  "skipped": [
+   {
+    "shapes": [
+     "组合 7(GROUP (6))"
+    ],
+    "slide": 2
+   },
+   {
+    "shapes": [
+     "组合 7(GROUP (6))"
+    ],
+    "slide": 3
+   },
+   {
+    "shapes": [
+     "组合 7(GROUP (6))"
+    ],
+    "slide": 4
+   },
+   {
+    "shapes": [
+     "组合 7(GROUP (6))"
+    ],
+    "slide": 5
+   },
+   {
+    "shapes": [
+     "组合 7(GROUP (6))",
+     "组合 12(GROUP (6))"
+    ],
+    "slide": 6
+   },
+   {
+    "shapes": [
+     "组合 7(GROUP (6))"
+    ],
+    "slide": 7
+   },
+   {
+    "shapes": [
+     "组合 7(GROUP (6))"
+    ],
+    "slide": 8
+   },
+   {
+    "shapes": [
+     "Group 66(GROUP (6))",
+     "组合 7(GROUP (6))"
+    ],
+    "slide": 9
+   },
+   {
+    "shapes": [
+     "组合 7(GROUP (6))"
+    ],
+    "slide": 10
+   },
+   {
+    "shapes": [
+     "组合 7(GROUP (6))"
+    ],
+    "slide": 11
+   },
+   {
+    "shapes": [
+     "组合 7(GROUP (6))"
+    ],
+    "slide": 12
+   },
+   {
+    "shapes": [
+     "图表 35(unsupported chart)"
+    ],
+    "slide": 13
+   },
+   {
+    "shapes": [
+     "组合 7(GROUP (6))"
+    ],
+    "slide": 14
+   },
+   {
+    "shapes": [
+     "组合 7(GROUP (6))"
+    ],
+    "slide": 15
+   },
+   {
+    "shapes": [
+     "组合 7(GROUP (6))"
+    ],
+    "slide": 17
+   },
+   {
+    "shapes": [
+     "组合 7(GROUP (6))"
+    ],
+    "slide": 18
+   },
+   {
+    "shapes": [
+     "组合 7(GROUP (6))"
+    ],
+    "slide": 19
+   },
+   {
+    "shapes": [
+     "组合 7(GROUP (6))"
+    ],
+    "slide": 20
+   },
+   {
+    "shapes": [
+     "组合 7(GROUP (6))"
+    ],
+    "slide": 21
+   },
+   {
+    "shapes": [
+     "组合 7(GROUP (6))"
+    ],
+    "slide": 22
+   },
+   {
+    "shapes": [
+     "组合 7(GROUP (6))"
+    ],
+    "slide": 23
+   },
+   {
+    "shapes": [
+     "组合 7(GROUP (6))"
+    ],
+    "slide": 24
+   },
+   {
+    "shapes": [
+     "组合 7(GROUP (6))"
+    ],
+    "slide": 25
+   },
+   {
+    "shapes": [
+     "组合 7(GROUP (6))"
+    ],
+    "slide": 26
+   },
+   {
+    "shapes": [
+     "组合 7(GROUP (6))"
+    ],
+    "slide": 27
+   },
+   {
+    "shapes": [
+     "组合 7(GROUP (6))"
+    ],
+    "slide": 28
+   },
+   {
+    "shapes": [
+     "组合 7(GROUP (6))"
+    ],
+    "slide": 29
+   },
+   {
+    "shapes": [
+     "组合 7(GROUP (6))"
+    ],
+    "slide": 30
+   }
+  ],
+  "theme": {
+   "colors": {
+    "accent": "#FFC000",
+    "bg": "#FFFFFF",
+    "hairline": "#D8D5CE",
+    "ink": "#000000",
+    "muted": "#8A93A3",
+    "primary": "#0070C0"
+   },
+   "textStyles": {
+    "bignum": {
+     "bold": true,
+     "color": "$accent",
+     "fontSize": 80
+    },
+    "body": {
+     "color": "$ink",
+     "fontFamily": "Calibri",
+     "fontSize": 18,
+     "lineHeight": 1.5
+    },
+    "caption": {
+     "color": "$muted",
+     "fontSize": 12
+    },
+    "title": {
+     "bold": true,
+     "color": "$primary",
+     "fontFamily": "Calibri",
+     "fontSize": 36
+    }
+   }
+  }
+ }
+}

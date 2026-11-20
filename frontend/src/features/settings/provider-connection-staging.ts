@@ -26,10 +26,13 @@ export function resolveProviderFaceConnection(
   const url = String(plan.base_url).replace(/\/$/, '');
   const sharedUrls = new Set(connections.filter(row => row.provider_access_id === accessId)
     .map(row => String(row.base_url || '').replace(/\/$/, '')));
-  const previous = connections.find(row => row.provider_access_id === accessId &&
-    String(row.base_url || '').replace(/\/$/, '') === url &&
-    (plan.face ? row.gateway_namespace === plan.face
-      || (!row.gateway_namespace && sharedUrls.size === 1) : !row.gateway_namespace));
+  const matching = connections.filter(row => row.provider_access_id === accessId &&
+    String(row.base_url || '').replace(/\/$/, '') === url);
+  const previous = (plan.face
+    ? matching.find(row => row.gateway_namespace === plan.face)
+    : matching.find(row => !row.gateway_namespace))
+    || (plan.face && sharedUrls.size === 1
+      ? matching.find(row => !row.gateway_namespace) : undefined);
   if (previous?.enabled === false) throw ports.disabledConnection(previous);
   // Face values come from the existing template planner's normalized protocol
   // and generated provider recipe. This owner does not admit new catalog facts.

@@ -330,17 +330,25 @@ def test_best_effort_recovery_does_not_sleep_on_permanent_errors(monkeypatch, er
     assert sleeps == []
 
 
-def test_swarm_rehydration_rides_the_boot_recovery_retry_schedule(monkeypatch):
-    """A transient storage failure retries swarm resume instead of dropping it."""
+@pytest.mark.parametrize('role,read_only,owns_recovery', [
+    ('execution', False, True), ('all', False, True),
+    ('api', False, False), ('execution_shard', False, False), ('worker', True, False),
+])
+def test_swarm_rehydration_is_owned_and_preserves_boot_retry(monkeypatch, role, read_only, owns_recovery):
+    """Only the converged recovery owner resumes sessions and retries transient reads."""
     import lib.server.server_assembly as assembly
     import lib.swarm.integration as swarm_integration
     import lib.turn_lifecycle as turns
     from lib.storage import warmup
 
     monkeypatch.setattr(assembly, '_DEPLOYMENT_CONFIGURATION', SimpleNamespace(
-        process_role='worker', distributed_preview_read_only=True))
+        process_role=role, distributed_preview_read_only=read_only))
     monkeypatch.setattr(assembly, '_server_log', __import__('logging').getLogger('test'))
     monkeypatch.setattr(warmup, 'start_keep_warm', lambda **_kwargs: None)
+    monkeypatch.setattr('lib.message_queue.drain_idle_background_batches', lambda: None)
+    monkeypatch.setattr('lib.storage.mcp_declarations.start_legacy_slot_compaction', lambda **_: None)
+    monkeypatch.setattr('lib.conversations.restart_resume.resume_restart_paused_turns', lambda **_: None)
+    monkeypatch.setattr('lib.server.restart_notice.deliver_restart_notices', lambda: None)
     monkeypatch.setattr(turns, 'cleanup_superseded_attempts', lambda: None)
     monkeypatch.setattr(swarm_integration, 'start_swarm_output_cleanup', lambda: None)
     calls, sleeps = [], []
@@ -356,8 +364,8 @@ def test_swarm_rehydration_rides_the_boot_recovery_retry_schedule(monkeypatch):
 
     assembly._run_post_ready_deferred()
 
-    assert len(calls) == 3
-    assert sleeps == [2.0, 5.0]
+    assert calls == ([1, 1, 1] if owns_recovery else [])
+    assert sleeps == ([2.0, 5.0] if owns_recovery else [])
 
 
 def test_best_effort_recovery_preserves_transient_storage_retries(monkeypatch):

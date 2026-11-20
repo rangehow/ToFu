@@ -46,6 +46,7 @@ logger = get_logger(__name__)
 
 __all__ = [
     'PINNED_HYPERFRAMES',
+    'PINNED_IMAGEIO_FFMPEG',
     'motion_root',
     'node_root',
     'node_bin',
@@ -64,6 +65,12 @@ __all__ = [
 
 #: HyperFrames version pinned for the managed install (P0-verified).
 PINNED_HYPERFRAMES = '0.7.71'
+
+#: imageio-ffmpeg wheel pinned for the on-demand bootstrap (0.8.1 bundles
+#: FFmpeg 9.0.2 with libx264 and libass). Development tracks the current FFmpeg
+#: through the project toolchain; a release pins the wheel so a future FFmpeg
+#: option removal cannot change shipped behavior.
+PINNED_IMAGEIO_FFMPEG = '0.8.1'
 
 #: Minimum Node major version required by the HyperFrames CLI.
 _MIN_NODE_MAJOR = 22
@@ -364,7 +371,7 @@ def ensure_ffprobe(*, install: bool = True, timeout: int = 600) -> str:
 
 
 def ensure_ffmpeg(*, install: bool = True, timeout: int = 300) -> str:
-    """Return an ffmpeg path, pip-installing ``imageio-ffmpeg`` if absent.
+    """Return an ffmpeg path, pip-installing the pinned ``imageio-ffmpeg`` if absent.
 
     ``imageio-ffmpeg`` is a zero-dependency wheel bundling a full static
     ffmpeg (libx264/aac/mp3/png) — no root needed, ``pip uninstall``
@@ -383,7 +390,8 @@ def ensure_ffmpeg(*, install: bool = True, timeout: int = 300) -> str:
                 '(one-time ffmpeg bootstrap)', installer)
     try:
         proc = subprocess.run(
-            [installer, '-m', 'pip', 'install', 'imageio-ffmpeg'],
+            [installer, '-m', 'pip', 'install',
+             f'imageio-ffmpeg=={PINNED_IMAGEIO_FFMPEG}'],
             capture_output=True, text=True, timeout=timeout,
             env={**inherited_child_environment(), 'PIP_REQUIRE_VIRTUALENV': 'false'})
         if proc.returncode != 0:

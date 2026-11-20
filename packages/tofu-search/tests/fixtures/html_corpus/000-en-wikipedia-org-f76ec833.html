@@ -1,0 +1,1318 @@
+<!DOCTYPE html>
+<html class="client-nojs vector-feature-language-in-header-enabled vector-feature-language-in-main-menu-disabled vector-feature-language-in-main-page-header-disabled vector-feature-page-tools-pinned-disabled vector-feature-toc-pinned-clientpref-1 vector-feature-main-menu-pinned-disabled vector-feature-limited-width-clientpref-1 vector-feature-limited-width-content-enabled vector-feature-custom-font-size-clientpref-1 vector-feature-appearance-pinned-clientpref-1 skin-theme-clientpref-day vector-sticky-header-enabled vector-toc-available skin-thumbsize-clientpref-standard skin-underline-clientpref-browser" lang="en" dir="ltr">
+<head>
+<meta charset="UTF-8">
+<title>Rust (programming language) - Wikipedia</title>
+<script>/* stub */</script>
+<script>/* stub */</script>
+<link rel="stylesheet" href="/w/load.php?lang=en&amp;modules=ext.cite.parsoid.styles%7Cext.cite.styles%7Cext.pygments%7Cext.readingLists.bookmark.icons%2Cstyles%7Cext.tmh.player.styles%7Cext.uls.interlanguage%7Cext.visualEditor.desktopArticleTarget.noscript%7Cext.wikimediamessages.styles%7Cjquery.makeCollapsible.styles%7Cskins.vector.icons%2Cstyles%7Cskins.vector.search.codex.styles%7Cwikibase.client.init&amp;only=styles&amp;skin=vector-2022">
+<script async="" src="/w/load.php?lang=en&amp;modules=startup&amp;only=scripts&amp;raw=1&amp;skin=vector-2022">/* stub */</script>
+<meta name="ResourceLoaderDynamicStyles" content="">
+<link rel="stylesheet" href="/w/load.php?lang=en&amp;modules=site.styles&amp;only=styles&amp;skin=vector-2022">
+<meta name="generator" content="MediaWiki 1.48.0-wmf.4">
+<meta name="referrer" content="origin">
+<meta name="referrer" content="origin-when-cross-origin">
+<meta name="robots" content="max-image-preview:standard">
+<meta name="format-detection" content="telephone=no">
+<meta property="og:image" content="https://thumb.wikimedia.org/wikipedia/commons/thumb/d/d5/Rust_programming_language_black_logo.svg/1280px-Rust_programming_language_black_logo.svg.png?utm_source=en.wikipedia.org&amp;utm_campaign=index&amp;utm_content=thumbnail">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="1200">
+<meta name="viewport" content="width=1120">
+<meta property="og:title" content="Rust (programming language) - Wikipedia">
+<meta property="og:type" content="website">
+<link rel="preconnect" href="//thumb.wikimedia.org">
+<link rel="discord:component-embed" type="application/json" href="https://en.wikipedia.org/w/rest.php/discord/v0-internal/discord-preview?title=Rust+%28programming+language%29&amp;db=enwiki&amp;lang=en">
+<link rel="alternate" type="application/x-wiki" title="Edit this page" href="/w/index.php?title=Rust_(programming_language)&amp;action=edit">
+<link rel="apple-touch-icon" href="/static/apple-touch/wikipedia.png">
+<link rel="icon" href="/static/favicon/wikipedia.ico">
+<link rel="search" type="application/opensearchdescription+xml" href="/w/rest.php/v1/search" title="Wikipedia (en)">
+<link rel="EditURI" type="application/rsd+xml" href="//en.wikipedia.org/w/api.php?action=rsd">
+<link rel="canonical" href="https://en.wikipedia.org/wiki/Rust_(programming_language)">
+<link rel="license" href="https://creativecommons.org/licenses/by-sa/4.0/deed.en">
+<link rel="alternate" type="application/atom+xml" title="Wikipedia Atom feed" href="/w/index.php?title=Special:RecentChanges&amp;feed=atom">
+<link rel="dns-prefetch" href="//meta.wikimedia.org" />
+<link rel="dns-prefetch" href="auth.wikimedia.org">
+</head>
+<body class="mediawiki ltr sitedir-ltr mw-hide-empty-elt action-view skin-vector-2022 ns-0 ns-subject mw-editable page-Rust_programming_language rootpage-Rust_programming_language skin--responsive skin-vector skin-vector-search-vue">
+<div id="mw-aria-live-region" class="mw-aria-live-region" aria-live="polite"></div><a class="mw-jump-link" href="#bodyContent">Jump to content</a>
+<div class="vector-header-container">
+	<header class="vector-header mw-header no-font-mode-scale">
+		<div class="vector-header-start">
+			<nav class="vector-main-menu-landmark" aria-label="Site">
+				
+<div id="vector-main-menu-dropdown" class="vector-dropdown vector-main-menu-dropdown vector-button-flush-left vector-button-flush-right"  title="Main menu" >
+	<input type="checkbox" id="vector-main-menu-dropdown-checkbox" role="button" aria-haspopup="true" data-event-name="ui.dropdown-vector-main-menu-dropdown" class="vector-dropdown-checkbox "  aria-label="Main menu"   >
+	<label id="vector-main-menu-dropdown-label" for="vector-main-menu-dropdown-checkbox" class="vector-dropdown-label cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--icon-only " aria-hidden="true"  ><span class="vector-icon mw-ui-icon-menu mw-ui-icon-wikimedia-menu cdx-button__icon"></span>
+
+<span class="vector-dropdown-label-text">Main menu</span>
+	</label>
+	<div class="vector-dropdown-content">
+
+
+				<div id="vector-main-menu-unpinned-container" class="vector-unpinned-container">
+		
+<div id="vector-main-menu" class="vector-main-menu vector-pinnable-element">
+	<div
+	class="vector-pinnable-header vector-main-menu-pinnable-header vector-pinnable-header-unpinned"
+	data-feature-name="main-menu-pinned"
+	data-pinnable-element-id="vector-main-menu"
+	data-pinned-container-id="vector-main-menu-pinned-container"
+	data-unpinned-container-id="vector-main-menu-unpinned-container"
+>
+	<div class="vector-pinnable-header-label">Main menu</div>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-pin-button" data-event-name="pinnable-header.vector-main-menu.pin" aria-label="Move Main menu to sidebar">move to sidebar</button>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-unpin-button" data-event-name="pinnable-header.vector-main-menu.unpin" aria-label="Hide Main menu">hide</button>
+</div>
+
+	
+<div id="p-navigation" class="vector-menu mw-portlet mw-portlet-navigation"  >
+	<div class="vector-menu-heading">
+		Navigation
+	</div>
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			<li id="n-mainpage-description" class="mw-list-item"><a href="/wiki/Main_Page" title="Visit the main page [z]" accesskey="z"><span>Main page</span></a></li><li id="n-contents" class="mw-list-item"><a href="/wiki/Wikipedia:Contents" title="Guides to browsing Wikipedia"><span>Contents</span></a></li><li id="n-currentevents" class="mw-list-item"><a href="/wiki/Portal:Current_events" title="Articles related to current events"><span>Current events</span></a></li><li id="n-randompage" class="mw-list-item"><a href="/wiki/Special:Random" title="Visit a randomly selected article [x]" accesskey="x"><span>Random article</span></a></li><li id="n-aboutsite" class="mw-list-item"><a href="/wiki/Wikipedia:About" title="Learn about Wikipedia and how it works"><span>About Wikipedia</span></a></li><li id="n-contactpage" class="mw-list-item"><a href="//en.wikipedia.org/wiki/Wikipedia:Contact_us" title="How to contact Wikipedia"><span>Contact us</span></a></li>
+		</ul>
+		
+	</div>
+</div>
+
+	
+<div id="p-interaction" class="vector-menu mw-portlet mw-portlet-interaction"  >
+	<div class="vector-menu-heading">
+		Contribute
+	</div>
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			<li id="n-help" class="mw-list-item"><a href="/wiki/Help:Contents" title="Guidance on how to use and edit Wikipedia"><span>Help</span></a></li><li id="n-introduction" class="mw-list-item"><a href="/wiki/Help:Introduction" title="Learn how to edit Wikipedia"><span>Learn to edit</span></a></li><li id="n-portal" class="mw-list-item"><a href="/wiki/Wikipedia:Community_portal" title="The hub for editors"><span>Community portal</span></a></li><li id="n-recentchanges" class="mw-list-item"><a href="/wiki/Special:RecentChanges" title="A list of recent changes to Wikipedia [r]" accesskey="r"><span>Recent changes</span></a></li><li id="n-upload" class="mw-list-item"><a href="/wiki/Wikipedia:File_upload_wizard" title="Add images or other media for use on Wikipedia"><span>Upload file</span></a></li><li id="n-specialpages" class="mw-list-item"><a href="/wiki/Special:SpecialPages" title="A list of all special pages [q]" accesskey="q"><span>Special pages</span></a></li>
+		</ul>
+		
+	</div>
+</div>
+
+</div>
+
+				</div>
+
+	</div>
+</div>
+
+		</nav>
+			
+<a href="/wiki/Main_Page" class="mw-logo">
+	<img class="mw-logo-icon" src="/static/images/icons/enwiki-25.svg" alt="" aria-hidden="true" height="50" width="50">
+	<span class="mw-logo-container skin-invert">
+		<img class="mw-logo-wordmark" alt="Wikipedia" src="/static/images/mobile/copyright/wikipedia-wordmark-en-25.svg" style="width: 8.75em; height: 1.375em;">
+		<img class="mw-logo-tagline" alt="The Free Encyclopedia" src="/static/images/mobile/copyright/wikipedia-tagline-en-25.svg" width="140" height="11" style="width: 8.75em; height: 0.6875em;">
+	</span>
+</a>
+
+		</div>
+		<div class="vector-header-end">
+			
+<div id="p-search" role="search" class="vector-search-box-vue  vector-search-box-collapses vector-search-box-show-thumbnail vector-search-box-auto-expand-width vector-search-box">
+	<a href="/wiki/Special:Search" class="cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--icon-only search-toggle" title="Search Wikipedia [f]" accesskey="f"><span class="vector-icon mw-ui-icon-search mw-ui-icon-wikimedia-search cdx-button__icon"></span>
+
+<span>Search</span>
+	</a>
+	<div class="vector-typeahead-search-container">
+		<div class="cdx-typeahead-search cdx-typeahead-search--show-thumbnail cdx-typeahead-search--auto-expand-width">
+			<form action="/w/index.php" id="searchform" class="cdx-search-input cdx-search-input--has-end-button">
+				<div id="simpleSearch" class="cdx-search-input__input-wrapper"  data-search-loc="header-moved">
+					<div class="cdx-text-input cdx-text-input--has-start-icon">
+						<input
+							class="cdx-text-input__input mw-searchInput" autocomplete="off"
+							 type="search" name="search" placeholder="Search Wikipedia" aria-label="Search Wikipedia" autocapitalize="none" spellcheck="false" title="Search Wikipedia [f]" accesskey="f" id="searchInput"
+							>
+						<span class="cdx-text-input__icon cdx-text-input__start-icon"></span>
+					</div>
+					<input type="hidden" name="title" value="Special:Search">
+				</div>
+				<button class="cdx-button cdx-search-input__end-button">Search</button>
+			</form>
+		</div>
+	</div>
+</div>
+
+			<nav class="vector-user-links vector-user-links-wide" aria-label="Personal tools">
+	<div class="vector-user-links-main">
+	
+<div id="p-vector-user-menu-preferences" class="vector-menu mw-portlet emptyPortlet"  >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			
+		</ul>
+		
+	</div>
+</div>
+
+	
+<div id="p-vector-user-menu-userpage" class="vector-menu mw-portlet emptyPortlet"  >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			
+		</ul>
+		
+	</div>
+</div>
+
+	<nav class="vector-appearance-landmark" aria-label="Appearance">
+		
+<div id="vector-appearance-dropdown" class="vector-dropdown "  title="Change the appearance of the page&#039;s font size, width, and color" >
+	<input type="checkbox" id="vector-appearance-dropdown-checkbox" role="button" aria-haspopup="true" data-event-name="ui.dropdown-vector-appearance-dropdown" class="vector-dropdown-checkbox "  aria-label="Appearance"   >
+	<label id="vector-appearance-dropdown-label" for="vector-appearance-dropdown-checkbox" class="vector-dropdown-label cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--icon-only " aria-hidden="true"  ><span class="vector-icon mw-ui-icon-appearance mw-ui-icon-wikimedia-appearance cdx-button__icon"></span>
+
+<span class="vector-dropdown-label-text">Appearance</span>
+	</label>
+	<div class="vector-dropdown-content">
+
+
+			<div id="vector-appearance-unpinned-container" class="vector-unpinned-container">
+				
+			</div>
+		
+	</div>
+</div>
+
+	</nav>
+	
+<div id="p-vector-user-menu-notifications" class="vector-menu mw-portlet emptyPortlet"  >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			
+		</ul>
+		
+	</div>
+</div>
+
+	
+<div id="p-vector-user-menu-overflow" class="vector-menu mw-portlet"  >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			<li id="pt-sitesupport-2" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="https://donate.wikimedia.org/?wmf_source=donate&amp;wmf_medium=sidebar&amp;wmf_campaign=en.wikipedia.org&amp;uselang=en" data-mw-donate-attempt="top_link" class=""><span>Donate</span></a>
+</li>
+<li id="pt-createaccount-2" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/w/index.php?title=Special:CreateAccount&amp;returnto=Rust+%28programming+language%29" title="You are encouraged to create an account and log in; however, it is not mandatory" class=""><span>Create account</span></a>
+</li>
+<li id="pt-login-2" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/w/index.php?title=Special:UserLogin&amp;returnto=Rust+%28programming+language%29" title="You&#039;re encouraged to log in; however, it&#039;s not mandatory. [o]" accesskey="o" class=""><span>Log in</span></a>
+</li>
+
+			
+		</ul>
+		
+	</div>
+</div>
+
+	</div>
+	
+<div id="vector-user-links-dropdown" class="vector-dropdown vector-user-menu vector-button-flush-right vector-user-menu-logged-out vector-user-links-dropdown--collapsible"  title="Log in and more options" >
+	<input type="checkbox" id="vector-user-links-dropdown-checkbox" role="button" aria-haspopup="true" data-event-name="ui.dropdown-vector-user-links-dropdown" class="vector-dropdown-checkbox "  aria-label="Personal tools"   >
+	<label id="vector-user-links-dropdown-label" for="vector-user-links-dropdown-checkbox" class="vector-dropdown-label cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--icon-only " aria-hidden="true"  ><span class="vector-icon mw-ui-icon-userAvatar mw-ui-icon-wikimedia-userAvatar cdx-button__icon"></span>
+
+<span class="vector-dropdown-label-text">Personal tools</span>
+	</label>
+	<div class="vector-dropdown-content">
+
+
+		
+<div id="p-personal" class="vector-menu mw-portlet mw-portlet-personal"  title="User menu" >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			<li id="pt-sitesupport" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="https://donate.wikimedia.org/?wmf_source=donate&amp;wmf_medium=sidebar&amp;wmf_campaign=en.wikipedia.org&amp;uselang=en" data-mw-donate-attempt="top_link" class=""><span class="vector-icon mw-ui-icon-heart mw-ui-icon-wikimedia-heart cdx-button__icon"></span>
+
+<span>Donate</span></a>
+</li>
+<li id="pt-createaccount" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/w/index.php?title=Special:CreateAccount&amp;returnto=Rust+%28programming+language%29" title="You are encouraged to create an account and log in; however, it is not mandatory" class=""><span class="vector-icon mw-ui-icon-userAvatar mw-ui-icon-wikimedia-userAvatar cdx-button__icon"></span>
+
+<span>Create account</span></a>
+</li>
+<li id="pt-login" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/w/index.php?title=Special:UserLogin&amp;returnto=Rust+%28programming+language%29" title="You&#039;re encouraged to log in; however, it&#039;s not mandatory. [o]" accesskey="o" class=""><span class="vector-icon mw-ui-icon-logIn mw-ui-icon-wikimedia-logIn cdx-button__icon"></span>
+
+<span>Log in</span></a>
+</li>
+
+			
+		</ul>
+		
+	</div>
+</div>
+
+	
+	</div>
+</div>
+
+</nav>
+
+		</div>
+	</header>
+</div>
+<div class="mw-page-container">
+	<div class="mw-page-container-inner">
+		<div class="vector-sitenotice-container">
+			<div id="siteNotice"></div>
+		</div>
+		<div class="vector-column-start">
+			<div class="vector-main-menu-container">
+		<div id="mw-navigation">
+			<nav id="mw-panel" class="vector-main-menu-landmark" aria-label="Site">
+				<div id="vector-main-menu-pinned-container" class="vector-pinned-container">
+				
+				</div>
+		</nav>
+		</div>
+	</div>
+	<div class="vector-sticky-pinned-container">
+				<nav id="mw-panel-toc" aria-label="Contents" data-event-name="ui.sidebar-toc" class="mw-table-of-contents-container vector-toc-landmark">
+					<div id="vector-toc-pinned-container" class="vector-pinned-container">
+					<div id="vector-toc" class="vector-toc vector-pinnable-element">
+	<div
+	class="vector-pinnable-header vector-toc-pinnable-header vector-pinnable-header-pinned"
+	data-feature-name="toc-pinned"
+	data-pinnable-element-id="vector-toc"
+	data-pinned-container-id="vector-toc-pinned-container"
+	data-unpinned-container-id="vector-toc-unpinned-container"
+>
+	<h2 class="vector-pinnable-header-label">Contents</h2>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-pin-button" data-event-name="pinnable-header.vector-toc.pin" aria-label="Move Contents to sidebar">move to sidebar</button>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-unpin-button" data-event-name="pinnable-header.vector-toc.unpin" aria-label="Hide Contents">hide</button>
+</div>
+
+
+	<ul class="vector-toc-contents" id="mw-panel-toc-list">
+		<li id="toc-mw-content-text"
+			class="vector-toc-list-item vector-toc-level-1">
+			<a href="#" class="vector-toc-link">
+				<div class="vector-toc-text">(Top)</div>
+			</a>
+		</li>
+		<li id="toc-History"
+		class="vector-toc-list-item vector-toc-level-1">
+		<a class="vector-toc-link" href="#History">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">1</span>
+				<span>History</span>
+			</div>
+		</a>
+		
+			<button aria-controls="toc-History-sublist" class="cdx-button cdx-button--weight-quiet cdx-button--icon-only vector-toc-toggle">
+				<span class="vector-icon mw-ui-icon-wikimedia-expand"></span>
+				<span>Toggle History subsection</span>
+			</button>
+		
+		<ul id="toc-History-sublist" class="vector-toc-list">
+			<li id="toc-2006–2009:_Early_years"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#2006–2009:_Early_years">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">1.1</span>
+					<span>2006–2009: Early years</span>
+				</div>
+			</a>
+			
+			<ul id="toc-2006–2009:_Early_years-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-2009–2012:_Mozilla_sponsorship"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#2009–2012:_Mozilla_sponsorship">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">1.2</span>
+					<span>2009–2012: Mozilla sponsorship</span>
+				</div>
+			</a>
+			
+			<ul id="toc-2009–2012:_Mozilla_sponsorship-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-2012–2015:_Evolution"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#2012–2015:_Evolution">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">1.3</span>
+					<span>2012–2015: Evolution</span>
+				</div>
+			</a>
+			
+			<ul id="toc-2012–2015:_Evolution-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-2015–2020:_Servo_and_early_adoption"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#2015–2020:_Servo_and_early_adoption">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">1.4</span>
+					<span>2015–2020: Servo and early adoption</span>
+				</div>
+			</a>
+			
+			<ul id="toc-2015–2020:_Servo_and_early_adoption-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-2020–present:_Mozilla_layoffs_and_Rust_Foundation"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#2020–present:_Mozilla_layoffs_and_Rust_Foundation">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">1.5</span>
+					<span>2020–present: Mozilla layoffs and Rust Foundation</span>
+				</div>
+			</a>
+			
+			<ul id="toc-2020–present:_Mozilla_layoffs_and_Rust_Foundation-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+	</ul>
+	</li>
+	<li id="toc-Syntax_and_features"
+		class="vector-toc-list-item vector-toc-level-1">
+		<a class="vector-toc-link" href="#Syntax_and_features">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">2</span>
+				<span>Syntax and features</span>
+			</div>
+		</a>
+		
+			<button aria-controls="toc-Syntax_and_features-sublist" class="cdx-button cdx-button--weight-quiet cdx-button--icon-only vector-toc-toggle">
+				<span class="vector-icon mw-ui-icon-wikimedia-expand"></span>
+				<span>Toggle Syntax and features subsection</span>
+			</button>
+		
+		<ul id="toc-Syntax_and_features-sublist" class="vector-toc-list">
+			<li id="toc-Hello_World_program"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Hello_World_program">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.1</span>
+					<span>Hello World program</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Hello_World_program-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-Variables"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Variables">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.2</span>
+					<span>Variables</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Variables-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-Block_expressions_and_control_flow"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Block_expressions_and_control_flow">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.3</span>
+					<span>Block expressions and control flow</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Block_expressions_and_control_flow-sublist" class="vector-toc-list">
+				<li id="toc-if_expressions"
+			class="vector-toc-list-item vector-toc-level-3">
+			<a class="vector-toc-link" href="#if_expressions">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.3.1</span>
+					<span><span>if</span> expressions</span>
+				</div>
+			</a>
+			
+			<ul id="toc-if_expressions-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-while_loops"
+			class="vector-toc-list-item vector-toc-level-3">
+			<a class="vector-toc-link" href="#while_loops">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.3.2</span>
+					<span><span>while</span> loops</span>
+				</div>
+			</a>
+			
+			<ul id="toc-while_loops-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-for_loops_and_iterators"
+			class="vector-toc-list-item vector-toc-level-3">
+			<a class="vector-toc-link" href="#for_loops_and_iterators">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.3.3</span>
+					<span><span>for</span> loops and iterators</span>
+				</div>
+			</a>
+			
+			<ul id="toc-for_loops_and_iterators-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-loop_and_break_statements"
+			class="vector-toc-list-item vector-toc-level-3">
+			<a class="vector-toc-link" href="#loop_and_break_statements">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.3.4</span>
+					<span><span>loop</span> and <span>break</span> statements</span>
+				</div>
+			</a>
+			
+			<ul id="toc-loop_and_break_statements-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+	</ul>
+		</li>
+		<li id="toc-Pattern_matching"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Pattern_matching">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.4</span>
+					<span>Pattern matching</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Pattern_matching-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-Types"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Types">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.5</span>
+					<span>Types</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Types-sublist" class="vector-toc-list">
+				<li id="toc-Primitive_types"
+			class="vector-toc-list-item vector-toc-level-3">
+			<a class="vector-toc-link" href="#Primitive_types">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.5.1</span>
+					<span>Primitive types</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Primitive_types-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-Compound_types"
+			class="vector-toc-list-item vector-toc-level-3">
+			<a class="vector-toc-link" href="#Compound_types">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.5.2</span>
+					<span>Compound types</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Compound_types-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+	</ul>
+		</li>
+		<li id="toc-Ownership_and_references"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Ownership_and_references">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.6</span>
+					<span>Ownership and references</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Ownership_and_references-sublist" class="vector-toc-list">
+				<li id="toc-Lifetimes"
+			class="vector-toc-list-item vector-toc-level-3">
+			<a class="vector-toc-link" href="#Lifetimes">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.6.1</span>
+					<span>Lifetimes</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Lifetimes-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+	</ul>
+		</li>
+		<li id="toc-User-defined_types"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#User-defined_types">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.7</span>
+					<span>User-defined types</span>
+				</div>
+			</a>
+			
+			<ul id="toc-User-defined_types-sublist" class="vector-toc-list">
+				<li id="toc-Standard_library"
+			class="vector-toc-list-item vector-toc-level-3">
+			<a class="vector-toc-link" href="#Standard_library">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.7.1</span>
+					<span>Standard library</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Standard_library-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+	</ul>
+		</li>
+		<li id="toc-Pointers"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Pointers">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.8</span>
+					<span>Pointers</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Pointers-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-Type_conversion"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Type_conversion">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.9</span>
+					<span>Type conversion</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Type_conversion-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-Polymorphism"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Polymorphism">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.10</span>
+					<span>Polymorphism</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Polymorphism-sublist" class="vector-toc-list">
+				<li id="toc-Traits"
+			class="vector-toc-list-item vector-toc-level-3">
+			<a class="vector-toc-link" href="#Traits">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.10.1</span>
+					<span>Traits</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Traits-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-Generic_functions"
+			class="vector-toc-list-item vector-toc-level-3">
+			<a class="vector-toc-link" href="#Generic_functions">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.10.2</span>
+					<span>Generic functions</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Generic_functions-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-Trait_objects"
+			class="vector-toc-list-item vector-toc-level-3">
+			<a class="vector-toc-link" href="#Trait_objects">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.10.3</span>
+					<span>Trait objects</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Trait_objects-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+	</ul>
+		</li>
+		<li id="toc-Memory_management"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Memory_management">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.11</span>
+					<span>Memory management</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Memory_management-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-Unsafe"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Unsafe">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.12</span>
+					<span>Unsafe</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Unsafe-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-Macros"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Macros">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.13</span>
+					<span>Macros</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Macros-sublist" class="vector-toc-list">
+				<li id="toc-Declarative_macros"
+			class="vector-toc-list-item vector-toc-level-3">
+			<a class="vector-toc-link" href="#Declarative_macros">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.13.1</span>
+					<span>Declarative macros</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Declarative_macros-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-Procedural_macros"
+			class="vector-toc-list-item vector-toc-level-3">
+			<a class="vector-toc-link" href="#Procedural_macros">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.13.2</span>
+					<span>Procedural macros</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Procedural_macros-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+	</ul>
+		</li>
+		<li id="toc-Interface_with_C_and_C++"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Interface_with_C_and_C++">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.14</span>
+					<span>Interface with C and C++</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Interface_with_C_and_C++-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+	</ul>
+	</li>
+	<li id="toc-Safety"
+		class="vector-toc-list-item vector-toc-level-1">
+		<a class="vector-toc-link" href="#Safety">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">3</span>
+				<span>Safety</span>
+			</div>
+		</a>
+		
+		<ul id="toc-Safety-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+	<li id="toc-Ecosystem"
+		class="vector-toc-list-item vector-toc-level-1">
+		<a class="vector-toc-link" href="#Ecosystem">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">4</span>
+				<span>Ecosystem</span>
+			</div>
+		</a>
+		
+			<button aria-controls="toc-Ecosystem-sublist" class="cdx-button cdx-button--weight-quiet cdx-button--icon-only vector-toc-toggle">
+				<span class="vector-icon mw-ui-icon-wikimedia-expand"></span>
+				<span>Toggle Ecosystem subsection</span>
+			</button>
+		
+		<ul id="toc-Ecosystem-sublist" class="vector-toc-list">
+			<li id="toc-Compiler"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Compiler">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">4.1</span>
+					<span>Compiler</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Compiler-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-Cargo"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Cargo">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">4.2</span>
+					<span>Cargo</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Cargo-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-Rustfmt"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Rustfmt">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">4.3</span>
+					<span>Rustfmt</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Rustfmt-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-Clippy"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Clippy">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">4.4</span>
+					<span>Clippy</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Clippy-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-Versioning_system"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Versioning_system">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">4.5</span>
+					<span>Versioning system</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Versioning_system-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-IDE_support"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#IDE_support">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">4.6</span>
+					<span>IDE support</span>
+				</div>
+			</a>
+			
+			<ul id="toc-IDE_support-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+	</ul>
+	</li>
+	<li id="toc-Performance"
+		class="vector-toc-list-item vector-toc-level-1">
+		<a class="vector-toc-link" href="#Performance">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">5</span>
+				<span>Performance</span>
+			</div>
+		</a>
+		
+		<ul id="toc-Performance-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+	<li id="toc-Adoption"
+		class="vector-toc-list-item vector-toc-level-1">
+		<a class="vector-toc-link" href="#Adoption">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">6</span>
+				<span>Adoption</span>
+			</div>
+		</a>
+		
+		<ul id="toc-Adoption-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+	<li id="toc-Reception"
+		class="vector-toc-list-item vector-toc-level-1">
+		<a class="vector-toc-link" href="#Reception">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">7</span>
+				<span>Reception</span>
+			</div>
+		</a>
+		
+		<ul id="toc-Reception-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+	<li id="toc-In_academic_research"
+		class="vector-toc-list-item vector-toc-level-1">
+		<a class="vector-toc-link" href="#In_academic_research">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">8</span>
+				<span>In academic research</span>
+			</div>
+		</a>
+		
+		<ul id="toc-In_academic_research-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+	<li id="toc-Community"
+		class="vector-toc-list-item vector-toc-level-1">
+		<a class="vector-toc-link" href="#Community">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">9</span>
+				<span>Community</span>
+			</div>
+		</a>
+		
+			<button aria-controls="toc-Community-sublist" class="cdx-button cdx-button--weight-quiet cdx-button--icon-only vector-toc-toggle">
+				<span class="vector-icon mw-ui-icon-wikimedia-expand"></span>
+				<span>Toggle Community subsection</span>
+			</button>
+		
+		<ul id="toc-Community-sublist" class="vector-toc-list">
+			<li id="toc-Rust_Foundation"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Rust_Foundation">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">9.1</span>
+					<span>Rust Foundation</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Rust_Foundation-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-Governance_teams"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Governance_teams">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">9.2</span>
+					<span>Governance teams</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Governance_teams-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+	</ul>
+	</li>
+	<li id="toc-See_also"
+		class="vector-toc-list-item vector-toc-level-1">
+		<a class="vector-toc-link" href="#See_also">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">10</span>
+				<span>See also</span>
+			</div>
+		</a>
+		
+		<ul id="toc-See_also-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+	<li id="toc-Notes"
+		class="vector-toc-list-item vector-toc-level-1">
+		<a class="vector-toc-link" href="#Notes">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">11</span>
+				<span>Notes</span>
+			</div>
+		</a>
+		
+		<ul id="toc-Notes-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+	<li id="toc-References"
+		class="vector-toc-list-item vector-toc-level-1">
+		<a class="vector-toc-link" href="#References">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">12</span>
+				<span>References</span>
+			</div>
+		</a>
+		
+			<button aria-controls="toc-References-sublist" class="cdx-button cdx-button--weight-quiet cdx-button--icon-only vector-toc-toggle">
+				<span class="vector-icon mw-ui-icon-wikimedia-expand"></span>
+				<span>Toggle References subsection</span>
+			</button>
+		
+		<ul id="toc-References-sublist" class="vector-toc-list">
+			<li id="toc-Book_sources"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Book_sources">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">12.1</span>
+					<span>Book sources</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Book_sources-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-Others"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Others">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">12.2</span>
+					<span>Others</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Others-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-Further_reading"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Further_reading">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">12.3</span>
+					<span>Further reading</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Further_reading-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+	</ul>
+	</li>
+	<li id="toc-External_links"
+		class="vector-toc-list-item vector-toc-level-1">
+		<a class="vector-toc-link" href="#External_links">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">13</span>
+				<span>External links</span>
+			</div>
+		</a>
+		
+		<ul id="toc-External_links-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+</ul>
+</div>
+
+					</div>
+		</nav>
+			</div>
+		</div>
+		<div class="mw-content-container">
+			<main id="content" class="mw-body">
+				<header class="mw-body-header vector-page-titlebar no-font-mode-scale">
+					<nav aria-label="Contents" class="vector-toc-landmark">
+						
+<div id="vector-page-titlebar-toc" class="vector-dropdown vector-page-titlebar-toc vector-button-flush-left"  title="Table of Contents" >
+	<input type="checkbox" id="vector-page-titlebar-toc-checkbox" role="button" aria-haspopup="true" data-event-name="ui.dropdown-vector-page-titlebar-toc" class="vector-dropdown-checkbox "  aria-label="Toggle the table of contents"   >
+	<label id="vector-page-titlebar-toc-label" for="vector-page-titlebar-toc-checkbox" class="vector-dropdown-label cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--icon-only " aria-hidden="true"  ><span class="vector-icon mw-ui-icon-listBullet mw-ui-icon-wikimedia-listBullet cdx-button__icon"></span>
+
+<span class="vector-dropdown-label-text">Toggle the table of contents</span>
+	</label>
+	<div class="vector-dropdown-content">
+
+
+							<div id="vector-page-titlebar-toc-unpinned-container" class="vector-unpinned-container">
+			</div>
+		
+	</div>
+</div>
+
+					</nav>
+					<h1 id="firstHeading" class="firstHeading mw-first-heading"><span lang="en" dir="ltr"><span class="mw-page-title-main">Rust (programming language)</span></span></h1>
+			
+<div id="p-lang-btn" class="vector-dropdown mw-portlet mw-portlet-lang"  >
+	<input type="checkbox" id="p-lang-btn-checkbox" role="button" aria-haspopup="true" data-event-name="ui.dropdown-p-lang-btn" class="vector-dropdown-checkbox mw-interlanguage-selector"  aria-label="60 languages" aria-description="Go to an article in another language. Available in 60 languages"  >
+	<label id="p-lang-btn-label" for="p-lang-btn-checkbox" class="vector-dropdown-label cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--action-progressive mw-portlet-lang-heading-60" aria-hidden="true"  ><span class="vector-icon mw-ui-icon-language-progressive mw-ui-icon-wikimedia-language-progressive cdx-button__icon"></span>
+
+<span class="vector-dropdown-label-text">60 languages</span>
+	</label>
+	<div class="vector-dropdown-content">
+
+		<div class="vector-menu-content">
+			
+			<ul class="vector-menu-content-list">
+				
+				<li class="interlanguage-link interwiki-af mw-list-item"><a href="https://af.wikipedia.org/wiki/Rust_(programmeertaal)" title="Rust (programmeertaal) – Afrikaans" lang="af" hreflang="af" data-title="Rust (programmeertaal)" data-language-autonym="Afrikaans" data-language-local-name="Afrikaans" class="interlanguage-link-target"><span>Afrikaans</span></a></li><li class="interlanguage-link interwiki-ar mw-list-item"><a href="https://ar.wikipedia.org/wiki/%D8%B1%D8%B3%D8%AA_(%D9%84%D8%BA%D8%A9_%D8%A8%D8%B1%D9%85%D8%AC%D8%A9)" title="رست (لغة برمجة) – Arabic" lang="ar" hreflang="ar" data-title="رست (لغة برمجة)" data-language-autonym="العربية" data-language-local-name="Arabic" class="interlanguage-link-target"><span>العربية</span></a></li><li class="interlanguage-link interwiki-az mw-list-item"><a href="https://az.wikipedia.org/wiki/Rust_(proqramla%C5%9Fd%C4%B1rma_dili)" title="Rust (proqramlaşdırma dili) – Azerbaijani" lang="az" hreflang="az" data-title="Rust (proqramlaşdırma dili)" data-language-autonym="Azərbaycanca" data-language-local-name="Azerbaijani" class="interlanguage-link-target"><span>Azərbaycanca</span></a></li><li class="interlanguage-link interwiki-be mw-list-item"><a href="https://be.wikipedia.org/wiki/Rust" title="Rust – Belarusian" lang="be" hreflang="be" data-title="Rust" data-language-autonym="Беларуская" data-language-local-name="Belarusian" class="interlanguage-link-target"><span>Беларуская</span></a></li><li class="interlanguage-link interwiki-bg mw-list-item"><a href="https://bg.wikipedia.org/wiki/Rust" title="Rust – Bulgarian" lang="bg" hreflang="bg" data-title="Rust" data-language-autonym="Български" data-language-local-name="Bulgarian" class="interlanguage-link-target"><span>Български</span></a></li><li class="interlanguage-link interwiki-bh mw-list-item"><a href="https://bh.wikipedia.org/wiki/%E0%A4%B0%E0%A4%B8%E0%A5%8D%E0%A4%9F_(%E0%A4%AA%E0%A5%8D%E0%A4%B0%E0%A5%8B%E0%A4%97%E0%A5%8D%E0%A4%B0%E0%A4%BE%E0%A4%AE%E0%A4%BF%E0%A4%82%E0%A4%97_%E0%A4%AD%E0%A4%BE%E0%A4%B7%E0%A4%BE)" title="रस्ट (प्रोग्रामिंग भाषा) – Bhojpuri" lang="bh" hreflang="bh" data-title="रस्ट (प्रोग्रामिंग भाषा)" data-language-autonym="भोजपुरी" data-language-local-name="Bhojpuri" class="interlanguage-link-target"><span>भोजपुरी</span></a></li><li class="interlanguage-link interwiki-bn mw-list-item"><a href="https://bn.wikipedia.org/wiki/%E0%A6%B0%E0%A6%BE%E0%A6%B8%E0%A7%8D%E0%A6%9F_(%E0%A6%AA%E0%A7%8D%E0%A6%B0%E0%A7%8B%E0%A6%97%E0%A7%8D%E0%A6%B0%E0%A6%BE%E0%A6%AE%E0%A6%BF%E0%A6%82_%E0%A6%AD%E0%A6%BE%E0%A6%B7%E0%A6%BE)" title="রাস্ট (প্রোগ্রামিং ভাষা) – Bangla" lang="bn" hreflang="bn" data-title="রাস্ট (প্রোগ্রামিং ভাষা)" data-language-autonym="বাংলা" data-language-local-name="Bangla" class="interlanguage-link-target"><span>বাংলা</span></a></li><li class="interlanguage-link interwiki-ca mw-list-item"><a href="https://ca.wikipedia.org/wiki/Rust_(llenguatge_de_programaci%C3%B3)" title="Rust (llenguatge de programació) – Catalan" lang="ca" hreflang="ca" data-title="Rust (llenguatge de programació)" data-language-autonym="Català" data-language-local-name="Catalan" class="interlanguage-link-target"><span>Català</span></a></li><li class="interlanguage-link interwiki-ckb mw-list-item"><a href="https://ckb.wikipedia.org/wiki/%DA%95%DB%95%D8%B3%D8%AA_(%D8%B2%D9%85%D8%A7%D9%86%DB%8C_%D8%A8%DB%95%D8%B1%D9%86%D8%A7%D9%85%DB%95%D8%B3%D8%A7%D8%B2%DB%8C)" title="ڕەست (زمانی بەرنامەسازی) – Central Kurdish" lang="ckb" hreflang="ckb" data-title="ڕەست (زمانی بەرنامەسازی)" data-language-autonym="کوردی" data-language-local-name="Central Kurdish" class="interlanguage-link-target"><span>کوردی</span></a></li><li class="interlanguage-link interwiki-cs mw-list-item"><a href="https://cs.wikipedia.org/wiki/Rust_(programovac%C3%AD_jazyk)" title="Rust (programovací jazyk) – Czech" lang="cs" hreflang="cs" data-title="Rust (programovací jazyk)" data-language-autonym="Čeština" data-language-local-name="Czech" class="interlanguage-link-target"><span>Čeština</span></a></li><li class="interlanguage-link interwiki-da mw-list-item"><a href="https://da.wikipedia.org/wiki/Rust_(programmeringssprog)" title="Rust (programmeringssprog) – Danish" lang="da" hreflang="da" data-title="Rust (programmeringssprog)" data-language-autonym="Dansk" data-language-local-name="Danish" class="interlanguage-link-target"><span>Dansk</span></a></li><li class="interlanguage-link interwiki-de mw-list-item"><a href="https://de.wikipedia.org/wiki/Rust_(Programmiersprache)" title="Rust (Programmiersprache) – German" lang="de" hreflang="de" data-title="Rust (Programmiersprache)" data-language-autonym="Deutsch" data-language-local-name="German" class="interlanguage-link-target"><span>Deutsch</span></a></li><li class="interlanguage-link interwiki-dtp mw-list-item"><a href="https://dtp.wikipedia.org/wiki/Rust_(boros_tokud)" title="Rust (boros tokud) – Central Dusun" lang="dtp" hreflang="dtp" data-title="Rust (boros tokud)" data-language-autonym="Kadazandusun" data-language-local-name="Central Dusun" class="interlanguage-link-target"><span>Kadazandusun</span></a></li><li class="interlanguage-link interwiki-eo mw-list-item"><a href="https://eo.wikipedia.org/wiki/Rust_(programlingvo)" title="Rust (programlingvo) – Esperanto" lang="eo" hreflang="eo" data-title="Rust (programlingvo)" data-language-autonym="Esperanto" data-language-local-name="Esperanto" class="interlanguage-link-target"><span>Esperanto</span></a></li><li class="interlanguage-link interwiki-es mw-list-item"><a href="https://es.wikipedia.org/wiki/Rust_(lenguaje_de_programaci%C3%B3n)" title="Rust (lenguaje de programación) – Spanish" lang="es" hreflang="es" data-title="Rust (lenguaje de programación)" data-language-autonym="Español" data-language-local-name="Spanish" class="interlanguage-link-target"><span>Español</span></a></li><li class="interlanguage-link interwiki-et mw-list-item"><a href="https://et.wikipedia.org/wiki/Rust" title="Rust – Estonian" lang="et" hreflang="et" data-title="Rust" data-language-autonym="Eesti" data-language-local-name="Estonian" class="interlanguage-link-target"><span>Eesti</span></a></li><li class="interlanguage-link interwiki-eu mw-list-item"><a href="https://eu.wikipedia.org/wiki/Rust_(programazio-lengoaia)" title="Rust (programazio-lengoaia) – Basque" lang="eu" hreflang="eu" data-title="Rust (programazio-lengoaia)" data-language-autonym="Euskara" data-language-local-name="Basque" class="interlanguage-link-target"><span>Euskara</span></a></li><li class="interlanguage-link interwiki-fa mw-list-item"><a href="https://fa.wikipedia.org/wiki/%D8%B1%D8%A7%D8%B3%D8%AA_(%D8%B2%D8%A8%D8%A7%D9%86_%D8%A8%D8%B1%D9%86%D8%A7%D9%85%D9%87%E2%80%8C%D9%86%D9%88%DB%8C%D8%B3%DB%8C)" title="راست (زبان برنامه‌نویسی) – Persian" lang="fa" hreflang="fa" data-title="راست (زبان برنامه‌نویسی)" data-language-autonym="فارسی" data-language-local-name="Persian" class="interlanguage-link-target"><span>فارسی</span></a></li><li class="interlanguage-link interwiki-fi mw-list-item"><a href="https://fi.wikipedia.org/wiki/Rust_(ohjelmointikieli)" title="Rust (ohjelmointikieli) – Finnish" lang="fi" hreflang="fi" data-title="Rust (ohjelmointikieli)" data-language-autonym="Suomi" data-language-local-name="Finnish" class="interlanguage-link-target"><span>Suomi</span></a></li><li class="interlanguage-link interwiki-fr mw-list-item"><a href="https://fr.wikipedia.org/wiki/Rust_(langage)" title="Rust (langage) – French" lang="fr" hreflang="fr" data-title="Rust (langage)" data-language-autonym="Français" data-language-local-name="French" class="interlanguage-link-target"><span>Français</span></a></li><li class="interlanguage-link interwiki-ga mw-list-item"><a href="https://ga.wikipedia.org/wiki/Rust_(teanga_r%C3%ADomhchl%C3%A1r%C3%BAch%C3%A1in)" title="Rust (teanga ríomhchlárúcháin) – Irish" lang="ga" hreflang="ga" data-title="Rust (teanga ríomhchlárúcháin)" data-language-autonym="Gaeilge" data-language-local-name="Irish" class="interlanguage-link-target"><span>Gaeilge</span></a></li><li class="interlanguage-link interwiki-gl mw-list-item"><a href="https://gl.wikipedia.org/wiki/Rust_(linguaxe_de_programaci%C3%B3n)" title="Rust (linguaxe de programación) – Galician" lang="gl" hreflang="gl" data-title="Rust (linguaxe de programación)" data-language-autonym="Galego" data-language-local-name="Galician" class="interlanguage-link-target"><span>Galego</span></a></li><li class="interlanguage-link interwiki-he mw-list-item"><a href="https://he.wikipedia.org/wiki/%D7%A8%D7%90%D7%A1%D7%98_(%D7%A9%D7%A4%D7%AA_%D7%AA%D7%9B%D7%A0%D7%95%D7%AA)" title="ראסט (שפת תכנות) – Hebrew" lang="he" hreflang="he" data-title="ראסט (שפת תכנות)" data-language-autonym="עברית" data-language-local-name="Hebrew" class="interlanguage-link-target"><span>עברית</span></a></li><li class="interlanguage-link interwiki-hr mw-list-item"><a href="https://hr.wikipedia.org/wiki/Rust_(programski_jezik)" title="Rust (programski jezik) – Croatian" lang="hr" hreflang="hr" data-title="Rust (programski jezik)" data-language-autonym="Hrvatski" data-language-local-name="Croatian" class="interlanguage-link-target"><span>Hrvatski</span></a></li><li class="interlanguage-link interwiki-hu mw-list-item"><a href="https://hu.wikipedia.org/wiki/Rust_(programoz%C3%A1si_nyelv)" title="Rust (programozási nyelv) – Hungarian" lang="hu" hreflang="hu" data-title="Rust (programozási nyelv)" data-language-autonym="Magyar" data-language-local-name="Hungarian" class="interlanguage-link-target"><span>Magyar</span></a></li><li class="interlanguage-link interwiki-id mw-list-item"><a href="https://id.wikipedia.org/wiki/Rust_(bahasa_pemrograman)" title="Rust (bahasa pemrograman) – Indonesian" lang="id" hreflang="id" data-title="Rust (bahasa pemrograman)" data-language-autonym="Bahasa Indonesia" data-language-local-name="Indonesian" class="interlanguage-link-target"><span>Bahasa Indonesia</span></a></li><li class="interlanguage-link interwiki-io mw-list-item"><a href="https://io.wikipedia.org/wiki/Rust_(programifo-linguo)" title="Rust (programifo-linguo) – Ido" lang="io" hreflang="io" data-title="Rust (programifo-linguo)" data-language-autonym="Ido" data-language-local-name="Ido" class="interlanguage-link-target"><span>Ido</span></a></li><li class="interlanguage-link interwiki-is mw-list-item"><a href="https://is.wikipedia.org/wiki/Rust_(forritunarm%C3%A1l)" title="Rust (forritunarmál) – Icelandic" lang="is" hreflang="is" data-title="Rust (forritunarmál)" data-language-autonym="Íslenska" data-language-local-name="Icelandic" class="interlanguage-link-target"><span>Íslenska</span></a></li><li class="interlanguage-link interwiki-isv mw-list-item"><a href="https://isv.wikipedia.org/wiki/Rust" title="Rust – Interslavic" lang="isv" hreflang="isv" data-title="Rust" data-language-autonym="Medžuslovjansky" data-language-local-name="Interslavic" class="interlanguage-link-target"><span>Medžuslovjansky</span></a></li><li class="interlanguage-link interwiki-it mw-list-item"><a href="https://it.wikipedia.org/wiki/Rust_(linguaggio_di_programmazione)" title="Rust (linguaggio di programmazione) – Italian" lang="it" hreflang="it" data-title="Rust (linguaggio di programmazione)" data-language-autonym="Italiano" data-language-local-name="Italian" class="interlanguage-link-target"><span>Italiano</span></a></li><li class="interlanguage-link interwiki-ja mw-list-item"><a href="https://ja.wikipedia.org/wiki/Rust_(%E3%83%97%E3%83%AD%E3%82%B0%E3%83%A9%E3%83%9F%E3%83%B3%E3%82%B0%E8%A8%80%E8%AA%9E)" title="Rust (プログラミング言語) – Japanese" lang="ja" hreflang="ja" data-title="Rust (プログラミング言語)" data-language-autonym="日本語" data-language-local-name="Japanese" class="interlanguage-link-target"><span>日本語</span></a></li><li class="interlanguage-link interwiki-kab mw-list-item"><a href="https://kab.wikipedia.org/wiki/Rust_(Tutlayt_Usihel)" title="Rust (Tutlayt Usihel) – Kabyle" lang="kab" hreflang="kab" data-title="Rust (Tutlayt Usihel)" data-language-autonym="Taqbaylit" data-language-local-name="Kabyle" class="interlanguage-link-target"><span>Taqbaylit</span></a></li><li class="interlanguage-link interwiki-ko mw-list-item"><a href="https://ko.wikipedia.org/wiki/%EB%9F%AC%EC%8A%A4%ED%8A%B8_(%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4)" title="러스트 (프로그래밍 언어) – Korean" lang="ko" hreflang="ko" data-title="러스트 (프로그래밍 언어)" data-language-autonym="한국어" data-language-local-name="Korean" class="interlanguage-link-target"><span>한국어</span></a></li><li class="interlanguage-link interwiki-lmo mw-list-item"><a href="https://lmo.wikipedia.org/wiki/Rust_(lenguagg_de_programazzion)" title="Rust (lenguagg de programazzion) – Lombard" lang="lmo" hreflang="lmo" data-title="Rust (lenguagg de programazzion)" data-language-autonym="Lombard" data-language-local-name="Lombard" class="interlanguage-link-target"><span>Lombard</span></a></li><li class="interlanguage-link interwiki-lv mw-list-item"><a href="https://lv.wikipedia.org/wiki/Rust" title="Rust – Latvian" lang="lv" hreflang="lv" data-title="Rust" data-language-autonym="Latviešu" data-language-local-name="Latvian" class="interlanguage-link-target"><span>Latviešu</span></a></li><li class="interlanguage-link interwiki-ml mw-list-item"><a href="https://ml.wikipedia.org/wiki/%E0%B4%B1%E0%B4%B8%E0%B5%8D%E0%B4%B1%E0%B5%8D%E0%B4%B1%E0%B5%8D_(%E0%B4%AA%E0%B5%8D%E0%B4%B0%E0%B5%8B%E0%B4%97%E0%B5%8D%E0%B4%B0%E0%B4%BE%E0%B4%AE%E0%B4%BF%E0%B4%82%E0%B4%97%E0%B5%8D_%E0%B4%AD%E0%B4%BE%E0%B4%B7)" title="റസ്റ്റ് (പ്രോഗ്രാമിംഗ് ഭാഷ) – Malayalam" lang="ml" hreflang="ml" data-title="റസ്റ്റ് (പ്രോഗ്രാമിംഗ് ഭാഷ)" data-language-autonym="മലയാളം" data-language-local-name="Malayalam" class="interlanguage-link-target"><span>മലയാളം</span></a></li><li class="interlanguage-link interwiki-ms mw-list-item"><a href="https://ms.wikipedia.org/wiki/Rust_(bahasa_pengaturcaraan)" title="Rust (bahasa pengaturcaraan) – Malay" lang="ms" hreflang="ms" data-title="Rust (bahasa pengaturcaraan)" data-language-autonym="Bahasa Melayu" data-language-local-name="Malay" class="interlanguage-link-target"><span>Bahasa Melayu</span></a></li><li class="interlanguage-link interwiki-nl mw-list-item"><a href="https://nl.wikipedia.org/wiki/Rust_(programmeertaal)" title="Rust (programmeertaal) – Dutch" lang="nl" hreflang="nl" data-title="Rust (programmeertaal)" data-language-autonym="Nederlands" data-language-local-name="Dutch" class="interlanguage-link-target"><span>Nederlands</span></a></li><li class="interlanguage-link interwiki-no mw-list-item"><a href="https://no.wikipedia.org/wiki/Rust_(programmeringsspr%C3%A5k)" title="Rust (programmeringsspråk) – Norwegian Bokmål" lang="nb" hreflang="nb" data-title="Rust (programmeringsspråk)" data-language-autonym="Norsk bokmål" data-language-local-name="Norwegian Bokmål" class="interlanguage-link-target"><span>Norsk bokmål</span></a></li><li class="interlanguage-link interwiki-pl mw-list-item"><a href="https://pl.wikipedia.org/wiki/Rust_(j%C4%99zyk_programowania)" title="Rust (język programowania) – Polish" lang="pl" hreflang="pl" data-title="Rust (język programowania)" data-language-autonym="Polski" data-language-local-name="Polish" class="interlanguage-link-target"><span>Polski</span></a></li><li class="interlanguage-link interwiki-pt mw-list-item"><a href="https://pt.wikipedia.org/wiki/Rust_(linguagem_de_programa%C3%A7%C3%A3o)" title="Rust (linguagem de programação) – Portuguese" lang="pt" hreflang="pt" data-title="Rust (linguagem de programação)" data-language-autonym="Português" data-language-local-name="Portuguese" class="interlanguage-link-target"><span>Português</span></a></li><li class="interlanguage-link interwiki-qu mw-list-item"><a href="https://qu.wikipedia.org/wiki/Rust" title="Rust – Quechua" lang="qu" hreflang="qu" data-title="Rust" data-language-autonym="Runa Simi" data-language-local-name="Quechua" class="interlanguage-link-target"><span>Runa Simi</span></a></li><li class="interlanguage-link interwiki-ro mw-list-item"><a href="https://ro.wikipedia.org/wiki/Rust_(limbaj_de_programare)" title="Rust (limbaj de programare) – Romanian" lang="ro" hreflang="ro" data-title="Rust (limbaj de programare)" data-language-autonym="Română" data-language-local-name="Romanian" class="interlanguage-link-target"><span>Română</span></a></li><li class="interlanguage-link interwiki-ru mw-list-item"><a href="https://ru.wikipedia.org/wiki/Rust_(%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)" title="Rust (язык программирования) – Russian" lang="ru" hreflang="ru" data-title="Rust (язык программирования)" data-language-autonym="Русский" data-language-local-name="Russian" class="interlanguage-link-target"><span>Русский</span></a></li><li class="interlanguage-link interwiki-si mw-list-item"><a href="https://si.wikipedia.org/wiki/Rust_(%E0%B6%9A%E0%B7%8A%E2%80%8D%E0%B6%BB%E0%B6%B8%E0%B6%BD%E0%B7%9A%E0%B6%9B%E0%B6%B1_%E0%B6%B7%E0%B7%8F%E0%B7%82%E0%B7%8F%E0%B7%80)" title="Rust (ක්‍රමලේඛන භාෂාව) – Sinhala" lang="si" hreflang="si" data-title="Rust (ක්‍රමලේඛන භාෂාව)" data-language-autonym="සිංහල" data-language-local-name="Sinhala" class="interlanguage-link-target"><span>සිංහල</span></a></li><li class="interlanguage-link interwiki-simple mw-list-item"><a href="https://simple.wikipedia.org/wiki/Rust_(programming_language)" title="Rust (programming language) – Simple English" lang="en-simple" hreflang="en-simple" data-title="Rust (programming language)" data-language-autonym="Simple English" data-language-local-name="Simple English" class="interlanguage-link-target"><span>Simple English</span></a></li><li class="interlanguage-link interwiki-sk mw-list-item"><a href="https://sk.wikipedia.org/wiki/Rust_(programovac%C3%AD_jazyk)" title="Rust (programovací jazyk) – Slovak" lang="sk" hreflang="sk" data-title="Rust (programovací jazyk)" data-language-autonym="Slovenčina" data-language-local-name="Slovak" class="interlanguage-link-target"><span>Slovenčina</span></a></li><li class="interlanguage-link interwiki-sq mw-list-item"><a href="https://sq.wikipedia.org/wiki/Rust_(gjuh%C3%AB_programimi)" title="Rust (gjuhë programimi) – Albanian" lang="sq" hreflang="sq" data-title="Rust (gjuhë programimi)" data-language-autonym="Shqip" data-language-local-name="Albanian" class="interlanguage-link-target"><span>Shqip</span></a></li><li class="interlanguage-link interwiki-sr mw-list-item"><a href="https://sr.wikipedia.org/wiki/Rust_(%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D1%81%D0%BA%D0%B8_%D1%98%D0%B5%D0%B7%D0%B8%D0%BA)" title="Rust (програмски језик) – Serbian" lang="sr" hreflang="sr" data-title="Rust (програмски језик)" data-language-autonym="Српски / srpski" data-language-local-name="Serbian" class="interlanguage-link-target"><span>Српски / srpski</span></a></li><li class="interlanguage-link interwiki-sv mw-list-item"><a href="https://sv.wikipedia.org/wiki/Rust_(programspr%C3%A5k)" title="Rust (programspråk) – Swedish" lang="sv" hreflang="sv" data-title="Rust (programspråk)" data-language-autonym="Svenska" data-language-local-name="Swedish" class="interlanguage-link-target"><span>Svenska</span></a></li><li class="interlanguage-link interwiki-sw mw-list-item"><a href="https://sw.wikipedia.org/wiki/Rust" title="Rust – Swahili" lang="sw" hreflang="sw" data-title="Rust" data-language-autonym="Kiswahili" data-language-local-name="Swahili" class="interlanguage-link-target"><span>Kiswahili</span></a></li><li class="interlanguage-link interwiki-te mw-list-item"><a href="https://te.wikipedia.org/wiki/%E0%B0%B0%E0%B0%B8%E0%B1%8D%E0%B0%9F%E0%B1%8D_(%E0%B0%AA%E0%B1%8D%E0%B0%B0%E0%B1%8B%E0%B0%97%E0%B1%8D%E0%B0%B0%E0%B0%BE%E0%B0%AE%E0%B0%BF%E0%B0%82%E0%B0%97%E0%B1%8D_%E0%B0%AD%E0%B0%BE%E0%B0%B7)" title="రస్ట్ (ప్రోగ్రామింగ్ భాష) – Telugu" lang="te" hreflang="te" data-title="రస్ట్ (ప్రోగ్రామింగ్ భాష)" data-language-autonym="తెలుగు" data-language-local-name="Telugu" class="interlanguage-link-target"><span>తెలుగు</span></a></li><li class="interlanguage-link interwiki-th mw-list-item"><a href="https://th.wikipedia.org/wiki/%E0%B8%A0%E0%B8%B2%E0%B8%A9%E0%B8%B2%E0%B8%A3%E0%B8%B1%E0%B8%AA%E0%B8%95%E0%B9%8C" title="ภาษารัสต์ – Thai" lang="th" hreflang="th" data-title="ภาษารัสต์" data-language-autonym="ไทย" data-language-local-name="Thai" class="interlanguage-link-target"><span>ไทย</span></a></li><li class="interlanguage-link interwiki-tok mw-list-item"><a href="https://tok.wikipedia.org/wiki/toki_ilo_Wasi" title="toki ilo Wasi – Toki Pona" lang="tok" hreflang="tok" data-title="toki ilo Wasi" data-language-autonym="Toki pona" data-language-local-name="Toki Pona" class="interlanguage-link-target"><span>Toki pona</span></a></li><li class="interlanguage-link interwiki-tr mw-list-item"><a href="https://tr.wikipedia.org/wiki/Rust_(programlama_dili)" title="Rust (programlama dili) – Turkish" lang="tr" hreflang="tr" data-title="Rust (programlama dili)" data-language-autonym="Türkçe" data-language-local-name="Turkish" class="interlanguage-link-target"><span>Türkçe</span></a></li><li class="interlanguage-link interwiki-uk mw-list-item"><a href="https://uk.wikipedia.org/wiki/Rust_(%D0%BC%D0%BE%D0%B2%D0%B0_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D1%83%D0%B2%D0%B0%D0%BD%D0%BD%D1%8F)" title="Rust (мова програмування) – Ukrainian" lang="uk" hreflang="uk" data-title="Rust (мова програмування)" data-language-autonym="Українська" data-language-local-name="Ukrainian" class="interlanguage-link-target"><span>Українська</span></a></li><li class="interlanguage-link interwiki-vi mw-list-item"><a href="https://vi.wikipedia.org/wiki/Rust_(ng%C3%B4n_ng%E1%BB%AF_l%E1%BA%ADp_tr%C3%ACnh)" title="Rust (ngôn ngữ lập trình) – Vietnamese" lang="vi" hreflang="vi" data-title="Rust (ngôn ngữ lập trình)" data-language-autonym="Tiếng Việt" data-language-local-name="Vietnamese" class="interlanguage-link-target"><span>Tiếng Việt</span></a></li><li class="interlanguage-link interwiki-zh-min-nan mw-list-item"><a href="https://zh-min-nan.wikipedia.org/wiki/Rust_(pian-t%C3%AAng_g%C3%BA-gi%C3%A2n)" title="Rust (pian-têng gú-giân) – Minnan" lang="nan" hreflang="nan" data-title="Rust (pian-têng gú-giân)" data-language-autonym="閩南語 / Bân-lâm-gí" data-language-local-name="Minnan" class="interlanguage-link-target"><span>閩南語 / Bân-lâm-gí</span></a></li><li class="interlanguage-link interwiki-zh-yue mw-list-item"><a href="https://zh-yue.wikipedia.org/wiki/Rust" title="Rust – Cantonese" lang="yue" hreflang="yue" data-title="Rust" data-language-autonym="粵語" data-language-local-name="Cantonese" class="interlanguage-link-target"><span>粵語</span></a></li><li class="interlanguage-link interwiki-zh mw-list-item"><a href="https://zh.wikipedia.org/wiki/Rust_(%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80)" title="Rust (编程语言) – Chinese" lang="zh" hreflang="zh" data-title="Rust (编程语言)" data-language-autonym="中文" data-language-local-name="Chinese" class="interlanguage-link-target"><span>中文</span></a></li>
+			</ul>
+			<div class="after-portlet after-portlet-lang"><span class="wb-langlinks-edit wb-langlinks-link"><a href="https://www.wikidata.org/wiki/Special:EntityPage/Q575650#sitelinks-wikipedia" title="Edit interlanguage links" class="wbc-editpage">Edit links</a></span></div>
+		</div>
+
+	</div>
+</div>
+</header>
+				<div class="vector-page-toolbar">
+					<div class="vector-page-toolbar-container">
+						<div id="left-navigation">
+							<nav aria-label="Namespaces">
+								
+<div id="p-associated-pages" class="vector-menu vector-menu-tabs mw-portlet mw-portlet-associated-pages"  >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			<li id="ca-nstab-main" class="selected mw-list-item vector-tab-noicon"><a data-mw-interface  href="/wiki/Rust_(programming_language)" title="View the content page [c]" accesskey="c" class=""><span>Article</span></a>
+</li>
+<li id="ca-talk" class="mw-list-item vector-tab-noicon"><a data-mw-interface  href="/wiki/Talk:Rust_(programming_language)" rel="discussion" title="Discuss improvements to the content page [t]" accesskey="t" class=""><span>Talk</span></a>
+</li>
+
+			
+		</ul>
+		
+	</div>
+</div>
+
+								
+<div id="vector-variants-dropdown" class="vector-dropdown emptyPortlet"  >
+	<input type="checkbox" id="vector-variants-dropdown-checkbox" role="button" aria-haspopup="true" data-event-name="ui.dropdown-vector-variants-dropdown" class="vector-dropdown-checkbox " aria-label="Change language variant"    >
+	<label id="vector-variants-dropdown-label" for="vector-variants-dropdown-checkbox" class="vector-dropdown-label cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet" aria-hidden="true"  ><span class="vector-dropdown-label-text">English</span>
+	</label>
+	<div class="vector-dropdown-content">
+
+
+					
+<div id="p-variants" class="vector-menu mw-portlet mw-portlet-variants emptyPortlet"  >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			
+		</ul>
+		
+	</div>
+</div>
+
+				
+	</div>
+</div>
+
+							</nav>
+						</div>
+						<div id="right-navigation" class="vector-collapsible">
+							<nav aria-label="Views">
+			    
+<div id="p-views" class="vector-menu vector-menu-tabs mw-portlet mw-portlet-views"  >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			<li id="ca-view" class="selected mw-list-item vector-menu-item--collapsible vector-tab-noicon"><a data-mw-interface  href="/wiki/Rust_(programming_language)" class=""><span>Read</span></a>
+</li>
+<li id="ca-edit" class="mw-list-item vector-menu-item--collapsible vector-tab-noicon"><a data-mw-interface  href="/w/index.php?title=Rust_(programming_language)&amp;action=edit" title="Edit the source code of this page [e]" accesskey="e" class=""><span>Edit</span></a>
+</li>
+<li id="ca-history" class="mw-list-item vector-menu-item--collapsible vector-tab-noicon"><a data-mw-interface  href="/w/index.php?title=Rust_(programming_language)&amp;action=history" title="Past revisions of this page [h]" accesskey="h" class=""><span>View history</span></a>
+</li>
+<li id="ca-bookmark" class="mw-list-item vector-menu-item--collapsible"><a href="#" class="cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--icon-only reading-lists-bookmark" id="" title="Add this page to your saved items"><span class="vector-icon mw-ui-icon-bookmarkOutline mw-ui-icon-wikimedia-bookmarkOutline cdx-button__icon"></span>
+
+<span>Save</span>
+</a>
+</li>
+
+			
+		</ul>
+		
+	</div>
+</div>
+
+			</nav>
+
+							<nav class="vector-page-tools-landmark" aria-label="Page tools">
+								
+<div id="vector-page-tools-dropdown" class="vector-dropdown vector-page-tools-dropdown"  >
+	<input type="checkbox" id="vector-page-tools-dropdown-checkbox" role="button" aria-haspopup="true" data-event-name="ui.dropdown-vector-page-tools-dropdown" class="vector-dropdown-checkbox "  aria-label="Tools"   >
+	<label id="vector-page-tools-dropdown-label" for="vector-page-tools-dropdown-checkbox" class="vector-dropdown-label cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--icon-only " aria-hidden="true"  ><span class="vector-icon mw-ui-icon-verticalEllipsis mw-ui-icon-wikimedia-verticalEllipsis cdx-button__icon"></span>
+
+<span class="vector-dropdown-label-text">Tools</span>
+	</label>
+	<div class="vector-dropdown-content">
+
+
+									<div id="vector-page-tools-unpinned-container" class="vector-unpinned-container">
+						
+<div id="vector-page-tools" class="vector-page-tools vector-pinnable-element">
+	<div
+	class="vector-pinnable-header vector-page-tools-pinnable-header vector-pinnable-header-unpinned"
+	data-feature-name="page-tools-pinned"
+	data-pinnable-element-id="vector-page-tools"
+	data-pinned-container-id="vector-page-tools-pinned-container"
+	data-unpinned-container-id="vector-page-tools-unpinned-container"
+>
+	<div class="vector-pinnable-header-label">Tools</div>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-pin-button" data-event-name="pinnable-header.vector-page-tools.pin" aria-label="Move Tools to sidebar">move to sidebar</button>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-unpin-button" data-event-name="pinnable-header.vector-page-tools.unpin" aria-label="Hide Tools">hide</button>
+</div>
+
+	
+<div id="p-cactions" class="vector-menu mw-portlet mw-portlet-cactions emptyPortlet vector-has-collapsible-items"  >
+	<div class="vector-menu-heading">
+		Actions
+	</div>
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			<li id="ca-view-more" class="selected mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/wiki/Rust_(programming_language)" class=""><span class="vector-icon mw-ui-icon-eye mw-ui-icon-wikimedia-eye cdx-button__icon"></span>
+
+<span>Read</span></a>
+</li>
+<li id="ca-edit-more" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/w/index.php?title=Rust_(programming_language)&amp;action=edit" title="Edit the source code of this page [e]" accesskey="e" class=""><span class="vector-icon mw-ui-icon-edit mw-ui-icon-wikimedia-edit cdx-button__icon"></span>
+
+<span>Edit</span></a>
+</li>
+<li id="ca-history-more" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/w/index.php?title=Rust_(programming_language)&amp;action=history" title="Past revisions of this page [h]" accesskey="h" class=""><span class="vector-icon mw-ui-icon-history mw-ui-icon-wikimedia-history cdx-button__icon"></span>
+
+<span>View history</span></a>
+</li>
+<li id="ca-bookmark-more" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="#" class="reading-lists-bookmark" title="Add this page to your saved items"><span class="vector-icon mw-ui-icon-bookmarkOutline mw-ui-icon-wikimedia-bookmarkOutline cdx-button__icon"></span>
+
+<span>Save</span></a>
+</li>
+
+			
+		</ul>
+		
+	</div>
+</div>
+
+<div id="p-tb" class="vector-menu mw-portlet mw-portlet-tb"  >
+	<div class="vector-menu-heading">
+		General
+	</div>
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			<li id="t-whatlinkshere" class="mw-list-item"><a href="/wiki/Special:WhatLinksHere/Rust_(programming_language)" title="List of all English Wikipedia pages containing links to this page [j]" accesskey="j"><span>What links here</span></a></li><li id="t-recentchangeslinked" class="mw-list-item"><a href="/wiki/Special:RecentChangesLinked/Rust_(programming_language)" rel="nofollow" title="Recent changes in pages linked from this page [k]" accesskey="k"><span>Related changes</span></a></li><li id="t-upload" class="mw-list-item"><a href="//en.wikipedia.org/wiki/Wikipedia:File_Upload_Wizard" title="Upload files [u]" accesskey="u"><span>Upload file</span></a></li><li id="t-permalink" class="mw-list-item"><a href="/w/index.php?title=Rust_(programming_language)&amp;oldid=1386182972" title="Permanent link to this revision of this page"><span>Permanent link</span></a></li><li id="t-info" class="mw-list-item"><a href="/w/index.php?title=Rust_(programming_language)&amp;action=info" title="More information about this page"><span>Page information</span></a></li><li id="t-cite" class="mw-list-item"><a href="/w/index.php?title=Special:CiteThisPage&amp;page=Rust_%28programming_language%29&amp;id=1386182972&amp;wpFormIdentifier=titleform" title="Information on how to cite this page"><span>Cite this page</span></a></li><li id="t-urlshortener" class="mw-list-item"><a href="/w/index.php?title=Special:UrlShortener&amp;url=https%3A%2F%2Fen.wikipedia.org%2Fwiki%2FRust_%28programming_language%29"><span>Get shortened URL</span></a></li><li id="parsermigration-switch-to-legacy" class="mw-list-item"><a href="/w/index.php?title=Rust_(programming_language)&amp;useparsoid=0"><span>Switch to legacy parser</span></a></li>
+		</ul>
+		
+	</div>
+</div>
+
+<div id="p-coll-print_export" class="vector-menu mw-portlet mw-portlet-coll-print_export"  >
+	<div class="vector-menu-heading">
+		Print/export
+	</div>
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			<li id="coll-download-as-rl" class="mw-list-item"><a href="/w/index.php?title=Special:DownloadAsPdf&amp;page=Rust_%28programming_language%29&amp;action=show-download-screen" title="Download this page as a PDF file"><span>Download as PDF</span></a></li><li id="t-print" class="mw-list-item"><a href="javascript:print();" rel="alternate" title="Printable version of this page [p]" accesskey="p"><span>Printable version</span></a></li>
+		</ul>
+		
+	</div>
+</div>
+
+<div id="p-wikibase-otherprojects" class="vector-menu mw-portlet mw-portlet-wikibase-otherprojects"  >
+	<div class="vector-menu-heading">
+		In other projects
+	</div>
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			<li class="wb-otherproject-link wb-otherproject-abstract mw-list-item"><a href="https://abstract.wikipedia.org/wiki/Q575650" hreflang="en"><span>Abstract Wikipedia</span></a></li><li class="wb-otherproject-link wb-otherproject-commons mw-list-item"><a href="https://commons.wikimedia.org/wiki/Category:Rust_(programming_language)" hreflang="en"><span>Wikimedia Commons</span></a></li><li class="wb-otherproject-link wb-otherproject-wikiversity mw-list-item"><a href="https://en.wikiversity.org/wiki/Rust" hreflang="en"><span>Wikiversity</span></a></li><li id="t-wikibase" class="wb-otherproject-link wb-otherproject-wikibase-dataitem mw-list-item"><a href="https://www.wikidata.org/wiki/Special:EntityPage/Q575650" title="Structured data on this page hosted by Wikidata [g]" accesskey="g"><span>Wikidata item</span></a></li>
+		</ul>
+		
+	</div>
+</div>
+
+</div>
+
+									</div>
+				
+	</div>
+</div>
+
+							</nav>
+						</div>
+					</div>
+				</div>
+				<div class="vector-column-end no-font-mode-scale">
+					<div class="vector-sticky-pinned-container">
+						<nav class="vector-page-tools-landmark" aria-label="Page tools">
+							<div id="vector-page-tools-pinned-container" class="vector-pinned-container">
+				
+							</div>
+		</nav>
+						<nav class="vector-appearance-landmark" aria-label="Appearance">
+							<div id="vector-appearance-pinned-container" class="vector-pinned-container">
+				<div id="vector-appearance" class="vector-appearance vector-pinnable-element">
+	<div
+	class="vector-pinnable-header vector-appearance-pinnable-header vector-pinnable-header-pinned"
+	data-feature-name="appearance-pinned"
+	data-pinnable-element-id="vector-appearance"
+	data-pinned-container-id="vector-appearance-pinned-container"
+	data-unpinned-container-id="vector-appearance-unpinned-container"
+>
+	<div class="vector-pinnable-header-label">Appearance</div>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-pin-button" data-event-name="pinnable-header.vector-appearance.pin" aria-label="Move Appearance to sidebar">move to sidebar</button>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-unpin-button" data-event-name="pinnable-header.vector-appearance.unpin" aria-label="Hide Appearance">hide</button>
+</div>
+
+
+</div>
+
+							</div>
+		</nav>
+					</div>
+				</div>
+				<div id="bodyContent" class="vector-body" aria-labelledby="firstHeading" data-mw-ve-target-container>
+					<div class="vector-body-before-content">
+							<div class="mw-indicators">
+		<div id="mw-indicator-good-star" class="mw-indicator"><div class="mw-parser-output"><span typeof="mw:File" data-mw='{"caption":"This is a good article. Click here for more information."}' id="mwGKY"><a href="https://en.wikipedia.org/wiki/Wikipedia:Good_articles*" title="This is a good article. Click here for more information." id="mwGKc"><img resource="https://en.wikipedia.org/wiki/File:Symbol_support_vote.svg" src="//thumb.wikimedia.org/wikipedia/en/thumb/9/94/Symbol_support_vote.svg/20px-Symbol_support_vote.svg.png?utm_source=en.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail" decoding="async" loading="lazy" srcset="//thumb.wikimedia.org/wikipedia/en/thumb/9/94/Symbol_support_vote.svg/40px-Symbol_support_vote.svg.png?utm_source=en.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail 2x" alt="This is a good article. Click here for more information." data-file-width="180" data-file-height="185" data-file-type="drawing" height="20" width="19" class="mw-file-element" id="mwGKg"/></a></span>
+</div></div>
+		</div>
+
+						<div id="siteSub" class="noprint">From Wikipedia, the free encyclopedia</div>
+						<div id="contentSub"><div id="mw-content-subtitle"></div></div>
+						
+					</div>
+					
+					<div id="mw-content-text" class="mw-body-content"><div class="mw-content-ltr mw-parser-output" lang="en" dir="ltr" data-mw-parsoid-version="0.25.0.0-alpha1" data-mw-html-version="2.8.0"><section data-mw-section-id="0" id="mwAQ"><div class="shortdescription nomobile noexcerpt noprint searchaux" style="display:none" about="#mwt1" typeof="mw:Transclusion" id="mwAg" data-mw='{"parts":[{"template":{"target":{"wt":"Short description","href":"./Template:Short_description"},"params":{"1":{"wt":"General-purpose programming language"}},"i":0}}]}'>General-purpose programming language</div><span class="mw-empty-elt" about="#mwt1"><link rel="mw:PageProp/Category" href="./Category:Articles_with_short_description"/><link rel="mw:PageProp/Category" href="./Category:Short_description_is_different_from_Wikidata"/></span>
+<p class="mw-empty-elt" id="mwAw"><span typeof="mw:Nowiki mw:Transclusion" about="#mwt2" id="mwBA" data-mw='{"parts":[{"template":{"target":{"wt":"Good article","href":"./Template:Good_article"},"params":{},"i":0}}]}'></span><meta typeof="mw:Extension/indicator" about="#mwt2" id="mwBQ" data-mw='{"name":"indicator","attrs":{"name":"good-star"},"body":{"extsrc":"[[File:symbol support vote.svg|20x20px |link=Wikipedia:Good articles*   |This is a good article. Click here for more information.]]\n"}}'/><link rel="mw:PageProp/Category" href="./Category:Good_articles" about="#mwt2" id="mwBg"/></p>
+
+<p class="mw-empty-elt" id="mwBw"><span typeof="mw:Nowiki mw:Transclusion" about="#mwt4" id="mwCA" data-mw='{"parts":[{"template":{"target":{"wt":"Use American English","href":"./Template:Use_American_English"},"params":{"date":{"wt":"February 2026"}},"i":0}}]}'></span><link rel="mw:PageProp/Category" href="./Category:Use_American_English_from_February_2026" about="#mwt4"/><link rel="mw:PageProp/Category" href="./Category:All_Wikipedia_articles_written_in_American_English" about="#mwt4" id="mwCQ"/>
+<span typeof="mw:Nowiki mw:Transclusion" about="#mwt5" id="mwCg" data-mw='{"parts":[{"template":{"target":{"wt":"Use mdy dates","href":"./Template:Use_mdy_dates"},"params":{"date":{"wt":"July 2022"},"cs1-dates":{"wt":"y"}},"i":0}}]}'></span><link rel="mw:PageProp/Category" href="./Category:Use_mdy_dates_from_July_2022" about="#mwt5" id="mwCw"/></p>
+
+<span class="mw-empty-elt" about="#mwt6" typeof="mw:Transclusion" id="mwDA" data-mw='{"parts":[{"template":{"target":{"wt":"Infobox programming language\n","href":"./Template:Infobox_programming_language"},"params":{"name":{"wt":"Rust"},"title":{"wt":"Rust"},"logo":{"wt":"Rust programming language black logo.svg{{!}}class=skin-invert"},"logo size":{"wt":"128px"},"logo alt":{"wt":"Rust logo: a capital letter R attached inside a sprocket with teeth on the outside, both black on a white background"},"paradigms":{"wt":"{{cslist|\n  [[Comparison of multi-paradigm programming languages|Multi-paradigm]]:\n  [[Concurrent computing|concurrent]]|\n  [[Functional programming|functional]]|\n  [[Generic programming|generic]]|\n  [[Imperative programming|imperative]]|\n  [[Structured programming|structured]]|\n}}"},"released":{"wt":"{{Start date and age|2012|01|20}}&lt;ref name=Rust0.1a>{{Cite mailing list |last=Anderson |first=Brian |date=2012-01-24 |title=[rust-dev] The Rust compiler 0.1 is unleashed |url=https://mail.mozilla.org/pipermail/rust-dev/2012-January/001256.html |mailing-list=rust-dev |access-date=2025-01-07 |archive-url=https://web.archive.org/web/20120124160628/https://mail.mozilla.org/pipermail/rust-dev/2012-January/001256.html |archive-date=January 24, 2012 }}&lt;/ref>"},"latest release version":{"wt":"{{wikidata|property|edit|reference|P548=Q2804309|P348}}"},"latest release date":{"wt":"{{start date and age|{{wikidata|qualifier|mdy|P548=Q2804309|P348|P577}}}}"},"typing":{"wt":"{{cslist|\n  [[Affine type system|Affine]]|\n  [[Type inference|inferred]]|\n  [[Nominal type system|nominal]]|\n  [[Static typing|static]]|\n  [[Strong and weak typing|strong]]|\n}}"},"programming language":{"wt":"[[OCaml]] (2006–2011)&lt;br/>Rust (2012–present)"},"platform":{"wt":"[[Cross-platform]]{{refn|group=note|Build tools, host tools, and standard library are supported for [[x86-64]], [[ARM architecture family|ARM]], [[MIPS architecture|MIPS]], [[RISC-V]], [[WebAssembly]], [[i686]], [[AArch64]], [[PowerPC]], and [[Linux on IBM Z|s390x]].&lt;ref name=CrossPlatform>{{Cite web |title=Platform Support |website=The rustc book |url=https://doc.rust-lang.org/rustc/platform-support.html |access-date=2022-06-27 |archive-date=2022-06-30  |archive-url=https://web.archive.org/web/20220630164523/https://doc.rust-lang.org/rustc/platform-support.html |url-status=live }}&lt;/ref>}}"},"operating system":{"wt":"Cross-platform{{refn|group=note|[[Windows]], [[Linux]], [[macOS]], [[FreeBSD]], [[NetBSD]], and [[Illumos]] are supported. Host build tools on [[Android (operating system)|Android]], [[iOS]], [[Haiku (operating system)|Haiku]], [[Redox (operating system)|Redox]], and [[Fuchsia (operating system)|Fuchsia]] are not officially shipped; these operating systems are supported as targets.&lt;ref name=\"CrossPlatform\" />}}"},"license":{"wt":"[[MIT License|MIT]], [[Apache License|Apache 2.0]]{{refn|group=note|Third-party dependencies, e.g., [[LLVM]] or [[MSVC]], are subject to their own licenses.&lt;ref>{{cite web |title=Copyright |url=https://github.com/rust-lang/rust/blob/master/COPYRIGHT |website=[[GitHub]] |publisher=The Rust Programming Language |date=19 October 2022 |access-date=2022-10-19 |archive-date=2023-07-22 |archive-url=https://web.archive.org/web/20230722190056/http://github.com/rust-lang/rust/blob/master/COPYRIGHT |url-status=live }}&lt;/ref>&lt;ref name=\"licenses\" />}}"},"file ext":{"wt":"&lt;code>.rs&lt;/code>, &lt;code>.rlib&lt;/code>"},"website":{"wt":"{{URL|https://www.rust-lang.org/|rust-lang.org}}"},"implementations":{"wt":"Rust compiler, [[GNU Compiler Collection|GCC]]"},"influenced by":{"wt":"{{cslist|\n  [[Alef (programming language)|Alef]]|\n  [[BETA (programming language)|BETA]]|\n  [[CLU (programming language)|CLU]]|\n  [[C Sharp (programming language)|C#]]|\n  [[C++]]|\n  [[Cyclone (programming language)|Cyclone]]|\n  [[Elm (programming language)|Elm]]|\n  [[Erlang (programming language)|Erlang]]|\n  [[Haskell]]|\n  [[Hermes (programming language)|Hermes]]|\n  [[Limbo (programming language)|Limbo]]|\n  [[Mesa (programming language)|Mesa]]|\n  [[Napier88|Napier]]|\n  [[Newsqueak]]|\n  [[Typestate analysis|NIL]]{{refn|group=note|name=nil|NIL is cited as an influence for Rust in multiple sources; this likely refers to Network Implementation Language developed by Robert Strom and others at [[IBM]], which pioneered [[typestate analysis]],&lt;ref name=\"Strom1983\">{{cite book|last1=Strom|first1=Robert E.|title=Proceedings of the 10th ACM SIGACT-SIGPLAN symposium on Principles of programming languages - POPL &apos;83|year=1983|pages=276–284|doi=10.1145/567067.567093|chapter=Mechanisms for compile-time enforcement of security|isbn=0897910907|s2cid=6630704 }}&lt;/ref>&lt;ref>{{cite journal|last=Strom|first=Robert E.|author2=Yemini, Shaula |title=Typestate: A programming language concept for enhancing software reliability|journal=IEEE Transactions on Software Engineering|year=1986|volume=12|issue=1 |pages=157–171|publisher=IEEE |url=https://www.cs.cmu.edu/~aldrich/papers/classic/tse12-typestate.pdf|doi=10.1109/tse.1986.6312929|bibcode=1986ITSEn..12..157S |s2cid=15575346 }}&lt;/ref> not to be confused with [[NIL (programming language)|New Implementation of LISP]].}}|\n  [[OCaml]]|\n  [[Ruby (programming language)|Ruby]]|\n  [[Sather]]|\n  [[Scheme (programming language)|Scheme]]|\n  [[Standard ML]]|\n  [[Swift (programming language)|Swift]]&lt;ref>{{Cite web |title=Uniqueness Types |url=https://blog.rust-lang.org/2016/08/10/Shape-of-errors-to-come.html |access-date=2016-10-08 |website=Rust Blog |quote=\"Those of you familiar with the Elm style may recognize that the updated {{mono|--explain}} messages draw heavy inspiration from the Elm approach.\" |archive-date=2016-09-15  |archive-url=https://web.archive.org/web/20160915133745/https://blog.rust-lang.org/2016/08/10/Shape-of-errors-to-come.html |url-status=live }}&lt;/ref>&lt;ref name=\"influences\" />\n}}"},"influenced":{"wt":"{{cslist|\n  [[Idris (programming language)|Idris]]&lt;ref>{{Cite web |title=Uniqueness Types |url=http://docs.idris-lang.org/en/latest/reference/uniqueness-types.html |access-date=2022-07-14 |website=Idris 1.3.3 documentation |quote=\"They are inspired by ... ownership types and borrowed pointers in the Rust programming language.\" |archive-date=2018-11-21  |archive-url=https://web.archive.org/web/20181121072557/http://docs.idris-lang.org/en/latest/reference/uniqueness-types.html |url-status=live }}&lt;/ref>|\n  &lt;!-- The article was deleted -- can be reinstated in the future if the article topic is deemed notable\n  [[Mojo (programming language)|Mojo]]&lt;ref>{{Cite web |last=Claburn |first=Thomas |title=Modular reveals Mojo, Python superset with C-level speed |url=https://www.theregister.com/2023/05/05/modular_struts_its_mojo_a/ |access-date=2023-05-13 |website=The Register}}&lt;/ref>|\n  -->\n  [[PHP]]&lt;ref>{{Cite web |url=https://wiki.php.net/rfc/attributes_v2 |title=PHP RFC: Attributes v2 |first1=Benjamin |last1=Eberlei |first2=Martin |last2=Schröder |website=wiki.php.net |date=2020-03-09 |access-date=2026-05-11}}&lt;/ref>&lt;ref>{{Cite web |url=https://wiki.php.net/rfc/match_expression_v2 |title=PHP RFC: Match expression v2 |first=Ilija |last=Tovilo |website=wiki.php.net |date=2020-05-22 |access-date=2020-11-29}}&lt;/ref>&lt;ref>{{Cite web |url=https://wiki.php.net/rfc/enumerations |title=PHP RFC: Enumerations |first1=Larry |last1=Garfield |first2=Ilija |last2=Tovilo |website=wiki.php.net |date=2020-12-04 |access-date=2026-05-11}}&lt;/ref>&lt;ref>{{Cite web |url=https://wiki.php.net/rfc/pattern-matching |title=PHP RFC: Pattern Matching |first1=Larry |last1=Garfield |first2=Ilija |last2=Tovilo |website=wiki.php.net |date=2020-11-11 |access-date=2026-05-11}}&lt;/ref>|\n  [[Project Verona]]&lt;ref name=\"Project Verona\" />|\n  [[SPARK (programming language)|SPARK]]&lt;ref name=\"Jaloyan\" />|\n  [[Swift (programming language)|Swift]]&lt;ref name=\"Lattner\" />|\n  [[V (programming language)|V]]&lt;ref>{{Cite web |title=V documentation (Introduction) |url=https://github.com/vlang/v/blob/master/doc/docs.md#introduction |access-date=2023-11-04 |website=[[GitHub]] |publisher=The V Programming Language}}&lt;/ref>|\n  [[Zig (programming language)|Zig]]&lt;ref>{{Cite web |last=Yegulalp |first=Serdar |date=2016-08-29 |title=New challenger joins Rust to topple C language |url=https://www.infoworld.com/article/3113083/new-challenger-joins-rust-to-upend-c-language.html |access-date=2022-10-19 |website=[[InfoWorld]]|archive-date=2021-11-25  |archive-url=https://web.archive.org/web/20211125104022/https://www.infoworld.com/article/3113083/new-challenger-joins-rust-to-upend-c-language.html |url-status=live }}&lt;/ref>|\n  [[Gleam (programming language)|Gleam]]&lt;ref name=\"Gleam\" />|\n}}"}},"i":0}}]}'><style data-mw-deduplicate="TemplateStyles:r1385617415" typeof="mw:Extension/templatestyles" about="#mwt7" data-mw='{"name":"templatestyles","attrs":{"src":"Module:Infobox/styles.css"},"body":{"extsrc":""}}'>/* stub */</style></span><table class="infobox vevent" about="#mwt6" id="mwDQ"><tbody><tr><th colspan="2" class="infobox-above" style="background-color:#e0e0e0; color:inherit;">Rust</th></tr><tr><td colspan="2" class="infobox-image"><span class="skin-invert" typeof="mw:File"><a href="https://en.wikipedia.org/wiki/File:Rust_programming_language_black_logo.svg" class="mw-file-description"><img resource="https://en.wikipedia.org/wiki/File:Rust_programming_language_black_logo.svg" src="//thumb.wikimedia.org/wikipedia/commons/thumb/d/d5/Rust_programming_language_black_logo.svg/250px-Rust_programming_language_black_logo.svg.png?utm_source=en.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail" decoding="async" loading="lazy" srcset="//thumb.wikimedia.org/wikipedia/commons/thumb/d/d5/Rust_programming_language_black_logo.svg/330px-Rust_programming_language_black_logo.svg.png?utm_source=en.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail 2x" alt="Rust logo: a capital letter R attached inside a sprocket with teeth on the outside, both black on a white background" data-file-width="106" data-file-height="106" data-file-type="drawing" height="128" width="128" class="mw-file-element"/></a></span></td></tr><tr><th scope="row" class="infobox-label"><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Programming_paradigm" title="Programming paradigm">Paradigms</a></th><td class="infobox-data"><style data-mw-deduplicate="TemplateStyles:r1367478826" typeof="mw:Extension/templatestyles" about="#mwt8" data-mw='{"name":"templatestyles","attrs":{"src":"Comma-separated list/styles.css"}}'>/* stub */</style><ul class="cslist"><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Comparison_of_multi-paradigm_programming_languages" title="Comparison of multi-paradigm programming languages">Multi-paradigm</a>:
+  <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Concurrent_computing" title="Concurrent computing">concurrent</a></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Functional_programming" title="Functional programming">functional</a></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Generic_programming" title="Generic programming">generic</a></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Imperative_programming" title="Imperative programming">imperative</a></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Structured_programming" title="Structured programming">structured</a></li></ul></td></tr><tr><th scope="row" class="infobox-label">First<span typeof="mw:Entity"> </span>appeared</th><td class="infobox-data">January<span typeof="mw:Entity"> </span>20, 2012<span class="noprint"><span typeof="mw:Entity">;</span><span typeof="mw:Entity"> </span>14 years ago</span><span style="display:none"><span typeof="mw:Entity"> </span>(<span class="bday dtstart published updated">2012-01-20</span>)</span><sup about="#mwt11" class="mw-ref reference" id="cite_ref-Rust0.1a_1-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Rust0.1a"},"body":{"id":"mw-reference-text-cite_note-Rust0.1a-1"}}'><a href="#cite_note-Rust0.1a-1" id="mwDg"><span class="mw-reflink-text" id="mwDw"><span class="cite-bracket" id="mwEA">[</span>1<span class="cite-bracket" id="mwEQ">]</span></span></a></sup></td></tr><tr class="infobox-hiddenrow"><td colspan="2" class="infobox-full-data"><link rel="mw-deduplicated-inline-style" href="mw-data:TemplateStyles:r1385617415" about="#mwt14" typeof="mw:Extension/templatestyles" data-mw='{"name":"templatestyles","attrs":{"src":"Module:Infobox/styles.css"},"body":{"extsrc":""}}'/></td></tr><tr><th scope="row" class="infobox-label" style="white-space: nowrap;"><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Software_release_life_cycle" title="Software release life cycle">Stable release</a></th><td class="infobox-data"><div style="margin:0px;">1.100.0<sup about="#mwt16" class="mw-ref reference" id="cite_ref-wikidata-e8f68e73306cbb7a7edfd4e1f63081a410cb6f6b-v22_2-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"wikidata-e8f68e73306cbb7a7edfd4e1f63081a410cb6f6b-v22"},"body":{"id":"mw-reference-text-cite_note-wikidata-e8f68e73306cbb7a7edfd4e1f63081a410cb6f6b-v22-2"}}'><a href="#cite_note-wikidata-e8f68e73306cbb7a7edfd4e1f63081a410cb6f6b-v22-2" id="mwEg"><span class="mw-reflink-text" id="mwEw"><span class="cite-bracket" id="mwFA">[</span>2<span class="cite-bracket" id="mwFQ">]</span></span></a></sup><span typeof="mw:Entity"> </span><span class="mw-valign-text-top" typeof="mw:File/Frameless" data-mw='{"caption":"Edit this on Wikidata"}'><a href="https://www.wikidata.org/wiki/Q575650?uselang=en#P348" title="Edit this on Wikidata"><img resource="https://en.wikipedia.org/wiki/File:OOjs_UI_icon_edit-ltr-progressive.svg" src="//thumb.wikimedia.org/wikipedia/en/thumb/8/8a/OOjs_UI_icon_edit-ltr-progressive.svg/20px-OOjs_UI_icon_edit-ltr-progressive.svg.png?utm_source=en.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail" decoding="async" loading="lazy" alt="Edit this on Wikidata" data-file-width="20" data-file-height="20" data-file-type="drawing" height="10" width="10" class="mw-file-element"/></a></span>
+   / November 12, 2026<span class="noprint"><span typeof="mw:Entity">;</span><span typeof="mw:Entity"> </span>5 days ago</span><span style="display:none"><span typeof="mw:Entity"> </span>(<span class="bday dtstart published updated">November 12, 2026</span>)</span></div></td></tr><tr style="display:none"><td colspan="2">
+</td></tr><tr><th scope="row" class="infobox-label"><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Type_system" title="Type system">Typing discipline</a></th><td class="infobox-data"><link rel="mw-deduplicated-inline-style" href="mw-data:TemplateStyles:r1367478826" about="#mwt19" typeof="mw:Extension/templatestyles" data-mw='{"name":"templatestyles","attrs":{"src":"Comma-separated list/styles.css"}}'/><ul class="cslist"><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Affine_type_system" title="Affine type system" class="mw-redirect">Affine</a></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Type_inference" title="Type inference">inferred</a></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Nominal_type_system" title="Nominal type system">nominal</a></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Static_typing" title="Static typing" class="mw-redirect">static</a></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Strong_and_weak_typing" title="Strong and weak typing" class="mw-redirect">strong</a></li></ul></td></tr><tr><th scope="row" class="infobox-label">Implementation language</th><td class="infobox-data"><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/OCaml" title="OCaml">OCaml</a> (2006–2011)<br/>Rust (2012–present)</td></tr><tr><th scope="row" class="infobox-label"><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Computing_platform" title="Computing platform">Platform</a></th><td class="infobox-data"><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Cross-platform" title="Cross-platform" class="mw-redirect">Cross-platform</a><sup about="#mwt25" class="mw-ref reference" id="cite_ref-4" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"group":"note"},"body":{"id":"mw-reference-text-cite_note-4"}}'><a href="#cite_note-4" data-mw-group="note" id="mwFg"><span class="mw-reflink-text" id="mwFw"><span class="cite-bracket" id="mwGA">[</span>note 1<span class="cite-bracket" id="mwGQ">]</span></span></a></sup></td></tr><tr><th scope="row" class="infobox-label"><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Operating_system" title="Operating system">OS</a></th><td class="infobox-data">Cross-platform<sup about="#mwt31" class="mw-ref reference" id="cite_ref-5" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"group":"note"},"body":{"id":"mw-reference-text-cite_note-5"}}'><a href="#cite_note-5" data-mw-group="note" id="mwGg"><span class="mw-reflink-text" id="mwGw"><span class="cite-bracket" id="mwHA">[</span>note 2<span class="cite-bracket" id="mwHQ">]</span></span></a></sup></td></tr><tr><th scope="row" class="infobox-label"><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Software_license" title="Software license">License</a></th><td class="infobox-data"><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/MIT_License" title="MIT License">MIT</a>, <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Apache_License" title="Apache License">Apache 2.0</a><sup about="#mwt41" class="mw-ref reference" id="cite_ref-8" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"group":"note"},"body":{"id":"mw-reference-text-cite_note-8"}}'><a href="#cite_note-8" data-mw-group="note" id="mwHg"><span class="mw-reflink-text" id="mwHw"><span class="cite-bracket" id="mwIA">[</span>note 3<span class="cite-bracket" id="mwIQ">]</span></span></a></sup></td></tr><tr><th scope="row" class="infobox-label"><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Filename_extension" title="Filename extension">Filename extensions</a></th><td class="infobox-data"><code>.rs</code>, <code>.rlib</code></td></tr><tr><th scope="row" class="infobox-label">Website</th><td class="infobox-data"><span class="url"><a rel="mw:ExtLink nofollow" href="https://www.rust-lang.org/" class="external text">rust-lang.org</a></span></td></tr><tr><th colspan="2" class="infobox-header" style="background-color: #EEEEEE; color:inherit;">Major <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Programming_language_implementation" title="Programming language implementation" class="mw-redirect">implementations</a></th></tr><tr><td colspan="2" class="infobox-full-data">Rust compiler, <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/GNU_Compiler_Collection" title="GNU Compiler Collection">GCC</a></td></tr><tr><th colspan="2" class="infobox-header" style="background-color: #EEEEEE; color:inherit;">Influenced by</th></tr><tr><td colspan="2" class="infobox-full-data"><link rel="mw-deduplicated-inline-style" href="mw-data:TemplateStyles:r1367478826" about="#mwt46" typeof="mw:Extension/templatestyles" data-mw='{"name":"templatestyles","attrs":{"src":"Comma-separated list/styles.css"}}'/><ul class="cslist"><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Alef_(programming_language)" title="Alef (programming language)">Alef</a></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/BETA_(programming_language)" title="BETA (programming language)">BETA</a></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/CLU_(programming_language)" title="CLU (programming language)">CLU</a></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/C_Sharp_(programming_language)" title="C Sharp (programming language)">C#</a></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/C++" title="C++">C++</a></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Cyclone_(programming_language)" title="Cyclone (programming language)">Cyclone</a></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Elm_(programming_language)" title="Elm (programming language)">Elm</a></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Erlang_(programming_language)" title="Erlang (programming language)">Erlang</a></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Haskell" title="Haskell">Haskell</a></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Hermes_(programming_language)" title="Hermes (programming language)">Hermes</a></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Limbo_(programming_language)" title="Limbo (programming language)">Limbo</a></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Mesa_(programming_language)" title="Mesa (programming language)">Mesa</a></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Napier88" title="Napier88">Napier</a></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Newsqueak" title="Newsqueak">Newsqueak</a></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Typestate_analysis" title="Typestate analysis">NIL</a><sup about="#mwt57" class="mw-ref reference" id="cite_ref-nil_11-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"nil","group":"note"},"body":{"id":"mw-reference-text-cite_note-nil-11"}}'><a href="#cite_note-nil-11" data-mw-group="note" id="mwIg"><span class="mw-reflink-text" id="mwIw"><span class="cite-bracket" id="mwJA">[</span>note 4<span class="cite-bracket" id="mwJQ">]</span></span></a></sup></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/OCaml" title="OCaml">OCaml</a></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Ruby_(programming_language)" title="Ruby (programming language)">Ruby</a></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Sather" title="Sather">Sather</a></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Scheme_(programming_language)" title="Scheme (programming language)">Scheme</a></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Standard_ML" title="Standard ML">Standard ML</a></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Swift_(programming_language)" title="Swift (programming language)">Swift</a><sup about="#mwt66" class="mw-ref reference" id="cite_ref-12" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-12"}}'><a href="#cite_note-12" id="mwJg"><span class="mw-reflink-text" id="mwJw"><span class="cite-bracket" id="mwKA">[</span>8<span class="cite-bracket" id="mwKQ">]</span></span></a></sup><sup about="#mwt70" class="mw-ref reference" id="cite_ref-influences_13-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"influences"}}'><a href="#cite_note-influences-13" id="mwKg"><span class="mw-reflink-text" id="mwKw"><span class="cite-bracket" id="mwLA">[</span>9<span class="cite-bracket" id="mwLQ">]</span></span></a></sup></li></ul></td></tr><tr><th colspan="2" class="infobox-header" style="background-color: #EEEEEE; color:inherit;">Influenced</th></tr><tr><td colspan="2" class="infobox-full-data"><link rel="mw-deduplicated-inline-style" href="mw-data:TemplateStyles:r1367478826" about="#mwt72" typeof="mw:Extension/templatestyles" data-mw='{"name":"templatestyles","attrs":{"src":"Comma-separated list/styles.css"}}'/><ul class="cslist"><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Idris_(programming_language)" title="Idris (programming language)">Idris</a><sup about="#mwt75" class="mw-ref reference" id="cite_ref-14" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-14"}}'><a href="#cite_note-14" id="mwLg"><span class="mw-reflink-text" id="mwLw"><span class="cite-bracket" id="mwMA">[</span>10<span class="cite-bracket" id="mwMQ">]</span></span></a></sup></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/PHP" title="PHP">PHP</a><sup about="#mwt80" class="mw-ref reference" id="cite_ref-15" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-15"}}'><a href="#cite_note-15" id="mwMg"><span class="mw-reflink-text" id="mwMw"><span class="cite-bracket" id="mwNA">[</span>11<span class="cite-bracket" id="mwNQ">]</span></span></a></sup><sup about="#mwt85" class="mw-ref reference" id="cite_ref-16" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-16"}}'><a href="#cite_note-16" id="mwNg"><span class="mw-reflink-text" id="mwNw"><span class="cite-bracket" id="mwOA">[</span>12<span class="cite-bracket" id="mwOQ">]</span></span></a></sup><sup about="#mwt90" class="mw-ref reference" id="cite_ref-17" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-17"}}'><a href="#cite_note-17" id="mwOg"><span class="mw-reflink-text" id="mwOw"><span class="cite-bracket" id="mwPA">[</span>13<span class="cite-bracket" id="mwPQ">]</span></span></a></sup><sup about="#mwt95" class="mw-ref reference" id="cite_ref-18" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-18"}}'><a href="#cite_note-18" id="mwPg"><span class="mw-reflink-text" id="mwPw"><span class="cite-bracket" id="mwQA">[</span>14<span class="cite-bracket" id="mwQQ">]</span></span></a></sup></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Project_Verona" title="Project Verona">Project Verona</a><sup about="#mwt98" class="mw-ref reference" id="cite_ref-Project_Verona_19-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Project Verona"}}'><a href="#cite_note-Project_Verona-19" id="mwQg"><span class="mw-reflink-text" id="mwQw"><span class="cite-bracket" id="mwRA">[</span>15<span class="cite-bracket" id="mwRQ">]</span></span></a></sup></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/SPARK_(programming_language)" title="SPARK (programming language)">SPARK</a><sup about="#mwt100" class="mw-ref reference" id="cite_ref-Jaloyan_20-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Jaloyan"}}'><a href="#cite_note-Jaloyan-20" id="mwRg"><span class="mw-reflink-text" id="mwRw"><span class="cite-bracket" id="mwSA">[</span>16<span class="cite-bracket" id="mwSQ">]</span></span></a></sup></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Swift_(programming_language)" title="Swift (programming language)">Swift</a><sup about="#mwt102" class="mw-ref reference" id="cite_ref-Lattner_21-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Lattner"}}'><a href="#cite_note-Lattner-21" id="mwSg"><span class="mw-reflink-text" id="mwSw"><span class="cite-bracket" id="mwTA">[</span>17<span class="cite-bracket" id="mwTQ">]</span></span></a></sup></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/V_(programming_language)" title="V (programming language)">V</a><sup about="#mwt106" class="mw-ref reference" id="cite_ref-22" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-22"}}'><a href="#cite_note-22" id="mwTg"><span class="mw-reflink-text" id="mwTw"><span class="cite-bracket" id="mwUA">[</span>18<span class="cite-bracket" id="mwUQ">]</span></span></a></sup></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Zig_(programming_language)" title="Zig (programming language)">Zig</a><sup about="#mwt111" class="mw-ref reference" id="cite_ref-23" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-23"}}'><a href="#cite_note-23" id="mwUg"><span class="mw-reflink-text" id="mwUw"><span class="cite-bracket" id="mwVA">[</span>19<span class="cite-bracket" id="mwVQ">]</span></span></a></sup></li><li><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Gleam_(programming_language)" title="Gleam (programming language)">Gleam</a><sup about="#mwt114" class="mw-ref reference" id="cite_ref-Gleam_24-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Gleam"}}'><a href="#cite_note-Gleam-24" id="mwVg"><span class="mw-reflink-text" id="mwVw"><span class="cite-bracket" id="mwWA">[</span>20<span class="cite-bracket" id="mwWQ">]</span></span></a></sup></li></ul></td></tr></tbody></table>
+
+<p id="mwWg"><b id="mwWw">Rust</b> is a <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/General-purpose_programming_language" title="General-purpose programming language" id="mwXA">general-purpose programming language</a> that emphasizes <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Computer_performance" title="Computer performance" id="mwXQ">performance</a>, <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Type_safety" title="Type safety" id="mwXg">type safety</a>, <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Concurrency_(computer_science)" title="Concurrency (computer science)" class="mw-redirect" id="mwXw">concurrency</a>, and <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Memory_safety" title="Memory safety" id="mwYA">memory safety</a>. Rust supports multiple <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Programming_paradigm" title="Programming paradigm" id="mwYQ">programming paradigms</a>. It was influenced by ideas from <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Functional_programming" title="Functional programming" id="mwYg">functional programming</a>, including <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Immutability" title="Immutability" class="mw-redirect" id="mwYw">immutability</a>, <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Higher-order_function" title="Higher-order function" id="mwZA">higher-order functions</a>, <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Algebraic_data_type" title="Algebraic data type" id="mwZQ">algebraic data types</a>, and <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Pattern_matching" title="Pattern matching" id="mwZg">pattern matching</a>. Rust also provides structs, <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Union_type" title="Union type" id="mwZw">enums</a>, traits, and methods as alternatives to traditional <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Object-oriented_programming" title="Object-oriented programming" id="mwaA">object-oriented programming</a>, without relying on classes or inheritance. Rust enforces memory safety (i.e., that all <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Reference_(computer_science)" title="Reference (computer science)" id="mwaQ">references</a> point to valid memory) without a conventional <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Garbage_collection_(computer_science)" title="Garbage collection (computer science)" id="mwag">garbage collector</a>; instead, memory safety errors and <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Data_race" title="Data race" class="mw-redirect" id="mwaw">data races</a> are prevented by the <i id="mwbA">borrow checker</i>, which tracks the <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Object_lifetime" title="Object lifetime" id="mwbQ">object lifetime</a> of references at <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Compile_time" title="Compile time" id="mwbg">compile time</a>.</p>
+
+<p id="mwbw">Software developer Graydon Hoare created Rust in 2006 while working at <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Mozilla" title="Mozilla" id="mwcA">Mozilla</a>, which officially sponsored the project in 2009. The first stable release, Rust 1.0, was published in May 2015. The project has been sponsored by the <a rel="mw:WikiLink" href="#Rust_Foundation" class="mw-selflink-fragment" id="mwcQ">Rust Foundation</a> since February 2021. Rust has been adopted by software projects, especially in <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Web_service" title="Web service" id="mwcg">web services</a> and <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/System_software" title="System software" id="mwcw">system software</a>. It has been studied academically and has a community of developers.</p>
+
+<meta property="mw:PageProp/toc" id="mwdA" data-mw='{"autoGenerated":true}'/></section><section data-mw-section-id="1" id="mwdQ" aria-labelledby="History"><div class="mw-heading mw-heading2"><h2 id="History">History</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/w/index.php?title=Rust_(programming_language)&amp;action=edit&amp;section=1" title="Edit section: History"><span>edit</span></a><span class="mw-editsection-bracket">]</span></span></div>
+<section data-mw-section-id="2" id="mwdg" aria-labelledby="2006–2009:_Early_years"><div class="mw-heading mw-heading3"><h3 id="2006–2009:_Early_years"><span id="2006.E2.80.932009:_Early_years" typeof="mw:FallbackId"></span>2006–2009: Early years</h3><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/w/index.php?title=Rust_(programming_language)&amp;action=edit&amp;section=2" title="Edit section: 2006–2009: Early years"><span>edit</span></a><span class="mw-editsection-bracket">]</span></span></div>
+<figure class="mw-default-size mw-halign-right" typeof="mw:File/Thumb" id="mwdw"><a href="https://en.wikipedia.org/wiki/File:MozillaCaliforniaHeadquarters.JPG" class="mw-file-description" id="mweA"><img resource="https://en.wikipedia.org/wiki/File:MozillaCaliforniaHeadquarters.JPG" src="//thumb.wikimedia.org/wikipedia/commons/thumb/d/dd/MozillaCaliforniaHeadquarters.JPG/250px-MozillaCaliforniaHeadquarters.JPG?utm_source=en.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail" decoding="async" loading="lazy" srcset="//thumb.wikimedia.org/wikipedia/commons/thumb/d/dd/MozillaCaliforniaHeadquarters.JPG/500px-MozillaCaliforniaHeadquarters.JPG?utm_source=en.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail 2x" data-file-width="2560" data-file-height="1920" data-file-type="bitmap" height="188" width="250" class="mw-file-element" id="mweQ"/></a><figcaption id="mweg">Mozilla Foundation headquarters in <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Mountain_View,_California" title="Mountain View, California" id="mwew">Mountain View, California</a>, June 2009</figcaption></figure>
+<p id="mwfA">In 2006, Rust began as a personal project by <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Mozilla" title="Mozilla" id="mwfQ">Mozilla</a> employee Graydon Hoare. According to <i id="mwfg"><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/MIT_Technology_Review" title="MIT Technology Review" id="mwfw">MIT Technology Review</a></i>, he started the project due to his frustration with a broken elevator in his apartment building whose software had crashed,<sup about="#mwt119" class="mw-ref reference" id="cite_ref-MITTechReview_25-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"},"body":{"id":"mw-reference-text-cite_note-MITTechReview-25"}}'><a href="#cite_note-MITTechReview-25" id="mwgA"><span class="mw-reflink-text" id="mwgQ"><span class="cite-bracket" id="mwgg">[</span>21<span class="cite-bracket" id="mwgw">]</span></span></a></sup> and named the language after the <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Rust_(fungus)" title="Rust (fungus)" id="mwhA">fungi of the same name</a> that are "over-engineered for survival".<sup about="#mwt120" class="mw-ref reference" id="cite_ref-MITTechReview_25-1" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mwhQ"><span class="mw-reflink-text" id="mwhg"><span class="cite-bracket" id="mwhw">[</span>21<span class="cite-bracket" id="mwiA">]</span></span></a></sup> Between 2006 and 2009, Rust was not publicized to others at Mozilla and was written in Hoare's free time.<sup about="#mwt123" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"},"body":{"id":"mw-reference-text-cite_note-Klabnik2016ACMHistory-26"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwiQ"><span class="mw-reflink-text" id="mwig"><span class="cite-bracket" id="mwiw">[</span>22<span class="cite-bracket" id="mwjA">]</span></span></a></sup><sup class="reference nowrap" about="#mwt116" typeof="mw:Transclusion" id="mwjQ" data-mw='{"parts":[{"template":{"target":{"wt":"rp","href":"./Template:Rp"},"params":{"at":{"wt":"7:50"}},"i":0}}]}'><span title="Location: 7:50"><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>7:50<span typeof="mw:Entity"> </span></span></sup> Hoare began speaking about the language around 2009 after a small group at Mozilla became interested.<sup about="#mwt126" class="mw-ref reference" id="cite_ref-Hoare2010_27-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Hoare2010"},"body":{"id":"mw-reference-text-cite_note-Hoare2010-27"}}'><a href="#cite_note-Hoare2010-27" id="mwjg"><span class="mw-reflink-text" id="mwjw"><span class="cite-bracket" id="mwkA">[</span>23<span class="cite-bracket" id="mwkQ">]</span></span></a></sup></p>
+
+<p id="mwkg">Early contributors have agreed that the language was based primarily on existing ideas. Hoare cited languages from the 1970s, 1980s, and 1990s as influences — including <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/CLU_(programming_language)" title="CLU (programming language)" id="mwkw">CLU</a>, <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/BETA_(programming_language)" title="BETA (programming language)" id="mwlA">BETA</a>, <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Mesa_(programming_language)" title="Mesa (programming language)" id="mwlQ">Mesa</a>, NIL,<sup about="#mwt127" class="mw-ref reference" id="cite_ref-nil_11-1" rel="dc:references" typeof="mw:Transclusion mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"nil","group":"note"},"body":{"html":""},"parts":[{"template":{"target":{"wt":"refn","href":"./Template:Refn"},"params":{"group":{"wt":"note"},"name":{"wt":"nil"}},"i":0}}]}'><a href="#cite_note-nil-11" data-mw-group="note" id="mwlg"><span class="mw-reflink-text" id="mwlw"><span class="cite-bracket" id="mwmA">[</span>note 4<span class="cite-bracket" id="mwmQ">]</span></span></a></sup> <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Erlang_(programming_language)" title="Erlang (programming language)" id="mwmg">Erlang</a>, <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Newsqueak" title="Newsqueak" id="mwmw">Newsqueak</a>, <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Napier88" title="Napier88" id="mwnA">Napier</a>, <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Hermes_(programming_language)" title="Hermes (programming language)" id="mwnQ">Hermes</a>, <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Sather" title="Sather" id="mwng">Sather</a>, <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Alef_(programming_language)" title="Alef (programming language)" id="mwnw">Alef</a>, and <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Limbo_(programming_language)" title="Limbo (programming language)" id="mwoA">Limbo</a>.<sup about="#mwt131" class="mw-ref reference" id="cite_ref-Hoare2010_27-1" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Hoare2010"}}'><a href="#cite_note-Hoare2010-27" id="mwoQ"><span class="mw-reflink-text" id="mwog"><span class="cite-bracket" id="mwow">[</span>23<span class="cite-bracket" id="mwpA">]</span></span></a></sup> He described the language as "technology from the past come to save the future from itself."<sup about="#mwt132" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-1" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwpQ"><span class="mw-reflink-text" id="mwpg"><span class="cite-bracket" id="mwpw">[</span>22<span class="cite-bracket" id="mwqA">]</span></span></a></sup><sup class="reference nowrap" about="#mwt130" typeof="mw:Transclusion" id="mwqQ" data-mw='{"parts":[{"template":{"target":{"wt":"rp","href":"./Template:Rp"},"params":{"at":{"wt":"8:17"}},"i":0}}]}'><span title="Location: 8:17"><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>8:17<span typeof="mw:Entity"> </span></span></sup><sup about="#mwt133" class="mw-ref reference" id="cite_ref-Hoare2010_27-2" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Hoare2010"}}'><a href="#cite_note-Hoare2010-27" id="mwqg"><span class="mw-reflink-text" id="mwqw"><span class="cite-bracket" id="mwrA">[</span>23<span class="cite-bracket" id="mwrQ">]</span></span></a></sup> Early contributor Manish Goregaokar similarly described it as based on "mostly decades-old research."<sup about="#mwt134" class="mw-ref reference" id="cite_ref-MITTechReview_25-2" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mwrg"><span class="mw-reflink-text" id="mwrw"><span class="cite-bracket" id="mwsA">[</span>21<span class="cite-bracket" id="mwsQ">]</span></span></a></sup></p>
+
+<p id="mwsg">The first <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Compiler" title="Compiler" id="mwsw">compiler</a> was written in about 38,000 lines of <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/OCaml" title="OCaml" id="mwtA">OCaml</a>.<sup about="#mwt140" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-2" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwtQ"><span class="mw-reflink-text" id="mwtg"><span class="cite-bracket" id="mwtw">[</span>22<span class="cite-bracket" id="mwuA">]</span></span></a></sup><sup class="reference nowrap" about="#mwt135" typeof="mw:Transclusion" id="mwuQ" data-mw='{"parts":[{"template":{"target":{"wt":"rp","href":"./Template:Rp"},"params":{"at":{"wt":"15:34"}},"i":0}}]}'><span title="Location: 15:34"><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>15:34<span typeof="mw:Entity"> </span></span></sup><sup about="#mwt143" class="mw-ref reference" id="cite_ref-OCamlCompiler_28-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"OCamlCompiler"},"body":{"id":"mw-reference-text-cite_note-OCamlCompiler-28"}}'><a href="#cite_note-OCamlCompiler-28" id="mwug"><span class="mw-reflink-text" id="mwuw"><span class="cite-bracket" id="mwvA">[</span>24<span class="cite-bracket" id="mwvQ">]</span></span></a></sup> It supported a number of features no longer present today, including explicit <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Object-oriented_programming" title="Object-oriented programming" id="mwvg">object-oriented programming</a> via an <code class="mw-highlight mw-highlight-lang-text mw-content-ltr" style="" dir="ltr" typeof="mw:Extension/syntaxhighlight mw:Transclusion" about="#mwt136" id="mwvw" data-mw='{"name":"syntaxhighlight","attrs":{"lang":"text","class":"","style":"","inline":"1"},"body":{"extsrc":"obj"},"parts":[{"template":{"target":{"wt":"code","href":"./Template:Code"},"params":{"1":{"wt":"obj"}},"i":0}}]}'>obj</code> keyword<sup about="#mwt144" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-3" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwwA"><span class="mw-reflink-text" id="mwwQ"><span class="cite-bracket" id="mwwg">[</span>22<span class="cite-bracket" id="mwww">]</span></span></a></sup><sup class="reference nowrap" about="#mwt138" typeof="mw:Transclusion" id="mwxA" data-mw='{"parts":[{"template":{"target":{"wt":"rp","href":"./Template:Rp"},"params":{"at":{"wt":"10:08"}},"i":0}}]}'><span title="Location: 10:08"><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>10:08<span typeof="mw:Entity"> </span></span></sup> and a <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Typestate_analysis" title="Typestate analysis" id="mwxQ">typestate analysis</a> system tracking variable state such as going from uninitialized to initialized.<sup about="#mwt145" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-4" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwxg"><span class="mw-reflink-text" id="mwxw"><span class="cite-bracket" id="mwyA">[</span>22<span class="cite-bracket" id="mwyQ">]</span></span></a></sup><sup class="reference nowrap" about="#mwt139" typeof="mw:Transclusion" id="mwyg" data-mw='{"parts":[{"template":{"target":{"wt":"rp","href":"./Template:Rp"},"params":{"at":{"wt":"13:12"}},"i":0}}]}'><span title="Location: 13:12"><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>13:12<span typeof="mw:Entity"> </span></span></sup></p>
+
+</section><section data-mw-section-id="3" id="mwyw" aria-labelledby="2009–2012:_Mozilla_sponsorship"><div class="mw-heading mw-heading3"><h3 id="2009–2012:_Mozilla_sponsorship"><span id="2009.E2.80.932012:_Mozilla_sponsorship" typeof="mw:FallbackId"></span>2009–2012: Mozilla sponsorship</h3><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/w/index.php?title=Rust_(programming_language)&amp;action=edit&amp;section=3" title="Edit section: 2009–2012: Mozilla sponsorship"><span>edit</span></a><span class="mw-editsection-bracket">]</span></span></div>
+<p id="mwzA">In 2009, Mozilla officially sponsored the project.<sup about="#mwt146" class="mw-ref reference" id="cite_ref-MITTechReview_25-3" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mwzQ"><span class="mw-reflink-text" id="mwzg"><span class="cite-bracket" id="mwzw">[</span>21<span class="cite-bracket" id="mw0A">]</span></span></a></sup> <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Brendan_Eich" title="Brendan Eich" id="mw0Q">Brendan Eich</a> and other executives, intrigued by the possibility of using Rust for a safe <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Web_browser" title="Web browser" id="mw0g">web browser</a> engine, placed engineers on the project including, Patrick Walton, Niko Matsakis, Felix Klock, and Manish Goregaokar.<sup about="#mwt147" class="mw-ref reference" id="cite_ref-MITTechReview_25-4" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mw0w"><span class="mw-reflink-text" id="mw1A"><span class="cite-bracket" id="mw1Q">[</span>21<span class="cite-bracket" id="mw1g">]</span></span></a></sup> A conference room taken by the project developers was dubbed "the nerd cave", with a sign placed outside the door.<sup about="#mwt148" class="mw-ref reference" id="cite_ref-MITTechReview_25-5" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mw1w"><span class="mw-reflink-text" id="mw2A"><span class="cite-bracket" id="mw2Q">[</span>21<span class="cite-bracket" id="mw2g">]</span></span></a></sup></p>
+
+<p id="mw2w">Work shifted from the OCaml compiler to a <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Self-hosting_compiler" title="Self-hosting compiler" class="mw-redirect" id="mw3A">self-hosting compiler</a> (<i id="mw3Q">i.e.</i>, written in Rust) targeting <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/LLVM" title="LLVM" id="mw3g">LLVM</a>.<sup about="#mwt161" class="mw-ref reference" id="cite_ref-Rust0.1_29-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Rust0.1"},"body":{"id":"mw-reference-text-cite_note-Rust0.1-29"}}'><a href="#cite_note-Rust0.1-29" id="mw3w"><span class="mw-reflink-text" id="mw4A"><span class="cite-bracket" id="mw4Q">[</span>25<span class="cite-bracket" id="mw4g">]</span></span></a></sup><sup about="#mwt149" class="mw-ref reference" id="cite_ref-31" rel="dc:references" typeof="mw:Transclusion mw:Extension/ref" data-mw='{"name":"ref","attrs":{"group":"note"},"body":{"id":"mw-reference-text-cite_note-31"},"parts":[{"template":{"target":{"wt":"refn","href":"./Template:Refn"},"params":{"group":{"wt":"note"},"1":{"wt":"The exact date for this event is uncertain; the public history of Rust compiler versions goes back to 2012.&lt;ref name=Nelson2022RustConf>{{Cite AV media |url=https://www.youtube.com/watch?v=oUIjG-y4zaA |last=Nelson |first=Jynn |title=RustConf 2022 - Bootstrapping: The once and future compiler |publisher=Rust Team |date=2022-08-05 |access-date=2024-10-29 |location=Portland, Oregon |via=YouTube}}&lt;/ref>"}},"i":0}}]}'><a href="#cite_note-31" data-mw-group="note" id="mw4w"><span class="mw-reflink-text" id="mw5A"><span class="cite-bracket" id="mw5Q">[</span>note 5<span class="cite-bracket" id="mw5g">]</span></span></a></sup> The ownership system was in place by 2010.<sup about="#mwt162" class="mw-ref reference" id="cite_ref-MITTechReview_25-6" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mw5w"><span class="mw-reflink-text" id="mw6A"><span class="cite-bracket" id="mw6Q">[</span>21<span class="cite-bracket" id="mw6g">]</span></span></a></sup> The Rust logo was developed in 2011 based on a bicycle <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Chainring" title="Chainring" class="mw-redirect" id="mw6w">chainring</a>.<sup about="#mwt165" class="mw-ref reference" id="cite_ref-32" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-32"}}'><a href="#cite_note-32" id="mw7A"><span class="mw-reflink-text" id="mw7Q"><span class="cite-bracket" id="mw7g">[</span>27<span class="cite-bracket" id="mw7w">]</span></span></a></sup> The early 2010s witnessed increasing involvement from full-time engineers at Mozilla and open-source contributors.<sup about="#mwt166" class="mw-ref reference" id="cite_ref-MITTechReview_25-7" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mw8A"><span class="mw-reflink-text" id="mw8Q"><span class="cite-bracket" id="mw8g">[</span>21<span class="cite-bracket" id="mw8w">]</span></span></a></sup></p>
+
+<p id="mw9A">On January 20, 2012, Rust 0.1 became the first public release<sup about="#mwt169" class="mw-ref reference" id="cite_ref-Rust0.1a_1-1" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Rust0.1a"},"body":{"html":"&lt;link rel=\"mw-deduplicated-inline-style\" href=\"mw-data:TemplateStyles:r1333433106\" about=\"#mwt167\" typeof=\"mw:Extension/templatestyles mw:Transclusion\" id=\"mw9Q\" data-mw=&apos;{\"name\":\"templatestyles\",\"attrs\":{\"src\":\"Module:Citation/CS1/styles.css\"},\"body\":{\"extsrc\":\"\"},\"parts\":[{\"template\":{\"target\":{\"wt\":\"Cite mailing list \",\"href\":\"./Template:Cite_mailing_list\"},\"params\":{\"last\":{\"wt\":\"Anderson\"},\"first\":{\"wt\":\"Brian\"},\"date\":{\"wt\":\"2012-01-24\"},\"title\":{\"wt\":\"[rust-dev] The Rust compiler 0.1 is unleashed\"},\"url\":{\"wt\":\"https://mail.mozilla.org/pipermail/rust-dev/2012-January/001256.html\"},\"mailing-list\":{\"wt\":\"rust-dev\"},\"access-date\":{\"wt\":\"2025-01-07\"},\"archive-url\":{\"wt\":\"https://web.archive.org/web/20120124160628/https://mail.mozilla.org/pipermail/rust-dev/2012-January/001256.html\"},\"archive-date\":{\"wt\":\"January 24, 2012\"}},\"i\":0}}]}&apos;/>&lt;cite id=\"CITEREFAnderson2012\" class=\"citation mailinglist cs1\" about=\"#mwt167\">Anderson, Brian (2012-01-24). &lt;a rel=\"mw:ExtLink nofollow\" href=\"https://web.archive.org/web/20120124160628/https://mail.mozilla.org/pipermail/rust-dev/2012-January/001256.html\" class=\"external text\">\"&lt;span typeof=\"mw:Entity\">[&lt;/span>rust-dev&lt;span typeof=\"mw:Entity\">]&lt;/span> The Rust compiler 0.1 is unleashed\"&lt;/a>. &lt;i>rust-dev&lt;/i> (Mailing list). Archived from &lt;a rel=\"mw:ExtLink nofollow\" href=\"https://mail.mozilla.org/pipermail/rust-dev/2012-January/001256.html\" class=\"external text\">the original&lt;/a> on 2012-01-24&lt;span class=\"reference-accessdate\">. Retrieved &lt;span class=\"nowrap\">2025-01-07&lt;/span>&lt;/span>.&lt;/cite>&lt;span title=\"ctx_ver=Z39.88-2004&amp;amp;rft_val_fmt=info%3Aofi%2Ffmt%3Akev%3Amtx%3Abook&amp;amp;rft.genre=unknown&amp;amp;rft.btitle=%5Brust-dev%5D+The+Rust+compiler+0.1+is+unleashed&amp;amp;rft.date=2012-01-24&amp;amp;rft.aulast=Anderson&amp;amp;rft.aufirst=Brian&amp;amp;rft_id=https%3A%2F%2Fmail.mozilla.org%2Fpipermail%2Frust-dev%2F2012-January%2F001256.html&amp;amp;rfr_id=info%3Asid%2Fen.wikipedia.org%3ARust+%28programming+language%29\" class=\"Z3988\" about=\"#mwt167\" id=\"mw9g\">&lt;/span>"}}'><a href="#cite_note-Rust0.1a-1" id="mw9w"><span class="mw-reflink-text" id="mw-A"><span class="cite-bracket" id="mw-Q">[</span>1<span class="cite-bracket" id="mw-g">]</span></span></a></sup> for Windows, Linux, and macOS.<sup about="#mwt172" class="mw-ref reference" id="cite_ref-ExtremeTechRust0.1_33-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"ExtremeTechRust0.1"},"body":{"id":"mw-reference-text-cite_note-ExtremeTechRust0.1-33"}}'><a href="#cite_note-ExtremeTechRust0.1-33" id="mw-w"><span class="mw-reflink-text" id="mw_A"><span class="cite-bracket" id="mw_Q">[</span>28<span class="cite-bracket" id="mw_g">]</span></span></a></sup></p>
+
+</section><section data-mw-section-id="4" id="mw_w" aria-labelledby="2012–2015:_Evolution"><div class="mw-heading mw-heading3"><h3 id="2012–2015:_Evolution"><span id="2012.E2.80.932015:_Evolution" typeof="mw:FallbackId"></span>2012–2015: Evolution</h3><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/w/index.php?title=Rust_(programming_language)&amp;action=edit&amp;section=4" title="Edit section: 2012–2015: Evolution"><span>edit</span></a><span class="mw-editsection-bracket">]</span></span></div>
+<p id="mwAQA">The following years were marked by substantial changes to the Rust <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Type_system" title="Type system" id="mwAQE">type system</a>.<sup about="#mwt177" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-5" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwAQI"><span class="mw-reflink-text" id="mwAQM"><span class="cite-bracket" id="mwAQQ">[</span>22<span class="cite-bracket" id="mwAQU">]</span></span></a></sup><sup class="reference nowrap" about="#mwt173" typeof="mw:Transclusion" id="mwAQY" data-mw='{"parts":[{"template":{"target":{"wt":"rp","href":"./Template:Rp"},"params":{"at":{"wt":"18:36"}},"i":0}}]}'><span title="Location: 18:36"><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>18:36<span typeof="mw:Entity"> </span></span></sup><sup about="#mwt178" class="mw-ref reference" id="cite_ref-MITTechReview_25-8" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mwAQc"><span class="mw-reflink-text" id="mwAQg"><span class="cite-bracket" id="mwAQk">[</span>21<span class="cite-bracket" id="mwAQo">]</span></span></a></sup> Memory management through the ownership system was gradually consolidated and expanded; by 2013, the <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Garbage_collection_(computer_science)" title="Garbage collection (computer science)" id="mwAQs">garbage collector</a> was rarely used and was removed.<sup about="#mwt179" class="mw-ref reference" id="cite_ref-MITTechReview_25-9" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mwAQw"><span class="mw-reflink-text" id="mwAQ0"><span class="cite-bracket" id="mwAQ4">[</span>21<span class="cite-bracket" id="mwAQ8">]</span></span></a></sup> Also removed were typestates, the <code class="mw-highlight mw-highlight-lang-text mw-content-ltr" style="" dir="ltr" typeof="mw:Extension/syntaxhighlight mw:Transclusion" about="#mwt174" id="mwARA" data-mw='{"name":"syntaxhighlight","attrs":{"lang":"text","class":"","style":"","inline":"1"},"body":{"extsrc":"pure"},"parts":[{"template":{"target":{"wt":"code","href":"./Template:Code"},"params":{"1":{"wt":"pure"}},"i":0}}]}'>pure</code> keyword,<sup about="#mwt182" class="mw-ref reference" id="cite_ref-34" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-34"}}'><a href="#cite_note-34" id="mwARE"><span class="mw-reflink-text" id="mwARI"><span class="cite-bracket" id="mwARM">[</span>29<span class="cite-bracket" id="mwARQ">]</span></span></a></sup> various specialized pointer types, and syntax support for <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Channel_(programming)" title="Channel (programming)" id="mwARU">channels</a>.<sup about="#mwt183" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-6" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwARY"><span class="mw-reflink-text" id="mwARc"><span class="cite-bracket" id="mwARg">[</span>22<span class="cite-bracket" id="mwARk">]</span></span></a></sup><sup class="reference nowrap" about="#mwt176" typeof="mw:Transclusion" id="mwARo" data-mw='{"parts":[{"template":{"target":{"wt":"rp","href":"./Template:Rp"},"params":{"at":{"wt":"22:32"}},"i":0}}]}'><span title="Location: 22:32"><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>22:32<span typeof="mw:Entity"> </span></span></sup></p>
+
+<p id="mwARs">According to Steve Klabnik, the language was influenced during this period by developers coming from <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/C++" title="C++" id="mwARw">C++</a> (e.g., low-level performance of features), <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Scripting_language" title="Scripting language" id="mwAR0">scripting languages</a> (e.g., Cargo and package management), and <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Functional_programming" title="Functional programming" id="mwAR4">functional programming</a> (e.g., the type system).<sup about="#mwt185" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-7" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwAR8"><span class="mw-reflink-text" id="mwASA"><span class="cite-bracket" id="mwASE">[</span>22<span class="cite-bracket" id="mwASI">]</span></span></a></sup><sup class="reference nowrap" about="#mwt184" typeof="mw:Transclusion" id="mwASM" data-mw='{"parts":[{"template":{"target":{"wt":"rp","href":"./Template:Rp"},"params":{"at":{"wt":"30:50"}},"i":0}}]}'><span title="Location: 30:50"><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>30:50<span typeof="mw:Entity"> </span></span></sup></p>
+
+<p id="mwASQ">In 2013, Graydon Hoare stepped down from Rust.<sup about="#mwt191" class="mw-ref reference" id="cite_ref-MITTechReview_25-10" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mwASU"><span class="mw-reflink-text" id="mwASY"><span class="cite-bracket" id="mwASc">[</span>21<span class="cite-bracket" id="mwASg">]</span></span></a></sup> After Hoare's departure, Rust evolved organically under a federated governance structure, with a "core team" of initially six people,<sup about="#mwt192" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-8" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwASk"><span class="mw-reflink-text" id="mwASo"><span class="cite-bracket" id="mwASs">[</span>22<span class="cite-bracket" id="mwASw">]</span></span></a></sup><sup class="reference nowrap" about="#mwt186" typeof="mw:Transclusion" id="mwAS0" data-mw='{"parts":[{"template":{"target":{"wt":"rp","href":"./Template:Rp"},"params":{"at":{"wt":"21:45"}},"i":0}}]}'><span title="Location: 21:45"><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>21:45<span typeof="mw:Entity"> </span></span></sup> and around 30<span typeof="mw:Entity" id="mwAS4">–</span>40 developers total across various other teams.<sup about="#mwt193" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-9" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwAS8"><span class="mw-reflink-text" id="mwATA"><span class="cite-bracket" id="mwATE">[</span>22<span class="cite-bracket" id="mwATI">]</span></span></a></sup><sup class="reference nowrap" about="#mwt187" typeof="mw:Transclusion" id="mwATM" data-mw='{"parts":[{"template":{"target":{"wt":"rp","href":"./Template:Rp"},"params":{"at":{"wt":"22:22"}},"i":0}}]}'><span title="Location: 22:22"><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>22:22<span typeof="mw:Entity"> </span></span></sup> In March 2014, a <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Request_for_Comments" title="Request for Comments" id="mwATQ">Request for Comments</a> (RFC) process for new language features was added.<sup about="#mwt194" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-10" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwATU"><span class="mw-reflink-text" id="mwATY"><span class="cite-bracket" id="mwATc">[</span>22<span class="cite-bracket" id="mwATg">]</span></span></a></sup><sup class="reference nowrap" about="#mwt188" typeof="mw:Transclusion" id="mwATk" data-mw='{"parts":[{"template":{"target":{"wt":"rp","href":"./Template:Rp"},"params":{"at":{"wt":"33:47"}},"i":0}}]}'><span title="Location: 33:47"><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>33:47<span typeof="mw:Entity"> </span></span></sup> In 2016, the core team comprised nine people<sup about="#mwt195" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-11" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwATo"><span class="mw-reflink-text" id="mwATs"><span class="cite-bracket" id="mwATw">[</span>22<span class="cite-bracket" id="mwAT0">]</span></span></a></sup><sup class="reference nowrap" about="#mwt189" typeof="mw:Transclusion" id="mwAT4" data-mw='{"parts":[{"template":{"target":{"wt":"rp","href":"./Template:Rp"},"params":{"at":{"wt":"21:45"}},"i":0}}]}'><span title="Location: 21:45"><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>21:45<span typeof="mw:Entity"> </span></span></sup> and there were over 1,600 RFCs.<sup about="#mwt196" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-12" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwAT8"><span class="mw-reflink-text" id="mwAUA"><span class="cite-bracket" id="mwAUE">[</span>22<span class="cite-bracket" id="mwAUI">]</span></span></a></sup><sup class="reference nowrap" about="#mwt190" typeof="mw:Transclusion" id="mwAUM" data-mw='{"parts":[{"template":{"target":{"wt":"rp","href":"./Template:Rp"},"params":{"at":{"wt":"34:08"}},"i":0}}]}'><span title="Location: 34:08"><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>34:08<span typeof="mw:Entity"> </span></span></sup></p>
+
+<p id="mwAUQ">Development focused on finalizing features for version 1.0 (which would begin providing <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Backward_compatibility" title="Backward compatibility" id="mwAUU">backward compatibility</a>).<sup about="#mwt198" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-13" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwAUY"><span class="mw-reflink-text" id="mwAUc"><span class="cite-bracket" id="mwAUg">[</span>22<span class="cite-bracket" id="mwAUk">]</span></span></a></sup><sup class="reference nowrap" about="#mwt197" typeof="mw:Transclusion" id="mwAUo" data-mw='{"parts":[{"template":{"target":{"wt":"rp","href":"./Template:Rp"},"params":{"at":{"wt":"41:26"}},"i":0}}]}'><span title="Location: 41:26"><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>41:26<span typeof="mw:Entity"> </span></span></sup> According to Andrew Binstock writing for <i id="mwAUs"><a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Dr._Dobb's_Journal" title="Dr. Dobb's Journal" id="mwAUw">Dr. Dobb's Journal</a></i> in January 2014, while Rust was "widely viewed as a remarkably elegant language", adoption slowed because it radically changed from version to version.<sup about="#mwt201" class="mw-ref reference" id="cite_ref-35" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-35"}}'><a href="#cite_note-35" id="mwAU0"><span class="mw-reflink-text" id="mwAU4"><span class="cite-bracket" id="mwAU8">[</span>30<span class="cite-bracket" id="mwAVA">]</span></span></a></sup></p>
+
+<p id="mwAVE">On May 15, 2015, Rust 1.0 became the first <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Stable_release" title="Stable release" class="mw-redirect" id="mwAVI">stable release</a>.<sup about="#mwt203" class="mw-ref reference" id="cite_ref-MITTechReview_25-11" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mwAVM"><span class="mw-reflink-text" id="mwAVQ"><span class="cite-bracket" id="mwAVU">[</span>21<span class="cite-bracket" id="mwAVY">]</span></span></a></sup> One year later, the compiler had accumulated at least 1,400 contributors, and there were at least 5,000 third-party libraries published on the package-management website Crates.io.<sup about="#mwt204" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-14" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwAVc"><span class="mw-reflink-text" id="mwAVg"><span class="cite-bracket" id="mwAVk">[</span>22<span class="cite-bracket" id="mwAVo">]</span></span></a></sup><sup class="reference nowrap" about="#mwt202" typeof="mw:Transclusion" id="mwAVs" data-mw='{"parts":[{"template":{"target":{"wt":"rp","href":"./Template:Rp"},"params":{"at":{"wt":"43:15"}},"i":0}}]}'><span title="Location: 43:15"><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>43:15<span typeof="mw:Entity"> </span></span></sup></p>
+
+</section><section data-mw-section-id="5" id="mwAVw" aria-labelledby="2015–2020:_Servo_and_early_adoption"><div class="mw-heading mw-heading3"><h3 id="2015–2020:_Servo_and_early_adoption"><span id="2015.E2.80.932020:_Servo_and_early_adoption" typeof="mw:FallbackId"></span>2015–2020: Servo and early adoption</h3><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/w/index.php?title=Rust_(programming_language)&amp;action=edit&amp;section=5" title="Edit section: 2015–2020: Servo and early adoption"><span>edit</span></a><span class="mw-editsection-bracket">]</span></span></div>
+<figure class="mw-default-size mw-halign-right" typeof="mw:File/Thumb" id="mwAV0"><a href="https://en.wikipedia.org/wiki/File:Home_page_servo_v0.01.png" class="mw-file-description" id="mwAV4"><img resource="https://en.wikipedia.org/wiki/File:Home_page_servo_v0.01.png" src="//thumb.wikimedia.org/wikipedia/commons/thumb/3/39/Home_page_servo_v0.01.png/250px-Home_page_servo_v0.01.png?utm_source=en.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail" decoding="async" loading="lazy" srcset="//thumb.wikimedia.org/wikipedia/commons/thumb/3/39/Home_page_servo_v0.01.png/500px-Home_page_servo_v0.01.png?utm_source=en.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail 2x" data-file-width="1855" data-file-height="1056" data-file-type="bitmap" height="142" width="250" class="mw-file-element" id="mwAV8"/></a><figcaption id="mwAWA">Early homepage of Mozilla's <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Servo_browser_engine" title="Servo browser engine" class="mw-redirect" id="mwAWE">Servo browser engine</a></figcaption></figure>
+<p id="mwAWI">The development of the <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Servo_browser_engine" title="Servo browser engine" class="mw-redirect" id="mwAWM">Servo browser engine</a> continued in parallel with Rust, funded by Mozilla and <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Samsung" title="Samsung" id="mwAWQ">Samsung</a>.<sup about="#mwt209" class="mw-ref reference" id="cite_ref-36" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-36"}}'><a href="#cite_note-36" id="mwAWU"><span class="mw-reflink-text" id="mwAWY"><span class="cite-bracket" id="mwAWc">[</span>31<span class="cite-bracket" id="mwAWg">]</span></span></a></sup> New features in Rust were tested out by the Servo team, and new features in Servo were used to give feedback to the Rust team.<sup about="#mwt210" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-15" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwAWk"><span class="mw-reflink-text" id="mwAWo"><span class="cite-bracket" id="mwAWs">[</span>22<span class="cite-bracket" id="mwAWw">]</span></span></a></sup><sup class="reference nowrap" about="#mwt205" typeof="mw:Transclusion" id="mwAW0" data-mw='{"parts":[{"template":{"target":{"wt":"rp","href":"./Template:Rp"},"params":{"at":{"wt":"5:41"}},"i":0}}]}'><span title="Location: 5:41"><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>5:41<span typeof="mw:Entity"> </span></span></sup> The first version of Servo was released in 2016.<sup about="#mwt211" class="mw-ref reference" id="cite_ref-MITTechReview_25-12" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mwAW4"><span class="mw-reflink-text" id="mwAW8"><span class="cite-bracket" id="mwAXA">[</span>21<span class="cite-bracket" id="mwAXE">]</span></span></a></sup> The <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Firefox" title="Firefox" id="mwAXI">Firefox</a> web browser shipped with Rust code in 2016 (version 45),<sup about="#mwt212" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-16" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwAXM"><span class="mw-reflink-text" id="mwAXQ"><span class="cite-bracket" id="mwAXU">[</span>22<span class="cite-bracket" id="mwAXY">]</span></span></a></sup><sup class="reference nowrap" about="#mwt206" typeof="mw:Transclusion" id="mwAXc" data-mw='{"parts":[{"template":{"target":{"wt":"rp","href":"./Template:Rp"},"params":{"at":{"wt":"53:30"}},"i":0}}]}'><span title="Location: 53:30"><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>53:30<span typeof="mw:Entity"> </span></span></sup><sup about="#mwt215" class="mw-ref reference" id="cite_ref-37" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-37"}}'><a href="#cite_note-37" id="mwAXg"><span class="mw-reflink-text" id="mwAXk"><span class="cite-bracket" id="mwAXo">[</span>32<span class="cite-bracket" id="mwAXs">]</span></span></a></sup> but components of Servo did not appear in Firefox until September 2017 (version 57) as part of the <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Gecko_(software)" title="Gecko (software)" id="mwAXw">Gecko</a> and <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Gecko_(software)#Quantum" title="Gecko (software)" id="mwAX0">Quantum</a> projects.<sup about="#mwt218" class="mw-ref reference" id="cite_ref-38" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-38"}}'><a href="#cite_note-38" id="mwAX4"><span class="mw-reflink-text" id="mwAX8"><span class="cite-bracket" id="mwAYA">[</span>33<span class="cite-bracket" id="mwAYE">]</span></span></a></sup></p>
+
+<p id="mwAYI">In the years following 1.0, improvements were made to the toolchain ecosystem including <a rel="mw:WikiLink" href="#Rustfmt" class="mw-selflink-fragment" id="mwAYM">Rustfmt</a>, <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Integrated_development_environment" title="Integrated development environment" id="mwAYQ">integrated development environment</a> (IDE) support,<sup about="#mwt222" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-17" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwAYU"><span class="mw-reflink-text" id="mwAYY"><span class="cite-bracket" id="mwAYc">[</span>22<span class="cite-bracket" id="mwAYg">]</span></span></a></sup><sup class="reference nowrap" about="#mwt219" typeof="mw:Transclusion" id="mwAYk" data-mw='{"parts":[{"template":{"target":{"wt":"rp","href":"./Template:Rp"},"params":{"at":{"wt":"44:56"}},"i":0}}]}'><span title="Location: 44:56"><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>44:56<span typeof="mw:Entity"> </span></span></sup> and a regular compiler testing and release cycle.<sup about="#mwt223" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-18" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwAYo"><span class="mw-reflink-text" id="mwAYs"><span class="cite-bracket" id="mwAYw">[</span>22<span class="cite-bracket" id="mwAY0">]</span></span></a></sup><sup class="reference nowrap" about="#mwt220" typeof="mw:Transclusion" id="mwAY4" data-mw='{"parts":[{"template":{"target":{"wt":"rp","href":"./Template:Rp"},"params":{"at":{"wt":"46:48"}},"i":0}}]}'><span title="Location: 46:48"><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>46:48<span typeof="mw:Entity"> </span></span></sup> Rust's community gained a <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Code_of_conduct" title="Code of conduct" id="mwAY8">code of conduct</a> and an <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/IRC" title="IRC" id="mwAZA">IRC</a> chat for discussion.<sup about="#mwt224" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-19" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwAZE"><span class="mw-reflink-text" id="mwAZI"><span class="cite-bracket" id="mwAZM">[</span>22<span class="cite-bracket" id="mwAZQ">]</span></span></a></sup><sup class="reference nowrap" about="#mwt221" typeof="mw:Transclusion" id="mwAZU" data-mw='{"parts":[{"template":{"target":{"wt":"rp","href":"./Template:Rp"},"params":{"at":{"wt":"50:36"}},"i":0}}]}'><span title="Location: 50:36"><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>50:36<span typeof="mw:Entity"> </span></span></sup></p>
+
+<p id="mwAZY">The earliest known adoption outside of Mozilla was by individual projects at Samsung, <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Facebook" title="Facebook" id="mwAZc">Facebook</a> (now <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Meta_Platforms" title="Meta Platforms" id="mwAZg">Meta Platforms</a>), <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Dropbox" title="Dropbox" id="mwAZk">Dropbox</a>, and Tilde, Inc., the company behind <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Ember.js" title="Ember.js" id="mwAZo">Ember.js</a>.<sup about="#mwt226" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-20" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwAZs"><span class="mw-reflink-text" id="mwAZw"><span class="cite-bracket" id="mwAZ0">[</span>22<span class="cite-bracket" id="mwAZ4">]</span></span></a></sup><sup class="reference nowrap" about="#mwt225" typeof="mw:Transclusion" id="mwAZ8" data-mw='{"parts":[{"template":{"target":{"wt":"rp","href":"./Template:Rp"},"params":{"at":{"wt":"55:44"}},"i":0}}]}'><span title="Location: 55:44"><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>55:44<span typeof="mw:Entity"> </span></span></sup><sup about="#mwt227" class="mw-ref reference" id="cite_ref-MITTechReview_25-13" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mwAaA"><span class="mw-reflink-text" id="mwAaE"><span class="cite-bracket" id="mwAaI">[</span>21<span class="cite-bracket" id="mwAaM">]</span></span></a></sup> <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Amazon_Web_Services" title="Amazon Web Services" id="mwAaQ">Amazon Web Services</a> followed in 2020.<sup about="#mwt228" class="mw-ref reference" id="cite_ref-MITTechReview_25-14" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mwAaU"><span class="mw-reflink-text" id="mwAaY"><span class="cite-bracket" id="mwAac">[</span>21<span class="cite-bracket" id="mwAag">]</span></span></a></sup> Engineers cited performance, lack of a garbage collector, safety, and developer experience as reasons for the adoption. Amazon developers cited a 2017 research finding that Rust code was more <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Energy_efficiency_in_computing" title="Energy efficiency in computing" class="mw-redirect" id="mwAak">energy efficient</a> compared to similar <a rel="mw:WikiLink" href="https://en.wikipedia.org/wiki/Java_(programming_language)" title="Java (programming language)" id="mwAao">Java</a> code.

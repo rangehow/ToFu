@@ -267,13 +267,12 @@ exe = EXE(
     console=False,          # No terminal window on Windows/macOS
     disable_windowed_traceback=False,
     argv_emulation=False,
-    # Native host arch (None). The CI macOS matrix builds arm64 on macos-14 and
-    # x86_64 on macos-13 separately, each with arch-matching wheels. Do NOT set
-    # 'universal2' here: the runners' interpreter + several bundled C extensions
-    # (psycopg2, pymupdf, lxml) ship single-arch wheels, so a universal2 COLLECT
-    # aborts with "not a fat binary!" (see .github/workflows/build-desktop.yml).
+    # Separate native CI runners supply architecture-matching Python wheels.
+    # PyInstaller must sign its processed binaries and app with the release
+    # identity, not leave ad-hoc signatures for a later outer DMG signature.
     target_arch=None,
-    codesign_identity=None,
+    codesign_identity=(os.environ.get('TOFU_MACOS_SIGN_IDENTITY')
+                       if sys.platform == 'darwin' else None),
     entitlements_file=None,
     icon=icon_file,
 )
@@ -298,7 +297,7 @@ if sys.platform == 'darwin':
         bundle_identifier='com.tofu.desktop',
         info_plist={
             'CFBundleDisplayName': 'Tofu',
-            'CFBundleShortVersionString': open(
+            'CFBundleShortVersionString': os.environ.get('TOFU_MACOS_APP_VERSION') or open(
                 os.path.join(ROOT, 'VERSION')).read().strip(),
             'NSHighResolutionCapable': True,
             'LSBackgroundOnly': False,

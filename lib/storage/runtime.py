@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
+from contextlib import ExitStack
 import os
 import threading
 import time
@@ -100,6 +101,11 @@ def _restart_breaker_config() -> tuple[float, int]:
         'TOFU_STORAGE_RESTART_CRASH_LIMIT',
         _DEFAULT_CRASH_LIMIT, 1, 100))
     return window, limit
+
+
+def _client_wait_cancelled():
+    return StorageError('database_unavailable', 'Storage client acquisition cancelled',
+                        retryable=False)
 
 
 class StorageRuntime:
@@ -720,7 +726,7 @@ class StorageRuntime:
             raise StorageError('database_unavailable', message, retryable=False)
         return self.client()
 
-    def client(self, *, write: bool = False) -> StorageClient:
+    def client(self, *, write: bool = False, cancellation=None) -> StorageClient:
         """Return the ready client, waiting out a bounded in-flight restart.
 
         A crash-restart window (~10 s) used to fail every in-flight caller
@@ -735,18 +741,43 @@ class StorageRuntime:
         non-retryable error that names its remedy, including for callers
         that were already waiting when the restart attempt was refused.
         """
-        if self.ready:
+        if cancellation is None:
+            return self._wait_for_client(write=write)
+
+        interrupted = False
+
+        def wake():
+            nonlocal interrupted
+            with self._ready_condition:
+                interrupted = True
+                self._ready_condition.notify_all()
+
+        # Bind outside the readiness lock: cancel owns the token lock while
+        # notifying the condition, and detach must not invert that ordering.
+        with ExitStack() as binding:
+            try:
+                binding.enter_context(cancellation.bind(wake))
+            except OSError as error:
+                raise _client_wait_cancelled() from error
+            return self._wait_for_client(write=write, interrupted=lambda: interrupted)
+
+    def _wait_for_client(self, *, write, interrupted=None):
+        if interrupted is None and self.ready:
             return self._supervisor.client
         deadline = time.monotonic() + _FENCE_RESTART_WAIT_CAP_S
         with self._ready_condition:
-            while self._restart_in_flight_locked():
+            while True:
+                if interrupted is not None and interrupted():
+                    raise _client_wait_cancelled()
+                if self.ready:
+                    return self._supervisor.client
+                if not self._restart_in_flight_locked():
+                    break
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     break
                 self._ready_condition.wait(
                     min(_FENCE_RESTART_WAIT_POLL_S, remaining))
-                if self.ready:
-                    return self._supervisor.client
             refused = self._refusal_error_locked()
         if refused is not None:
             raise refused

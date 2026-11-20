@@ -66,6 +66,64 @@ def libraries(tmp_path_factory) -> dict[str, str]:
     return {'fault': str(library), 'coalesce': state.library}
 
 
+@pytest.mark.parametrize('failure', ['auto_extension', 'vfs_register'])
+def test_initialization_error_leaves_stock_sqlite_functional(tmp_path, failure):
+    from lib.storage_authority_sql.adapters import sqlite_wal_coalesce as shim
+
+    compiler = shutil.which('cc') or shutil.which('gcc') or shutil.which('clang')
+    if compiler is None or not hasattr(sqlite3.Connection, 'enable_load_extension'):
+        pytest.skip('the regression needs a C compiler and SQLite extension loading')
+    library = tmp_path / 'tofu_wal_coalesce.so'
+    command = [compiler, '-O2', '-shared', '-fPIC', f'-I{shim._SOURCE_PATH.parent}',
+               '-o', str(library), str(_HERE / 'sqlite_wal_init_fault.c')]
+    if (include := shim._header_directory()) is not None:
+        command.insert(1, f'-I{include}')
+    if failure == 'vfs_register':
+        command.insert(1, '-DFAIL_VFS_REGISTRATION')
+    subprocess.run(command, check=True, capture_output=True)
+
+    # These registries are process-global; don't inherit a successful load.
+    completed = subprocess.run(
+        [sys.executable, '-c', _CHECK_INITIALIZATION_FALLBACK, str(library),
+         str(tmp_path / 'ordinary.db'), failure], capture_output=True, text=True, timeout=30)
+    assert completed.returncode == 0, completed.stderr
+
+
+_CHECK_INITIALIZATION_FALLBACK = '''
+from contextlib import closing
+from pathlib import Path
+import sqlite3
+import sys
+
+from lib.storage_authority_sql.adapters import sqlite_wal_coalesce as shim
+
+library, database, failure = sys.argv[1:]
+shim._build = lambda: Path(library)
+state = shim.wal_coalescing()
+assert state.vfs is None, state
+expected_reason = ('injected auto-extension registration failure' if failure == 'auto_extension'
+                   else 'not registered after loading')
+assert expected_reason in state.reason, state
+try:
+    sqlite3.connect(f'file::memory:?vfs={shim.VFS_NAME}', uri=True).close()
+except sqlite3.OperationalError as exc:
+    assert 'no such vfs' in str(exc).lower(), exc
+else:
+    raise AssertionError('failed shim is still available by name')
+
+target, uri = shim.connection_target(database, state.vfs)
+assert (target, uri) == (database, False)
+with closing(sqlite3.connect(target, uri=uri)) as db:
+    assert db.execute('PRAGMA journal_mode=WAL').fetchone() == ('wal',)
+    db.execute('CREATE TABLE entries (value INTEGER)')
+    db.execute('INSERT INTO entries VALUES (7)')
+    db.commit()
+with closing(sqlite3.connect(target, uri=uri)) as db:
+    assert db.execute('PRAGMA integrity_check').fetchone() == ('ok',)
+    assert db.execute('SELECT value FROM entries').fetchall() == [(7,)]
+'''
+
+
 def _run(libraries, database: Path, engine: str, *, environment=None, **spec):
     extensions = [libraries['fault']]
     if engine == 'coalesce':
@@ -248,3 +306,14 @@ def test_sidecar_connections_use_the_coalescing_vfs(libraries, tmp_path):
             'library': libraries['coalesce']}
     finally:
         backend.close()
+
+
+def test_loaded_extension_distinguishes_writer_vfs_selection(tmp_path, libraries):
+    from contextlib import closing
+    from lib.storage_authority_sql.adapters.sqlite_wal_coalesce import connection_target
+
+    for selected in (None, VFS_NAME):
+        path = tmp_path / ('wrapped.db' if selected else 'stock.db')
+        target, uri = connection_target(path, selected)
+        with closing(sqlite3.connect(target, uri=uri)) as conn:
+            assert conn.execute('SELECT tofu_wal_coalescing_selected()').fetchone() == (int(selected is not None),)

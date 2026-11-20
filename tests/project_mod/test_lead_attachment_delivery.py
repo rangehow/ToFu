@@ -74,6 +74,38 @@ def test_a_delegation_brief_carries_its_attachments_into_the_worker_input(worker
         == worker['assignment_id']
 
 
+@pytest.mark.parametrize('denial', ['plan_mode', 'stale_attempt', 'revoked_replay'])
+def test_denied_delegation_does_not_admit_attachments(worker_runtime, ports, denial):
+    r = worker_runtime
+    if denial == 'plan_mode':
+        r.task['config']['planMode'] = True
+    elif denial == 'stale_attempt':
+        r.attempts['coordinator-attempt']['status'] = 'interrupted'
+    else:
+        worker = r.call('delegate_project_work', **r.args)
+        r.c.repo.revoke(worker['assignment_id'], 1)
+    before = len(r.calls), len(r.created)
+    refused = r.call('delegate_project_work', **r.args, attachments=['docs/design.pdf'])
+    assert 'error' in refused, refused
+    assert not ports
+    assert (len(r.calls), len(r.created)) == before
+
+
+def test_attachment_preflight_does_not_replace_the_workers_live_authority(worker_runtime, monkeypatch, ports):
+    r = worker_runtime
+    admit = lead_attachments.admit
+
+    def interrupted_during_retention(*args):
+        records = admit(*args)
+        r.attempts['coordinator-attempt']['status'] = 'interrupted'
+        return records
+
+    monkeypatch.setattr(lead_attachments, 'admit', interrupted_during_retention)
+    refused = r.call('delegate_project_work', **r.args, attachments=['docs/design.pdf'])
+    assert 'current owned Coordinator attempt' in refused['error'], refused
+    assert len(ports) == 1 and not r.calls and not r.created
+
+
 def test_a_refused_attachment_creates_no_worker(worker_runtime, ports):
     r = worker_runtime
     refused = r.call('delegate_project_work', **r.args, attachments=['/etc/passwd'])
@@ -145,12 +177,20 @@ def test_a_project_message_delivers_its_attachments_to_the_running_model(setup, 
 
 
 def test_both_message_contracts_declare_one_attachment_shape():
-    """send_project_message lives in its own contract; its attachment shapes are the dispatch ones."""
+    """send_project_message lives in its own contract; its attachment shapes are the dispatch ones.
+
+    Its attachments description is the one full definition; the dispatch
+    reference only points to it (tests/tasks_pkg/test_lead_schema_single_definitions.py).
+    """
     from lib.conversations.project_messages import CONTRACT as messages
     from lib.project_dispatch.repository import CONTRACT as dispatch
     from lib.tools.coordinator import COORDINATOR_TOOLS
     send = next(tool for tool in messages['tools'] if tool['function']['name'] == 'send_project_message')
-    assert send['function']['parameters']['properties']['attachments'] == dispatch['$defs']['leadAttachmentReferences']
+    send_attachments = dict(send['function']['parameters']['properties']['attachments'])
+    dispatch_references = dict(dispatch['$defs']['leadAttachmentReferences'])
+    assert 'send_project_message' in dispatch_references.pop('description')
+    assert 'through the shared attachment pipeline' in send_attachments.pop('description')
+    assert send_attachments == dispatch_references
     assert messages['$defs']['attachment'] == dispatch['$defs']['leadAttachment']
     tools = {tool['function']['name']: tool['function']['parameters']['properties'] for tool in COORDINATOR_TOOLS}
     for name in ('delegate_project_work', 'control_conversation'):

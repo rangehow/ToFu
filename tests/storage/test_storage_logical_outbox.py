@@ -37,6 +37,7 @@ from lib.storage_authority_sql import logical_outbox
 from lib.storage_authority_sql.server import create_server
 
 
+pytest_plugins = ('tests.support.postgres_cluster',)
 pytestmark = pytest.mark.unit
 _TOKEN = 'logical-outbox-test-token-' * 2
 
@@ -192,6 +193,76 @@ def test_schema_38_expands_to_transactional_outbox_without_row_rewrite(tmp_path)
         'encryption_key_id', 'payload_ciphertext', 'record_bytes',
     } <= columns
     assert int(version) == SCHEMA_VERSION
+
+
+@pytest.mark.parametrize('engine', ['sqlite', 'postgres'])
+def test_archive_prune_captures_only_committed_utf8_ordered_delete(tmp_path, request, engine):
+    from lib.storage_authority_sql.adapters.postgres import PostgresBackend
+    from lib.storage_authority_sql.operations_pkg._archives import (
+        _archive_create, _archive_list, _archive_prune,
+    )
+    from lib.storage_authority_sql.operations_pkg._conversations import _conversation_create
+
+    config = _config(tmp_path)
+    if engine == 'postgres':
+        config = replace(config, backend=engine, postgres_dsn=request.getfixturevalue('postgres_cluster'))
+    backend = (PostgresBackend if engine == 'postgres' else SQLiteBackend)(config)
+    pipeline = LogicalOutboxPipeline(backend, replace(policy_from_config(config, backend), publisher_enabled=False))
+    scope = {'conversation_id': 'prune-outbox', 'user_id': 41}
+
+    def command(callback):
+        return backend.command('compaction_archive.prune', 'a' * 64, None, 'user',
+                               callback, time.monotonic() + 10, receipt_required=False)
+
+    def read_state(session):
+        return ([row['id'] for row in _archive_list(session, scope)['archives']], _fetch_pending(session, 3))
+
+    def prune(session, *, rollback=False):
+        response, size = pipeline.execute_and_capture(
+            session, lambda recorder: _archive_prune(recorder, scope | {'keep': 1}),
+            operation='compaction_archive.prune', request_id='prune', request_digest='a' * 64,
+            command_id='prune', payload=scope | {'keep': 1},
+        )
+        if rollback:
+            assert response == {'deleted': 1} and size > 0
+            assert len(_fetch_pending(session, 3)) == 1
+            raise StorageError('database_conflict', 'fixture rollback after capture')
+        return response, size
+
+    backend.start()
+    try:
+        pipeline.start()
+        assert pipeline.capture_enabled
+        command(lambda session: _conversation_create(session, scope | {'conv_id': scope['conversation_id']}))
+        for archive_id in ('Ā', 'è'):
+            command(lambda session: _archive_create(session, scope | {
+                'archive_id': archive_id, 'created_at_ms': 1, 'messages': [],
+            }))
+        with pytest.raises(StorageError, match='fixture rollback after capture'):
+            command(lambda session: prune(session, rollback=True))
+        assert backend.query('test.prune-state', read_state, time.monotonic() + 10) == (['è', 'Ā'], [])
+
+        response, size = command(prune)
+        assert response == {'deleted': 1} and size > 0
+        ids, records = backend.query('test.prune-state', read_state, time.monotonic() + 10)
+        assert ids == ['Ā']
+        record, = records
+        assert (record.sequence, record.operation, record.owner_user_id, record.record_bytes) == (
+            1, 'compaction_archive.prune', 41, size,
+        )
+        pipeline._sink = LogicalCommitShadow(config.logical_shadow_dir, stream_id=pipeline.status()['stream_id'])
+        pipeline._publish(record)
+        clear = decode_logical_payload(pipeline._sink.read_records()[0])
+        assert clear['response'] == {'deleted': 1}
+        deletes = [mutation for mutation in clear['mutations'] if mutation['sql'].startswith('DELETE')]
+        delete, = deletes
+        assert delete['sql'].startswith('DELETE FROM storage_compaction_archives')
+        assert delete['params'] == ['è', scope['conversation_id'], 41, ''] and delete['rowcount'] == 1
+        assert all('tofu_utf8_bytes' not in mutation['sql'] and 'convert_to' not in mutation['sql']
+                   for mutation in clear['mutations'])
+    finally:
+        pipeline.close()
+        backend.close()
 
 
 def test_rpc_command_and_receipt_share_one_logical_event(tmp_path, monkeypatch):

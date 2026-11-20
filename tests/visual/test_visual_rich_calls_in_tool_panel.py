@@ -400,10 +400,6 @@ def test_questions_and_rich_bodies_read_as_calls_of_the_tool_panel(frontend_visu
       const choice = {interactionId: 'g-choice', question: 'Which scope should the redesign cover?',
         options: ['Frontend only', 'Frontend + defaults'], descriptions: ['Visual only', 'Also schema'],
         state: 'pending'};
-      // A free-text question mounts the same native answer control as a choice
-      // (one ask_human answer control, docs/FRONTEND_ARCHITECTURE.md 2026-11-16).
-      const interactions = {'g-choice': choice, 'g-free': {interactionId: 'g-free', mode: 'free_text',
-        question: 'Which release should the notes cover?', options: [], state: 'pending'}};
       mountRounds([
         fixtureCall('read', 'read_files', 1),
         fixtureCall('ask', 'ask_human', 2, {status: 'awaiting_human', guidanceId: 'g-free',
@@ -424,23 +420,22 @@ def test_questions_and_rich_bodies_read_as_calls_of_the_tool_panel(frontend_visu
         cmd: () => fixtureRow('run_command'),
       }, {
         // The production choice port shape; nothing is submitted here.
-        choiceInteractions: () => ({load: async id => interactions[id],
+        choiceInteractions: () => ({load: async () => choice,
           submit: async () => { throw new Error('not submitted in this fixture'); }, commandId: () => 'command'}),
       });
       const results = document.querySelector('.ptool-results-block');
       results.classList.add('expanded');
       results.querySelector('.ptool-results-header').setAttribute('aria-expanded', 'true');
     }""")
-    frame.wait_for_function("""() => [['ask', 'Which release'], ['choose', 'Frontend only']].every(([id, text]) =>
-      document.querySelector(`[data-block-id="tool:${id}"][data-renderer-mode="native-choice"] .rich-block input`)
-        && document.querySelector(`[data-block-id="tool:${id}"] .rich-block`).textContent.includes(text))""")
+    frame.wait_for_function("""() => document.querySelector('[data-renderer-mode="native-choice"] .rich-block')
+      ?.textContent.includes('Frontend only')""")
     geometry = frame.evaluate(r"""() => {
       const blockOf = id => document.querySelector(`.conversation-block[data-block-id="tool:${id}"]`);
       const marker = node => getComputedStyle(node, '::before').content;
       const visible = node => getComputedStyle(node).display !== 'none' && node.getBoundingClientRect().width > 0;
       const ask = blockOf('ask'), choose = blockOf('choose'), search = blockOf('search');
-      const header = ask.querySelector(':scope > .conversation-tool-summary');
-      const body = ask.querySelector(':scope > .rich-response');
+      const card = ask.querySelector('.hg-card');
+      const header = card.querySelector(':scope > .hg-header');
       const summary = choose.querySelector(':scope > .conversation-tool-summary');
       const rich = choose.querySelector(':scope > .rich-response');
       const results = search.querySelector('.ptool-results-block');
@@ -456,11 +451,10 @@ def test_questions_and_rich_bodies_read_as_calls_of_the_tool_panel(frontend_visu
       });
       return {
         card: panelCard(), loose,
-        ask: {block: panelBlock(ask), sheets: [...body.querySelectorAll('.rich-block')].map(panelSheet),
-          marker: marker(header),
-          title: panelRect(header.querySelector(':scope > .ptool-text')),
-          badge: panelRect(header.querySelector(':scope > .ptool-badge')),
-          body: [body].filter(visible).map(panelRect)},
+        ask: {block: panelBlock(ask), sheet: panelSheet(card), marker: marker(header),
+          title: panelRect(header.querySelector(':scope > .hg-title')),
+          badge: panelRect(header.querySelector(':scope > .hg-badge')),
+          body: [...card.children].filter(node => node !== header && visible(node)).map(panelRect)},
         choose: {block: panelBlock(choose), marker: marker(summary),
           title: panelRect(summary.querySelector(':scope > .ptool-text')), rich: panelRect(rich),
           sheets: [...rich.querySelectorAll('.rich-block')].map(panelSheet)},
@@ -489,8 +483,7 @@ def test_questions_and_rich_bodies_read_as_calls_of_the_tool_panel(frontend_visu
     # A question is one call: no sheet, a `?` marker in the glyph column, the
     # waiting badge on the rows' outcome column, the body from the title's
     # edge to the card's side.
-    for sheet in ask['sheets']:
-        assert (sheet['border'], sheet['background'], sheet['radius']) == (['0px'] * 4, 'rgba(0, 0, 0, 0)', '0px')
+    assert ask['sheet'] == NO_SHEET
     assert ask['marker'].startswith('"?"')
     assert ask['title']['left'] == pytest.approx(text_edge, abs=0.5)
     assert ask['badge']['right'] == pytest.approx(right - card['endLane'], abs=0.5)

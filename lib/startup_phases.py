@@ -26,8 +26,8 @@ STARTUP_PHASES: tuple[StartupPhase, ...] = (
     StartupPhase(1, 'frontend_assets', 'Frontend assets'),
     StartupPhase(2, 'storage_boundary', 'Exclusive storage boundary'),
     StartupPhase(3, 'storage_authority_sql', 'Storage sidecar'),
-    StartupPhase(4, 'storage_recovery', 'Storage recovery'),
-    StartupPhase(5, 'model_routing', 'Model-routing v2 authority'),
+    StartupPhase(4, 'model_routing', 'Model-routing v2 authority'),
+    StartupPhase(5, 'storage_recovery', 'Storage recovery'),
     StartupPhase(6, 'critical_imports', 'Critical imports'),
     StartupPhase(7, 'background_workers', 'Background workers'),
     StartupPhase(8, 'optional_services', 'Optional services'),
@@ -35,6 +35,12 @@ STARTUP_PHASES: tuple[StartupPhase, ...] = (
 )
 
 REQUIRED_PHASE_COUNT = len(STARTUP_PHASES)
+
+# Appended by the boot projection after readiness while the resident execution
+# host starts. It has no ordinal here, but it obeys the same key -> browser
+# i18n label contract (``update.phase.<key>``) as every startup phase.
+EXECUTION_SERVICE_PHASE_KEY = 'execution_service'
+EXECUTION_SERVICE_PHASE_LABEL = 'Execution service'
 
 _PHASE_BY_INDEX = {phase.index: phase for phase in STARTUP_PHASES}
 
@@ -48,6 +54,8 @@ def phase_label(index: int) -> str:
 
 
 __all__ = [
+    'EXECUTION_SERVICE_PHASE_KEY',
+    'EXECUTION_SERVICE_PHASE_LABEL',
     'REQUIRED_PHASE_COUNT',
     'STARTUP_PHASES',
     'StartupPhase',

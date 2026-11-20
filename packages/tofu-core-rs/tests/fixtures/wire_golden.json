@@ -1,169 +1,843 @@
 {
  "generator": "packages/tofu-core-rs/scripts/gen_wire_golden.py",
- "model": "golden-model",
  "max_tokens": 4096,
  "temperature": 1.0,
- "base_url": "http://127.0.0.1:9/v1",
  "api_key": "sk-golden",
- "messages": [
+ "working_dir": "/",
+ "gateway_profiles": [
   {
-   "role": "system",
-   "content": "You are a test harness."
-  },
-  {
-   "role": "system",
-   "content": "Managed section.",
-   "_isMeta": true
-  },
-  {
-   "role": "user",
-   "content": [
-    {
-     "type": "text",
-     "text": "Run it "
+   "id": "catpaw",
+   "hosts": [
+    "mcli.internal.example.com"
+   ],
+   "provider_ids": [],
+   "traits": {
+    "anthropic_system_identity": {
+     "text": "You are Claude Code, Anthropic's official CLI for Claude.",
+     "accepted_prefix": "you are claude code"
     },
-    {
-     "type": "text",
-     "text": "   "
+    "working_directory_header": "X-Working-Dir"
+   }
+  },
+  {
+   "id": "friday",
+   "hosts": [
+    "your-llm-gateway.example.com"
+   ],
+   "provider_ids": [
+    "yourprovider",
+    "example-corp"
+   ],
+   "traits": {
+    "anthropic_claude_tool_name_budget_bytes": 448,
+    "claude_cache_multipliers": {
+     "cacheWriteMul": 1.25,
+     "cacheWrite1hMul": 2.0,
+     "cacheReadMul": 0.1
     },
-    {
-     "type": "text",
-     "text": "please ☃"
-    }
-   ]
+    "image_generation_api": "friday_async"
+   }
   },
   {
-   "role": "user",
-   "content": "<system-reminder>ambient</system-reminder>",
-   "_isMeta": true
-  },
-  {
-   "role": "assistant",
-   "content": "Running.",
-   "tool_calls": [
-    {
-     "id": "call_a",
-     "type": "function",
-     "function": {
-      "name": "run_command",
-      "arguments": "{\"command\": \"true\"}"
-     }
-    }
-   ]
-  },
-  {
-   "role": "tool",
-   "tool_call_id": "call_a",
-   "content": "$ true\n\n[exit code: 0]"
-  },
-  {
-   "role": "tool",
-   "tool_call_id": "call_zzz",
-   "content": "orphan"
-  },
-  {
-   "role": "assistant",
-   "content": "",
-   "tool_calls": [
-    {
-     "id": "call_b",
-     "type": "function",
-     "function": {
-      "name": "read_files",
-      "arguments": "{\"path\": \"f0.txt\"}"
-     }
-    }
-   ]
-  },
-  {
-   "role": "tool",
-   "tool_call_id": "call_b",
-   "content": "File: f0.txt (1 lines)\n   1\tnoop 0\n"
-  },
-  {
-   "role": "user",
-   "content": "A private progress event.",
-   "_isMeta": true
+   "id": "friday-keyword-filter",
+   "hosts": [
+    ".internal.example.com"
+   ],
+   "provider_ids": [
+    "example-corp*"
+   ],
+   "traits": {
+    "blocked_term_sanitize": true
+   }
   }
  ],
- "tools": [
-  {
-   "type": "function",
-   "function": {
-    "name": "run_command",
-    "description": "Run a shell command — bounded.",
-    "parameters": {
-     "type": "object",
-     "properties": {
-      "command": {
-       "type": "string"
-      }
-     },
-     "required": [
-      "command"
-     ]
-    }
-   }
-  },
-  {
-   "type": "function",
-   "function": {
-    "name": "send",
-    "description": "Send to one target.",
-    "parameters": {
-     "additionalProperties": false,
-     "oneOf": [
-      {
-       "required": [
-        "a"
-       ]
-      },
-      {
-       "required": [
-        "b"
-       ]
-      }
-     ],
-     "properties": {
-      "a": {
-       "type": "string"
-      },
-      "b": {
-       "type": "integer"
-      }
-     },
-     "type": "object"
-    }
-   }
-  },
-  {
-   "type": "function",
-   "decoded_result_schema": {
-    "type": "object",
-    "properties": {
-     "ok": {
-      "type": "boolean"
-     }
-    },
-    "description": "résultat"
+ "message_sets": {
+  "base": [
+   {
+    "role": "system",
+    "content": "You are a test harness."
    },
-   "function": {
-    "name": "read_files",
-    "description": "Read files.",
-    "parameters": {
+   {
+    "role": "system",
+    "content": "Managed section.",
+    "_isMeta": true
+   },
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "text",
+      "text": "Run it "
+     },
+     {
+      "type": "text",
+      "text": "   "
+     },
+     {
+      "type": "text",
+      "text": "please ☃"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "<system-reminder>ambient</system-reminder>",
+    "_isMeta": true
+   },
+   {
+    "role": "assistant",
+    "content": "Running.",
+    "tool_calls": [
+     {
+      "id": "call_a",
+      "type": "function",
+      "function": {
+       "name": "run_command",
+       "arguments": "{\"command\": \"true\"}"
+      }
+     }
+    ]
+   },
+   {
+    "role": "tool",
+    "tool_call_id": "call_a",
+    "content": "$ true\n\n[exit code: 0]"
+   },
+   {
+    "role": "tool",
+    "tool_call_id": "call_zzz",
+    "content": "orphan"
+   },
+   {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+     {
+      "id": "call_b",
+      "type": "function",
+      "function": {
+       "name": "read_files",
+       "arguments": "{\"path\": \"f0.txt\"}"
+      }
+     }
+    ]
+   },
+   {
+    "role": "tool",
+    "tool_call_id": "call_b",
+    "content": "File: f0.txt (1 lines)\n   1\tnoop 0\n"
+   },
+   {
+    "role": "user",
+    "content": "A private progress event.",
+    "_isMeta": true
+   }
+  ],
+  "loop": [
+   {
+    "role": "system",
+    "content": [
+     {
+      "type": "text",
+      "text": "Static prompt."
+     },
+     {
+      "type": "text",
+      "text": "Memory block."
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "Inspect the repo."
+   },
+   {
+    "role": "assistant",
+    "content": "Looking.",
+    "tool_calls": [
+     {
+      "id": "toolu_1",
+      "type": "function",
+      "function": {
+       "name": "run_command",
+       "arguments": "{\"command\": \"ls\"}"
+      }
+     }
+    ]
+   },
+   {
+    "role": "tool",
+    "tool_call_id": "toolu_1",
+    "content": "a\nb"
+   },
+   {
+    "role": "assistant",
+    "content": null,
+    "tool_calls": [
+     {
+      "id": "toolu_2",
+      "type": "function",
+      "function": {
+       "name": "read_files",
+       "arguments": "{\"path\": \"a\"}"
+      }
+     },
+     {
+      "id": "toolu_3",
+      "type": "function",
+      "function": {
+       "name": "read_files",
+       "arguments": "{\"path\": \"b\"}"
+      }
+     }
+    ]
+   },
+   {
+    "role": "tool",
+    "tool_call_id": "toolu_2",
+    "content": "A"
+   },
+   {
+    "role": "tool",
+    "tool_call_id": "toolu_3",
+    "content": [
+     {
+      "type": "text",
+      "text": "B"
+     }
+    ]
+   },
+   {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+     {
+      "id": "toolu_4",
+      "type": "function",
+      "function": {
+       "name": "run_command",
+       "arguments": "{\"command\": \"pwd\"}"
+      }
+     }
+    ]
+   },
+   {
+    "role": "tool",
+    "tool_call_id": "toolu_4",
+    "content": "/w"
+   }
+  ],
+  "prefill": [
+   {
+    "role": "system",
+    "content": "Be brief."
+   },
+   {
+    "role": "user",
+    "content": "Start."
+   },
+   {
+    "role": "assistant",
+    "content": "Partial answer so far"
+   }
+  ]
+ },
+ "tool_sets": {
+  "base": [
+   {
+    "type": "function",
+    "function": {
+     "name": "run_command",
+     "description": "Run a shell command — bounded.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "command": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "command"
+      ]
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "send",
+     "description": "Send to one target.",
+     "parameters": {
+      "additionalProperties": false,
+      "oneOf": [
+       {
+        "required": [
+         "a"
+        ]
+       },
+       {
+        "required": [
+         "b"
+        ]
+       }
+      ],
+      "properties": {
+       "a": {
+        "type": "string"
+       },
+       "b": {
+        "type": "integer"
+       }
+      },
+      "type": "object"
+     }
+    }
+   },
+   {
+    "type": "function",
+    "decoded_result_schema": {
      "type": "object",
      "properties": {
-      "path": {
-       "type": "string"
+      "ok": {
+       "type": "boolean"
+      }
+     },
+     "description": "résultat"
+    },
+    "function": {
+     "name": "read_files",
+     "description": "Read files.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
       }
      }
     }
    }
-  }
- ],
+  ],
+  "budget": [
+   {
+    "type": "function",
+    "function": {
+     "name": "search_tools",
+     "description": "search_tools tool.",
+     "parameters": {
+      "type": "object",
+      "properties": {}
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "execute_tools",
+     "description": "execute_tools tool.",
+     "parameters": {
+      "type": "object",
+      "properties": {}
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "poll",
+     "description": "poll tool.",
+     "parameters": {
+      "type": "object",
+      "properties": {}
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "browser_navigate_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "description": "browser_navigate_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx tool.",
+     "parameters": {
+      "type": "object",
+      "properties": {}
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "browser_screenshot_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "description": "browser_screenshot_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx tool.",
+     "parameters": {
+      "type": "object",
+      "properties": {}
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "browser_read_page_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "description": "browser_read_page_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx tool.",
+     "parameters": {
+      "type": "object",
+      "properties": {}
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "desktop_click_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "description": "desktop_click_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx tool.",
+     "parameters": {
+      "type": "object",
+      "properties": {}
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "desktop_type_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "description": "desktop_type_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx tool.",
+     "parameters": {
+      "type": "object",
+      "properties": {}
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "knowledge_search_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "description": "knowledge_search_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx tool.",
+     "parameters": {
+      "type": "object",
+      "properties": {}
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "memory_lookup_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "description": "memory_lookup_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx tool.",
+     "parameters": {
+      "type": "object",
+      "properties": {}
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "paper_outline_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "description": "paper_outline_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx tool.",
+     "parameters": {
+      "type": "object",
+      "properties": {}
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "slides_render_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "description": "slides_render_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx tool.",
+     "parameters": {
+      "type": "object",
+      "properties": {}
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "video_frames_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "description": "video_frames_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx tool.",
+     "parameters": {
+      "type": "object",
+      "properties": {}
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "run_command",
+     "description": "Run a shell command — bounded.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "command": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "command"
+      ]
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "send",
+     "description": "Send to one target.",
+     "parameters": {
+      "additionalProperties": false,
+      "oneOf": [
+       {
+        "required": [
+         "a"
+        ]
+       },
+       {
+        "required": [
+         "b"
+        ]
+       }
+      ],
+      "properties": {
+       "a": {
+        "type": "string"
+       },
+       "b": {
+        "type": "integer"
+       }
+      },
+      "type": "object"
+     }
+    }
+   },
+   {
+    "type": "function",
+    "decoded_result_schema": {
+     "type": "object",
+     "properties": {
+      "ok": {
+       "type": "boolean"
+      }
+     },
+     "description": "résultat"
+    },
+    "function": {
+     "name": "read_files",
+     "description": "Read files.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   }
+  ],
+  "undiscoverable": [
+   {
+    "type": "function",
+    "function": {
+     "name": "poll",
+     "description": "poll tool.",
+     "parameters": {
+      "type": "object",
+      "properties": {}
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "browser_navigate_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "description": "browser_navigate_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx tool.",
+     "parameters": {
+      "type": "object",
+      "properties": {}
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "browser_screenshot_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "description": "browser_screenshot_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx tool.",
+     "parameters": {
+      "type": "object",
+      "properties": {}
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "browser_read_page_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "description": "browser_read_page_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx tool.",
+     "parameters": {
+      "type": "object",
+      "properties": {}
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "desktop_click_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "description": "desktop_click_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx tool.",
+     "parameters": {
+      "type": "object",
+      "properties": {}
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "desktop_type_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "description": "desktop_type_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx tool.",
+     "parameters": {
+      "type": "object",
+      "properties": {}
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "knowledge_search_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "description": "knowledge_search_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx tool.",
+     "parameters": {
+      "type": "object",
+      "properties": {}
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "memory_lookup_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "description": "memory_lookup_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx tool.",
+     "parameters": {
+      "type": "object",
+      "properties": {}
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "paper_outline_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "description": "paper_outline_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx tool.",
+     "parameters": {
+      "type": "object",
+      "properties": {}
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "slides_render_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "description": "slides_render_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx tool.",
+     "parameters": {
+      "type": "object",
+      "properties": {}
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "video_frames_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "description": "video_frames_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx tool.",
+     "parameters": {
+      "type": "object",
+      "properties": {}
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "run_command",
+     "description": "Run a shell command — bounded.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "command": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "command"
+      ]
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "send",
+     "description": "Send to one target.",
+     "parameters": {
+      "additionalProperties": false,
+      "oneOf": [
+       {
+        "required": [
+         "a"
+        ]
+       },
+       {
+        "required": [
+         "b"
+        ]
+       }
+      ],
+      "properties": {
+       "a": {
+        "type": "string"
+       },
+       "b": {
+        "type": "integer"
+       }
+      },
+      "type": "object"
+     }
+    }
+   },
+   {
+    "type": "function",
+    "decoded_result_schema": {
+     "type": "object",
+     "properties": {
+      "ok": {
+       "type": "boolean"
+      }
+     },
+     "description": "résultat"
+    },
+    "function": {
+     "name": "read_files",
+     "description": "Read files.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   }
+  ],
+  "kimi": [
+   {
+    "type": "function",
+    "function": {
+     "name": "run_command",
+     "description": "Run a shell command — bounded.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "command": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "command"
+      ]
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "shape",
+     "description": "MFJS shapes.",
+     "parameters": {
+      "type": "object",
+      "title": "Shape",
+      "required": [
+       "mode",
+       "extra"
+      ],
+      "properties": {
+       "mode": {
+        "type": "string",
+        "enum": [
+         "a",
+         "b"
+        ],
+        "examples": [
+         "a"
+        ]
+       },
+       "mixed": {
+        "enum": [
+         "x",
+         1
+        ]
+       },
+       "pair": {
+        "type": "array",
+        "prefixItems": [
+         {
+          "type": "string"
+         }
+        ],
+        "items": {
+         "type": "integer"
+        }
+       },
+       "map": {
+        "type": "object",
+        "patternProperties": {
+         "^x": {
+          "type": "string"
+         }
+        },
+        "additionalProperties": false
+       },
+       "list": {
+        "type": "array",
+        "items": {
+         "type": "string",
+         "minLength": 1
+        },
+        "default": []
+       },
+       "choice": {
+        "anyOf": [
+         {
+          "type": "string"
+         },
+         {
+          "type": "integer",
+          "format": "int32"
+         }
+        ]
+       },
+       "flag": true
+      }
+     }
+    }
+   }
+  ],
+  "none": null
+ },
  "cases": [
   {
+   "name": "generic-openai",
    "protocol": "openai",
+   "model": "golden-model",
+   "base_url": "http://127.0.0.1:9/v1",
+   "messages": "base",
+   "tools": "base",
+   "inference_profile": null,
+   "extended_cache_ttl": false,
+   "lineage": "",
    "url": "http://127.0.0.1:9/v1/chat/completions",
    "headers": [
     [
@@ -178,7 +852,15 @@
    "payload_b64": "eyJtb2RlbCI6ImdvbGRlbi1tb2RlbCIsIm1lc3NhZ2VzIjpbeyJyb2xlIjoic3lzdGVtIiwiY29udGVudCI6IllvdSBhcmUgYSB0ZXN0IGhhcm5lc3MuIn0seyJyb2xlIjoic3lzdGVtIiwiY29udGVudCI6Ik1hbmFnZWQgc2VjdGlvbi4ifSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6IlJ1biBpdCAgICBwbGVhc2Ug4piDPHN5c3RlbS1yZW1pbmRlcj5hbWJpZW50PC9zeXN0ZW0tcmVtaW5kZXI+In0seyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6IlJ1bm5pbmcuIiwidG9vbF9jYWxscyI6W3siaWQiOiJjYWxsX2EiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJhcmd1bWVudHMiOiJ7XCJjb21tYW5kXCI6IFwidHJ1ZVwifSJ9fV19LHsicm9sZSI6InRvb2wiLCJjb250ZW50IjoiJCB0cnVlXG5cbltleGl0IGNvZGU6IDBdIiwidG9vbF9jYWxsX2lkIjoiY2FsbF9hIn0seyJyb2xlIjoiYXNzaXN0YW50IiwidG9vbF9jYWxscyI6W3siaWQiOiJjYWxsX2IiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImFyZ3VtZW50cyI6IntcInBhdGhcIjogXCJmMC50eHRcIn0ifX1dfSx7InJvbGUiOiJ0b29sIiwiY29udGVudCI6IkZpbGU6IGYwLnR4dCAoMSBsaW5lcylcbiAgIDFcdG5vb3AgMFxuIiwidG9vbF9jYWxsX2lkIjoiY2FsbF9iIn0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOiJBIHByaXZhdGUgcHJvZ3Jlc3MgZXZlbnQuIn1dLCJtYXhfdG9rZW5zIjo0MDk2LCJzdHJlYW0iOnRydWUsInRvb2xzIjpbeyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJkZXNjcmlwdGlvbiI6IlJ1biBhIHNoZWxsIGNvbW1hbmQg4oCUIGJvdW5kZWQuIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJjb21tYW5kIjp7InR5cGUiOiJzdHJpbmcifX0sInJlcXVpcmVkIjpbImNvbW1hbmQiXX19fSx7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJzZW5kIiwiZGVzY3JpcHRpb24iOiJTZW5kIHRvIG9uZSB0YXJnZXQuIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImEiOnsidHlwZSI6InN0cmluZyJ9LCJiIjp7InR5cGUiOiJpbnRlZ2VyIn19fX19LHsidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJlYWRfZmlsZXMiLCJkZXNjcmlwdGlvbiI6IlJlYWQgZmlsZXMuXG5TdWNjZXNzZnVsIGRlY29kZWQgSlNPTiB2YWx1ZSAocHJvZHVjZXIgZGVjbGFyYXRpb247IGNvdmVyYWdlL2ZyZXNobmVzcyB1bmtub3duKToge1wiZGVzY3JpcHRpb25cIjpcInJcXHUwMGU5c3VsdGF0XCIsXCJwcm9wZXJ0aWVzXCI6e1wib2tcIjp7XCJ0eXBlXCI6XCJib29sZWFuXCJ9fSxcInR5cGVcIjpcIm9iamVjdFwifSIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsicGF0aCI6eyJ0eXBlIjoic3RyaW5nIn19fX19XSwidGVtcGVyYXR1cmUiOjEuMH0="
   },
   {
+   "name": "generic-anthropic",
    "protocol": "anthropic",
+   "model": "golden-model",
+   "base_url": "http://127.0.0.1:9/v1",
+   "messages": "base",
+   "tools": "base",
+   "inference_profile": null,
+   "extended_cache_ttl": false,
+   "lineage": "",
    "url": "http://127.0.0.1:9/v1/messages",
    "headers": [
     [
@@ -201,7 +883,15 @@
    "payload_b64": "eyJtb2RlbCI6ImdvbGRlbi1tb2RlbCIsIm1heF90b2tlbnMiOjQwOTYsInN0cmVhbSI6dHJ1ZSwidGVtcGVyYXR1cmUiOjEuMCwidG9vbHMiOlt7Im5hbWUiOiJydW5fY29tbWFuZCIsImRlc2NyaXB0aW9uIjoiUnVuIGEgc2hlbGwgY29tbWFuZCDigJQgYm91bmRlZC4iLCJpbnB1dF9zY2hlbWEiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsiY29tbWFuZCI6eyJ0eXBlIjoic3RyaW5nIn19LCJyZXF1aXJlZCI6WyJjb21tYW5kIl19fSx7Im5hbWUiOiJzZW5kIiwiZGVzY3JpcHRpb24iOiJTZW5kIHRvIG9uZSB0YXJnZXQuIiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInByb3BlcnRpZXMiOnsiYSI6eyJ0eXBlIjoic3RyaW5nIn0sImIiOnsidHlwZSI6ImludGVnZXIifX19fSx7Im5hbWUiOiJyZWFkX2ZpbGVzIiwiZGVzY3JpcHRpb24iOiJSZWFkIGZpbGVzLlxuU3VjY2Vzc2Z1bCBkZWNvZGVkIEpTT04gdmFsdWUgKHByb2R1Y2VyIGRlY2xhcmF0aW9uOyBjb3ZlcmFnZS9mcmVzaG5lc3MgdW5rbm93bik6IHtcImRlc2NyaXB0aW9uXCI6XCJyXFx1MDBlOXN1bHRhdFwiLFwicHJvcGVydGllc1wiOntcIm9rXCI6e1widHlwZVwiOlwiYm9vbGVhblwifX0sXCJ0eXBlXCI6XCJvYmplY3RcIn0iLCJpbnB1dF9zY2hlbWEiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsicGF0aCI6eyJ0eXBlIjoic3RyaW5nIn19fX1dLCJzeXN0ZW0iOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IllvdSBhcmUgYSB0ZXN0IGhhcm5lc3MuIn0seyJ0eXBlIjoidGV4dCIsInRleHQiOiJNYW5hZ2VkIHNlY3Rpb24uIn1dLCJtZXNzYWdlcyI6W3sicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJSdW4gaXQgICAgIn0seyJ0eXBlIjoidGV4dCIsInRleHQiOiJwbGVhc2Ug4piDIn0seyJ0eXBlIjoidGV4dCIsInRleHQiOiI8c3lzdGVtLXJlbWluZGVyPmFtYmllbnQ8L3N5c3RlbS1yZW1pbmRlcj4ifV19LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IlJ1bm5pbmcuIn0seyJ0eXBlIjoidG9vbF91c2UiLCJpZCI6ImNhbGxfYSIsIm5hbWUiOiJydW5fY29tbWFuZCIsImlucHV0Ijp7ImNvbW1hbmQiOiJ0cnVlIn19XX0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJ0b29sX3Jlc3VsdCIsInRvb2xfdXNlX2lkIjoiY2FsbF9hIiwiY29udGVudCI6IiQgdHJ1ZVxuXG5bZXhpdCBjb2RlOiAwXSJ9XX0seyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfdXNlIiwiaWQiOiJjYWxsX2IiLCJuYW1lIjoicmVhZF9maWxlcyIsImlucHV0Ijp7InBhdGgiOiJmMC50eHQifX1dfSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfcmVzdWx0IiwidG9vbF91c2VfaWQiOiJjYWxsX2IiLCJjb250ZW50IjoiRmlsZTogZjAudHh0ICgxIGxpbmVzKVxuICAgMVx0bm9vcCAwXG4ifV19LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJBIHByaXZhdGUgcHJvZ3Jlc3MgZXZlbnQuIn1dfV19"
   },
   {
+   "name": "generic-responses",
    "protocol": "responses",
+   "model": "golden-model",
+   "base_url": "http://127.0.0.1:9/v1",
+   "messages": "base",
+   "tools": "base",
+   "inference_profile": null,
+   "extended_cache_ttl": false,
+   "lineage": "",
    "url": "http://127.0.0.1:9/v1/responses",
    "headers": [
     [
@@ -214,6 +904,2102 @@
     ]
    ],
    "payload_b64": "eyJtb2RlbCI6ImdvbGRlbi1tb2RlbCIsInN0b3JlIjpmYWxzZSwic3RyZWFtIjp0cnVlLCJwYXJhbGxlbF90b29sX2NhbGxzIjp0cnVlLCJ0ZW1wZXJhdHVyZSI6MS4wLCJtYXhfb3V0cHV0X3Rva2VucyI6NDA5NiwiaW5wdXQiOlt7InR5cGUiOiJtZXNzYWdlIiwicm9sZSI6ImRldmVsb3BlciIsImNvbnRlbnQiOlt7InR5cGUiOiJpbnB1dF90ZXh0IiwidGV4dCI6IllvdSBhcmUgYSB0ZXN0IGhhcm5lc3MuIn1dfSx7InR5cGUiOiJtZXNzYWdlIiwicm9sZSI6ImRldmVsb3BlciIsImNvbnRlbnQiOlt7InR5cGUiOiJpbnB1dF90ZXh0IiwidGV4dCI6Ik1hbmFnZWQgc2VjdGlvbi4ifV19LHsidHlwZSI6Im1lc3NhZ2UiLCJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJpbnB1dF90ZXh0IiwidGV4dCI6IlJ1biBpdCAgICAifSx7InR5cGUiOiJpbnB1dF90ZXh0IiwidGV4dCI6InBsZWFzZSDimIMifSx7InR5cGUiOiJpbnB1dF90ZXh0IiwidGV4dCI6IjxzeXN0ZW0tcmVtaW5kZXI+YW1iaWVudDwvc3lzdGVtLXJlbWluZGVyPiJ9XX0seyJ0eXBlIjoibWVzc2FnZSIsInJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbeyJ0eXBlIjoib3V0cHV0X3RleHQiLCJ0ZXh0IjoiUnVubmluZy4ifV19LHsidHlwZSI6ImZ1bmN0aW9uX2NhbGwiLCJjYWxsX2lkIjoiY2FsbF9hIiwibmFtZSI6InJ1bl9jb21tYW5kIiwiYXJndW1lbnRzIjoie1wiY29tbWFuZFwiOiBcInRydWVcIn0ifSx7InR5cGUiOiJmdW5jdGlvbl9jYWxsX291dHB1dCIsImNhbGxfaWQiOiJjYWxsX2EiLCJvdXRwdXQiOiIkIHRydWVcblxuW2V4aXQgY29kZTogMF0ifSx7InR5cGUiOiJmdW5jdGlvbl9jYWxsIiwiY2FsbF9pZCI6ImNhbGxfYiIsIm5hbWUiOiJyZWFkX2ZpbGVzIiwiYXJndW1lbnRzIjoie1wicGF0aFwiOiBcImYwLnR4dFwifSJ9LHsidHlwZSI6ImZ1bmN0aW9uX2NhbGxfb3V0cHV0IiwiY2FsbF9pZCI6ImNhbGxfYiIsIm91dHB1dCI6IkZpbGU6IGYwLnR4dCAoMSBsaW5lcylcbiAgIDFcdG5vb3AgMFxuIn0seyJ0eXBlIjoibWVzc2FnZSIsInJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6ImlucHV0X3RleHQiLCJ0ZXh0IjoiQSBwcml2YXRlIHByb2dyZXNzIGV2ZW50LiJ9XX1dLCJ0b29scyI6W3sidHlwZSI6ImZ1bmN0aW9uIiwibmFtZSI6InJ1bl9jb21tYW5kIiwiZGVzY3JpcHRpb24iOiJSdW4gYSBzaGVsbCBjb21tYW5kIOKAlCBib3VuZGVkLiIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsiY29tbWFuZCI6eyJ0eXBlIjoic3RyaW5nIn19LCJyZXF1aXJlZCI6WyJjb21tYW5kIl19LCJzdHJpY3QiOmZhbHNlfSx7InR5cGUiOiJmdW5jdGlvbiIsIm5hbWUiOiJzZW5kIiwiZGVzY3JpcHRpb24iOiJTZW5kIHRvIG9uZSB0YXJnZXQuIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImEiOnsidHlwZSI6InN0cmluZyJ9LCJiIjp7InR5cGUiOiJpbnRlZ2VyIn19fSwic3RyaWN0IjpmYWxzZX0seyJ0eXBlIjoiZnVuY3Rpb24iLCJuYW1lIjoicmVhZF9maWxlcyIsImRlc2NyaXB0aW9uIjoiUmVhZCBmaWxlcy5cblN1Y2Nlc3NmdWwgZGVjb2RlZCBKU09OIHZhbHVlIChwcm9kdWNlciBkZWNsYXJhdGlvbjsgY292ZXJhZ2UvZnJlc2huZXNzIHVua25vd24pOiB7XCJkZXNjcmlwdGlvblwiOlwiclxcdTAwZTlzdWx0YXRcIixcInByb3BlcnRpZXNcIjp7XCJva1wiOntcInR5cGVcIjpcImJvb2xlYW5cIn19LFwidHlwZVwiOlwib2JqZWN0XCJ9IiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJwYXRoIjp7InR5cGUiOiJzdHJpbmcifX19LCJzdHJpY3QiOmZhbHNlfV19"
+  },
+  {
+   "name": "friday-claude-anthropic",
+   "protocol": "anthropic",
+   "model": "aws.claude-opus-4.8",
+   "base_url": "https://api.openai.com/v1/anthropic",
+   "messages": "base",
+   "tools": "base",
+   "inference_profile": {
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "conv-1",
+   "url": "https://api.openai.com/v1/anthropic/v1/messages",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "anthropic-version",
+     "2023-06-01"
+    ],
+    [
+     "x-api-key",
+     "sk-golden"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ],
+    [
+     "Mt-Session-Id",
+     "8a422c98-5425-54c3-9b87-470399a09c76"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImF3cy5jbGF1ZGUtb3B1cy00LjgiLCJtYXhfdG9rZW5zIjo0MDk2LCJzdHJlYW0iOnRydWUsInRlbXBlcmF0dXJlIjoxLjAsInRvb2xzIjpbeyJuYW1lIjoicnVuX2NvbW1hbmQiLCJkZXNjcmlwdGlvbiI6IlJ1biBhIHNoZWxsIGNvbW1hbmQg4oCUIGJvdW5kZWQuIiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImNvbW1hbmQiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsiY29tbWFuZCJdfX0seyJuYW1lIjoic2VuZCIsImRlc2NyaXB0aW9uIjoiU2VuZCB0byBvbmUgdGFyZ2V0LiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImEiOnsidHlwZSI6InN0cmluZyJ9LCJiIjp7InR5cGUiOiJpbnRlZ2VyIn19fX0seyJuYW1lIjoicmVhZF9maWxlcyIsImRlc2NyaXB0aW9uIjoiUmVhZCBmaWxlcy5cblN1Y2Nlc3NmdWwgZGVjb2RlZCBKU09OIHZhbHVlIChwcm9kdWNlciBkZWNsYXJhdGlvbjsgY292ZXJhZ2UvZnJlc2huZXNzIHVua25vd24pOiB7XCJkZXNjcmlwdGlvblwiOlwiclxcdTAwZTlzdWx0YXRcIixcInByb3BlcnRpZXNcIjp7XCJva1wiOntcInR5cGVcIjpcImJvb2xlYW5cIn19LFwidHlwZVwiOlwib2JqZWN0XCJ9IiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InBhdGgiOnsidHlwZSI6InN0cmluZyJ9fX0sImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCJ9fV0sInN5c3RlbSI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiWW91IGFyZSBhIHRlc3QgaGFybmVzcy4iLCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX0seyJ0eXBlIjoidGV4dCIsInRleHQiOiJNYW5hZ2VkIHNlY3Rpb24uIiwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19XSwibWVzc2FnZXMiOlt7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiUnVuIGl0ICAgICJ9LHsidHlwZSI6InRleHQiLCJ0ZXh0IjoicGxlYXNlIOKYgyJ9LHsidHlwZSI6InRleHQiLCJ0ZXh0IjoiPHN5c3RlbS1yZW1pbmRlcj5hbWJpZW50PC9zeXN0ZW0tcmVtaW5kZXI+In1dfSx7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJSdW5uaW5nLiJ9LHsidHlwZSI6InRvb2xfdXNlIiwiaWQiOiJjYWxsX2EiLCJuYW1lIjoicnVuX2NvbW1hbmQiLCJpbnB1dCI6eyJjb21tYW5kIjoidHJ1ZSJ9fV19LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF9yZXN1bHQiLCJ0b29sX3VzZV9pZCI6ImNhbGxfYSIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IiQgdHJ1ZVxuXG5bZXhpdCBjb2RlOiAwXSJ9XX1dfSx7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF91c2UiLCJpZCI6ImNhbGxfYiIsIm5hbWUiOiJyZWFkX2ZpbGVzIiwiaW5wdXQiOnsicGF0aCI6ImYwLnR4dCJ9fV19LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF9yZXN1bHQiLCJ0b29sX3VzZV9pZCI6ImNhbGxfYiIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IkZpbGU6IGYwLnR4dCAoMSBsaW5lcylcbiAgIDFcdG5vb3AgMFxuIn1dfV19LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJBIHByaXZhdGUgcHJvZ3Jlc3MgZXZlbnQuIiwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19XX1dfQ=="
+  },
+  {
+   "name": "friday-claude-anthropic-loop",
+   "protocol": "anthropic",
+   "model": "aws.claude-opus-4.8",
+   "base_url": "https://api.openai.com/v1/anthropic",
+   "messages": "loop",
+   "tools": "base",
+   "inference_profile": {
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "conv-1",
+   "url": "https://api.openai.com/v1/anthropic/v1/messages",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "anthropic-version",
+     "2023-06-01"
+    ],
+    [
+     "x-api-key",
+     "sk-golden"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ],
+    [
+     "Mt-Session-Id",
+     "8a422c98-5425-54c3-9b87-470399a09c76"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImF3cy5jbGF1ZGUtb3B1cy00LjgiLCJtYXhfdG9rZW5zIjo0MDk2LCJzdHJlYW0iOnRydWUsInRlbXBlcmF0dXJlIjoxLjAsInRvb2xzIjpbeyJuYW1lIjoicnVuX2NvbW1hbmQiLCJkZXNjcmlwdGlvbiI6IlJ1biBhIHNoZWxsIGNvbW1hbmQg4oCUIGJvdW5kZWQuIiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImNvbW1hbmQiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsiY29tbWFuZCJdfX0seyJuYW1lIjoic2VuZCIsImRlc2NyaXB0aW9uIjoiU2VuZCB0byBvbmUgdGFyZ2V0LiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImEiOnsidHlwZSI6InN0cmluZyJ9LCJiIjp7InR5cGUiOiJpbnRlZ2VyIn19fX0seyJuYW1lIjoicmVhZF9maWxlcyIsImRlc2NyaXB0aW9uIjoiUmVhZCBmaWxlcy5cblN1Y2Nlc3NmdWwgZGVjb2RlZCBKU09OIHZhbHVlIChwcm9kdWNlciBkZWNsYXJhdGlvbjsgY292ZXJhZ2UvZnJlc2huZXNzIHVua25vd24pOiB7XCJkZXNjcmlwdGlvblwiOlwiclxcdTAwZTlzdWx0YXRcIixcInByb3BlcnRpZXNcIjp7XCJva1wiOntcInR5cGVcIjpcImJvb2xlYW5cIn19LFwidHlwZVwiOlwib2JqZWN0XCJ9IiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InBhdGgiOnsidHlwZSI6InN0cmluZyJ9fX0sImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCJ9fV0sInN5c3RlbSI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiU3RhdGljIHByb21wdC4iLCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX0seyJ0eXBlIjoidGV4dCIsInRleHQiOiJNZW1vcnkgYmxvY2suIiwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19XSwibWVzc2FnZXMiOlt7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiSW5zcGVjdCB0aGUgcmVwby4ifV19LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6Ikxvb2tpbmcuIn0seyJ0eXBlIjoidG9vbF91c2UiLCJpZCI6InRvb2x1XzEiLCJuYW1lIjoicnVuX2NvbW1hbmQiLCJpbnB1dCI6eyJjb21tYW5kIjoibHMifX1dfSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfcmVzdWx0IiwidG9vbF91c2VfaWQiOiJ0b29sdV8xIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiYVxuYiJ9XX1dfSx7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF91c2UiLCJpZCI6InRvb2x1XzIiLCJuYW1lIjoicmVhZF9maWxlcyIsImlucHV0Ijp7InBhdGgiOiJhIn19LHsidHlwZSI6InRvb2xfdXNlIiwiaWQiOiJ0b29sdV8zIiwibmFtZSI6InJlYWRfZmlsZXMiLCJpbnB1dCI6eyJwYXRoIjoiYiJ9fV19LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF9yZXN1bHQiLCJ0b29sX3VzZV9pZCI6InRvb2x1XzIiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJBIn1dfSx7InR5cGUiOiJ0b29sX3Jlc3VsdCIsInRvb2xfdXNlX2lkIjoidG9vbHVfMyIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IkIifV19XX0seyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfdXNlIiwiaWQiOiJ0b29sdV80IiwibmFtZSI6InJ1bl9jb21tYW5kIiwiaW5wdXQiOnsiY29tbWFuZCI6InB3ZCJ9fV19LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF9yZXN1bHQiLCJ0b29sX3VzZV9pZCI6InRvb2x1XzQiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiIvdyJ9XSwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19XX1dfQ=="
+  },
+  {
+   "name": "friday-claude-anthropic-extended-ttl",
+   "protocol": "anthropic",
+   "model": "aws.claude-opus-4.8",
+   "base_url": "https://api.openai.com/v1/anthropic",
+   "messages": "loop",
+   "tools": "base",
+   "inference_profile": {
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": true,
+   "lineage": "conv-2",
+   "url": "https://api.openai.com/v1/anthropic/v1/messages",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "anthropic-version",
+     "2023-06-01"
+    ],
+    [
+     "x-api-key",
+     "sk-golden"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ],
+    [
+     "anthropic-beta",
+     "extended-cache-ttl-2025-04-11"
+    ],
+    [
+     "Mt-Session-Id",
+     "88abb41c-6841-5c8c-86b8-c049f58ce239"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImF3cy5jbGF1ZGUtb3B1cy00LjgiLCJtYXhfdG9rZW5zIjo0MDk2LCJzdHJlYW0iOnRydWUsInRlbXBlcmF0dXJlIjoxLjAsInRvb2xzIjpbeyJuYW1lIjoicnVuX2NvbW1hbmQiLCJkZXNjcmlwdGlvbiI6IlJ1biBhIHNoZWxsIGNvbW1hbmQg4oCUIGJvdW5kZWQuIiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImNvbW1hbmQiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsiY29tbWFuZCJdfX0seyJuYW1lIjoic2VuZCIsImRlc2NyaXB0aW9uIjoiU2VuZCB0byBvbmUgdGFyZ2V0LiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImEiOnsidHlwZSI6InN0cmluZyJ9LCJiIjp7InR5cGUiOiJpbnRlZ2VyIn19fX0seyJuYW1lIjoicmVhZF9maWxlcyIsImRlc2NyaXB0aW9uIjoiUmVhZCBmaWxlcy5cblN1Y2Nlc3NmdWwgZGVjb2RlZCBKU09OIHZhbHVlIChwcm9kdWNlciBkZWNsYXJhdGlvbjsgY292ZXJhZ2UvZnJlc2huZXNzIHVua25vd24pOiB7XCJkZXNjcmlwdGlvblwiOlwiclxcdTAwZTlzdWx0YXRcIixcInByb3BlcnRpZXNcIjp7XCJva1wiOntcInR5cGVcIjpcImJvb2xlYW5cIn19LFwidHlwZVwiOlwib2JqZWN0XCJ9IiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InBhdGgiOnsidHlwZSI6InN0cmluZyJ9fX0sImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCIsInR0bCI6IjFoIn19XSwic3lzdGVtIjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJTdGF0aWMgcHJvbXB0LiIsImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCIsInR0bCI6IjFoIn19LHsidHlwZSI6InRleHQiLCJ0ZXh0IjoiTWVtb3J5IGJsb2NrLiIsImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCIsInR0bCI6IjFoIn19XSwibWVzc2FnZXMiOlt7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiSW5zcGVjdCB0aGUgcmVwby4ifV19LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6Ikxvb2tpbmcuIn0seyJ0eXBlIjoidG9vbF91c2UiLCJpZCI6InRvb2x1XzEiLCJuYW1lIjoicnVuX2NvbW1hbmQiLCJpbnB1dCI6eyJjb21tYW5kIjoibHMifX1dfSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfcmVzdWx0IiwidG9vbF91c2VfaWQiOiJ0b29sdV8xIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiYVxuYiJ9XX1dfSx7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF91c2UiLCJpZCI6InRvb2x1XzIiLCJuYW1lIjoicmVhZF9maWxlcyIsImlucHV0Ijp7InBhdGgiOiJhIn19LHsidHlwZSI6InRvb2xfdXNlIiwiaWQiOiJ0b29sdV8zIiwibmFtZSI6InJlYWRfZmlsZXMiLCJpbnB1dCI6eyJwYXRoIjoiYiJ9fV19LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF9yZXN1bHQiLCJ0b29sX3VzZV9pZCI6InRvb2x1XzIiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJBIn1dfSx7InR5cGUiOiJ0b29sX3Jlc3VsdCIsInRvb2xfdXNlX2lkIjoidG9vbHVfMyIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IkIifV19XX0seyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfdXNlIiwiaWQiOiJ0b29sdV80IiwibmFtZSI6InJ1bl9jb21tYW5kIiwiaW5wdXQiOnsiY29tbWFuZCI6InB3ZCJ9fV19LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF9yZXN1bHQiLCJ0b29sX3VzZV9pZCI6InRvb2x1XzQiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiIvdyJ9XSwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19XX1dfQ=="
+  },
+  {
+   "name": "friday-claude-anthropic-prefill",
+   "protocol": "anthropic",
+   "model": "aws.claude-opus-4.8",
+   "base_url": "https://api.openai.com/v1/anthropic",
+   "messages": "prefill",
+   "tools": "none",
+   "inference_profile": {
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "url": "https://api.openai.com/v1/anthropic/v1/messages",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "anthropic-version",
+     "2023-06-01"
+    ],
+    [
+     "x-api-key",
+     "sk-golden"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImF3cy5jbGF1ZGUtb3B1cy00LjgiLCJtYXhfdG9rZW5zIjo0MDk2LCJzdHJlYW0iOnRydWUsInRlbXBlcmF0dXJlIjoxLjAsInN5c3RlbSI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiQmUgYnJpZWYuIiwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19XSwibWVzc2FnZXMiOlt7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiU3RhcnQuIiwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19XX0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IltZb3VyIHByZXZpb3VzIHJlc3BvbnNlIGZvciBjb250ZXh0XTpcblBhcnRpYWwgYW5zd2VyIHNvIGZhciJ9XX1dfQ=="
+  },
+  {
+   "name": "friday-claude-tool-name-budget",
+   "protocol": "anthropic",
+   "model": "aws.claude-opus-4.8",
+   "base_url": "https://api.openai.com/v1/anthropic",
+   "messages": "loop",
+   "tools": "budget",
+   "inference_profile": {
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "conv-3",
+   "url": "https://api.openai.com/v1/anthropic/v1/messages",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "anthropic-version",
+     "2023-06-01"
+    ],
+    [
+     "x-api-key",
+     "sk-golden"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ],
+    [
+     "Mt-Session-Id",
+     "b7892c4e-7fc0-5bd2-9963-4a604933dddd"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImF3cy5jbGF1ZGUtb3B1cy00LjgiLCJtYXhfdG9rZW5zIjo0MDk2LCJzdHJlYW0iOnRydWUsInRlbXBlcmF0dXJlIjoxLjAsInRvb2xzIjpbeyJuYW1lIjoic2VhcmNoX3Rvb2xzIiwiZGVzY3JpcHRpb24iOiJzZWFyY2hfdG9vbHMgdG9vbC4iLCJpbnB1dF9zY2hlbWEiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnt9fX0seyJuYW1lIjoiZXhlY3V0ZV90b29scyIsImRlc2NyaXB0aW9uIjoiZXhlY3V0ZV90b29scyB0b29sLiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6e319fSx7Im5hbWUiOiJwb2xsIiwiZGVzY3JpcHRpb24iOiJwb2xsIHRvb2wuIiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7fX19LHsibmFtZSI6ImJyb3dzZXJfbmF2aWdhdGVfeHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eCIsImRlc2NyaXB0aW9uIjoiYnJvd3Nlcl9uYXZpZ2F0ZV94eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4IHRvb2wuIiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7fX19LHsibmFtZSI6ImRlc2t0b3BfY2xpY2tfeHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eCIsImRlc2NyaXB0aW9uIjoiZGVza3RvcF9jbGlja194eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4IHRvb2wuIiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7fX19LHsibmFtZSI6ImRlc2t0b3BfdHlwZV94eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4IiwiZGVzY3JpcHRpb24iOiJkZXNrdG9wX3R5cGVfeHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eCB0b29sLiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6e319fSx7Im5hbWUiOiJtZW1vcnlfbG9va3VwX3h4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHgiLCJkZXNjcmlwdGlvbiI6Im1lbW9yeV9sb29rdXBfeHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eCB0b29sLiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6e319fSx7Im5hbWUiOiJwYXBlcl9vdXRsaW5lX3h4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHgiLCJkZXNjcmlwdGlvbiI6InBhcGVyX291dGxpbmVfeHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eCB0b29sLiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6e319fSx7Im5hbWUiOiJzbGlkZXNfcmVuZGVyX3h4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHgiLCJkZXNjcmlwdGlvbiI6InNsaWRlc19yZW5kZXJfeHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eCB0b29sLiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6e319fSx7Im5hbWUiOiJ2aWRlb19mcmFtZXNfeHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eCIsImRlc2NyaXB0aW9uIjoidmlkZW9fZnJhbWVzX3h4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHggdG9vbC4iLCJpbnB1dF9zY2hlbWEiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnt9fX0seyJuYW1lIjoicnVuX2NvbW1hbmQiLCJkZXNjcmlwdGlvbiI6IlJ1biBhIHNoZWxsIGNvbW1hbmQg4oCUIGJvdW5kZWQuIiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImNvbW1hbmQiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsiY29tbWFuZCJdfX0seyJuYW1lIjoic2VuZCIsImRlc2NyaXB0aW9uIjoiU2VuZCB0byBvbmUgdGFyZ2V0LiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImEiOnsidHlwZSI6InN0cmluZyJ9LCJiIjp7InR5cGUiOiJpbnRlZ2VyIn19fX0seyJuYW1lIjoicmVhZF9maWxlcyIsImRlc2NyaXB0aW9uIjoiUmVhZCBmaWxlcy5cblN1Y2Nlc3NmdWwgZGVjb2RlZCBKU09OIHZhbHVlIChwcm9kdWNlciBkZWNsYXJhdGlvbjsgY292ZXJhZ2UvZnJlc2huZXNzIHVua25vd24pOiB7XCJkZXNjcmlwdGlvblwiOlwiclxcdTAwZTlzdWx0YXRcIixcInByb3BlcnRpZXNcIjp7XCJva1wiOntcInR5cGVcIjpcImJvb2xlYW5cIn19LFwidHlwZVwiOlwib2JqZWN0XCJ9IiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InBhdGgiOnsidHlwZSI6InN0cmluZyJ9fX0sImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCJ9fV0sInN5c3RlbSI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiU3RhdGljIHByb21wdC4iLCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX0seyJ0eXBlIjoidGV4dCIsInRleHQiOiJNZW1vcnkgYmxvY2suIiwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19XSwibWVzc2FnZXMiOlt7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiSW5zcGVjdCB0aGUgcmVwby4ifV19LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6Ikxvb2tpbmcuIn0seyJ0eXBlIjoidG9vbF91c2UiLCJpZCI6InRvb2x1XzEiLCJuYW1lIjoicnVuX2NvbW1hbmQiLCJpbnB1dCI6eyJjb21tYW5kIjoibHMifX1dfSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfcmVzdWx0IiwidG9vbF91c2VfaWQiOiJ0b29sdV8xIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiYVxuYiJ9XX1dfSx7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF91c2UiLCJpZCI6InRvb2x1XzIiLCJuYW1lIjoicmVhZF9maWxlcyIsImlucHV0Ijp7InBhdGgiOiJhIn19LHsidHlwZSI6InRvb2xfdXNlIiwiaWQiOiJ0b29sdV8zIiwibmFtZSI6InJlYWRfZmlsZXMiLCJpbnB1dCI6eyJwYXRoIjoiYiJ9fV19LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF9yZXN1bHQiLCJ0b29sX3VzZV9pZCI6InRvb2x1XzIiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJBIn1dfSx7InR5cGUiOiJ0b29sX3Jlc3VsdCIsInRvb2xfdXNlX2lkIjoidG9vbHVfMyIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IkIifV19XX0seyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfdXNlIiwiaWQiOiJ0b29sdV80IiwibmFtZSI6InJ1bl9jb21tYW5kIiwiaW5wdXQiOnsiY29tbWFuZCI6InB3ZCJ9fV19LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF9yZXN1bHQiLCJ0b29sX3VzZV9pZCI6InRvb2x1XzQiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiIvdyJ9XSwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19XX1dfQ=="
+  },
+  {
+   "name": "friday-claude-tool-name-budget-undiscoverable",
+   "protocol": "anthropic",
+   "model": "aws.claude-opus-4.8",
+   "base_url": "https://api.openai.com/v1/anthropic",
+   "messages": "loop",
+   "tools": "undiscoverable",
+   "inference_profile": {
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "conv-3",
+   "url": "https://api.openai.com/v1/anthropic/v1/messages",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "anthropic-version",
+     "2023-06-01"
+    ],
+    [
+     "x-api-key",
+     "sk-golden"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ],
+    [
+     "Mt-Session-Id",
+     "b7892c4e-7fc0-5bd2-9963-4a604933dddd"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImF3cy5jbGF1ZGUtb3B1cy00LjgiLCJtYXhfdG9rZW5zIjo0MDk2LCJzdHJlYW0iOnRydWUsInRlbXBlcmF0dXJlIjoxLjAsInRvb2xzIjpbeyJuYW1lIjoicG9sbCIsImRlc2NyaXB0aW9uIjoicG9sbCB0b29sLiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6e319fSx7Im5hbWUiOiJicm93c2VyX25hdmlnYXRlX3h4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHgiLCJkZXNjcmlwdGlvbiI6ImJyb3dzZXJfbmF2aWdhdGVfeHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eCB0b29sLiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6e319fSx7Im5hbWUiOiJicm93c2VyX3NjcmVlbnNob3RfeHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eCIsImRlc2NyaXB0aW9uIjoiYnJvd3Nlcl9zY3JlZW5zaG90X3h4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHggdG9vbC4iLCJpbnB1dF9zY2hlbWEiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnt9fX0seyJuYW1lIjoiYnJvd3Nlcl9yZWFkX3BhZ2VfeHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eCIsImRlc2NyaXB0aW9uIjoiYnJvd3Nlcl9yZWFkX3BhZ2VfeHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eCB0b29sLiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6e319fSx7Im5hbWUiOiJkZXNrdG9wX2NsaWNrX3h4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHgiLCJkZXNjcmlwdGlvbiI6ImRlc2t0b3BfY2xpY2tfeHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eCB0b29sLiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6e319fSx7Im5hbWUiOiJkZXNrdG9wX3R5cGVfeHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eCIsImRlc2NyaXB0aW9uIjoiZGVza3RvcF90eXBlX3h4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHggdG9vbC4iLCJpbnB1dF9zY2hlbWEiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnt9fX0seyJuYW1lIjoia25vd2xlZGdlX3NlYXJjaF94eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4IiwiZGVzY3JpcHRpb24iOiJrbm93bGVkZ2Vfc2VhcmNoX3h4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHggdG9vbC4iLCJpbnB1dF9zY2hlbWEiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnt9fX0seyJuYW1lIjoibWVtb3J5X2xvb2t1cF94eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4IiwiZGVzY3JpcHRpb24iOiJtZW1vcnlfbG9va3VwX3h4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHggdG9vbC4iLCJpbnB1dF9zY2hlbWEiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnt9fX0seyJuYW1lIjoicGFwZXJfb3V0bGluZV94eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4IiwiZGVzY3JpcHRpb24iOiJwYXBlcl9vdXRsaW5lX3h4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHggdG9vbC4iLCJpbnB1dF9zY2hlbWEiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnt9fX0seyJuYW1lIjoic2xpZGVzX3JlbmRlcl94eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4IiwiZGVzY3JpcHRpb24iOiJzbGlkZXNfcmVuZGVyX3h4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHggdG9vbC4iLCJpbnB1dF9zY2hlbWEiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnt9fX0seyJuYW1lIjoidmlkZW9fZnJhbWVzX3h4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHgiLCJkZXNjcmlwdGlvbiI6InZpZGVvX2ZyYW1lc194eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4IHRvb2wuIiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7fX19LHsibmFtZSI6InJ1bl9jb21tYW5kIiwiZGVzY3JpcHRpb24iOiJSdW4gYSBzaGVsbCBjb21tYW5kIOKAlCBib3VuZGVkLiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJjb21tYW5kIjp7InR5cGUiOiJzdHJpbmcifX0sInJlcXVpcmVkIjpbImNvbW1hbmQiXX19LHsibmFtZSI6InNlbmQiLCJkZXNjcmlwdGlvbiI6IlNlbmQgdG8gb25lIHRhcmdldC4iLCJpbnB1dF9zY2hlbWEiOnsidHlwZSI6Im9iamVjdCIsImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicHJvcGVydGllcyI6eyJhIjp7InR5cGUiOiJzdHJpbmcifSwiYiI6eyJ0eXBlIjoiaW50ZWdlciJ9fX19LHsibmFtZSI6InJlYWRfZmlsZXMiLCJkZXNjcmlwdGlvbiI6IlJlYWQgZmlsZXMuXG5TdWNjZXNzZnVsIGRlY29kZWQgSlNPTiB2YWx1ZSAocHJvZHVjZXIgZGVjbGFyYXRpb247IGNvdmVyYWdlL2ZyZXNobmVzcyB1bmtub3duKToge1wiZGVzY3JpcHRpb25cIjpcInJcXHUwMGU5c3VsdGF0XCIsXCJwcm9wZXJ0aWVzXCI6e1wib2tcIjp7XCJ0eXBlXCI6XCJib29sZWFuXCJ9fSxcInR5cGVcIjpcIm9iamVjdFwifSIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJwYXRoIjp7InR5cGUiOiJzdHJpbmcifX19LCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX1dLCJzeXN0ZW0iOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IlN0YXRpYyBwcm9tcHQuIiwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19LHsidHlwZSI6InRleHQiLCJ0ZXh0IjoiTWVtb3J5IGJsb2NrLiIsImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCJ9fV0sIm1lc3NhZ2VzIjpbeyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6Ikluc3BlY3QgdGhlIHJlcG8uIn1dfSx7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJMb29raW5nLiJ9LHsidHlwZSI6InRvb2xfdXNlIiwiaWQiOiJ0b29sdV8xIiwibmFtZSI6InJ1bl9jb21tYW5kIiwiaW5wdXQiOnsiY29tbWFuZCI6ImxzIn19XX0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJ0b29sX3Jlc3VsdCIsInRvb2xfdXNlX2lkIjoidG9vbHVfMSIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6ImFcbmIifV19XX0seyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfdXNlIiwiaWQiOiJ0b29sdV8yIiwibmFtZSI6InJlYWRfZmlsZXMiLCJpbnB1dCI6eyJwYXRoIjoiYSJ9fSx7InR5cGUiOiJ0b29sX3VzZSIsImlkIjoidG9vbHVfMyIsIm5hbWUiOiJyZWFkX2ZpbGVzIiwiaW5wdXQiOnsicGF0aCI6ImIifX1dfSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfcmVzdWx0IiwidG9vbF91c2VfaWQiOiJ0b29sdV8yIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiQSJ9XX0seyJ0eXBlIjoidG9vbF9yZXN1bHQiLCJ0b29sX3VzZV9pZCI6InRvb2x1XzMiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJCIn1dfV19LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0b29sX3VzZSIsImlkIjoidG9vbHVfNCIsIm5hbWUiOiJydW5fY29tbWFuZCIsImlucHV0Ijp7ImNvbW1hbmQiOiJwd2QifX1dfSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfcmVzdWx0IiwidG9vbF91c2VfaWQiOiJ0b29sdV80IiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiL3cifV0sImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCJ9fV19XX0="
+  },
+  {
+   "name": "friday-claude-openai-face",
+   "protocol": "openai",
+   "model": "aws.claude-opus-4.8",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "loop",
+   "tools": "base",
+   "inference_profile": {
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "conv-4",
+   "url": "https://api.openai.com/v1/chat/completions",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ],
+    [
+     "Mt-Session-Id",
+     "482440c9-e83b-5ac2-86e0-0682cc0ddfe1"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImF3cy5jbGF1ZGUtb3B1cy00LjgiLCJtZXNzYWdlcyI6W3sicm9sZSI6InN5c3RlbSIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IlN0YXRpYyBwcm9tcHQuIiwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19LHsidHlwZSI6InRleHQiLCJ0ZXh0IjoiTWVtb3J5IGJsb2NrLiIsImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCJ9fV19LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJJbnNwZWN0IHRoZSByZXBvLiJ9XX0seyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiTG9va2luZy4iLCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX1dLCJ0b29sX2NhbGxzIjpbeyJpZCI6InRvb2x1XzEiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJhcmd1bWVudHMiOiJ7XCJjb21tYW5kXCI6IFwibHNcIn0ifX1dfSx7InJvbGUiOiJ0b29sIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiYVxuYiJ9XSwidG9vbF9jYWxsX2lkIjoidG9vbHVfMSJ9LHsicm9sZSI6ImFzc2lzdGFudCIsInRvb2xfY2FsbHMiOlt7ImlkIjoidG9vbHVfMiIsInR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJyZWFkX2ZpbGVzIiwiYXJndW1lbnRzIjoie1wicGF0aFwiOiBcImFcIn0ifX0seyJpZCI6InRvb2x1XzMiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImFyZ3VtZW50cyI6IntcInBhdGhcIjogXCJiXCJ9In19XX0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IkEifV0sInRvb2xfY2FsbF9pZCI6InRvb2x1XzIifSx7InJvbGUiOiJ0b29sIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiQiJ9XSwidG9vbF9jYWxsX2lkIjoidG9vbHVfMyJ9LHsicm9sZSI6ImFzc2lzdGFudCIsInRvb2xfY2FsbHMiOlt7ImlkIjoidG9vbHVfNCIsInR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJydW5fY29tbWFuZCIsImFyZ3VtZW50cyI6IntcImNvbW1hbmRcIjogXCJwd2RcIn0ifX1dfSx7InJvbGUiOiJ0b29sIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiL3cifV0sInRvb2xfY2FsbF9pZCI6InRvb2x1XzQifV0sIm1heF90b2tlbnMiOjQwOTYsInN0cmVhbSI6dHJ1ZSwidG9vbHMiOlt7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJydW5fY29tbWFuZCIsImRlc2NyaXB0aW9uIjoiUnVuIGEgc2hlbGwgY29tbWFuZCDigJQgYm91bmRlZC4iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImNvbW1hbmQiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsiY29tbWFuZCJdfX19LHsidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InNlbmQiLCJkZXNjcmlwdGlvbiI6IlNlbmQgdG8gb25lIHRhcmdldC4iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInByb3BlcnRpZXMiOnsiYSI6eyJ0eXBlIjoic3RyaW5nIn0sImIiOnsidHlwZSI6ImludGVnZXIifX19fX0seyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImRlc2NyaXB0aW9uIjoiUmVhZCBmaWxlcy5cblN1Y2Nlc3NmdWwgZGVjb2RlZCBKU09OIHZhbHVlIChwcm9kdWNlciBkZWNsYXJhdGlvbjsgY292ZXJhZ2UvZnJlc2huZXNzIHVua25vd24pOiB7XCJkZXNjcmlwdGlvblwiOlwiclxcdTAwZTlzdWx0YXRcIixcInByb3BlcnRpZXNcIjp7XCJva1wiOntcInR5cGVcIjpcImJvb2xlYW5cIn19LFwidHlwZVwiOlwib2JqZWN0XCJ9IiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJwYXRoIjp7InR5cGUiOiJzdHJpbmcifX19LCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX19XSwidGVtcGVyYXR1cmUiOjEuMH0="
+  },
+  {
+   "name": "friday-kimi-k3-anthropic",
+   "protocol": "anthropic",
+   "model": "kimi-k3",
+   "base_url": "https://api.openai.com/v1/anthropic",
+   "messages": "loop",
+   "tools": "budget",
+   "inference_profile": {
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "conv-5",
+   "url": "https://api.openai.com/v1/anthropic/v1/messages",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "anthropic-version",
+     "2023-06-01"
+    ],
+    [
+     "x-api-key",
+     "sk-golden"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ],
+    [
+     "Mt-Session-Id",
+     "2b005bfc-d380-511f-b6be-b80f85d19d09"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImtpbWktazMiLCJtYXhfdG9rZW5zIjo0MDk2LCJzdHJlYW0iOnRydWUsInRlbXBlcmF0dXJlIjoxLjAsInRvb2xzIjpbeyJuYW1lIjoic2VhcmNoX3Rvb2xzIiwiZGVzY3JpcHRpb24iOiJzZWFyY2hfdG9vbHMgdG9vbC4iLCJpbnB1dF9zY2hlbWEiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnt9fX0seyJuYW1lIjoiZXhlY3V0ZV90b29scyIsImRlc2NyaXB0aW9uIjoiZXhlY3V0ZV90b29scyB0b29sLiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6e319fSx7Im5hbWUiOiJwb2xsIiwiZGVzY3JpcHRpb24iOiJwb2xsIHRvb2wuIiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7fX19LHsibmFtZSI6ImJyb3dzZXJfbmF2aWdhdGVfeHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eCIsImRlc2NyaXB0aW9uIjoiYnJvd3Nlcl9uYXZpZ2F0ZV94eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4IHRvb2wuIiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7fX19LHsibmFtZSI6ImJyb3dzZXJfc2NyZWVuc2hvdF94eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4IiwiZGVzY3JpcHRpb24iOiJicm93c2VyX3NjcmVlbnNob3RfeHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eCB0b29sLiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6e319fSx7Im5hbWUiOiJicm93c2VyX3JlYWRfcGFnZV94eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4IiwiZGVzY3JpcHRpb24iOiJicm93c2VyX3JlYWRfcGFnZV94eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4IHRvb2wuIiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7fX19LHsibmFtZSI6ImRlc2t0b3BfY2xpY2tfeHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eCIsImRlc2NyaXB0aW9uIjoiZGVza3RvcF9jbGlja194eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4IHRvb2wuIiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7fX19LHsibmFtZSI6ImRlc2t0b3BfdHlwZV94eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4IiwiZGVzY3JpcHRpb24iOiJkZXNrdG9wX3R5cGVfeHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eCB0b29sLiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6e319fSx7Im5hbWUiOiJrbm93bGVkZ2Vfc2VhcmNoX3h4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHgiLCJkZXNjcmlwdGlvbiI6Imtub3dsZWRnZV9zZWFyY2hfeHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eCB0b29sLiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6e319fSx7Im5hbWUiOiJtZW1vcnlfbG9va3VwX3h4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHgiLCJkZXNjcmlwdGlvbiI6Im1lbW9yeV9sb29rdXBfeHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eCB0b29sLiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6e319fSx7Im5hbWUiOiJwYXBlcl9vdXRsaW5lX3h4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHgiLCJkZXNjcmlwdGlvbiI6InBhcGVyX291dGxpbmVfeHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eCB0b29sLiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6e319fSx7Im5hbWUiOiJzbGlkZXNfcmVuZGVyX3h4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHgiLCJkZXNjcmlwdGlvbiI6InNsaWRlc19yZW5kZXJfeHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eCB0b29sLiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6e319fSx7Im5hbWUiOiJ2aWRlb19mcmFtZXNfeHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eCIsImRlc2NyaXB0aW9uIjoidmlkZW9fZnJhbWVzX3h4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHggdG9vbC4iLCJpbnB1dF9zY2hlbWEiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnt9fX0seyJuYW1lIjoicnVuX2NvbW1hbmQiLCJkZXNjcmlwdGlvbiI6IlJ1biBhIHNoZWxsIGNvbW1hbmQg4oCUIGJvdW5kZWQuIiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImNvbW1hbmQiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsiY29tbWFuZCJdfX0seyJuYW1lIjoic2VuZCIsImRlc2NyaXB0aW9uIjoiU2VuZCB0byBvbmUgdGFyZ2V0LiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImEiOnsidHlwZSI6InN0cmluZyJ9LCJiIjp7InR5cGUiOiJpbnRlZ2VyIn19fX0seyJuYW1lIjoicmVhZF9maWxlcyIsImRlc2NyaXB0aW9uIjoiUmVhZCBmaWxlcy5cblN1Y2Nlc3NmdWwgZGVjb2RlZCBKU09OIHZhbHVlIChwcm9kdWNlciBkZWNsYXJhdGlvbjsgY292ZXJhZ2UvZnJlc2huZXNzIHVua25vd24pOiB7XCJkZXNjcmlwdGlvblwiOlwiclxcdTAwZTlzdWx0YXRcIixcInByb3BlcnRpZXNcIjp7XCJva1wiOntcInR5cGVcIjpcImJvb2xlYW5cIn19LFwidHlwZVwiOlwib2JqZWN0XCJ9IiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InBhdGgiOnsidHlwZSI6InN0cmluZyJ9fX19XSwic3lzdGVtIjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJTdGF0aWMgcHJvbXB0LiJ9LHsidHlwZSI6InRleHQiLCJ0ZXh0IjoiTWVtb3J5IGJsb2NrLiJ9XSwibWVzc2FnZXMiOlt7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiSW5zcGVjdCB0aGUgcmVwby4ifV19LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6Ikxvb2tpbmcuIn0seyJ0eXBlIjoidG9vbF91c2UiLCJpZCI6InRvb2x1XzEiLCJuYW1lIjoicnVuX2NvbW1hbmQiLCJpbnB1dCI6eyJjb21tYW5kIjoibHMifX1dfSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfcmVzdWx0IiwidG9vbF91c2VfaWQiOiJ0b29sdV8xIiwiY29udGVudCI6ImFcbmIifV19LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0b29sX3VzZSIsImlkIjoidG9vbHVfMiIsIm5hbWUiOiJyZWFkX2ZpbGVzIiwiaW5wdXQiOnsicGF0aCI6ImEifX0seyJ0eXBlIjoidG9vbF91c2UiLCJpZCI6InRvb2x1XzMiLCJuYW1lIjoicmVhZF9maWxlcyIsImlucHV0Ijp7InBhdGgiOiJiIn19XX0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJ0b29sX3Jlc3VsdCIsInRvb2xfdXNlX2lkIjoidG9vbHVfMiIsImNvbnRlbnQiOiJBIn0seyJ0eXBlIjoidG9vbF9yZXN1bHQiLCJ0b29sX3VzZV9pZCI6InRvb2x1XzMiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJCIn1dfV19LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0b29sX3VzZSIsImlkIjoidG9vbHVfNCIsIm5hbWUiOiJydW5fY29tbWFuZCIsImlucHV0Ijp7ImNvbW1hbmQiOiJwd2QifX1dfSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfcmVzdWx0IiwidG9vbF91c2VfaWQiOiJ0b29sdV80IiwiY29udGVudCI6Ii93In1dfV19"
+  },
+  {
+   "name": "friday-kimi-k3-anthropic-mfjs",
+   "protocol": "anthropic",
+   "model": "kimi-k3",
+   "base_url": "https://api.openai.com/v1/anthropic",
+   "messages": "base",
+   "tools": "kimi",
+   "inference_profile": {
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "url": "https://api.openai.com/v1/anthropic/v1/messages",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "anthropic-version",
+     "2023-06-01"
+    ],
+    [
+     "x-api-key",
+     "sk-golden"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImtpbWktazMiLCJtYXhfdG9rZW5zIjo0MDk2LCJzdHJlYW0iOnRydWUsInRlbXBlcmF0dXJlIjoxLjAsInRvb2xzIjpbeyJuYW1lIjoicnVuX2NvbW1hbmQiLCJkZXNjcmlwdGlvbiI6IlJ1biBhIHNoZWxsIGNvbW1hbmQg4oCUIGJvdW5kZWQuIiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImNvbW1hbmQiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsiY29tbWFuZCJdfX0seyJuYW1lIjoic2hhcGUiLCJkZXNjcmlwdGlvbiI6Ik1GSlMgc2hhcGVzLiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwicmVxdWlyZWQiOlsibW9kZSIsImV4dHJhIl0sInByb3BlcnRpZXMiOnsibW9kZSI6eyJ0eXBlIjoic3RyaW5nIiwiZW51bSI6WyJhIiwiYiJdfSwibWl4ZWQiOnt9LCJwYWlyIjp7InR5cGUiOiJhcnJheSIsIml0ZW1zIjp7fX0sIm1hcCI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOnRydWV9LCJsaXN0Ijp7InR5cGUiOiJhcnJheSIsIml0ZW1zIjp7InR5cGUiOiJzdHJpbmcifSwiZGVmYXVsdCI6W119LCJjaG9pY2UiOnsiYW55T2YiOlt7InR5cGUiOiJzdHJpbmcifSx7InR5cGUiOiJpbnRlZ2VyIn1dfSwiZmxhZyI6e30sImV4dHJhIjp7fX19fV0sInN5c3RlbSI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiWW91IGFyZSBhIHRlc3QgaGFybmVzcy4ifSx7InR5cGUiOiJ0ZXh0IiwidGV4dCI6Ik1hbmFnZWQgc2VjdGlvbi4ifV0sIm1lc3NhZ2VzIjpbeyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IlJ1biBpdCAgICAifSx7InR5cGUiOiJ0ZXh0IiwidGV4dCI6InBsZWFzZSDimIMifSx7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IjxzeXN0ZW0tcmVtaW5kZXI+YW1iaWVudDwvc3lzdGVtLXJlbWluZGVyPiJ9XX0seyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiUnVubmluZy4ifSx7InR5cGUiOiJ0b29sX3VzZSIsImlkIjoiY2FsbF9hIiwibmFtZSI6InJ1bl9jb21tYW5kIiwiaW5wdXQiOnsiY29tbWFuZCI6InRydWUifX1dfSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfcmVzdWx0IiwidG9vbF91c2VfaWQiOiJjYWxsX2EiLCJjb250ZW50IjoiJCB0cnVlXG5cbltleGl0IGNvZGU6IDBdIn1dfSx7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF91c2UiLCJpZCI6ImNhbGxfYiIsIm5hbWUiOiJyZWFkX2ZpbGVzIiwiaW5wdXQiOnsicGF0aCI6ImYwLnR4dCJ9fV19LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF9yZXN1bHQiLCJ0b29sX3VzZV9pZCI6ImNhbGxfYiIsImNvbnRlbnQiOiJGaWxlOiBmMC50eHQgKDEgbGluZXMpXG4gICAxXHRub29wIDBcbiJ9XX0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IkEgcHJpdmF0ZSBwcm9ncmVzcyBldmVudC4ifV19XX0="
+  },
+  {
+   "name": "friday-kimi-k27-code-chat",
+   "protocol": "openai",
+   "model": "kimi-k2.7-code",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "loop",
+   "tools": "kimi",
+   "inference_profile": {
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "conv-6",
+   "url": "https://api.openai.com/v1/chat/completions",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ],
+    [
+     "Mt-Session-Id",
+     "292b00f9-4795-5460-a143-e862d4b58c74"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImtpbWktazIuNy1jb2RlIiwibWVzc2FnZXMiOlt7InJvbGUiOiJzeXN0ZW0iLCJjb250ZW50IjoiU3RhdGljIHByb21wdC5NZW1vcnkgYmxvY2suIn0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOiJJbnNwZWN0IHRoZSByZXBvLiJ9LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOiJMb29raW5nLiIsInRvb2xfY2FsbHMiOlt7ImlkIjoidG9vbHVfMSIsInR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJydW5fY29tbWFuZCIsImFyZ3VtZW50cyI6IntcImNvbW1hbmRcIjogXCJsc1wifSJ9fV19LHsicm9sZSI6InRvb2wiLCJjb250ZW50IjoiYVxuYiIsInRvb2xfY2FsbF9pZCI6InRvb2x1XzEifSx7InJvbGUiOiJhc3Npc3RhbnQiLCJ0b29sX2NhbGxzIjpbeyJpZCI6InRvb2x1XzIiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImFyZ3VtZW50cyI6IntcInBhdGhcIjogXCJhXCJ9In19LHsiaWQiOiJ0b29sdV8zIiwidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJlYWRfZmlsZXMiLCJhcmd1bWVudHMiOiJ7XCJwYXRoXCI6IFwiYlwifSJ9fV19LHsicm9sZSI6InRvb2wiLCJjb250ZW50IjoiQSIsInRvb2xfY2FsbF9pZCI6InRvb2x1XzIifSx7InJvbGUiOiJ0b29sIiwiY29udGVudCI6IkIiLCJ0b29sX2NhbGxfaWQiOiJ0b29sdV8zIn0seyJyb2xlIjoiYXNzaXN0YW50IiwidG9vbF9jYWxscyI6W3siaWQiOiJ0b29sdV80IiwidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJ1bl9jb21tYW5kIiwiYXJndW1lbnRzIjoie1wiY29tbWFuZFwiOiBcInB3ZFwifSJ9fV19LHsicm9sZSI6InRvb2wiLCJjb250ZW50IjoiL3ciLCJ0b29sX2NhbGxfaWQiOiJ0b29sdV80In1dLCJtYXhfdG9rZW5zIjo0MDk2LCJzdHJlYW0iOnRydWUsInRvb2xzIjpbeyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJkZXNjcmlwdGlvbiI6IlJ1biBhIHNoZWxsIGNvbW1hbmQg4oCUIGJvdW5kZWQuIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJjb21tYW5kIjp7InR5cGUiOiJzdHJpbmcifX0sInJlcXVpcmVkIjpbImNvbW1hbmQiXX19fSx7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJzaGFwZSIsImRlc2NyaXB0aW9uIjoiTUZKUyBzaGFwZXMuIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicmVxdWlyZWQiOlsibW9kZSIsImV4dHJhIl0sInByb3BlcnRpZXMiOnsibW9kZSI6eyJ0eXBlIjoic3RyaW5nIiwiZW51bSI6WyJhIiwiYiJdfSwibWl4ZWQiOnt9LCJwYWlyIjp7InR5cGUiOiJhcnJheSIsIml0ZW1zIjp7fX0sIm1hcCI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOnRydWV9LCJsaXN0Ijp7InR5cGUiOiJhcnJheSIsIml0ZW1zIjp7InR5cGUiOiJzdHJpbmcifSwiZGVmYXVsdCI6W119LCJjaG9pY2UiOnsiYW55T2YiOlt7InR5cGUiOiJzdHJpbmcifSx7InR5cGUiOiJpbnRlZ2VyIn1dfSwiZmxhZyI6e30sImV4dHJhIjp7fX19fX1dLCJ0ZW1wZXJhdHVyZSI6MS4wfQ=="
+  },
+  {
+   "name": "friday-glm-chat",
+   "protocol": "openai",
+   "model": "glm-5.3",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "base",
+   "tools": "base",
+   "inference_profile": {
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "conv-7",
+   "url": "https://api.openai.com/v1/chat/completions",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ],
+    [
+     "Mt-Session-Id",
+     "cd57d928-1bd1-52d7-a854-7aa5b680c43d"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImdsbS01LjMiLCJtZXNzYWdlcyI6W3sicm9sZSI6InN5c3RlbSIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IllvdSBhcmUgYSB0ZXN0IGhhcm5lc3MuIiwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19XX0seyJyb2xlIjoic3lzdGVtIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiTWFuYWdlZCBzZWN0aW9uLiIsImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCJ9fV19LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJSdW4gaXQgICAgIn0seyJ0eXBlIjoidGV4dCIsInRleHQiOiJwbGVhc2Ug4piDIn0seyJ0eXBlIjoidGV4dCIsInRleHQiOiI8c3lzdGVtLXJlbWluZGVyPmFtYmllbnQ8L3N5c3RlbS1yZW1pbmRlcj4ifV19LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IlJ1bm5pbmcuIn1dLCJ0b29sX2NhbGxzIjpbeyJpZCI6ImNhbGxfYSIsInR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJydW5fY29tbWFuZCIsImFyZ3VtZW50cyI6IntcImNvbW1hbmRcIjogXCJ0cnVlXCJ9In19XX0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IiQgdHJ1ZVxuXG5bZXhpdCBjb2RlOiAwXSJ9XSwidG9vbF9jYWxsX2lkIjoiY2FsbF9hIn0seyJyb2xlIjoiYXNzaXN0YW50IiwidG9vbF9jYWxscyI6W3siaWQiOiJjYWxsX2IiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImFyZ3VtZW50cyI6IntcInBhdGhcIjogXCJmMC50eHRcIn0ifX1dfSx7InJvbGUiOiJ0b29sIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiRmlsZTogZjAudHh0ICgxIGxpbmVzKVxuICAgMVx0bm9vcCAwXG4ifV0sInRvb2xfY2FsbF9pZCI6ImNhbGxfYiJ9LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJBIHByaXZhdGUgcHJvZ3Jlc3MgZXZlbnQuIiwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19XX1dLCJtYXhfdG9rZW5zIjo0MDk2LCJzdHJlYW0iOnRydWUsInRvb2xzIjpbeyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJkZXNjcmlwdGlvbiI6IlJ1biBhIHNoZWxsIGNvbW1hbmQg4oCUIGJvdW5kZWQuIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJjb21tYW5kIjp7InR5cGUiOiJzdHJpbmcifX0sInJlcXVpcmVkIjpbImNvbW1hbmQiXX19fSx7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJzZW5kIiwiZGVzY3JpcHRpb24iOiJTZW5kIHRvIG9uZSB0YXJnZXQuIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImEiOnsidHlwZSI6InN0cmluZyJ9LCJiIjp7InR5cGUiOiJpbnRlZ2VyIn19fX19LHsidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJlYWRfZmlsZXMiLCJkZXNjcmlwdGlvbiI6IlJlYWQgZmlsZXMuXG5TdWNjZXNzZnVsIGRlY29kZWQgSlNPTiB2YWx1ZSAocHJvZHVjZXIgZGVjbGFyYXRpb247IGNvdmVyYWdlL2ZyZXNobmVzcyB1bmtub3duKToge1wiZGVzY3JpcHRpb25cIjpcInJcXHUwMGU5c3VsdGF0XCIsXCJwcm9wZXJ0aWVzXCI6e1wib2tcIjp7XCJ0eXBlXCI6XCJib29sZWFuXCJ9fSxcInR5cGVcIjpcIm9iamVjdFwifSIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsicGF0aCI6eyJ0eXBlIjoic3RyaW5nIn19fSwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19fV0sInRlbXBlcmF0dXJlIjoxLjB9"
+  },
+  {
+   "name": "friday-glm-chat-loop",
+   "protocol": "openai",
+   "model": "glm-5.1",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "loop",
+   "tools": "base",
+   "inference_profile": {
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "conv-7",
+   "url": "https://api.openai.com/v1/chat/completions",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ],
+    [
+     "Mt-Session-Id",
+     "cd57d928-1bd1-52d7-a854-7aa5b680c43d"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImdsbS01LjEiLCJtZXNzYWdlcyI6W3sicm9sZSI6InN5c3RlbSIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IlN0YXRpYyBwcm9tcHQuIiwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19LHsidHlwZSI6InRleHQiLCJ0ZXh0IjoiTWVtb3J5IGJsb2NrLiIsImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCJ9fV19LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJJbnNwZWN0IHRoZSByZXBvLiJ9XX0seyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiTG9va2luZy4iLCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX1dLCJ0b29sX2NhbGxzIjpbeyJpZCI6InRvb2x1XzEiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJhcmd1bWVudHMiOiJ7XCJjb21tYW5kXCI6IFwibHNcIn0ifX1dfSx7InJvbGUiOiJ0b29sIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiYVxuYiJ9XSwidG9vbF9jYWxsX2lkIjoidG9vbHVfMSJ9LHsicm9sZSI6ImFzc2lzdGFudCIsInRvb2xfY2FsbHMiOlt7ImlkIjoidG9vbHVfMiIsInR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJyZWFkX2ZpbGVzIiwiYXJndW1lbnRzIjoie1wicGF0aFwiOiBcImFcIn0ifX0seyJpZCI6InRvb2x1XzMiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImFyZ3VtZW50cyI6IntcInBhdGhcIjogXCJiXCJ9In19XX0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IkEifV0sInRvb2xfY2FsbF9pZCI6InRvb2x1XzIifSx7InJvbGUiOiJ0b29sIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiQiJ9XSwidG9vbF9jYWxsX2lkIjoidG9vbHVfMyJ9LHsicm9sZSI6ImFzc2lzdGFudCIsInRvb2xfY2FsbHMiOlt7ImlkIjoidG9vbHVfNCIsInR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJydW5fY29tbWFuZCIsImFyZ3VtZW50cyI6IntcImNvbW1hbmRcIjogXCJwd2RcIn0ifX1dfSx7InJvbGUiOiJ0b29sIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiL3cifV0sInRvb2xfY2FsbF9pZCI6InRvb2x1XzQifV0sIm1heF90b2tlbnMiOjQwOTYsInN0cmVhbSI6dHJ1ZSwidG9vbHMiOlt7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJydW5fY29tbWFuZCIsImRlc2NyaXB0aW9uIjoiUnVuIGEgc2hlbGwgY29tbWFuZCDigJQgYm91bmRlZC4iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImNvbW1hbmQiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsiY29tbWFuZCJdfX19LHsidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InNlbmQiLCJkZXNjcmlwdGlvbiI6IlNlbmQgdG8gb25lIHRhcmdldC4iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInByb3BlcnRpZXMiOnsiYSI6eyJ0eXBlIjoic3RyaW5nIn0sImIiOnsidHlwZSI6ImludGVnZXIifX19fX0seyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImRlc2NyaXB0aW9uIjoiUmVhZCBmaWxlcy5cblN1Y2Nlc3NmdWwgZGVjb2RlZCBKU09OIHZhbHVlIChwcm9kdWNlciBkZWNsYXJhdGlvbjsgY292ZXJhZ2UvZnJlc2huZXNzIHVua25vd24pOiB7XCJkZXNjcmlwdGlvblwiOlwiclxcdTAwZTlzdWx0YXRcIixcInByb3BlcnRpZXNcIjp7XCJva1wiOntcInR5cGVcIjpcImJvb2xlYW5cIn19LFwidHlwZVwiOlwib2JqZWN0XCJ9IiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJwYXRoIjp7InR5cGUiOiJzdHJpbmcifX19LCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX19XSwidGVtcGVyYXR1cmUiOjEuMH0="
+  },
+  {
+   "name": "friday-glm-chat-markers-declared-off",
+   "protocol": "openai",
+   "model": "glm-5.3",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "loop",
+   "tools": "base",
+   "inference_profile": {
+    "features": {
+     "chat_cache_breakpoints": "unsupported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "url": "https://api.openai.com/v1/chat/completions",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImdsbS01LjMiLCJtZXNzYWdlcyI6W3sicm9sZSI6InN5c3RlbSIsImNvbnRlbnQiOiJTdGF0aWMgcHJvbXB0Lk1lbW9yeSBibG9jay4ifSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6Ikluc3BlY3QgdGhlIHJlcG8uIn0seyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6Ikxvb2tpbmcuIiwidG9vbF9jYWxscyI6W3siaWQiOiJ0b29sdV8xIiwidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJ1bl9jb21tYW5kIiwiYXJndW1lbnRzIjoie1wiY29tbWFuZFwiOiBcImxzXCJ9In19XX0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOiJhXG5iIiwidG9vbF9jYWxsX2lkIjoidG9vbHVfMSJ9LHsicm9sZSI6ImFzc2lzdGFudCIsInRvb2xfY2FsbHMiOlt7ImlkIjoidG9vbHVfMiIsInR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJyZWFkX2ZpbGVzIiwiYXJndW1lbnRzIjoie1wicGF0aFwiOiBcImFcIn0ifX0seyJpZCI6InRvb2x1XzMiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImFyZ3VtZW50cyI6IntcInBhdGhcIjogXCJiXCJ9In19XX0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOiJBIiwidG9vbF9jYWxsX2lkIjoidG9vbHVfMiJ9LHsicm9sZSI6InRvb2wiLCJjb250ZW50IjoiQiIsInRvb2xfY2FsbF9pZCI6InRvb2x1XzMifSx7InJvbGUiOiJhc3Npc3RhbnQiLCJ0b29sX2NhbGxzIjpbeyJpZCI6InRvb2x1XzQiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJhcmd1bWVudHMiOiJ7XCJjb21tYW5kXCI6IFwicHdkXCJ9In19XX0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOiIvdyIsInRvb2xfY2FsbF9pZCI6InRvb2x1XzQifV0sIm1heF90b2tlbnMiOjQwOTYsInN0cmVhbSI6dHJ1ZSwidG9vbHMiOlt7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJydW5fY29tbWFuZCIsImRlc2NyaXB0aW9uIjoiUnVuIGEgc2hlbGwgY29tbWFuZCDigJQgYm91bmRlZC4iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImNvbW1hbmQiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsiY29tbWFuZCJdfX19LHsidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InNlbmQiLCJkZXNjcmlwdGlvbiI6IlNlbmQgdG8gb25lIHRhcmdldC4iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInByb3BlcnRpZXMiOnsiYSI6eyJ0eXBlIjoic3RyaW5nIn0sImIiOnsidHlwZSI6ImludGVnZXIifX19fX0seyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImRlc2NyaXB0aW9uIjoiUmVhZCBmaWxlcy5cblN1Y2Nlc3NmdWwgZGVjb2RlZCBKU09OIHZhbHVlIChwcm9kdWNlciBkZWNsYXJhdGlvbjsgY292ZXJhZ2UvZnJlc2huZXNzIHVua25vd24pOiB7XCJkZXNjcmlwdGlvblwiOlwiclxcdTAwZTlzdWx0YXRcIixcInByb3BlcnRpZXNcIjp7XCJva1wiOntcInR5cGVcIjpcImJvb2xlYW5cIn19LFwidHlwZVwiOlwib2JqZWN0XCJ9IiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJwYXRoIjp7InR5cGUiOiJzdHJpbmcifX19fX1dLCJ0ZW1wZXJhdHVyZSI6MS4wfQ=="
+  },
+  {
+   "name": "friday-deepseek-chat",
+   "protocol": "openai",
+   "model": "deepseek-v4-flash",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "loop",
+   "tools": "base",
+   "inference_profile": {
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "conv-8",
+   "url": "https://api.openai.com/v1/chat/completions",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ],
+    [
+     "Mt-Session-Id",
+     "5b0d8452-e2b9-5774-a835-d683debdfc8c"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImRlZXBzZWVrLXY0LWZsYXNoIiwibWVzc2FnZXMiOlt7InJvbGUiOiJzeXN0ZW0iLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJTdGF0aWMgcHJvbXB0LiIsImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCJ9fSx7InR5cGUiOiJ0ZXh0IiwidGV4dCI6Ik1lbW9yeSBibG9jay4iLCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX1dfSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiSW5zcGVjdCB0aGUgcmVwby4ifV19LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6Ikxvb2tpbmcuIiwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19XSwidG9vbF9jYWxscyI6W3siaWQiOiJ0b29sdV8xIiwidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJ1bl9jb21tYW5kIiwiYXJndW1lbnRzIjoie1wiY29tbWFuZFwiOiBcImxzXCJ9In19XX0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6ImFcbmIifV0sInRvb2xfY2FsbF9pZCI6InRvb2x1XzEifSx7InJvbGUiOiJhc3Npc3RhbnQiLCJ0b29sX2NhbGxzIjpbeyJpZCI6InRvb2x1XzIiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImFyZ3VtZW50cyI6IntcInBhdGhcIjogXCJhXCJ9In19LHsiaWQiOiJ0b29sdV8zIiwidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJlYWRfZmlsZXMiLCJhcmd1bWVudHMiOiJ7XCJwYXRoXCI6IFwiYlwifSJ9fV19LHsicm9sZSI6InRvb2wiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJBIn1dLCJ0b29sX2NhbGxfaWQiOiJ0b29sdV8yIn0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IkIifV0sInRvb2xfY2FsbF9pZCI6InRvb2x1XzMifSx7InJvbGUiOiJhc3Npc3RhbnQiLCJ0b29sX2NhbGxzIjpbeyJpZCI6InRvb2x1XzQiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJhcmd1bWVudHMiOiJ7XCJjb21tYW5kXCI6IFwicHdkXCJ9In19XX0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6Ii93In1dLCJ0b29sX2NhbGxfaWQiOiJ0b29sdV80In1dLCJtYXhfdG9rZW5zIjo0MDk2LCJzdHJlYW0iOnRydWUsInRvb2xzIjpbeyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJkZXNjcmlwdGlvbiI6IlJ1biBhIHNoZWxsIGNvbW1hbmQg4oCUIGJvdW5kZWQuIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJjb21tYW5kIjp7InR5cGUiOiJzdHJpbmcifX0sInJlcXVpcmVkIjpbImNvbW1hbmQiXX19fSx7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJzZW5kIiwiZGVzY3JpcHRpb24iOiJTZW5kIHRvIG9uZSB0YXJnZXQuIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImEiOnsidHlwZSI6InN0cmluZyJ9LCJiIjp7InR5cGUiOiJpbnRlZ2VyIn19fX19LHsidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJlYWRfZmlsZXMiLCJkZXNjcmlwdGlvbiI6IlJlYWQgZmlsZXMuXG5TdWNjZXNzZnVsIGRlY29kZWQgSlNPTiB2YWx1ZSAocHJvZHVjZXIgZGVjbGFyYXRpb247IGNvdmVyYWdlL2ZyZXNobmVzcyB1bmtub3duKToge1wiZGVzY3JpcHRpb25cIjpcInJcXHUwMGU5c3VsdGF0XCIsXCJwcm9wZXJ0aWVzXCI6e1wib2tcIjp7XCJ0eXBlXCI6XCJib29sZWFuXCJ9fSxcInR5cGVcIjpcIm9iamVjdFwifSIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsicGF0aCI6eyJ0eXBlIjoic3RyaW5nIn19fSwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19fV0sInRlbXBlcmF0dXJlIjoxLjB9"
+  },
+  {
+   "name": "friday-qwen-chat",
+   "protocol": "openai",
+   "model": "qwen3.5-plus",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "base",
+   "tools": "base",
+   "inference_profile": {
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "url": "https://api.openai.com/v1/chat/completions",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6InF3ZW4zLjUtcGx1cyIsIm1lc3NhZ2VzIjpbeyJyb2xlIjoic3lzdGVtIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiWW91IGFyZSBhIHRlc3QgaGFybmVzcy4iLCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX1dfSx7InJvbGUiOiJzeXN0ZW0iLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJNYW5hZ2VkIHNlY3Rpb24uIiwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19XX0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IlJ1biBpdCAgICAifSx7InR5cGUiOiJ0ZXh0IiwidGV4dCI6InBsZWFzZSDimIMifSx7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IjxzeXN0ZW0tcmVtaW5kZXI+YW1iaWVudDwvc3lzdGVtLXJlbWluZGVyPiJ9XX0seyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiUnVubmluZy4ifV0sInRvb2xfY2FsbHMiOlt7ImlkIjoiY2FsbF9hIiwidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJ1bl9jb21tYW5kIiwiYXJndW1lbnRzIjoie1wiY29tbWFuZFwiOiBcInRydWVcIn0ifX1dfSx7InJvbGUiOiJ0b29sIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiJCB0cnVlXG5cbltleGl0IGNvZGU6IDBdIn1dLCJ0b29sX2NhbGxfaWQiOiJjYWxsX2EifSx7InJvbGUiOiJhc3Npc3RhbnQiLCJ0b29sX2NhbGxzIjpbeyJpZCI6ImNhbGxfYiIsInR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJyZWFkX2ZpbGVzIiwiYXJndW1lbnRzIjoie1wicGF0aFwiOiBcImYwLnR4dFwifSJ9fV19LHsicm9sZSI6InRvb2wiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJGaWxlOiBmMC50eHQgKDEgbGluZXMpXG4gICAxXHRub29wIDBcbiJ9XSwidG9vbF9jYWxsX2lkIjoiY2FsbF9iIn0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IkEgcHJpdmF0ZSBwcm9ncmVzcyBldmVudC4iLCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX1dfV0sIm1heF90b2tlbnMiOjQwOTYsInN0cmVhbSI6dHJ1ZSwidG9vbHMiOlt7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJydW5fY29tbWFuZCIsImRlc2NyaXB0aW9uIjoiUnVuIGEgc2hlbGwgY29tbWFuZCDigJQgYm91bmRlZC4iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImNvbW1hbmQiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsiY29tbWFuZCJdfX19LHsidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InNlbmQiLCJkZXNjcmlwdGlvbiI6IlNlbmQgdG8gb25lIHRhcmdldC4iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInByb3BlcnRpZXMiOnsiYSI6eyJ0eXBlIjoic3RyaW5nIn0sImIiOnsidHlwZSI6ImludGVnZXIifX19fX0seyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImRlc2NyaXB0aW9uIjoiUmVhZCBmaWxlcy5cblN1Y2Nlc3NmdWwgZGVjb2RlZCBKU09OIHZhbHVlIChwcm9kdWNlciBkZWNsYXJhdGlvbjsgY292ZXJhZ2UvZnJlc2huZXNzIHVua25vd24pOiB7XCJkZXNjcmlwdGlvblwiOlwiclxcdTAwZTlzdWx0YXRcIixcInByb3BlcnRpZXNcIjp7XCJva1wiOntcInR5cGVcIjpcImJvb2xlYW5cIn19LFwidHlwZVwiOlwib2JqZWN0XCJ9IiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJwYXRoIjp7InR5cGUiOiJzdHJpbmcifX19LCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX19XSwidGVtcGVyYXR1cmUiOjEuMH0="
+  },
+  {
+   "name": "friday-doubao-chat-no-markers",
+   "protocol": "openai",
+   "model": "Doubao-Seed-2.0-pro",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "loop",
+   "tools": "base",
+   "inference_profile": {
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "conv-9",
+   "url": "https://api.openai.com/v1/chat/completions",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ],
+    [
+     "Mt-Session-Id",
+     "d6463134-21fc-541f-8363-d6d4a3a3d135"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6IkRvdWJhby1TZWVkLTIuMC1wcm8iLCJtZXNzYWdlcyI6W3sicm9sZSI6InN5c3RlbSIsImNvbnRlbnQiOiJTdGF0aWMgcHJvbXB0Lk1lbW9yeSBibG9jay4ifSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6Ikluc3BlY3QgdGhlIHJlcG8uIn0seyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6Ikxvb2tpbmcuIiwidG9vbF9jYWxscyI6W3siaWQiOiJ0b29sdV8xIiwidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJ1bl9jb21tYW5kIiwiYXJndW1lbnRzIjoie1wiY29tbWFuZFwiOiBcImxzXCJ9In19XX0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOiJhXG5iIiwidG9vbF9jYWxsX2lkIjoidG9vbHVfMSJ9LHsicm9sZSI6ImFzc2lzdGFudCIsInRvb2xfY2FsbHMiOlt7ImlkIjoidG9vbHVfMiIsInR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJyZWFkX2ZpbGVzIiwiYXJndW1lbnRzIjoie1wicGF0aFwiOiBcImFcIn0ifX0seyJpZCI6InRvb2x1XzMiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImFyZ3VtZW50cyI6IntcInBhdGhcIjogXCJiXCJ9In19XX0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOiJBIiwidG9vbF9jYWxsX2lkIjoidG9vbHVfMiJ9LHsicm9sZSI6InRvb2wiLCJjb250ZW50IjoiQiIsInRvb2xfY2FsbF9pZCI6InRvb2x1XzMifSx7InJvbGUiOiJhc3Npc3RhbnQiLCJ0b29sX2NhbGxzIjpbeyJpZCI6InRvb2x1XzQiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJhcmd1bWVudHMiOiJ7XCJjb21tYW5kXCI6IFwicHdkXCJ9In19XX0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOiIvdyIsInRvb2xfY2FsbF9pZCI6InRvb2x1XzQifV0sIm1heF90b2tlbnMiOjQwOTYsInN0cmVhbSI6dHJ1ZSwidG9vbHMiOlt7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJydW5fY29tbWFuZCIsImRlc2NyaXB0aW9uIjoiUnVuIGEgc2hlbGwgY29tbWFuZCDigJQgYm91bmRlZC4iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImNvbW1hbmQiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsiY29tbWFuZCJdfX19LHsidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InNlbmQiLCJkZXNjcmlwdGlvbiI6IlNlbmQgdG8gb25lIHRhcmdldC4iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInByb3BlcnRpZXMiOnsiYSI6eyJ0eXBlIjoic3RyaW5nIn0sImIiOnsidHlwZSI6ImludGVnZXIifX19fX0seyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImRlc2NyaXB0aW9uIjoiUmVhZCBmaWxlcy5cblN1Y2Nlc3NmdWwgZGVjb2RlZCBKU09OIHZhbHVlIChwcm9kdWNlciBkZWNsYXJhdGlvbjsgY292ZXJhZ2UvZnJlc2huZXNzIHVua25vd24pOiB7XCJkZXNjcmlwdGlvblwiOlwiclxcdTAwZTlzdWx0YXRcIixcInByb3BlcnRpZXNcIjp7XCJva1wiOntcInR5cGVcIjpcImJvb2xlYW5cIn19LFwidHlwZVwiOlwib2JqZWN0XCJ9IiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJwYXRoIjp7InR5cGUiOiJzdHJpbmcifX19fX1dLCJ0ZW1wZXJhdHVyZSI6MS4wfQ=="
+  },
+  {
+   "name": "friday-doubao-chat-base",
+   "protocol": "openai",
+   "model": "Doubao-Seed-2.0-pro",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "base",
+   "tools": "base",
+   "inference_profile": null,
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "url": "https://api.openai.com/v1/chat/completions",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6IkRvdWJhby1TZWVkLTIuMC1wcm8iLCJtZXNzYWdlcyI6W3sicm9sZSI6InN5c3RlbSIsImNvbnRlbnQiOiJZb3UgYXJlIGEgdGVzdCBoYXJuZXNzLiJ9LHsicm9sZSI6InN5c3RlbSIsImNvbnRlbnQiOiJNYW5hZ2VkIHNlY3Rpb24uIn0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOiJSdW4gaXQgICAgcGxlYXNlIOKYgzxzeXN0ZW0tcmVtaW5kZXI+YW1iaWVudDwvc3lzdGVtLXJlbWluZGVyPiJ9LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOiJSdW5uaW5nLiIsInRvb2xfY2FsbHMiOlt7ImlkIjoiY2FsbF9hIiwidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJ1bl9jb21tYW5kIiwiYXJndW1lbnRzIjoie1wiY29tbWFuZFwiOiBcInRydWVcIn0ifX1dfSx7InJvbGUiOiJ0b29sIiwiY29udGVudCI6IiQgdHJ1ZVxuXG5bZXhpdCBjb2RlOiAwXSIsInRvb2xfY2FsbF9pZCI6ImNhbGxfYSJ9LHsicm9sZSI6ImFzc2lzdGFudCIsInRvb2xfY2FsbHMiOlt7ImlkIjoiY2FsbF9iIiwidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJlYWRfZmlsZXMiLCJhcmd1bWVudHMiOiJ7XCJwYXRoXCI6IFwiZjAudHh0XCJ9In19XX0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOiJGaWxlOiBmMC50eHQgKDEgbGluZXMpXG4gICAxXHRub29wIDBcbiIsInRvb2xfY2FsbF9pZCI6ImNhbGxfYiJ9LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjoiQSBwcml2YXRlIHByb2dyZXNzIGV2ZW50LiJ9XSwibWF4X3Rva2VucyI6NDA5Niwic3RyZWFtIjp0cnVlLCJ0b29scyI6W3sidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJ1bl9jb21tYW5kIiwiZGVzY3JpcHRpb24iOiJSdW4gYSBzaGVsbCBjb21tYW5kIOKAlCBib3VuZGVkLiIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsiY29tbWFuZCI6eyJ0eXBlIjoic3RyaW5nIn19LCJyZXF1aXJlZCI6WyJjb21tYW5kIl19fX0seyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoic2VuZCIsImRlc2NyaXB0aW9uIjoiU2VuZCB0byBvbmUgdGFyZ2V0LiIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCIsImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicHJvcGVydGllcyI6eyJhIjp7InR5cGUiOiJzdHJpbmcifSwiYiI6eyJ0eXBlIjoiaW50ZWdlciJ9fX19fSx7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJyZWFkX2ZpbGVzIiwiZGVzY3JpcHRpb24iOiJSZWFkIGZpbGVzLlxuU3VjY2Vzc2Z1bCBkZWNvZGVkIEpTT04gdmFsdWUgKHByb2R1Y2VyIGRlY2xhcmF0aW9uOyBjb3ZlcmFnZS9mcmVzaG5lc3MgdW5rbm93bik6IHtcImRlc2NyaXB0aW9uXCI6XCJyXFx1MDBlOXN1bHRhdFwiLFwicHJvcGVydGllc1wiOntcIm9rXCI6e1widHlwZVwiOlwiYm9vbGVhblwifX0sXCJ0eXBlXCI6XCJvYmplY3RcIn0iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InBhdGgiOnsidHlwZSI6InN0cmluZyJ9fX19fV0sInRlbXBlcmF0dXJlIjoxLjB9"
+  },
+  {
+   "name": "friday-minimax-chat",
+   "protocol": "openai",
+   "model": "MiniMax-M2.5",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "loop",
+   "tools": "base",
+   "inference_profile": {
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "url": "https://api.openai.com/v1/chat/completions",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6Ik1pbmlNYXgtTTIuNSIsIm1lc3NhZ2VzIjpbeyJyb2xlIjoic3lzdGVtIiwiY29udGVudCI6IlN0YXRpYyBwcm9tcHQuTWVtb3J5IGJsb2NrLiJ9LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjoiSW5zcGVjdCB0aGUgcmVwby4ifSx7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjoiTG9va2luZy4iLCJ0b29sX2NhbGxzIjpbeyJpZCI6InRvb2x1XzEiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJhcmd1bWVudHMiOiJ7XCJjb21tYW5kXCI6IFwibHNcIn0ifX1dfSx7InJvbGUiOiJ0b29sIiwiY29udGVudCI6ImFcbmIiLCJ0b29sX2NhbGxfaWQiOiJ0b29sdV8xIn0seyJyb2xlIjoiYXNzaXN0YW50IiwidG9vbF9jYWxscyI6W3siaWQiOiJ0b29sdV8yIiwidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJlYWRfZmlsZXMiLCJhcmd1bWVudHMiOiJ7XCJwYXRoXCI6IFwiYVwifSJ9fSx7ImlkIjoidG9vbHVfMyIsInR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJyZWFkX2ZpbGVzIiwiYXJndW1lbnRzIjoie1wicGF0aFwiOiBcImJcIn0ifX1dfSx7InJvbGUiOiJ0b29sIiwiY29udGVudCI6IkEiLCJ0b29sX2NhbGxfaWQiOiJ0b29sdV8yIn0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOiJCIiwidG9vbF9jYWxsX2lkIjoidG9vbHVfMyJ9LHsicm9sZSI6ImFzc2lzdGFudCIsInRvb2xfY2FsbHMiOlt7ImlkIjoidG9vbHVfNCIsInR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJydW5fY29tbWFuZCIsImFyZ3VtZW50cyI6IntcImNvbW1hbmRcIjogXCJwd2RcIn0ifX1dfSx7InJvbGUiOiJ0b29sIiwiY29udGVudCI6Ii93IiwidG9vbF9jYWxsX2lkIjoidG9vbHVfNCJ9XSwibWF4X3Rva2VucyI6NDA5Niwic3RyZWFtIjp0cnVlLCJ0b29scyI6W3sidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJ1bl9jb21tYW5kIiwiZGVzY3JpcHRpb24iOiJSdW4gYSBzaGVsbCBjb21tYW5kIOKAlCBib3VuZGVkLiIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsiY29tbWFuZCI6eyJ0eXBlIjoic3RyaW5nIn19LCJyZXF1aXJlZCI6WyJjb21tYW5kIl19fX0seyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoic2VuZCIsImRlc2NyaXB0aW9uIjoiU2VuZCB0byBvbmUgdGFyZ2V0LiIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCIsImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicHJvcGVydGllcyI6eyJhIjp7InR5cGUiOiJzdHJpbmcifSwiYiI6eyJ0eXBlIjoiaW50ZWdlciJ9fX19fSx7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJyZWFkX2ZpbGVzIiwiZGVzY3JpcHRpb24iOiJSZWFkIGZpbGVzLlxuU3VjY2Vzc2Z1bCBkZWNvZGVkIEpTT04gdmFsdWUgKHByb2R1Y2VyIGRlY2xhcmF0aW9uOyBjb3ZlcmFnZS9mcmVzaG5lc3MgdW5rbm93bik6IHtcImRlc2NyaXB0aW9uXCI6XCJyXFx1MDBlOXN1bHRhdFwiLFwicHJvcGVydGllc1wiOntcIm9rXCI6e1widHlwZVwiOlwiYm9vbGVhblwifX0sXCJ0eXBlXCI6XCJvYmplY3RcIn0iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InBhdGgiOnsidHlwZSI6InN0cmluZyJ9fX19fV0sInRlbXBlcmF0dXJlIjoxLjB9"
+  },
+  {
+   "name": "friday-kunlun-responses",
+   "protocol": "responses",
+   "model": "kunlunbedrock.gpt-6.1-sol-m17",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "loop",
+   "tools": "base",
+   "inference_profile": {
+    "sampling": {
+     "temperature": "omit"
+    },
+    "features": {
+     "responses_reasoning_replay": "supported",
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "conv-10",
+   "url": "https://api.openai.com/v1/responses",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ],
+    [
+     "Mt-Session-Id",
+     "1269c747-b706-5a17-a74f-c09c0042257a"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6Imt1bmx1bmJlZHJvY2suZ3B0LTYuMS1zb2wtbTE3Iiwic3RvcmUiOmZhbHNlLCJzdHJlYW0iOnRydWUsInBhcmFsbGVsX3Rvb2xfY2FsbHMiOnRydWUsIm1heF9vdXRwdXRfdG9rZW5zIjo0MDk2LCJyZWFzb25pbmciOnsiY29udGV4dCI6ImFsbF90dXJucyJ9LCJpbmNsdWRlIjpbInJlYXNvbmluZy5lbmNyeXB0ZWRfY29udGVudCJdLCJpbnB1dCI6W3sidHlwZSI6Im1lc3NhZ2UiLCJyb2xlIjoiZGV2ZWxvcGVyIiwiY29udGVudCI6W3sidHlwZSI6ImlucHV0X3RleHQiLCJ0ZXh0IjoiU3RhdGljIHByb21wdC4ifSx7InR5cGUiOiJpbnB1dF90ZXh0IiwidGV4dCI6Ik1lbW9yeSBibG9jay4ifV19LHsidHlwZSI6Im1lc3NhZ2UiLCJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJpbnB1dF90ZXh0IiwidGV4dCI6Ikluc3BlY3QgdGhlIHJlcG8uIn1dfSx7InR5cGUiOiJtZXNzYWdlIiwicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOlt7InR5cGUiOiJvdXRwdXRfdGV4dCIsInRleHQiOiJMb29raW5nLiJ9XX0seyJ0eXBlIjoiZnVuY3Rpb25fY2FsbCIsImNhbGxfaWQiOiJ0b29sdV8xIiwibmFtZSI6InJ1bl9jb21tYW5kIiwiYXJndW1lbnRzIjoie1wiY29tbWFuZFwiOiBcImxzXCJ9In0seyJ0eXBlIjoiZnVuY3Rpb25fY2FsbF9vdXRwdXQiLCJjYWxsX2lkIjoidG9vbHVfMSIsIm91dHB1dCI6ImFcbmIifSx7InR5cGUiOiJmdW5jdGlvbl9jYWxsIiwiY2FsbF9pZCI6InRvb2x1XzIiLCJuYW1lIjoicmVhZF9maWxlcyIsImFyZ3VtZW50cyI6IntcInBhdGhcIjogXCJhXCJ9In0seyJ0eXBlIjoiZnVuY3Rpb25fY2FsbCIsImNhbGxfaWQiOiJ0b29sdV8zIiwibmFtZSI6InJlYWRfZmlsZXMiLCJhcmd1bWVudHMiOiJ7XCJwYXRoXCI6IFwiYlwifSJ9LHsidHlwZSI6ImZ1bmN0aW9uX2NhbGxfb3V0cHV0IiwiY2FsbF9pZCI6InRvb2x1XzIiLCJvdXRwdXQiOiJBIn0seyJ0eXBlIjoiZnVuY3Rpb25fY2FsbF9vdXRwdXQiLCJjYWxsX2lkIjoidG9vbHVfMyIsIm91dHB1dCI6Ilt7XCJ0eXBlXCI6IFwidGV4dFwiLCBcInRleHRcIjogXCJCXCJ9XSJ9LHsidHlwZSI6ImZ1bmN0aW9uX2NhbGwiLCJjYWxsX2lkIjoidG9vbHVfNCIsIm5hbWUiOiJydW5fY29tbWFuZCIsImFyZ3VtZW50cyI6IntcImNvbW1hbmRcIjogXCJwd2RcIn0ifSx7InR5cGUiOiJmdW5jdGlvbl9jYWxsX291dHB1dCIsImNhbGxfaWQiOiJ0b29sdV80Iiwib3V0cHV0IjoiL3cifV0sInRvb2xzIjpbeyJ0eXBlIjoiZnVuY3Rpb24iLCJuYW1lIjoicnVuX2NvbW1hbmQiLCJkZXNjcmlwdGlvbiI6IlJ1biBhIHNoZWxsIGNvbW1hbmQg4oCUIGJvdW5kZWQuIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJjb21tYW5kIjp7InR5cGUiOiJzdHJpbmcifX0sInJlcXVpcmVkIjpbImNvbW1hbmQiXX0sInN0cmljdCI6ZmFsc2V9LHsidHlwZSI6ImZ1bmN0aW9uIiwibmFtZSI6InNlbmQiLCJkZXNjcmlwdGlvbiI6IlNlbmQgdG8gb25lIHRhcmdldC4iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInByb3BlcnRpZXMiOnsiYSI6eyJ0eXBlIjoic3RyaW5nIn0sImIiOnsidHlwZSI6ImludGVnZXIifX19LCJzdHJpY3QiOmZhbHNlfSx7InR5cGUiOiJmdW5jdGlvbiIsIm5hbWUiOiJyZWFkX2ZpbGVzIiwiZGVzY3JpcHRpb24iOiJSZWFkIGZpbGVzLlxuU3VjY2Vzc2Z1bCBkZWNvZGVkIEpTT04gdmFsdWUgKHByb2R1Y2VyIGRlY2xhcmF0aW9uOyBjb3ZlcmFnZS9mcmVzaG5lc3MgdW5rbm93bik6IHtcImRlc2NyaXB0aW9uXCI6XCJyXFx1MDBlOXN1bHRhdFwiLFwicHJvcGVydGllc1wiOntcIm9rXCI6e1widHlwZVwiOlwiYm9vbGVhblwifX0sXCJ0eXBlXCI6XCJvYmplY3RcIn0iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InBhdGgiOnsidHlwZSI6InN0cmluZyJ9fX0sInN0cmljdCI6ZmFsc2V9XX0="
+  },
+  {
+   "name": "friday-tokrouter-responses",
+   "protocol": "responses",
+   "model": "tokrouter.gpt-5.5.distill-m17",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "base",
+   "tools": "base",
+   "inference_profile": {
+    "sampling": {
+     "temperature": "omit"
+    },
+    "features": {
+     "responses_reasoning_replay": "supported",
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "url": "https://api.openai.com/v1/responses",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6InRva3JvdXRlci5ncHQtNS41LmRpc3RpbGwtbTE3Iiwic3RvcmUiOmZhbHNlLCJzdHJlYW0iOnRydWUsInBhcmFsbGVsX3Rvb2xfY2FsbHMiOnRydWUsIm1heF9vdXRwdXRfdG9rZW5zIjo0MDk2LCJyZWFzb25pbmciOnsiY29udGV4dCI6ImFsbF90dXJucyJ9LCJpbmNsdWRlIjpbInJlYXNvbmluZy5lbmNyeXB0ZWRfY29udGVudCJdLCJpbnB1dCI6W3sidHlwZSI6Im1lc3NhZ2UiLCJyb2xlIjoiZGV2ZWxvcGVyIiwiY29udGVudCI6W3sidHlwZSI6ImlucHV0X3RleHQiLCJ0ZXh0IjoiWW91IGFyZSBhIHRlc3QgaGFybmVzcy4ifV19LHsidHlwZSI6Im1lc3NhZ2UiLCJyb2xlIjoiZGV2ZWxvcGVyIiwiY29udGVudCI6W3sidHlwZSI6ImlucHV0X3RleHQiLCJ0ZXh0IjoiTWFuYWdlZCBzZWN0aW9uLiJ9XX0seyJ0eXBlIjoibWVzc2FnZSIsInJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6ImlucHV0X3RleHQiLCJ0ZXh0IjoiUnVuIGl0ICAgICJ9LHsidHlwZSI6ImlucHV0X3RleHQiLCJ0ZXh0IjoicGxlYXNlIOKYgyJ9LHsidHlwZSI6ImlucHV0X3RleHQiLCJ0ZXh0IjoiPHN5c3RlbS1yZW1pbmRlcj5hbWJpZW50PC9zeXN0ZW0tcmVtaW5kZXI+In1dfSx7InR5cGUiOiJtZXNzYWdlIiwicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOlt7InR5cGUiOiJvdXRwdXRfdGV4dCIsInRleHQiOiJSdW5uaW5nLiJ9XX0seyJ0eXBlIjoiZnVuY3Rpb25fY2FsbCIsImNhbGxfaWQiOiJjYWxsX2EiLCJuYW1lIjoicnVuX2NvbW1hbmQiLCJhcmd1bWVudHMiOiJ7XCJjb21tYW5kXCI6IFwidHJ1ZVwifSJ9LHsidHlwZSI6ImZ1bmN0aW9uX2NhbGxfb3V0cHV0IiwiY2FsbF9pZCI6ImNhbGxfYSIsIm91dHB1dCI6IiQgdHJ1ZVxuXG5bZXhpdCBjb2RlOiAwXSJ9LHsidHlwZSI6ImZ1bmN0aW9uX2NhbGwiLCJjYWxsX2lkIjoiY2FsbF9iIiwibmFtZSI6InJlYWRfZmlsZXMiLCJhcmd1bWVudHMiOiJ7XCJwYXRoXCI6IFwiZjAudHh0XCJ9In0seyJ0eXBlIjoiZnVuY3Rpb25fY2FsbF9vdXRwdXQiLCJjYWxsX2lkIjoiY2FsbF9iIiwib3V0cHV0IjoiRmlsZTogZjAudHh0ICgxIGxpbmVzKVxuICAgMVx0bm9vcCAwXG4ifSx7InR5cGUiOiJtZXNzYWdlIiwicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoiaW5wdXRfdGV4dCIsInRleHQiOiJBIHByaXZhdGUgcHJvZ3Jlc3MgZXZlbnQuIn1dfV0sInRvb2xzIjpbeyJ0eXBlIjoiZnVuY3Rpb24iLCJuYW1lIjoicnVuX2NvbW1hbmQiLCJkZXNjcmlwdGlvbiI6IlJ1biBhIHNoZWxsIGNvbW1hbmQg4oCUIGJvdW5kZWQuIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJjb21tYW5kIjp7InR5cGUiOiJzdHJpbmcifX0sInJlcXVpcmVkIjpbImNvbW1hbmQiXX0sInN0cmljdCI6ZmFsc2V9LHsidHlwZSI6ImZ1bmN0aW9uIiwibmFtZSI6InNlbmQiLCJkZXNjcmlwdGlvbiI6IlNlbmQgdG8gb25lIHRhcmdldC4iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInByb3BlcnRpZXMiOnsiYSI6eyJ0eXBlIjoic3RyaW5nIn0sImIiOnsidHlwZSI6ImludGVnZXIifX19LCJzdHJpY3QiOmZhbHNlfSx7InR5cGUiOiJmdW5jdGlvbiIsIm5hbWUiOiJyZWFkX2ZpbGVzIiwiZGVzY3JpcHRpb24iOiJSZWFkIGZpbGVzLlxuU3VjY2Vzc2Z1bCBkZWNvZGVkIEpTT04gdmFsdWUgKHByb2R1Y2VyIGRlY2xhcmF0aW9uOyBjb3ZlcmFnZS9mcmVzaG5lc3MgdW5rbm93bik6IHtcImRlc2NyaXB0aW9uXCI6XCJyXFx1MDBlOXN1bHRhdFwiLFwicHJvcGVydGllc1wiOntcIm9rXCI6e1widHlwZVwiOlwiYm9vbGVhblwifX0sXCJ0eXBlXCI6XCJvYmplY3RcIn0iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InBhdGgiOnsidHlwZSI6InN0cmluZyJ9fX0sInN0cmljdCI6ZmFsc2V9XX0="
+  },
+  {
+   "name": "catpaw-kimi-k3",
+   "protocol": "anthropic",
+   "model": "kimi-k3",
+   "base_url": "https://mcli.internal.example.com",
+   "messages": "base",
+   "tools": "base",
+   "inference_profile": null,
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "url": "https://mcli.internal.example.com/v1/messages",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "anthropic-version",
+     "2023-06-01"
+    ],
+    [
+     "x-api-key",
+     "sk-golden"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ],
+    [
+     "X-Working-Dir",
+     "/"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImtpbWktazMiLCJtYXhfdG9rZW5zIjo0MDk2LCJzdHJlYW0iOnRydWUsInRlbXBlcmF0dXJlIjoxLjAsInRvb2xzIjpbeyJuYW1lIjoicnVuX2NvbW1hbmQiLCJkZXNjcmlwdGlvbiI6IlJ1biBhIHNoZWxsIGNvbW1hbmQg4oCUIGJvdW5kZWQuIiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImNvbW1hbmQiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsiY29tbWFuZCJdfX0seyJuYW1lIjoic2VuZCIsImRlc2NyaXB0aW9uIjoiU2VuZCB0byBvbmUgdGFyZ2V0LiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImEiOnsidHlwZSI6InN0cmluZyJ9LCJiIjp7InR5cGUiOiJpbnRlZ2VyIn19fX0seyJuYW1lIjoicmVhZF9maWxlcyIsImRlc2NyaXB0aW9uIjoiUmVhZCBmaWxlcy5cblN1Y2Nlc3NmdWwgZGVjb2RlZCBKU09OIHZhbHVlIChwcm9kdWNlciBkZWNsYXJhdGlvbjsgY292ZXJhZ2UvZnJlc2huZXNzIHVua25vd24pOiB7XCJkZXNjcmlwdGlvblwiOlwiclxcdTAwZTlzdWx0YXRcIixcInByb3BlcnRpZXNcIjp7XCJva1wiOntcInR5cGVcIjpcImJvb2xlYW5cIn19LFwidHlwZVwiOlwib2JqZWN0XCJ9IiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InBhdGgiOnsidHlwZSI6InN0cmluZyJ9fX19XSwic3lzdGVtIjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJZb3UgYXJlIENsYXVkZSBDb2RlLCBBbnRocm9waWMncyBvZmZpY2lhbCBDTEkgZm9yIENsYXVkZS4ifSx7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IllvdSBhcmUgYSB0ZXN0IGhhcm5lc3MuIn0seyJ0eXBlIjoidGV4dCIsInRleHQiOiJNYW5hZ2VkIHNlY3Rpb24uIn1dLCJtZXNzYWdlcyI6W3sicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJSdW4gaXQgICAgIn0seyJ0eXBlIjoidGV4dCIsInRleHQiOiJwbGVhc2Ug4piDIn0seyJ0eXBlIjoidGV4dCIsInRleHQiOiI8c3lzdGVtLXJlbWluZGVyPmFtYmllbnQ8L3N5c3RlbS1yZW1pbmRlcj4ifV19LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IlJ1bm5pbmcuIn0seyJ0eXBlIjoidG9vbF91c2UiLCJpZCI6ImNhbGxfYSIsIm5hbWUiOiJydW5fY29tbWFuZCIsImlucHV0Ijp7ImNvbW1hbmQiOiJ0cnVlIn19XX0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJ0b29sX3Jlc3VsdCIsInRvb2xfdXNlX2lkIjoiY2FsbF9hIiwiY29udGVudCI6IiQgdHJ1ZVxuXG5bZXhpdCBjb2RlOiAwXSJ9XX0seyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfdXNlIiwiaWQiOiJjYWxsX2IiLCJuYW1lIjoicmVhZF9maWxlcyIsImlucHV0Ijp7InBhdGgiOiJmMC50eHQifX1dfSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfcmVzdWx0IiwidG9vbF91c2VfaWQiOiJjYWxsX2IiLCJjb250ZW50IjoiRmlsZTogZjAudHh0ICgxIGxpbmVzKVxuICAgMVx0bm9vcCAwXG4ifV19LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJBIHByaXZhdGUgcHJvZ3Jlc3MgZXZlbnQuIn1dfV19"
+  },
+  {
+   "name": "catpaw-glm-loop",
+   "protocol": "anthropic",
+   "model": "glm-5.3",
+   "base_url": "https://mcli.internal.example.com",
+   "messages": "loop",
+   "tools": "base",
+   "inference_profile": null,
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "url": "https://mcli.internal.example.com/v1/messages",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "anthropic-version",
+     "2023-06-01"
+    ],
+    [
+     "x-api-key",
+     "sk-golden"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ],
+    [
+     "X-Working-Dir",
+     "/"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImdsbS01LjMiLCJtYXhfdG9rZW5zIjo0MDk2LCJzdHJlYW0iOnRydWUsInRlbXBlcmF0dXJlIjoxLjAsInRvb2xzIjpbeyJuYW1lIjoicnVuX2NvbW1hbmQiLCJkZXNjcmlwdGlvbiI6IlJ1biBhIHNoZWxsIGNvbW1hbmQg4oCUIGJvdW5kZWQuIiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImNvbW1hbmQiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsiY29tbWFuZCJdfX0seyJuYW1lIjoic2VuZCIsImRlc2NyaXB0aW9uIjoiU2VuZCB0byBvbmUgdGFyZ2V0LiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImEiOnsidHlwZSI6InN0cmluZyJ9LCJiIjp7InR5cGUiOiJpbnRlZ2VyIn19fX0seyJuYW1lIjoicmVhZF9maWxlcyIsImRlc2NyaXB0aW9uIjoiUmVhZCBmaWxlcy5cblN1Y2Nlc3NmdWwgZGVjb2RlZCBKU09OIHZhbHVlIChwcm9kdWNlciBkZWNsYXJhdGlvbjsgY292ZXJhZ2UvZnJlc2huZXNzIHVua25vd24pOiB7XCJkZXNjcmlwdGlvblwiOlwiclxcdTAwZTlzdWx0YXRcIixcInByb3BlcnRpZXNcIjp7XCJva1wiOntcInR5cGVcIjpcImJvb2xlYW5cIn19LFwidHlwZVwiOlwib2JqZWN0XCJ9IiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InBhdGgiOnsidHlwZSI6InN0cmluZyJ9fX0sImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCJ9fV0sInN5c3RlbSI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiWW91IGFyZSBDbGF1ZGUgQ29kZSwgQW50aHJvcGljJ3Mgb2ZmaWNpYWwgQ0xJIGZvciBDbGF1ZGUuIn0seyJ0eXBlIjoidGV4dCIsInRleHQiOiJTdGF0aWMgcHJvbXB0LiIsImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCJ9fSx7InR5cGUiOiJ0ZXh0IiwidGV4dCI6Ik1lbW9yeSBibG9jay4iLCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX1dLCJtZXNzYWdlcyI6W3sicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJJbnNwZWN0IHRoZSByZXBvLiJ9XX0seyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiTG9va2luZy4ifSx7InR5cGUiOiJ0b29sX3VzZSIsImlkIjoidG9vbHVfMSIsIm5hbWUiOiJydW5fY29tbWFuZCIsImlucHV0Ijp7ImNvbW1hbmQiOiJscyJ9fV19LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF9yZXN1bHQiLCJ0b29sX3VzZV9pZCI6InRvb2x1XzEiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJhXG5iIn1dfV19LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0b29sX3VzZSIsImlkIjoidG9vbHVfMiIsIm5hbWUiOiJyZWFkX2ZpbGVzIiwiaW5wdXQiOnsicGF0aCI6ImEifX0seyJ0eXBlIjoidG9vbF91c2UiLCJpZCI6InRvb2x1XzMiLCJuYW1lIjoicmVhZF9maWxlcyIsImlucHV0Ijp7InBhdGgiOiJiIn19XX0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJ0b29sX3Jlc3VsdCIsInRvb2xfdXNlX2lkIjoidG9vbHVfMiIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IkEifV19LHsidHlwZSI6InRvb2xfcmVzdWx0IiwidG9vbF91c2VfaWQiOiJ0b29sdV8zIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiQiJ9XX1dfSx7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF91c2UiLCJpZCI6InRvb2x1XzQiLCJuYW1lIjoicnVuX2NvbW1hbmQiLCJpbnB1dCI6eyJjb21tYW5kIjoicHdkIn19XX0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJ0b29sX3Jlc3VsdCIsInRvb2xfdXNlX2lkIjoidG9vbHVfNCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6Ii93In1dLCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX1dfV19"
+  },
+  {
+   "name": "catalog-claude-opus-5-effort-max",
+   "protocol": "anthropic",
+   "model": "claude-opus-5",
+   "base_url": "https://api.openai.com/v1/anthropic",
+   "messages": "loop",
+   "tools": "base",
+   "inference_profile": {
+    "reasoning": {
+     "can_disable": true,
+     "default_effort": "high",
+     "display": "summarized",
+     "effort_field": "effort",
+     "effort_map": {
+      "ultra": "max"
+     },
+     "enabled_type": "adaptive",
+     "support": "supported",
+     "supported_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+     ],
+     "wire_format": "thinking_type"
+    },
+    "sampling": {
+     "omit": [
+      "temperature",
+      "top_p",
+      "top_k"
+     ]
+    },
+    "source": "official",
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "conv-11",
+   "reasoning": {
+    "effort": "max"
+   },
+   "url": "https://api.openai.com/v1/anthropic/v1/messages",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "anthropic-version",
+     "2023-06-01"
+    ],
+    [
+     "x-api-key",
+     "sk-golden"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ],
+    [
+     "Mt-Session-Id",
+     "a7e54339-6133-5215-af62-31bcf97f532c"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImNsYXVkZS1vcHVzLTUiLCJtYXhfdG9rZW5zIjo0MDk2LCJzdHJlYW0iOnRydWUsInRoaW5raW5nIjp7InR5cGUiOiJhZGFwdGl2ZSIsImRpc3BsYXkiOiJzdW1tYXJpemVkIn0sIm91dHB1dF9jb25maWciOnsiZWZmb3J0IjoibWF4In0sInRvb2xzIjpbeyJuYW1lIjoicnVuX2NvbW1hbmQiLCJkZXNjcmlwdGlvbiI6IlJ1biBhIHNoZWxsIGNvbW1hbmQg4oCUIGJvdW5kZWQuIiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImNvbW1hbmQiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsiY29tbWFuZCJdfX0seyJuYW1lIjoic2VuZCIsImRlc2NyaXB0aW9uIjoiU2VuZCB0byBvbmUgdGFyZ2V0LiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImEiOnsidHlwZSI6InN0cmluZyJ9LCJiIjp7InR5cGUiOiJpbnRlZ2VyIn19fX0seyJuYW1lIjoicmVhZF9maWxlcyIsImRlc2NyaXB0aW9uIjoiUmVhZCBmaWxlcy5cblN1Y2Nlc3NmdWwgZGVjb2RlZCBKU09OIHZhbHVlIChwcm9kdWNlciBkZWNsYXJhdGlvbjsgY292ZXJhZ2UvZnJlc2huZXNzIHVua25vd24pOiB7XCJkZXNjcmlwdGlvblwiOlwiclxcdTAwZTlzdWx0YXRcIixcInByb3BlcnRpZXNcIjp7XCJva1wiOntcInR5cGVcIjpcImJvb2xlYW5cIn19LFwidHlwZVwiOlwib2JqZWN0XCJ9IiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InBhdGgiOnsidHlwZSI6InN0cmluZyJ9fX0sImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCJ9fV0sInN5c3RlbSI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiU3RhdGljIHByb21wdC4iLCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX0seyJ0eXBlIjoidGV4dCIsInRleHQiOiJNZW1vcnkgYmxvY2suIiwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19XSwibWVzc2FnZXMiOlt7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiSW5zcGVjdCB0aGUgcmVwby4ifV19LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6Ikxvb2tpbmcuIn0seyJ0eXBlIjoidG9vbF91c2UiLCJpZCI6InRvb2x1XzEiLCJuYW1lIjoicnVuX2NvbW1hbmQiLCJpbnB1dCI6eyJjb21tYW5kIjoibHMifX1dfSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfcmVzdWx0IiwidG9vbF91c2VfaWQiOiJ0b29sdV8xIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiYVxuYiJ9XX1dfSx7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF91c2UiLCJpZCI6InRvb2x1XzIiLCJuYW1lIjoicmVhZF9maWxlcyIsImlucHV0Ijp7InBhdGgiOiJhIn19LHsidHlwZSI6InRvb2xfdXNlIiwiaWQiOiJ0b29sdV8zIiwibmFtZSI6InJlYWRfZmlsZXMiLCJpbnB1dCI6eyJwYXRoIjoiYiJ9fV19LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF9yZXN1bHQiLCJ0b29sX3VzZV9pZCI6InRvb2x1XzIiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJBIn1dfSx7InR5cGUiOiJ0b29sX3Jlc3VsdCIsInRvb2xfdXNlX2lkIjoidG9vbHVfMyIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IkIifV19XX0seyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfdXNlIiwiaWQiOiJ0b29sdV80IiwibmFtZSI6InJ1bl9jb21tYW5kIiwiaW5wdXQiOnsiY29tbWFuZCI6InB3ZCJ9fV19LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF9yZXN1bHQiLCJ0b29sX3VzZV9pZCI6InRvb2x1XzQiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiIvdyJ9XSwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19XX1dfQ=="
+  },
+  {
+   "name": "catalog-claude-opus-4.8-off",
+   "protocol": "anthropic",
+   "model": "claude-opus-4.8",
+   "base_url": "https://api.openai.com/v1/anthropic",
+   "messages": "base",
+   "tools": "base",
+   "inference_profile": {
+    "reasoning": {
+     "can_disable": true,
+     "default_effort": "high",
+     "display": "summarized",
+     "effort_field": "effort",
+     "effort_map": {
+      "ultra": "max"
+     },
+     "enabled_type": "adaptive",
+     "support": "supported",
+     "supported_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+     ],
+     "wire_format": "thinking_type"
+    },
+    "sampling": {
+     "omit": [
+      "temperature",
+      "top_p",
+      "top_k"
+     ]
+    },
+    "source": "official",
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "reasoning": {
+    "thinking_enabled": false
+   },
+   "url": "https://api.openai.com/v1/anthropic/v1/messages",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "anthropic-version",
+     "2023-06-01"
+    ],
+    [
+     "x-api-key",
+     "sk-golden"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImNsYXVkZS1vcHVzLTQuOCIsIm1heF90b2tlbnMiOjQwOTYsInN0cmVhbSI6dHJ1ZSwidGhpbmtpbmciOnsidHlwZSI6ImRpc2FibGVkIn0sInRvb2xzIjpbeyJuYW1lIjoicnVuX2NvbW1hbmQiLCJkZXNjcmlwdGlvbiI6IlJ1biBhIHNoZWxsIGNvbW1hbmQg4oCUIGJvdW5kZWQuIiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImNvbW1hbmQiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsiY29tbWFuZCJdfX0seyJuYW1lIjoic2VuZCIsImRlc2NyaXB0aW9uIjoiU2VuZCB0byBvbmUgdGFyZ2V0LiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImEiOnsidHlwZSI6InN0cmluZyJ9LCJiIjp7InR5cGUiOiJpbnRlZ2VyIn19fX0seyJuYW1lIjoicmVhZF9maWxlcyIsImRlc2NyaXB0aW9uIjoiUmVhZCBmaWxlcy5cblN1Y2Nlc3NmdWwgZGVjb2RlZCBKU09OIHZhbHVlIChwcm9kdWNlciBkZWNsYXJhdGlvbjsgY292ZXJhZ2UvZnJlc2huZXNzIHVua25vd24pOiB7XCJkZXNjcmlwdGlvblwiOlwiclxcdTAwZTlzdWx0YXRcIixcInByb3BlcnRpZXNcIjp7XCJva1wiOntcInR5cGVcIjpcImJvb2xlYW5cIn19LFwidHlwZVwiOlwib2JqZWN0XCJ9IiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InBhdGgiOnsidHlwZSI6InN0cmluZyJ9fX0sImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCJ9fV0sInN5c3RlbSI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiWW91IGFyZSBhIHRlc3QgaGFybmVzcy4iLCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX0seyJ0eXBlIjoidGV4dCIsInRleHQiOiJNYW5hZ2VkIHNlY3Rpb24uIiwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19XSwibWVzc2FnZXMiOlt7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiUnVuIGl0ICAgICJ9LHsidHlwZSI6InRleHQiLCJ0ZXh0IjoicGxlYXNlIOKYgyJ9LHsidHlwZSI6InRleHQiLCJ0ZXh0IjoiPHN5c3RlbS1yZW1pbmRlcj5hbWJpZW50PC9zeXN0ZW0tcmVtaW5kZXI+In1dfSx7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJSdW5uaW5nLiJ9LHsidHlwZSI6InRvb2xfdXNlIiwiaWQiOiJjYWxsX2EiLCJuYW1lIjoicnVuX2NvbW1hbmQiLCJpbnB1dCI6eyJjb21tYW5kIjoidHJ1ZSJ9fV19LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF9yZXN1bHQiLCJ0b29sX3VzZV9pZCI6ImNhbGxfYSIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IiQgdHJ1ZVxuXG5bZXhpdCBjb2RlOiAwXSJ9XX1dfSx7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF91c2UiLCJpZCI6ImNhbGxfYiIsIm5hbWUiOiJyZWFkX2ZpbGVzIiwiaW5wdXQiOnsicGF0aCI6ImYwLnR4dCJ9fV19LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF9yZXN1bHQiLCJ0b29sX3VzZV9pZCI6ImNhbGxfYiIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IkZpbGU6IGYwLnR4dCAoMSBsaW5lcylcbiAgIDFcdG5vb3AgMFxuIn1dfV19LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJBIHByaXZhdGUgcHJvZ3Jlc3MgZXZlbnQuIiwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19XX1dfQ=="
+  },
+  {
+   "name": "catalog-claude-sonnet-4.5-budget",
+   "protocol": "anthropic",
+   "model": "claude-sonnet-4.5",
+   "base_url": "https://api.openai.com/v1/anthropic",
+   "messages": "loop",
+   "tools": "base",
+   "inference_profile": {
+    "reasoning": {
+     "can_disable": true,
+     "default_budget_tokens": 1024,
+     "min_budget_tokens": 1024,
+     "support": "supported",
+     "wire_format": "thinking_type"
+    },
+    "sampling": {
+     "enabled_temperature": 1.0
+    },
+    "source": "official",
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "reasoning": {
+    "extra": {
+     "thinking": {
+      "type": "enabled",
+      "budget_tokens": 4096
+     }
+    }
+   },
+   "url": "https://api.openai.com/v1/anthropic/v1/messages",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "anthropic-version",
+     "2023-06-01"
+    ],
+    [
+     "x-api-key",
+     "sk-golden"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImNsYXVkZS1zb25uZXQtNC41IiwibWF4X3Rva2VucyI6NDA5Niwic3RyZWFtIjp0cnVlLCJ0ZW1wZXJhdHVyZSI6MS4wLCJ0aGlua2luZyI6eyJ0eXBlIjoiZW5hYmxlZCIsImJ1ZGdldF90b2tlbnMiOjQwOTZ9LCJ0b29scyI6W3sibmFtZSI6InJ1bl9jb21tYW5kIiwiZGVzY3JpcHRpb24iOiJSdW4gYSBzaGVsbCBjb21tYW5kIOKAlCBib3VuZGVkLiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJjb21tYW5kIjp7InR5cGUiOiJzdHJpbmcifX0sInJlcXVpcmVkIjpbImNvbW1hbmQiXX19LHsibmFtZSI6InNlbmQiLCJkZXNjcmlwdGlvbiI6IlNlbmQgdG8gb25lIHRhcmdldC4iLCJpbnB1dF9zY2hlbWEiOnsidHlwZSI6Im9iamVjdCIsImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicHJvcGVydGllcyI6eyJhIjp7InR5cGUiOiJzdHJpbmcifSwiYiI6eyJ0eXBlIjoiaW50ZWdlciJ9fX19LHsibmFtZSI6InJlYWRfZmlsZXMiLCJkZXNjcmlwdGlvbiI6IlJlYWQgZmlsZXMuXG5TdWNjZXNzZnVsIGRlY29kZWQgSlNPTiB2YWx1ZSAocHJvZHVjZXIgZGVjbGFyYXRpb247IGNvdmVyYWdlL2ZyZXNobmVzcyB1bmtub3duKToge1wiZGVzY3JpcHRpb25cIjpcInJcXHUwMGU5c3VsdGF0XCIsXCJwcm9wZXJ0aWVzXCI6e1wib2tcIjp7XCJ0eXBlXCI6XCJib29sZWFuXCJ9fSxcInR5cGVcIjpcIm9iamVjdFwifSIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJwYXRoIjp7InR5cGUiOiJzdHJpbmcifX19LCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX1dLCJzeXN0ZW0iOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IlN0YXRpYyBwcm9tcHQuIiwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19LHsidHlwZSI6InRleHQiLCJ0ZXh0IjoiTWVtb3J5IGJsb2NrLiIsImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCJ9fV0sIm1lc3NhZ2VzIjpbeyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6Ikluc3BlY3QgdGhlIHJlcG8uIn1dfSx7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJMb29raW5nLiJ9LHsidHlwZSI6InRvb2xfdXNlIiwiaWQiOiJ0b29sdV8xIiwibmFtZSI6InJ1bl9jb21tYW5kIiwiaW5wdXQiOnsiY29tbWFuZCI6ImxzIn19XX0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJ0b29sX3Jlc3VsdCIsInRvb2xfdXNlX2lkIjoidG9vbHVfMSIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6ImFcbmIifV19XX0seyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfdXNlIiwiaWQiOiJ0b29sdV8yIiwibmFtZSI6InJlYWRfZmlsZXMiLCJpbnB1dCI6eyJwYXRoIjoiYSJ9fSx7InR5cGUiOiJ0b29sX3VzZSIsImlkIjoidG9vbHVfMyIsIm5hbWUiOiJyZWFkX2ZpbGVzIiwiaW5wdXQiOnsicGF0aCI6ImIifX1dfSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfcmVzdWx0IiwidG9vbF91c2VfaWQiOiJ0b29sdV8yIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiQSJ9XX0seyJ0eXBlIjoidG9vbF9yZXN1bHQiLCJ0b29sX3VzZV9pZCI6InRvb2x1XzMiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJCIn1dfV19LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0b29sX3VzZSIsImlkIjoidG9vbHVfNCIsIm5hbWUiOiJydW5fY29tbWFuZCIsImlucHV0Ijp7ImNvbW1hbmQiOiJwd2QifX1dfSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfcmVzdWx0IiwidG9vbF91c2VfaWQiOiJ0b29sdV80IiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiL3cifV0sImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCJ9fV19XX0="
+  },
+  {
+   "name": "catalog-claude-opus-4.5-depth-xhigh",
+   "protocol": "anthropic",
+   "model": "claude-opus-4.5",
+   "base_url": "https://api.openai.com/v1/anthropic",
+   "messages": "base",
+   "tools": "base",
+   "inference_profile": {
+    "reasoning": {
+     "can_disable": true,
+     "default_budget_tokens": 1024,
+     "default_effort": "high",
+     "effort_field": "effort",
+     "effort_map": {
+      "max": "high",
+      "ultra": "high",
+      "xhigh": "high"
+     },
+     "min_budget_tokens": 1024,
+     "support": "supported",
+     "supported_efforts": [
+      "low",
+      "medium",
+      "high"
+     ],
+     "wire_format": "thinking_type"
+    },
+    "sampling": {
+     "enabled_temperature": 1.0
+    },
+    "source": "official",
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "reasoning": {
+    "thinking_depth": "xhigh"
+   },
+   "url": "https://api.openai.com/v1/anthropic/v1/messages",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "anthropic-version",
+     "2023-06-01"
+    ],
+    [
+     "x-api-key",
+     "sk-golden"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImNsYXVkZS1vcHVzLTQuNSIsIm1heF90b2tlbnMiOjQwOTYsInN0cmVhbSI6dHJ1ZSwidGVtcGVyYXR1cmUiOjEuMCwidGhpbmtpbmciOnsidHlwZSI6ImVuYWJsZWQiLCJidWRnZXRfdG9rZW5zIjoxMDI0fSwib3V0cHV0X2NvbmZpZyI6eyJlZmZvcnQiOiJoaWdoIn0sInRvb2xzIjpbeyJuYW1lIjoicnVuX2NvbW1hbmQiLCJkZXNjcmlwdGlvbiI6IlJ1biBhIHNoZWxsIGNvbW1hbmQg4oCUIGJvdW5kZWQuIiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImNvbW1hbmQiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsiY29tbWFuZCJdfX0seyJuYW1lIjoic2VuZCIsImRlc2NyaXB0aW9uIjoiU2VuZCB0byBvbmUgdGFyZ2V0LiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImEiOnsidHlwZSI6InN0cmluZyJ9LCJiIjp7InR5cGUiOiJpbnRlZ2VyIn19fX0seyJuYW1lIjoicmVhZF9maWxlcyIsImRlc2NyaXB0aW9uIjoiUmVhZCBmaWxlcy5cblN1Y2Nlc3NmdWwgZGVjb2RlZCBKU09OIHZhbHVlIChwcm9kdWNlciBkZWNsYXJhdGlvbjsgY292ZXJhZ2UvZnJlc2huZXNzIHVua25vd24pOiB7XCJkZXNjcmlwdGlvblwiOlwiclxcdTAwZTlzdWx0YXRcIixcInByb3BlcnRpZXNcIjp7XCJva1wiOntcInR5cGVcIjpcImJvb2xlYW5cIn19LFwidHlwZVwiOlwib2JqZWN0XCJ9IiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InBhdGgiOnsidHlwZSI6InN0cmluZyJ9fX0sImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCJ9fV0sInN5c3RlbSI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiWW91IGFyZSBhIHRlc3QgaGFybmVzcy4iLCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX0seyJ0eXBlIjoidGV4dCIsInRleHQiOiJNYW5hZ2VkIHNlY3Rpb24uIiwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19XSwibWVzc2FnZXMiOlt7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiUnVuIGl0ICAgICJ9LHsidHlwZSI6InRleHQiLCJ0ZXh0IjoicGxlYXNlIOKYgyJ9LHsidHlwZSI6InRleHQiLCJ0ZXh0IjoiPHN5c3RlbS1yZW1pbmRlcj5hbWJpZW50PC9zeXN0ZW0tcmVtaW5kZXI+In1dfSx7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJSdW5uaW5nLiJ9LHsidHlwZSI6InRvb2xfdXNlIiwiaWQiOiJjYWxsX2EiLCJuYW1lIjoicnVuX2NvbW1hbmQiLCJpbnB1dCI6eyJjb21tYW5kIjoidHJ1ZSJ9fV19LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF9yZXN1bHQiLCJ0b29sX3VzZV9pZCI6ImNhbGxfYSIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IiQgdHJ1ZVxuXG5bZXhpdCBjb2RlOiAwXSJ9XX1dfSx7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF91c2UiLCJpZCI6ImNhbGxfYiIsIm5hbWUiOiJyZWFkX2ZpbGVzIiwiaW5wdXQiOnsicGF0aCI6ImYwLnR4dCJ9fV19LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF9yZXN1bHQiLCJ0b29sX3VzZV9pZCI6ImNhbGxfYiIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IkZpbGU6IGYwLnR4dCAoMSBsaW5lcylcbiAgIDFcdG5vb3AgMFxuIn1dfV19LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJBIHByaXZhdGUgcHJvZ3Jlc3MgZXZlbnQuIiwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19XX1dfQ=="
+  },
+  {
+   "name": "catalog-claude-opus-5.5-off-floors",
+   "protocol": "anthropic",
+   "model": "claude-opus-5.5",
+   "base_url": "https://api.openai.com/v1/anthropic",
+   "messages": "base",
+   "tools": "none",
+   "inference_profile": {
+    "reasoning": {
+     "can_disable": false,
+     "default_effort": "medium",
+     "display": "summarized",
+     "effort_field": "effort",
+     "effort_map": {
+      "ultra": "max"
+     },
+     "enabled_type": "adaptive",
+     "support": "supported",
+     "supported_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+     ],
+     "wire_format": "thinking_type"
+    },
+    "sampling": {
+     "omit": [
+      "temperature",
+      "top_p",
+      "top_k"
+     ]
+    },
+    "source": "official",
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "reasoning": {
+    "thinking_depth": "off"
+   },
+   "url": "https://api.openai.com/v1/anthropic/v1/messages",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "anthropic-version",
+     "2023-06-01"
+    ],
+    [
+     "x-api-key",
+     "sk-golden"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImNsYXVkZS1vcHVzLTUuNSIsIm1heF90b2tlbnMiOjQwOTYsInN0cmVhbSI6dHJ1ZSwidGhpbmtpbmciOnsidHlwZSI6ImFkYXB0aXZlIiwiZGlzcGxheSI6InN1bW1hcml6ZWQifSwib3V0cHV0X2NvbmZpZyI6eyJlZmZvcnQiOiJsb3cifSwic3lzdGVtIjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJZb3UgYXJlIGEgdGVzdCBoYXJuZXNzLiIsImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCJ9fSx7InR5cGUiOiJ0ZXh0IiwidGV4dCI6Ik1hbmFnZWQgc2VjdGlvbi4iLCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX1dLCJtZXNzYWdlcyI6W3sicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJSdW4gaXQgICAgIn0seyJ0eXBlIjoidGV4dCIsInRleHQiOiJwbGVhc2Ug4piDIn0seyJ0eXBlIjoidGV4dCIsInRleHQiOiI8c3lzdGVtLXJlbWluZGVyPmFtYmllbnQ8L3N5c3RlbS1yZW1pbmRlcj4ifV19LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IlJ1bm5pbmcuIn0seyJ0eXBlIjoidG9vbF91c2UiLCJpZCI6ImNhbGxfYSIsIm5hbWUiOiJydW5fY29tbWFuZCIsImlucHV0Ijp7ImNvbW1hbmQiOiJ0cnVlIn19XX0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJ0b29sX3Jlc3VsdCIsInRvb2xfdXNlX2lkIjoiY2FsbF9hIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiJCB0cnVlXG5cbltleGl0IGNvZGU6IDBdIn1dfV19LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0b29sX3VzZSIsImlkIjoiY2FsbF9iIiwibmFtZSI6InJlYWRfZmlsZXMiLCJpbnB1dCI6eyJwYXRoIjoiZjAudHh0In19XX0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJ0b29sX3Jlc3VsdCIsInRvb2xfdXNlX2lkIjoiY2FsbF9iIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiRmlsZTogZjAudHh0ICgxIGxpbmVzKVxuICAgMVx0bm9vcCAwXG4ifV19XX0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IkEgcHJpdmF0ZSBwcm9ncmVzcyBldmVudC4iLCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX1dfV19"
+  },
+  {
+   "name": "catalog-claude-opus-5.5-exact-ultra-raises",
+   "protocol": "anthropic",
+   "model": "claude-opus-5.5",
+   "base_url": "https://api.openai.com/v1/anthropic",
+   "messages": "base",
+   "tools": "none",
+   "inference_profile": {
+    "reasoning": {
+     "can_disable": false,
+     "default_effort": "medium",
+     "display": "summarized",
+     "effort_field": "effort",
+     "effort_map": {
+      "ultra": "max"
+     },
+     "enabled_type": "adaptive",
+     "support": "supported",
+     "supported_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+     ],
+     "wire_format": "thinking_type"
+    },
+    "sampling": {
+     "omit": [
+      "temperature",
+      "top_p",
+      "top_k"
+     ]
+    },
+    "source": "official",
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "reasoning": {
+    "effort": "ultra"
+   },
+   "error": {
+    "class": "ReasoningContractError",
+    "message": "unsupported_effort: exact effort cannot be represented"
+   }
+  },
+  {
+   "name": "catalog-kimi-k3-effort-low",
+   "protocol": "anthropic",
+   "model": "kimi-k3",
+   "base_url": "https://api.openai.com/v1/anthropic",
+   "messages": "loop",
+   "tools": "base",
+   "inference_profile": {
+    "reasoning": {
+     "can_disable": false,
+     "default_effort": "max",
+     "effort_map": {
+      "medium": "high",
+      "ultra": "max",
+      "xhigh": "max"
+     },
+     "support": "supported",
+     "supported_efforts": [
+      "low",
+      "high",
+      "max"
+     ],
+     "wire_format": "reasoning_effort"
+    },
+    "sampling": {
+     "omit": [
+      "temperature",
+      "top_p",
+      "presence_penalty",
+      "frequency_penalty"
+     ]
+    },
+    "source": "official",
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "conv-12",
+   "reasoning": {
+    "effort": "low"
+   },
+   "url": "https://api.openai.com/v1/anthropic/v1/messages",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "anthropic-version",
+     "2023-06-01"
+    ],
+    [
+     "x-api-key",
+     "sk-golden"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ],
+    [
+     "Mt-Session-Id",
+     "e30461ad-2aa1-50aa-8d05-acababb81325"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImtpbWktazMiLCJtYXhfdG9rZW5zIjo0MDk2LCJzdHJlYW0iOnRydWUsIm91dHB1dF9jb25maWciOnsiZWZmb3J0IjoibG93In0sInRvb2xzIjpbeyJuYW1lIjoicnVuX2NvbW1hbmQiLCJkZXNjcmlwdGlvbiI6IlJ1biBhIHNoZWxsIGNvbW1hbmQg4oCUIGJvdW5kZWQuIiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImNvbW1hbmQiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsiY29tbWFuZCJdfX0seyJuYW1lIjoic2VuZCIsImRlc2NyaXB0aW9uIjoiU2VuZCB0byBvbmUgdGFyZ2V0LiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImEiOnsidHlwZSI6InN0cmluZyJ9LCJiIjp7InR5cGUiOiJpbnRlZ2VyIn19fX0seyJuYW1lIjoicmVhZF9maWxlcyIsImRlc2NyaXB0aW9uIjoiUmVhZCBmaWxlcy5cblN1Y2Nlc3NmdWwgZGVjb2RlZCBKU09OIHZhbHVlIChwcm9kdWNlciBkZWNsYXJhdGlvbjsgY292ZXJhZ2UvZnJlc2huZXNzIHVua25vd24pOiB7XCJkZXNjcmlwdGlvblwiOlwiclxcdTAwZTlzdWx0YXRcIixcInByb3BlcnRpZXNcIjp7XCJva1wiOntcInR5cGVcIjpcImJvb2xlYW5cIn19LFwidHlwZVwiOlwib2JqZWN0XCJ9IiwiaW5wdXRfc2NoZW1hIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InBhdGgiOnsidHlwZSI6InN0cmluZyJ9fX19XSwic3lzdGVtIjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJTdGF0aWMgcHJvbXB0LiJ9LHsidHlwZSI6InRleHQiLCJ0ZXh0IjoiTWVtb3J5IGJsb2NrLiJ9XSwibWVzc2FnZXMiOlt7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiSW5zcGVjdCB0aGUgcmVwby4ifV19LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6Ikxvb2tpbmcuIn0seyJ0eXBlIjoidG9vbF91c2UiLCJpZCI6InRvb2x1XzEiLCJuYW1lIjoicnVuX2NvbW1hbmQiLCJpbnB1dCI6eyJjb21tYW5kIjoibHMifX1dfSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfcmVzdWx0IiwidG9vbF91c2VfaWQiOiJ0b29sdV8xIiwiY29udGVudCI6ImFcbmIifV19LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0b29sX3VzZSIsImlkIjoidG9vbHVfMiIsIm5hbWUiOiJyZWFkX2ZpbGVzIiwiaW5wdXQiOnsicGF0aCI6ImEifX0seyJ0eXBlIjoidG9vbF91c2UiLCJpZCI6InRvb2x1XzMiLCJuYW1lIjoicmVhZF9maWxlcyIsImlucHV0Ijp7InBhdGgiOiJiIn19XX0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJ0b29sX3Jlc3VsdCIsInRvb2xfdXNlX2lkIjoidG9vbHVfMiIsImNvbnRlbnQiOiJBIn0seyJ0eXBlIjoidG9vbF9yZXN1bHQiLCJ0b29sX3VzZV9pZCI6InRvb2x1XzMiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJCIn1dfV19LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0b29sX3VzZSIsImlkIjoidG9vbHVfNCIsIm5hbWUiOiJydW5fY29tbWFuZCIsImlucHV0Ijp7ImNvbW1hbmQiOiJwd2QifX1dfSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfcmVzdWx0IiwidG9vbF91c2VfaWQiOiJ0b29sdV80IiwiY29udGVudCI6Ii93In1dfV19"
+  },
+  {
+   "name": "catalog-kimi-k27-code-off",
+   "protocol": "openai",
+   "model": "kimi-k2.7-code",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "loop",
+   "tools": "base",
+   "inference_profile": {
+    "reasoning": {
+     "can_disable": false,
+     "preserve_history": "keep_all",
+     "support": "supported",
+     "thinking_extra": {
+      "keep": "all"
+     },
+     "wire_format": "thinking_type"
+    },
+    "sampling": {
+     "omit": [
+      "top_p",
+      "presence_penalty",
+      "frequency_penalty"
+     ],
+     "temperature": 1.0
+    },
+    "source": "official",
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "reasoning": {
+    "thinking_enabled": false
+   },
+   "url": "https://api.openai.com/v1/chat/completions",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImtpbWktazIuNy1jb2RlIiwibWVzc2FnZXMiOlt7InJvbGUiOiJzeXN0ZW0iLCJjb250ZW50IjoiU3RhdGljIHByb21wdC5NZW1vcnkgYmxvY2suIn0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOiJJbnNwZWN0IHRoZSByZXBvLiJ9LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOiJMb29raW5nLiIsInRvb2xfY2FsbHMiOlt7ImlkIjoidG9vbHVfMSIsInR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJydW5fY29tbWFuZCIsImFyZ3VtZW50cyI6IntcImNvbW1hbmRcIjogXCJsc1wifSJ9fV19LHsicm9sZSI6InRvb2wiLCJjb250ZW50IjoiYVxuYiIsInRvb2xfY2FsbF9pZCI6InRvb2x1XzEifSx7InJvbGUiOiJhc3Npc3RhbnQiLCJ0b29sX2NhbGxzIjpbeyJpZCI6InRvb2x1XzIiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImFyZ3VtZW50cyI6IntcInBhdGhcIjogXCJhXCJ9In19LHsiaWQiOiJ0b29sdV8zIiwidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJlYWRfZmlsZXMiLCJhcmd1bWVudHMiOiJ7XCJwYXRoXCI6IFwiYlwifSJ9fV19LHsicm9sZSI6InRvb2wiLCJjb250ZW50IjoiQSIsInRvb2xfY2FsbF9pZCI6InRvb2x1XzIifSx7InJvbGUiOiJ0b29sIiwiY29udGVudCI6IkIiLCJ0b29sX2NhbGxfaWQiOiJ0b29sdV8zIn0seyJyb2xlIjoiYXNzaXN0YW50IiwidG9vbF9jYWxscyI6W3siaWQiOiJ0b29sdV80IiwidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJ1bl9jb21tYW5kIiwiYXJndW1lbnRzIjoie1wiY29tbWFuZFwiOiBcInB3ZFwifSJ9fV19LHsicm9sZSI6InRvb2wiLCJjb250ZW50IjoiL3ciLCJ0b29sX2NhbGxfaWQiOiJ0b29sdV80In1dLCJtYXhfdG9rZW5zIjo0MDk2LCJzdHJlYW0iOnRydWUsInRvb2xzIjpbeyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJkZXNjcmlwdGlvbiI6IlJ1biBhIHNoZWxsIGNvbW1hbmQg4oCUIGJvdW5kZWQuIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJjb21tYW5kIjp7InR5cGUiOiJzdHJpbmcifX0sInJlcXVpcmVkIjpbImNvbW1hbmQiXX19fSx7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJzZW5kIiwiZGVzY3JpcHRpb24iOiJTZW5kIHRvIG9uZSB0YXJnZXQuIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImEiOnsidHlwZSI6InN0cmluZyJ9LCJiIjp7InR5cGUiOiJpbnRlZ2VyIn19fX19LHsidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJlYWRfZmlsZXMiLCJkZXNjcmlwdGlvbiI6IlJlYWQgZmlsZXMuXG5TdWNjZXNzZnVsIGRlY29kZWQgSlNPTiB2YWx1ZSAocHJvZHVjZXIgZGVjbGFyYXRpb247IGNvdmVyYWdlL2ZyZXNobmVzcyB1bmtub3duKToge1wiZGVzY3JpcHRpb25cIjpcInJcXHUwMGU5c3VsdGF0XCIsXCJwcm9wZXJ0aWVzXCI6e1wib2tcIjp7XCJ0eXBlXCI6XCJib29sZWFuXCJ9fSxcInR5cGVcIjpcIm9iamVjdFwifSIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsicGF0aCI6eyJ0eXBlIjoic3RyaW5nIn19fX19XSwidGVtcGVyYXR1cmUiOjEuMCwidGhpbmtpbmciOnsidHlwZSI6ImVuYWJsZWQiLCJrZWVwIjoiYWxsIn19"
+  },
+  {
+   "name": "catalog-kimi-k26-off",
+   "protocol": "openai",
+   "model": "kimi-k2.6",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "base",
+   "tools": "base",
+   "inference_profile": {
+    "reasoning": {
+     "can_disable": true,
+     "support": "supported",
+     "wire_format": "thinking_type"
+    },
+    "sampling": {
+     "disabled_temperature": 0.6,
+     "enabled_temperature": 1.0,
+     "omit": [
+      "top_p",
+      "presence_penalty",
+      "frequency_penalty"
+     ]
+    },
+    "source": "official",
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "reasoning": {
+    "thinking_depth": "off"
+   },
+   "url": "https://api.openai.com/v1/chat/completions",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImtpbWktazIuNiIsIm1lc3NhZ2VzIjpbeyJyb2xlIjoic3lzdGVtIiwiY29udGVudCI6IllvdSBhcmUgYSB0ZXN0IGhhcm5lc3MuIn0seyJyb2xlIjoic3lzdGVtIiwiY29udGVudCI6Ik1hbmFnZWQgc2VjdGlvbi4ifSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6IlJ1biBpdCAgICBwbGVhc2Ug4piDPHN5c3RlbS1yZW1pbmRlcj5hbWJpZW50PC9zeXN0ZW0tcmVtaW5kZXI+In0seyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6IlJ1bm5pbmcuIiwidG9vbF9jYWxscyI6W3siaWQiOiJjYWxsX2EiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJhcmd1bWVudHMiOiJ7XCJjb21tYW5kXCI6IFwidHJ1ZVwifSJ9fV19LHsicm9sZSI6InRvb2wiLCJjb250ZW50IjoiJCB0cnVlXG5cbltleGl0IGNvZGU6IDBdIiwidG9vbF9jYWxsX2lkIjoiY2FsbF9hIn0seyJyb2xlIjoiYXNzaXN0YW50IiwidG9vbF9jYWxscyI6W3siaWQiOiJjYWxsX2IiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImFyZ3VtZW50cyI6IntcInBhdGhcIjogXCJmMC50eHRcIn0ifX1dfSx7InJvbGUiOiJ0b29sIiwiY29udGVudCI6IkZpbGU6IGYwLnR4dCAoMSBsaW5lcylcbiAgIDFcdG5vb3AgMFxuIiwidG9vbF9jYWxsX2lkIjoiY2FsbF9iIn0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOiJBIHByaXZhdGUgcHJvZ3Jlc3MgZXZlbnQuIn1dLCJtYXhfdG9rZW5zIjo0MDk2LCJzdHJlYW0iOnRydWUsInRvb2xzIjpbeyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJkZXNjcmlwdGlvbiI6IlJ1biBhIHNoZWxsIGNvbW1hbmQg4oCUIGJvdW5kZWQuIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJjb21tYW5kIjp7InR5cGUiOiJzdHJpbmcifX0sInJlcXVpcmVkIjpbImNvbW1hbmQiXX19fSx7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJzZW5kIiwiZGVzY3JpcHRpb24iOiJTZW5kIHRvIG9uZSB0YXJnZXQuIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImEiOnsidHlwZSI6InN0cmluZyJ9LCJiIjp7InR5cGUiOiJpbnRlZ2VyIn19fX19LHsidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJlYWRfZmlsZXMiLCJkZXNjcmlwdGlvbiI6IlJlYWQgZmlsZXMuXG5TdWNjZXNzZnVsIGRlY29kZWQgSlNPTiB2YWx1ZSAocHJvZHVjZXIgZGVjbGFyYXRpb247IGNvdmVyYWdlL2ZyZXNobmVzcyB1bmtub3duKToge1wiZGVzY3JpcHRpb25cIjpcInJcXHUwMGU5c3VsdGF0XCIsXCJwcm9wZXJ0aWVzXCI6e1wib2tcIjp7XCJ0eXBlXCI6XCJib29sZWFuXCJ9fSxcInR5cGVcIjpcIm9iamVjdFwifSIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsicGF0aCI6eyJ0eXBlIjoic3RyaW5nIn19fX19XSwidGVtcGVyYXR1cmUiOjAuNiwidGhpbmtpbmciOnsidHlwZSI6ImRpc2FibGVkIn19"
+  },
+  {
+   "name": "catalog-glm-5.3-depth-high",
+   "protocol": "openai",
+   "model": "glm-5.3",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "loop",
+   "tools": "base",
+   "inference_profile": {
+    "reasoning": {
+     "can_disable": false,
+     "default_effort": "max",
+     "effort_map": {
+      "medium": "high",
+      "ultra": "max",
+      "xhigh": "max"
+     },
+     "preserve_history": "clear_thinking_false",
+     "support": "supported",
+     "supported_efforts": [
+      "low",
+      "high",
+      "max"
+     ],
+     "wire_format": "thinking_type"
+    },
+    "sampling": {
+     "enabled_temperature": 1.0
+    },
+    "source": "official",
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "conv-13",
+   "reasoning": {
+    "thinking_depth": "high"
+   },
+   "url": "https://api.openai.com/v1/chat/completions",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ],
+    [
+     "Mt-Session-Id",
+     "40256919-cf6b-5280-b692-50ead49e7272"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImdsbS01LjMiLCJtZXNzYWdlcyI6W3sicm9sZSI6InN5c3RlbSIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IlN0YXRpYyBwcm9tcHQuIiwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19LHsidHlwZSI6InRleHQiLCJ0ZXh0IjoiTWVtb3J5IGJsb2NrLiIsImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCJ9fV19LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJJbnNwZWN0IHRoZSByZXBvLiJ9XX0seyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiTG9va2luZy4iLCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX1dLCJ0b29sX2NhbGxzIjpbeyJpZCI6InRvb2x1XzEiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJhcmd1bWVudHMiOiJ7XCJjb21tYW5kXCI6IFwibHNcIn0ifX1dfSx7InJvbGUiOiJ0b29sIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiYVxuYiJ9XSwidG9vbF9jYWxsX2lkIjoidG9vbHVfMSJ9LHsicm9sZSI6ImFzc2lzdGFudCIsInRvb2xfY2FsbHMiOlt7ImlkIjoidG9vbHVfMiIsInR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJyZWFkX2ZpbGVzIiwiYXJndW1lbnRzIjoie1wicGF0aFwiOiBcImFcIn0ifX0seyJpZCI6InRvb2x1XzMiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImFyZ3VtZW50cyI6IntcInBhdGhcIjogXCJiXCJ9In19XX0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IkEifV0sInRvb2xfY2FsbF9pZCI6InRvb2x1XzIifSx7InJvbGUiOiJ0b29sIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiQiJ9XSwidG9vbF9jYWxsX2lkIjoidG9vbHVfMyJ9LHsicm9sZSI6ImFzc2lzdGFudCIsInRvb2xfY2FsbHMiOlt7ImlkIjoidG9vbHVfNCIsInR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJydW5fY29tbWFuZCIsImFyZ3VtZW50cyI6IntcImNvbW1hbmRcIjogXCJwd2RcIn0ifX1dfSx7InJvbGUiOiJ0b29sIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiL3cifV0sInRvb2xfY2FsbF9pZCI6InRvb2x1XzQifV0sIm1heF90b2tlbnMiOjQwOTYsInN0cmVhbSI6dHJ1ZSwidG9vbHMiOlt7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJydW5fY29tbWFuZCIsImRlc2NyaXB0aW9uIjoiUnVuIGEgc2hlbGwgY29tbWFuZCDigJQgYm91bmRlZC4iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImNvbW1hbmQiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsiY29tbWFuZCJdfX19LHsidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InNlbmQiLCJkZXNjcmlwdGlvbiI6IlNlbmQgdG8gb25lIHRhcmdldC4iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInByb3BlcnRpZXMiOnsiYSI6eyJ0eXBlIjoic3RyaW5nIn0sImIiOnsidHlwZSI6ImludGVnZXIifX19fX0seyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImRlc2NyaXB0aW9uIjoiUmVhZCBmaWxlcy5cblN1Y2Nlc3NmdWwgZGVjb2RlZCBKU09OIHZhbHVlIChwcm9kdWNlciBkZWNsYXJhdGlvbjsgY292ZXJhZ2UvZnJlc2huZXNzIHVua25vd24pOiB7XCJkZXNjcmlwdGlvblwiOlwiclxcdTAwZTlzdWx0YXRcIixcInByb3BlcnRpZXNcIjp7XCJva1wiOntcInR5cGVcIjpcImJvb2xlYW5cIn19LFwidHlwZVwiOlwib2JqZWN0XCJ9IiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJwYXRoIjp7InR5cGUiOiJzdHJpbmcifX19LCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX19XSwidGVtcGVyYXR1cmUiOjEuMCwidGhpbmtpbmciOnsidHlwZSI6ImVuYWJsZWQifSwicmVhc29uaW5nX2VmZm9ydCI6ImhpZ2gifQ=="
+  },
+  {
+   "name": "catalog-glm-5.2-depth-minimal",
+   "protocol": "openai",
+   "model": "glm-5.2",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "base",
+   "tools": "base",
+   "inference_profile": {
+    "reasoning": {
+     "can_disable": true,
+     "default_effort": "medium",
+     "effort_map": {
+      "ultra": "max"
+     },
+     "preserve_history": "clear_thinking_false",
+     "support": "supported",
+     "supported_efforts": [
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+     ],
+     "wire_format": "thinking_type"
+    },
+    "sampling": {
+     "enabled_temperature": 1.0
+    },
+    "source": "official",
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "reasoning": {
+    "thinking_depth": "minimal"
+   },
+   "url": "https://api.openai.com/v1/chat/completions",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImdsbS01LjIiLCJtZXNzYWdlcyI6W3sicm9sZSI6InN5c3RlbSIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IllvdSBhcmUgYSB0ZXN0IGhhcm5lc3MuIiwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19XX0seyJyb2xlIjoic3lzdGVtIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiTWFuYWdlZCBzZWN0aW9uLiIsImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCJ9fV19LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJSdW4gaXQgICAgIn0seyJ0eXBlIjoidGV4dCIsInRleHQiOiJwbGVhc2Ug4piDIn0seyJ0eXBlIjoidGV4dCIsInRleHQiOiI8c3lzdGVtLXJlbWluZGVyPmFtYmllbnQ8L3N5c3RlbS1yZW1pbmRlcj4ifV19LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IlJ1bm5pbmcuIn1dLCJ0b29sX2NhbGxzIjpbeyJpZCI6ImNhbGxfYSIsInR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJydW5fY29tbWFuZCIsImFyZ3VtZW50cyI6IntcImNvbW1hbmRcIjogXCJ0cnVlXCJ9In19XX0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IiQgdHJ1ZVxuXG5bZXhpdCBjb2RlOiAwXSJ9XSwidG9vbF9jYWxsX2lkIjoiY2FsbF9hIn0seyJyb2xlIjoiYXNzaXN0YW50IiwidG9vbF9jYWxscyI6W3siaWQiOiJjYWxsX2IiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImFyZ3VtZW50cyI6IntcInBhdGhcIjogXCJmMC50eHRcIn0ifX1dfSx7InJvbGUiOiJ0b29sIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiRmlsZTogZjAudHh0ICgxIGxpbmVzKVxuICAgMVx0bm9vcCAwXG4ifV0sInRvb2xfY2FsbF9pZCI6ImNhbGxfYiJ9LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJBIHByaXZhdGUgcHJvZ3Jlc3MgZXZlbnQuIiwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19XX1dLCJtYXhfdG9rZW5zIjo0MDk2LCJzdHJlYW0iOnRydWUsInRvb2xzIjpbeyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJkZXNjcmlwdGlvbiI6IlJ1biBhIHNoZWxsIGNvbW1hbmQg4oCUIGJvdW5kZWQuIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJjb21tYW5kIjp7InR5cGUiOiJzdHJpbmcifX0sInJlcXVpcmVkIjpbImNvbW1hbmQiXX19fSx7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJzZW5kIiwiZGVzY3JpcHRpb24iOiJTZW5kIHRvIG9uZSB0YXJnZXQuIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImEiOnsidHlwZSI6InN0cmluZyJ9LCJiIjp7InR5cGUiOiJpbnRlZ2VyIn19fX19LHsidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJlYWRfZmlsZXMiLCJkZXNjcmlwdGlvbiI6IlJlYWQgZmlsZXMuXG5TdWNjZXNzZnVsIGRlY29kZWQgSlNPTiB2YWx1ZSAocHJvZHVjZXIgZGVjbGFyYXRpb247IGNvdmVyYWdlL2ZyZXNobmVzcyB1bmtub3duKToge1wiZGVzY3JpcHRpb25cIjpcInJcXHUwMGU5c3VsdGF0XCIsXCJwcm9wZXJ0aWVzXCI6e1wib2tcIjp7XCJ0eXBlXCI6XCJib29sZWFuXCJ9fSxcInR5cGVcIjpcIm9iamVjdFwifSIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsicGF0aCI6eyJ0eXBlIjoic3RyaW5nIn19fSwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19fV0sInRlbXBlcmF0dXJlIjoxLjAsInRoaW5raW5nIjp7InR5cGUiOiJlbmFibGVkIn0sInJlYXNvbmluZ19lZmZvcnQiOiJtaW5pbWFsIn0="
+  },
+  {
+   "name": "catalog-deepseek-v4-flash-off",
+   "protocol": "openai",
+   "model": "deepseek-v4-flash",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "loop",
+   "tools": "base",
+   "inference_profile": {
+    "reasoning": {
+     "can_disable": true,
+     "default_effort": "high",
+     "effort_map": {
+      "medium": "high",
+      "minimal": "low",
+      "ultra": "max",
+      "xhigh": "high"
+     },
+     "preserve_history": "replay",
+     "support": "supported",
+     "supported_efforts": [
+      "low",
+      "high",
+      "max"
+     ],
+     "wire_format": "thinking_type"
+    },
+    "source": "official",
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "reasoning": {
+    "thinking_depth": "off"
+   },
+   "url": "https://api.openai.com/v1/chat/completions",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImRlZXBzZWVrLXY0LWZsYXNoIiwibWVzc2FnZXMiOlt7InJvbGUiOiJzeXN0ZW0iLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJTdGF0aWMgcHJvbXB0LiIsImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCJ9fSx7InR5cGUiOiJ0ZXh0IiwidGV4dCI6Ik1lbW9yeSBibG9jay4iLCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX1dfSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiSW5zcGVjdCB0aGUgcmVwby4ifV19LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6Ikxvb2tpbmcuIiwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19XSwidG9vbF9jYWxscyI6W3siaWQiOiJ0b29sdV8xIiwidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJ1bl9jb21tYW5kIiwiYXJndW1lbnRzIjoie1wiY29tbWFuZFwiOiBcImxzXCJ9In19XX0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6ImFcbmIifV0sInRvb2xfY2FsbF9pZCI6InRvb2x1XzEifSx7InJvbGUiOiJhc3Npc3RhbnQiLCJ0b29sX2NhbGxzIjpbeyJpZCI6InRvb2x1XzIiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImFyZ3VtZW50cyI6IntcInBhdGhcIjogXCJhXCJ9In19LHsiaWQiOiJ0b29sdV8zIiwidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJlYWRfZmlsZXMiLCJhcmd1bWVudHMiOiJ7XCJwYXRoXCI6IFwiYlwifSJ9fV19LHsicm9sZSI6InRvb2wiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJBIn1dLCJ0b29sX2NhbGxfaWQiOiJ0b29sdV8yIn0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IkIifV0sInRvb2xfY2FsbF9pZCI6InRvb2x1XzMifSx7InJvbGUiOiJhc3Npc3RhbnQiLCJ0b29sX2NhbGxzIjpbeyJpZCI6InRvb2x1XzQiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJhcmd1bWVudHMiOiJ7XCJjb21tYW5kXCI6IFwicHdkXCJ9In19XX0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6Ii93In1dLCJ0b29sX2NhbGxfaWQiOiJ0b29sdV80In1dLCJtYXhfdG9rZW5zIjo0MDk2LCJzdHJlYW0iOnRydWUsInRvb2xzIjpbeyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJkZXNjcmlwdGlvbiI6IlJ1biBhIHNoZWxsIGNvbW1hbmQg4oCUIGJvdW5kZWQuIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJjb21tYW5kIjp7InR5cGUiOiJzdHJpbmcifX0sInJlcXVpcmVkIjpbImNvbW1hbmQiXX19fSx7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJzZW5kIiwiZGVzY3JpcHRpb24iOiJTZW5kIHRvIG9uZSB0YXJnZXQuIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImEiOnsidHlwZSI6InN0cmluZyJ9LCJiIjp7InR5cGUiOiJpbnRlZ2VyIn19fX19LHsidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJlYWRfZmlsZXMiLCJkZXNjcmlwdGlvbiI6IlJlYWQgZmlsZXMuXG5TdWNjZXNzZnVsIGRlY29kZWQgSlNPTiB2YWx1ZSAocHJvZHVjZXIgZGVjbGFyYXRpb247IGNvdmVyYWdlL2ZyZXNobmVzcyB1bmtub3duKToge1wiZGVzY3JpcHRpb25cIjpcInJcXHUwMGU5c3VsdGF0XCIsXCJwcm9wZXJ0aWVzXCI6e1wib2tcIjp7XCJ0eXBlXCI6XCJib29sZWFuXCJ9fSxcInR5cGVcIjpcIm9iamVjdFwifSIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsicGF0aCI6eyJ0eXBlIjoic3RyaW5nIn19fSwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19fV0sInRlbXBlcmF0dXJlIjoxLjAsInRoaW5raW5nIjp7InR5cGUiOiJkaXNhYmxlZCJ9fQ=="
+  },
+  {
+   "name": "catalog-deepseek-v4-pro-ultra",
+   "protocol": "openai",
+   "model": "deepseek-v4-pro",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "base",
+   "tools": "base",
+   "inference_profile": {
+    "reasoning": {
+     "can_disable": true,
+     "default_effort": "high",
+     "effort_map": {
+      "medium": "high",
+      "minimal": "low",
+      "ultra": "max",
+      "xhigh": "high"
+     },
+     "preserve_history": "replay",
+     "support": "supported",
+     "supported_efforts": [
+      "low",
+      "high",
+      "max"
+     ],
+     "wire_format": "thinking_type"
+    },
+    "source": "official",
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "reasoning": {
+    "thinking_depth": "ultra"
+   },
+   "url": "https://api.openai.com/v1/chat/completions",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImRlZXBzZWVrLXY0LXBybyIsIm1lc3NhZ2VzIjpbeyJyb2xlIjoic3lzdGVtIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiWW91IGFyZSBhIHRlc3QgaGFybmVzcy4iLCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX1dfSx7InJvbGUiOiJzeXN0ZW0iLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJNYW5hZ2VkIHNlY3Rpb24uIiwiY2FjaGVfY29udHJvbCI6eyJ0eXBlIjoiZXBoZW1lcmFsIn19XX0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IlJ1biBpdCAgICAifSx7InR5cGUiOiJ0ZXh0IiwidGV4dCI6InBsZWFzZSDimIMifSx7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IjxzeXN0ZW0tcmVtaW5kZXI+YW1iaWVudDwvc3lzdGVtLXJlbWluZGVyPiJ9XX0seyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiUnVubmluZy4ifV0sInRvb2xfY2FsbHMiOlt7ImlkIjoiY2FsbF9hIiwidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJ1bl9jb21tYW5kIiwiYXJndW1lbnRzIjoie1wiY29tbWFuZFwiOiBcInRydWVcIn0ifX1dfSx7InJvbGUiOiJ0b29sIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiJCB0cnVlXG5cbltleGl0IGNvZGU6IDBdIn1dLCJ0b29sX2NhbGxfaWQiOiJjYWxsX2EifSx7InJvbGUiOiJhc3Npc3RhbnQiLCJ0b29sX2NhbGxzIjpbeyJpZCI6ImNhbGxfYiIsInR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJyZWFkX2ZpbGVzIiwiYXJndW1lbnRzIjoie1wicGF0aFwiOiBcImYwLnR4dFwifSJ9fV19LHsicm9sZSI6InRvb2wiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJGaWxlOiBmMC50eHQgKDEgbGluZXMpXG4gICAxXHRub29wIDBcbiJ9XSwidG9vbF9jYWxsX2lkIjoiY2FsbF9iIn0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IkEgcHJpdmF0ZSBwcm9ncmVzcyBldmVudC4iLCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX1dfV0sIm1heF90b2tlbnMiOjQwOTYsInN0cmVhbSI6dHJ1ZSwidG9vbHMiOlt7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJydW5fY29tbWFuZCIsImRlc2NyaXB0aW9uIjoiUnVuIGEgc2hlbGwgY29tbWFuZCDigJQgYm91bmRlZC4iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImNvbW1hbmQiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsiY29tbWFuZCJdfX19LHsidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InNlbmQiLCJkZXNjcmlwdGlvbiI6IlNlbmQgdG8gb25lIHRhcmdldC4iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInByb3BlcnRpZXMiOnsiYSI6eyJ0eXBlIjoic3RyaW5nIn0sImIiOnsidHlwZSI6ImludGVnZXIifX19fX0seyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImRlc2NyaXB0aW9uIjoiUmVhZCBmaWxlcy5cblN1Y2Nlc3NmdWwgZGVjb2RlZCBKU09OIHZhbHVlIChwcm9kdWNlciBkZWNsYXJhdGlvbjsgY292ZXJhZ2UvZnJlc2huZXNzIHVua25vd24pOiB7XCJkZXNjcmlwdGlvblwiOlwiclxcdTAwZTlzdWx0YXRcIixcInByb3BlcnRpZXNcIjp7XCJva1wiOntcInR5cGVcIjpcImJvb2xlYW5cIn19LFwidHlwZVwiOlwib2JqZWN0XCJ9IiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJwYXRoIjp7InR5cGUiOiJzdHJpbmcifX19LCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX19XSwidGVtcGVyYXR1cmUiOjEuMCwidGhpbmtpbmciOnsidHlwZSI6ImVuYWJsZWQifSwicmVhc29uaW5nX2VmZm9ydCI6Im1heCJ9"
+  },
+  {
+   "name": "catalog-qwen3.8-max-enabled",
+   "protocol": "openai",
+   "model": "qwen3.8-max",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "base",
+   "tools": "base",
+   "inference_profile": {
+    "reasoning": {
+     "can_disable": true,
+     "support": "supported",
+     "supported_efforts": [],
+     "wire_format": "enable_thinking"
+    },
+    "source": "official",
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "reasoning": {
+    "thinking_enabled": true
+   },
+   "url": "https://api.openai.com/v1/chat/completions",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6InF3ZW4zLjgtbWF4IiwibWVzc2FnZXMiOlt7InJvbGUiOiJzeXN0ZW0iLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJZb3UgYXJlIGEgdGVzdCBoYXJuZXNzLiIsImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCJ9fV19LHsicm9sZSI6InN5c3RlbSIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6Ik1hbmFnZWQgc2VjdGlvbi4iLCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX1dfSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiUnVuIGl0ICAgICJ9LHsidHlwZSI6InRleHQiLCJ0ZXh0IjoicGxlYXNlIOKYgyJ9LHsidHlwZSI6InRleHQiLCJ0ZXh0IjoiPHN5c3RlbS1yZW1pbmRlcj5hbWJpZW50PC9zeXN0ZW0tcmVtaW5kZXI+In1dfSx7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJSdW5uaW5nLiJ9XSwidG9vbF9jYWxscyI6W3siaWQiOiJjYWxsX2EiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJhcmd1bWVudHMiOiJ7XCJjb21tYW5kXCI6IFwidHJ1ZVwifSJ9fV19LHsicm9sZSI6InRvb2wiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiIkIHRydWVcblxuW2V4aXQgY29kZTogMF0ifV0sInRvb2xfY2FsbF9pZCI6ImNhbGxfYSJ9LHsicm9sZSI6ImFzc2lzdGFudCIsInRvb2xfY2FsbHMiOlt7ImlkIjoiY2FsbF9iIiwidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJlYWRfZmlsZXMiLCJhcmd1bWVudHMiOiJ7XCJwYXRoXCI6IFwiZjAudHh0XCJ9In19XX0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IkZpbGU6IGYwLnR4dCAoMSBsaW5lcylcbiAgIDFcdG5vb3AgMFxuIn1dLCJ0b29sX2NhbGxfaWQiOiJjYWxsX2IifSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiQSBwcml2YXRlIHByb2dyZXNzIGV2ZW50LiIsImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCJ9fV19XSwibWF4X3Rva2VucyI6NDA5Niwic3RyZWFtIjp0cnVlLCJ0b29scyI6W3sidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJ1bl9jb21tYW5kIiwiZGVzY3JpcHRpb24iOiJSdW4gYSBzaGVsbCBjb21tYW5kIOKAlCBib3VuZGVkLiIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsiY29tbWFuZCI6eyJ0eXBlIjoic3RyaW5nIn19LCJyZXF1aXJlZCI6WyJjb21tYW5kIl19fX0seyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoic2VuZCIsImRlc2NyaXB0aW9uIjoiU2VuZCB0byBvbmUgdGFyZ2V0LiIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCIsImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicHJvcGVydGllcyI6eyJhIjp7InR5cGUiOiJzdHJpbmcifSwiYiI6eyJ0eXBlIjoiaW50ZWdlciJ9fX19fSx7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJyZWFkX2ZpbGVzIiwiZGVzY3JpcHRpb24iOiJSZWFkIGZpbGVzLlxuU3VjY2Vzc2Z1bCBkZWNvZGVkIEpTT04gdmFsdWUgKHByb2R1Y2VyIGRlY2xhcmF0aW9uOyBjb3ZlcmFnZS9mcmVzaG5lc3MgdW5rbm93bik6IHtcImRlc2NyaXB0aW9uXCI6XCJyXFx1MDBlOXN1bHRhdFwiLFwicHJvcGVydGllc1wiOntcIm9rXCI6e1widHlwZVwiOlwiYm9vbGVhblwifX0sXCJ0eXBlXCI6XCJvYmplY3RcIn0iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InBhdGgiOnsidHlwZSI6InN0cmluZyJ9fX0sImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCJ9fX1dLCJ0ZW1wZXJhdHVyZSI6MS4wLCJlbmFibGVfdGhpbmtpbmciOnRydWV9"
+  },
+  {
+   "name": "catalog-qwen-max-off-unsupported",
+   "protocol": "openai",
+   "model": "qwen-max",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "base",
+   "tools": "base",
+   "inference_profile": {
+    "reasoning": {
+     "support": "unsupported",
+     "wire_format": "none"
+    },
+    "source": "official",
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "reasoning": {
+    "thinking_depth": "off"
+   },
+   "url": "https://api.openai.com/v1/chat/completions",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6InF3ZW4tbWF4IiwibWVzc2FnZXMiOlt7InJvbGUiOiJzeXN0ZW0iLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJZb3UgYXJlIGEgdGVzdCBoYXJuZXNzLiIsImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCJ9fV19LHsicm9sZSI6InN5c3RlbSIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6Ik1hbmFnZWQgc2VjdGlvbi4iLCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX1dfSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiUnVuIGl0ICAgICJ9LHsidHlwZSI6InRleHQiLCJ0ZXh0IjoicGxlYXNlIOKYgyJ9LHsidHlwZSI6InRleHQiLCJ0ZXh0IjoiPHN5c3RlbS1yZW1pbmRlcj5hbWJpZW50PC9zeXN0ZW0tcmVtaW5kZXI+In1dfSx7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJSdW5uaW5nLiJ9XSwidG9vbF9jYWxscyI6W3siaWQiOiJjYWxsX2EiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJhcmd1bWVudHMiOiJ7XCJjb21tYW5kXCI6IFwidHJ1ZVwifSJ9fV19LHsicm9sZSI6InRvb2wiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiIkIHRydWVcblxuW2V4aXQgY29kZTogMF0ifV0sInRvb2xfY2FsbF9pZCI6ImNhbGxfYSJ9LHsicm9sZSI6ImFzc2lzdGFudCIsInRvb2xfY2FsbHMiOlt7ImlkIjoiY2FsbF9iIiwidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJlYWRfZmlsZXMiLCJhcmd1bWVudHMiOiJ7XCJwYXRoXCI6IFwiZjAudHh0XCJ9In19XX0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IkZpbGU6IGYwLnR4dCAoMSBsaW5lcylcbiAgIDFcdG5vb3AgMFxuIn1dLCJ0b29sX2NhbGxfaWQiOiJjYWxsX2IifSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiQSBwcml2YXRlIHByb2dyZXNzIGV2ZW50LiIsImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCJ9fV19XSwibWF4X3Rva2VucyI6NDA5Niwic3RyZWFtIjp0cnVlLCJ0b29scyI6W3sidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJ1bl9jb21tYW5kIiwiZGVzY3JpcHRpb24iOiJSdW4gYSBzaGVsbCBjb21tYW5kIOKAlCBib3VuZGVkLiIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsiY29tbWFuZCI6eyJ0eXBlIjoic3RyaW5nIn19LCJyZXF1aXJlZCI6WyJjb21tYW5kIl19fX0seyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoic2VuZCIsImRlc2NyaXB0aW9uIjoiU2VuZCB0byBvbmUgdGFyZ2V0LiIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCIsImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicHJvcGVydGllcyI6eyJhIjp7InR5cGUiOiJzdHJpbmcifSwiYiI6eyJ0eXBlIjoiaW50ZWdlciJ9fX19fSx7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJyZWFkX2ZpbGVzIiwiZGVzY3JpcHRpb24iOiJSZWFkIGZpbGVzLlxuU3VjY2Vzc2Z1bCBkZWNvZGVkIEpTT04gdmFsdWUgKHByb2R1Y2VyIGRlY2xhcmF0aW9uOyBjb3ZlcmFnZS9mcmVzaG5lc3MgdW5rbm93bik6IHtcImRlc2NyaXB0aW9uXCI6XCJyXFx1MDBlOXN1bHRhdFwiLFwicHJvcGVydGllc1wiOntcIm9rXCI6e1widHlwZVwiOlwiYm9vbGVhblwifX0sXCJ0eXBlXCI6XCJvYmplY3RcIn0iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InBhdGgiOnsidHlwZSI6InN0cmluZyJ9fX0sImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCJ9fX1dLCJ0ZW1wZXJhdHVyZSI6MS4wfQ=="
+  },
+  {
+   "name": "catalog-minimax-m2.5-split",
+   "protocol": "openai",
+   "model": "MiniMax-M2.5",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "loop",
+   "tools": "base",
+   "inference_profile": {
+    "reasoning": {
+     "can_disable": false,
+     "support": "supported",
+     "wire_format": "reasoning_split"
+    },
+    "source": "official",
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "reasoning": {
+    "thinking_depth": "medium"
+   },
+   "url": "https://api.openai.com/v1/chat/completions",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6Ik1pbmlNYXgtTTIuNSIsIm1lc3NhZ2VzIjpbeyJyb2xlIjoic3lzdGVtIiwiY29udGVudCI6IlN0YXRpYyBwcm9tcHQuTWVtb3J5IGJsb2NrLiJ9LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjoiSW5zcGVjdCB0aGUgcmVwby4ifSx7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjoiTG9va2luZy4iLCJ0b29sX2NhbGxzIjpbeyJpZCI6InRvb2x1XzEiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJhcmd1bWVudHMiOiJ7XCJjb21tYW5kXCI6IFwibHNcIn0ifX1dfSx7InJvbGUiOiJ0b29sIiwiY29udGVudCI6ImFcbmIiLCJ0b29sX2NhbGxfaWQiOiJ0b29sdV8xIn0seyJyb2xlIjoiYXNzaXN0YW50IiwidG9vbF9jYWxscyI6W3siaWQiOiJ0b29sdV8yIiwidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJlYWRfZmlsZXMiLCJhcmd1bWVudHMiOiJ7XCJwYXRoXCI6IFwiYVwifSJ9fSx7ImlkIjoidG9vbHVfMyIsInR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJyZWFkX2ZpbGVzIiwiYXJndW1lbnRzIjoie1wicGF0aFwiOiBcImJcIn0ifX1dfSx7InJvbGUiOiJ0b29sIiwiY29udGVudCI6IkEiLCJ0b29sX2NhbGxfaWQiOiJ0b29sdV8yIn0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOiJCIiwidG9vbF9jYWxsX2lkIjoidG9vbHVfMyJ9LHsicm9sZSI6ImFzc2lzdGFudCIsInRvb2xfY2FsbHMiOlt7ImlkIjoidG9vbHVfNCIsInR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJydW5fY29tbWFuZCIsImFyZ3VtZW50cyI6IntcImNvbW1hbmRcIjogXCJwd2RcIn0ifX1dfSx7InJvbGUiOiJ0b29sIiwiY29udGVudCI6Ii93IiwidG9vbF9jYWxsX2lkIjoidG9vbHVfNCJ9XSwibWF4X3Rva2VucyI6NDA5Niwic3RyZWFtIjp0cnVlLCJ0b29scyI6W3sidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJ1bl9jb21tYW5kIiwiZGVzY3JpcHRpb24iOiJSdW4gYSBzaGVsbCBjb21tYW5kIOKAlCBib3VuZGVkLiIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsiY29tbWFuZCI6eyJ0eXBlIjoic3RyaW5nIn19LCJyZXF1aXJlZCI6WyJjb21tYW5kIl19fX0seyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoic2VuZCIsImRlc2NyaXB0aW9uIjoiU2VuZCB0byBvbmUgdGFyZ2V0LiIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCIsImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicHJvcGVydGllcyI6eyJhIjp7InR5cGUiOiJzdHJpbmcifSwiYiI6eyJ0eXBlIjoiaW50ZWdlciJ9fX19fSx7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJyZWFkX2ZpbGVzIiwiZGVzY3JpcHRpb24iOiJSZWFkIGZpbGVzLlxuU3VjY2Vzc2Z1bCBkZWNvZGVkIEpTT04gdmFsdWUgKHByb2R1Y2VyIGRlY2xhcmF0aW9uOyBjb3ZlcmFnZS9mcmVzaG5lc3MgdW5rbm93bik6IHtcImRlc2NyaXB0aW9uXCI6XCJyXFx1MDBlOXN1bHRhdFwiLFwicHJvcGVydGllc1wiOntcIm9rXCI6e1widHlwZVwiOlwiYm9vbGVhblwifX0sXCJ0eXBlXCI6XCJvYmplY3RcIn0iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InBhdGgiOnsidHlwZSI6InN0cmluZyJ9fX19fV0sInRlbXBlcmF0dXJlIjoxLjAsInJlYXNvbmluZ19zcGxpdCI6dHJ1ZX0="
+  },
+  {
+   "name": "catalog-doubao-seed-off",
+   "protocol": "openai",
+   "model": "Doubao-seed-2.1-pro",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "base",
+   "tools": "base",
+   "inference_profile": {
+    "reasoning": {
+     "can_disable": true,
+     "support": "supported",
+     "wire_format": "thinking_type"
+    },
+    "source": "official",
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "reasoning": {
+    "thinking_enabled": false
+   },
+   "url": "https://api.openai.com/v1/chat/completions",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6IkRvdWJhby1zZWVkLTIuMS1wcm8iLCJtZXNzYWdlcyI6W3sicm9sZSI6InN5c3RlbSIsImNvbnRlbnQiOiJZb3UgYXJlIGEgdGVzdCBoYXJuZXNzLiJ9LHsicm9sZSI6InN5c3RlbSIsImNvbnRlbnQiOiJNYW5hZ2VkIHNlY3Rpb24uIn0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOiJSdW4gaXQgICAgcGxlYXNlIOKYgzxzeXN0ZW0tcmVtaW5kZXI+YW1iaWVudDwvc3lzdGVtLXJlbWluZGVyPiJ9LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOiJSdW5uaW5nLiIsInRvb2xfY2FsbHMiOlt7ImlkIjoiY2FsbF9hIiwidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJ1bl9jb21tYW5kIiwiYXJndW1lbnRzIjoie1wiY29tbWFuZFwiOiBcInRydWVcIn0ifX1dfSx7InJvbGUiOiJ0b29sIiwiY29udGVudCI6IiQgdHJ1ZVxuXG5bZXhpdCBjb2RlOiAwXSIsInRvb2xfY2FsbF9pZCI6ImNhbGxfYSJ9LHsicm9sZSI6ImFzc2lzdGFudCIsInRvb2xfY2FsbHMiOlt7ImlkIjoiY2FsbF9iIiwidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJlYWRfZmlsZXMiLCJhcmd1bWVudHMiOiJ7XCJwYXRoXCI6IFwiZjAudHh0XCJ9In19XX0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOiJGaWxlOiBmMC50eHQgKDEgbGluZXMpXG4gICAxXHRub29wIDBcbiIsInRvb2xfY2FsbF9pZCI6ImNhbGxfYiJ9LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjoiQSBwcml2YXRlIHByb2dyZXNzIGV2ZW50LiJ9XSwibWF4X3Rva2VucyI6NDA5Niwic3RyZWFtIjp0cnVlLCJ0b29scyI6W3sidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJ1bl9jb21tYW5kIiwiZGVzY3JpcHRpb24iOiJSdW4gYSBzaGVsbCBjb21tYW5kIOKAlCBib3VuZGVkLiIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsiY29tbWFuZCI6eyJ0eXBlIjoic3RyaW5nIn19LCJyZXF1aXJlZCI6WyJjb21tYW5kIl19fX0seyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoic2VuZCIsImRlc2NyaXB0aW9uIjoiU2VuZCB0byBvbmUgdGFyZ2V0LiIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCIsImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicHJvcGVydGllcyI6eyJhIjp7InR5cGUiOiJzdHJpbmcifSwiYiI6eyJ0eXBlIjoiaW50ZWdlciJ9fX19fSx7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJyZWFkX2ZpbGVzIiwiZGVzY3JpcHRpb24iOiJSZWFkIGZpbGVzLlxuU3VjY2Vzc2Z1bCBkZWNvZGVkIEpTT04gdmFsdWUgKHByb2R1Y2VyIGRlY2xhcmF0aW9uOyBjb3ZlcmFnZS9mcmVzaG5lc3MgdW5rbm93bik6IHtcImRlc2NyaXB0aW9uXCI6XCJyXFx1MDBlOXN1bHRhdFwiLFwicHJvcGVydGllc1wiOntcIm9rXCI6e1widHlwZVwiOlwiYm9vbGVhblwifX0sXCJ0eXBlXCI6XCJvYmplY3RcIn0iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InBhdGgiOnsidHlwZSI6InN0cmluZyJ9fX19fV0sInRlbXBlcmF0dXJlIjoxLjAsInRoaW5raW5nIjp7InR5cGUiOiJkaXNhYmxlZCJ9fQ=="
+  },
+  {
+   "name": "catalog-hy4-off-disabled-effort",
+   "protocol": "openai",
+   "model": "hy4",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "base",
+   "tools": "base",
+   "inference_profile": {
+    "reasoning": {
+     "can_disable": true,
+     "default_effort": "high",
+     "disabled_effort": "no_think",
+     "preserve_history": "replay",
+     "support": "supported",
+     "supported_efforts": [
+      "no_think",
+      "high"
+     ],
+     "wire_format": "reasoning_effort"
+    },
+    "source": "official",
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "reasoning": {
+    "thinking_depth": "off"
+   },
+   "url": "https://api.openai.com/v1/chat/completions",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6Imh5NCIsIm1lc3NhZ2VzIjpbeyJyb2xlIjoic3lzdGVtIiwiY29udGVudCI6IllvdSBhcmUgYSB0ZXN0IGhhcm5lc3MuIn0seyJyb2xlIjoic3lzdGVtIiwiY29udGVudCI6Ik1hbmFnZWQgc2VjdGlvbi4ifSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6IlJ1biBpdCAgICBwbGVhc2Ug4piDPHN5c3RlbS1yZW1pbmRlcj5hbWJpZW50PC9zeXN0ZW0tcmVtaW5kZXI+In0seyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6IlJ1bm5pbmcuIiwidG9vbF9jYWxscyI6W3siaWQiOiJjYWxsX2EiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJhcmd1bWVudHMiOiJ7XCJjb21tYW5kXCI6IFwidHJ1ZVwifSJ9fV19LHsicm9sZSI6InRvb2wiLCJjb250ZW50IjoiJCB0cnVlXG5cbltleGl0IGNvZGU6IDBdIiwidG9vbF9jYWxsX2lkIjoiY2FsbF9hIn0seyJyb2xlIjoiYXNzaXN0YW50IiwidG9vbF9jYWxscyI6W3siaWQiOiJjYWxsX2IiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImFyZ3VtZW50cyI6IntcInBhdGhcIjogXCJmMC50eHRcIn0ifX1dfSx7InJvbGUiOiJ0b29sIiwiY29udGVudCI6IkZpbGU6IGYwLnR4dCAoMSBsaW5lcylcbiAgIDFcdG5vb3AgMFxuIiwidG9vbF9jYWxsX2lkIjoiY2FsbF9iIn0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOiJBIHByaXZhdGUgcHJvZ3Jlc3MgZXZlbnQuIn1dLCJtYXhfdG9rZW5zIjo0MDk2LCJzdHJlYW0iOnRydWUsInRvb2xzIjpbeyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJkZXNjcmlwdGlvbiI6IlJ1biBhIHNoZWxsIGNvbW1hbmQg4oCUIGJvdW5kZWQuIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJjb21tYW5kIjp7InR5cGUiOiJzdHJpbmcifX0sInJlcXVpcmVkIjpbImNvbW1hbmQiXX19fSx7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJzZW5kIiwiZGVzY3JpcHRpb24iOiJTZW5kIHRvIG9uZSB0YXJnZXQuIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImEiOnsidHlwZSI6InN0cmluZyJ9LCJiIjp7InR5cGUiOiJpbnRlZ2VyIn19fX19LHsidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJlYWRfZmlsZXMiLCJkZXNjcmlwdGlvbiI6IlJlYWQgZmlsZXMuXG5TdWNjZXNzZnVsIGRlY29kZWQgSlNPTiB2YWx1ZSAocHJvZHVjZXIgZGVjbGFyYXRpb247IGNvdmVyYWdlL2ZyZXNobmVzcyB1bmtub3duKToge1wiZGVzY3JpcHRpb25cIjpcInJcXHUwMGU5c3VsdGF0XCIsXCJwcm9wZXJ0aWVzXCI6e1wib2tcIjp7XCJ0eXBlXCI6XCJib29sZWFuXCJ9fSxcInR5cGVcIjpcIm9iamVjdFwifSIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsicGF0aCI6eyJ0eXBlIjoic3RyaW5nIn19fX19XSwidGVtcGVyYXR1cmUiOjEuMCwicmVhc29uaW5nX2VmZm9ydCI6Im5vX3RoaW5rIn0="
+  },
+  {
+   "name": "catalog-grok-4.6-depth-max",
+   "protocol": "openai",
+   "model": "grok-4.6",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "base",
+   "tools": "base",
+   "inference_profile": {
+    "reasoning": {
+     "can_disable": false,
+     "default_effort": "medium",
+     "effort_map": {
+      "max": "xhigh",
+      "ultra": "xhigh"
+     },
+     "support": "supported",
+     "supported_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+     ],
+     "wire_format": "reasoning_effort"
+    },
+    "sampling": {
+     "omit": [
+      "temperature",
+      "presence_penalty",
+      "frequency_penalty",
+      "stop"
+     ]
+    },
+    "source": "official",
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "reasoning": {
+    "thinking_depth": "max"
+   },
+   "url": "https://api.openai.com/v1/chat/completions",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6Imdyb2stNC42IiwibWVzc2FnZXMiOlt7InJvbGUiOiJzeXN0ZW0iLCJjb250ZW50IjoiWW91IGFyZSBhIHRlc3QgaGFybmVzcy4ifSx7InJvbGUiOiJzeXN0ZW0iLCJjb250ZW50IjoiTWFuYWdlZCBzZWN0aW9uLiJ9LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjoiUnVuIGl0ICAgIHBsZWFzZSDimIM8c3lzdGVtLXJlbWluZGVyPmFtYmllbnQ8L3N5c3RlbS1yZW1pbmRlcj4ifSx7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjoiUnVubmluZy4iLCJ0b29sX2NhbGxzIjpbeyJpZCI6ImNhbGxfYSIsInR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJydW5fY29tbWFuZCIsImFyZ3VtZW50cyI6IntcImNvbW1hbmRcIjogXCJ0cnVlXCJ9In19XX0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOiIkIHRydWVcblxuW2V4aXQgY29kZTogMF0iLCJ0b29sX2NhbGxfaWQiOiJjYWxsX2EifSx7InJvbGUiOiJhc3Npc3RhbnQiLCJ0b29sX2NhbGxzIjpbeyJpZCI6ImNhbGxfYiIsInR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJyZWFkX2ZpbGVzIiwiYXJndW1lbnRzIjoie1wicGF0aFwiOiBcImYwLnR4dFwifSJ9fV19LHsicm9sZSI6InRvb2wiLCJjb250ZW50IjoiRmlsZTogZjAudHh0ICgxIGxpbmVzKVxuICAgMVx0bm9vcCAwXG4iLCJ0b29sX2NhbGxfaWQiOiJjYWxsX2IifSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6IkEgcHJpdmF0ZSBwcm9ncmVzcyBldmVudC4ifV0sIm1heF90b2tlbnMiOjQwOTYsInN0cmVhbSI6dHJ1ZSwidG9vbHMiOlt7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJydW5fY29tbWFuZCIsImRlc2NyaXB0aW9uIjoiUnVuIGEgc2hlbGwgY29tbWFuZCDigJQgYm91bmRlZC4iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImNvbW1hbmQiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsiY29tbWFuZCJdfX19LHsidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InNlbmQiLCJkZXNjcmlwdGlvbiI6IlNlbmQgdG8gb25lIHRhcmdldC4iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInByb3BlcnRpZXMiOnsiYSI6eyJ0eXBlIjoic3RyaW5nIn0sImIiOnsidHlwZSI6ImludGVnZXIifX19fX0seyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImRlc2NyaXB0aW9uIjoiUmVhZCBmaWxlcy5cblN1Y2Nlc3NmdWwgZGVjb2RlZCBKU09OIHZhbHVlIChwcm9kdWNlciBkZWNsYXJhdGlvbjsgY292ZXJhZ2UvZnJlc2huZXNzIHVua25vd24pOiB7XCJkZXNjcmlwdGlvblwiOlwiclxcdTAwZTlzdWx0YXRcIixcInByb3BlcnRpZXNcIjp7XCJva1wiOntcInR5cGVcIjpcImJvb2xlYW5cIn19LFwidHlwZVwiOlwib2JqZWN0XCJ9IiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJwYXRoIjp7InR5cGUiOiJzdHJpbmcifX19fX1dLCJyZWFzb25pbmdfZWZmb3J0IjoieGhpZ2gifQ=="
+  },
+  {
+   "name": "catalog-gemini-3.6-flash-loop",
+   "protocol": "openai",
+   "model": "gemini-3.6-flash",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "loop",
+   "tools": "base",
+   "inference_profile": {
+    "reasoning": {
+     "can_disable": false,
+     "default_effort": "medium",
+     "effort_map": {
+      "max": "high",
+      "ultra": "high",
+      "xhigh": "high"
+     },
+     "support": "supported",
+     "supported_efforts": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+     ],
+     "wire_format": "reasoning_effort"
+    },
+    "sampling": {
+     "omit": [
+      "temperature",
+      "top_p",
+      "top_k"
+     ]
+    },
+    "source": "official",
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "conv-14",
+   "reasoning": {
+    "thinking_depth": "low"
+   },
+   "url": "https://api.openai.com/v1/chat/completions",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ],
+    [
+     "Mt-Session-Id",
+     "d81defdc-c029-5907-9e89-a2cb2769939a"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImdlbWluaS0zLjYtZmxhc2giLCJtZXNzYWdlcyI6W3sicm9sZSI6InN5c3RlbSIsImNvbnRlbnQiOiJTdGF0aWMgcHJvbXB0Lk1lbW9yeSBibG9jay4ifSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6Ikluc3BlY3QgdGhlIHJlcG8uIn0seyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6Ikxvb2tpbmcuIiwidG9vbF9jYWxscyI6W3siaWQiOiJ0b29sdV8xIiwidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJ1bl9jb21tYW5kIiwiYXJndW1lbnRzIjoie1wiY29tbWFuZFwiOiBcImxzXCJ9In0sImV4dHJhX2NvbnRlbnQiOnsiZ29vZ2xlIjp7InRob3VnaHRfc2lnbmF0dXJlIjoic2tpcF90aG91Z2h0X3NpZ25hdHVyZV92YWxpZGF0b3IifX19XX0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOiJhXG5iIiwidG9vbF9jYWxsX2lkIjoidG9vbHVfMSJ9LHsicm9sZSI6ImFzc2lzdGFudCIsInRvb2xfY2FsbHMiOlt7ImlkIjoidG9vbHVfMiIsInR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJyZWFkX2ZpbGVzIiwiYXJndW1lbnRzIjoie1wicGF0aFwiOiBcImFcIn0ifSwiZXh0cmFfY29udGVudCI6eyJnb29nbGUiOnsidGhvdWdodF9zaWduYXR1cmUiOiJza2lwX3Rob3VnaHRfc2lnbmF0dXJlX3ZhbGlkYXRvciJ9fX0seyJpZCI6InRvb2x1XzMiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImFyZ3VtZW50cyI6IntcInBhdGhcIjogXCJiXCJ9In19XX0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOiJBIiwidG9vbF9jYWxsX2lkIjoidG9vbHVfMiJ9LHsicm9sZSI6InRvb2wiLCJjb250ZW50IjoiQiIsInRvb2xfY2FsbF9pZCI6InRvb2x1XzMifSx7InJvbGUiOiJhc3Npc3RhbnQiLCJ0b29sX2NhbGxzIjpbeyJpZCI6InRvb2x1XzQiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJhcmd1bWVudHMiOiJ7XCJjb21tYW5kXCI6IFwicHdkXCJ9In0sImV4dHJhX2NvbnRlbnQiOnsiZ29vZ2xlIjp7InRob3VnaHRfc2lnbmF0dXJlIjoic2tpcF90aG91Z2h0X3NpZ25hdHVyZV92YWxpZGF0b3IifX19XX0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOiIvdyIsInRvb2xfY2FsbF9pZCI6InRvb2x1XzQifV0sIm1heF90b2tlbnMiOjQwOTYsInN0cmVhbSI6dHJ1ZSwidG9vbHMiOlt7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJydW5fY29tbWFuZCIsImRlc2NyaXB0aW9uIjoiUnVuIGEgc2hlbGwgY29tbWFuZCDigJQgYm91bmRlZC4iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImNvbW1hbmQiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsiY29tbWFuZCJdfX19LHsidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InNlbmQiLCJkZXNjcmlwdGlvbiI6IlNlbmQgdG8gb25lIHRhcmdldC4iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInByb3BlcnRpZXMiOnsiYSI6eyJ0eXBlIjoic3RyaW5nIn0sImIiOnsidHlwZSI6ImludGVnZXIifX19fX0seyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImRlc2NyaXB0aW9uIjoiUmVhZCBmaWxlcy5cblN1Y2Nlc3NmdWwgZGVjb2RlZCBKU09OIHZhbHVlIChwcm9kdWNlciBkZWNsYXJhdGlvbjsgY292ZXJhZ2UvZnJlc2huZXNzIHVua25vd24pOiB7XCJkZXNjcmlwdGlvblwiOlwiclxcdTAwZTlzdWx0YXRcIixcInByb3BlcnRpZXNcIjp7XCJva1wiOntcInR5cGVcIjpcImJvb2xlYW5cIn19LFwidHlwZVwiOlwib2JqZWN0XCJ9IiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJwYXRoIjp7InR5cGUiOiJzdHJpbmcifX19fX1dLCJyZWFzb25pbmdfZWZmb3J0IjoibG93In0="
+  },
+  {
+   "name": "catalog-gemini-4-hydrogen-default",
+   "protocol": "openai",
+   "model": "gemini-4-hydrogen",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "base",
+   "tools": "base",
+   "inference_profile": {
+    "reasoning": {
+     "can_disable": false,
+     "default_effort": "high",
+     "effort_map": {
+      "max": "xhigh",
+      "minimal": "low",
+      "ultra": "xhigh"
+     },
+     "support": "supported",
+     "supported_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+     ],
+     "wire_format": "reasoning_effort"
+    },
+    "sampling": {
+     "omit": [
+      "temperature",
+      "top_p",
+      "top_k"
+     ]
+    },
+    "source": "official",
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "url": "https://api.openai.com/v1/chat/completions",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImdlbWluaS00LWh5ZHJvZ2VuIiwibWVzc2FnZXMiOlt7InJvbGUiOiJzeXN0ZW0iLCJjb250ZW50IjoiWW91IGFyZSBhIHRlc3QgaGFybmVzcy4ifSx7InJvbGUiOiJzeXN0ZW0iLCJjb250ZW50IjoiTWFuYWdlZCBzZWN0aW9uLiJ9LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjoiUnVuIGl0ICAgIHBsZWFzZSDimIM8c3lzdGVtLXJlbWluZGVyPmFtYmllbnQ8L3N5c3RlbS1yZW1pbmRlcj4ifSx7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjoiUnVubmluZy4iLCJ0b29sX2NhbGxzIjpbeyJpZCI6ImNhbGxfYSIsInR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJydW5fY29tbWFuZCIsImFyZ3VtZW50cyI6IntcImNvbW1hbmRcIjogXCJ0cnVlXCJ9In0sImV4dHJhX2NvbnRlbnQiOnsiZ29vZ2xlIjp7InRob3VnaHRfc2lnbmF0dXJlIjoic2tpcF90aG91Z2h0X3NpZ25hdHVyZV92YWxpZGF0b3IifX19XX0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOiIkIHRydWVcblxuW2V4aXQgY29kZTogMF0iLCJ0b29sX2NhbGxfaWQiOiJjYWxsX2EifSx7InJvbGUiOiJhc3Npc3RhbnQiLCJ0b29sX2NhbGxzIjpbeyJpZCI6ImNhbGxfYiIsInR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJyZWFkX2ZpbGVzIiwiYXJndW1lbnRzIjoie1wicGF0aFwiOiBcImYwLnR4dFwifSJ9LCJleHRyYV9jb250ZW50Ijp7Imdvb2dsZSI6eyJ0aG91Z2h0X3NpZ25hdHVyZSI6InNraXBfdGhvdWdodF9zaWduYXR1cmVfdmFsaWRhdG9yIn19fV19LHsicm9sZSI6InRvb2wiLCJjb250ZW50IjoiRmlsZTogZjAudHh0ICgxIGxpbmVzKVxuICAgMVx0bm9vcCAwXG4iLCJ0b29sX2NhbGxfaWQiOiJjYWxsX2IifSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6IkEgcHJpdmF0ZSBwcm9ncmVzcyBldmVudC4ifV0sIm1heF90b2tlbnMiOjQwOTYsInN0cmVhbSI6dHJ1ZSwidG9vbHMiOlt7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJydW5fY29tbWFuZCIsImRlc2NyaXB0aW9uIjoiUnVuIGEgc2hlbGwgY29tbWFuZCDigJQgYm91bmRlZC4iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImNvbW1hbmQiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsiY29tbWFuZCJdfX19LHsidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InNlbmQiLCJkZXNjcmlwdGlvbiI6IlNlbmQgdG8gb25lIHRhcmdldC4iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInByb3BlcnRpZXMiOnsiYSI6eyJ0eXBlIjoic3RyaW5nIn0sImIiOnsidHlwZSI6ImludGVnZXIifX19fX0seyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImRlc2NyaXB0aW9uIjoiUmVhZCBmaWxlcy5cblN1Y2Nlc3NmdWwgZGVjb2RlZCBKU09OIHZhbHVlIChwcm9kdWNlciBkZWNsYXJhdGlvbjsgY292ZXJhZ2UvZnJlc2huZXNzIHVua25vd24pOiB7XCJkZXNjcmlwdGlvblwiOlwiclxcdTAwZTlzdWx0YXRcIixcInByb3BlcnRpZXNcIjp7XCJva1wiOntcInR5cGVcIjpcImJvb2xlYW5cIn19LFwidHlwZVwiOlwib2JqZWN0XCJ9IiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJwYXRoIjp7InR5cGUiOiJzdHJpbmcifX19fX1dLCJyZWFzb25pbmdfZWZmb3J0IjoiaGlnaCJ9"
+  },
+  {
+   "name": "catalog-mistral-large-loop",
+   "protocol": "openai",
+   "model": "mistral-large-4-0",
+   "base_url": "https://api.mistral.ai/v1",
+   "messages": "loop",
+   "tools": "base",
+   "inference_profile": {
+    "reasoning": {
+     "can_disable": false,
+     "default_effort": "high",
+     "effort_map": {
+      "max": "high",
+      "ultra": "high",
+      "xhigh": "high"
+     },
+     "support": "supported",
+     "supported_efforts": [
+      "low",
+      "medium",
+      "high"
+     ],
+     "wire_format": "reasoning_effort"
+    },
+    "source": "official"
+   },
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "reasoning": {
+    "thinking_depth": "xhigh"
+   },
+   "url": "https://api.mistral.ai/v1/chat/completions",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6Im1pc3RyYWwtbGFyZ2UtNC0wIiwibWVzc2FnZXMiOlt7InJvbGUiOiJzeXN0ZW0iLCJjb250ZW50IjoiU3RhdGljIHByb21wdC5NZW1vcnkgYmxvY2suIn0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOiJJbnNwZWN0IHRoZSByZXBvLiJ9LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOiJMb29raW5nLiIsInRvb2xfY2FsbHMiOlt7ImlkIjoiVm1NbVJ5S2RVIiwidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJ1bl9jb21tYW5kIiwiYXJndW1lbnRzIjoie1wiY29tbWFuZFwiOiBcImxzXCJ9In19XX0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOiJhXG5iIiwidG9vbF9jYWxsX2lkIjoiVm1NbVJ5S2RVIn0seyJyb2xlIjoiYXNzaXN0YW50IiwidG9vbF9jYWxscyI6W3siaWQiOiI5bXlUWkVWTHkiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImFyZ3VtZW50cyI6IntcInBhdGhcIjogXCJhXCJ9In19LHsiaWQiOiJ0Nk5ta3ZqVjUiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImFyZ3VtZW50cyI6IntcInBhdGhcIjogXCJiXCJ9In19XX0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOiJBIiwidG9vbF9jYWxsX2lkIjoiOW15VFpFVkx5In0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOiJCIiwidG9vbF9jYWxsX2lkIjoidDZObWt2alY1In0seyJyb2xlIjoiYXNzaXN0YW50IiwidG9vbF9jYWxscyI6W3siaWQiOiIxNmxvdjFiSGIiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJhcmd1bWVudHMiOiJ7XCJjb21tYW5kXCI6IFwicHdkXCJ9In19XX0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOiIvdyIsInRvb2xfY2FsbF9pZCI6IjE2bG92MWJIYiJ9XSwibWF4X3Rva2VucyI6NDA5Niwic3RyZWFtIjp0cnVlLCJ0b29scyI6W3sidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJ1bl9jb21tYW5kIiwiZGVzY3JpcHRpb24iOiJSdW4gYSBzaGVsbCBjb21tYW5kIOKAlCBib3VuZGVkLiIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsiY29tbWFuZCI6eyJ0eXBlIjoic3RyaW5nIn19LCJyZXF1aXJlZCI6WyJjb21tYW5kIl19fX0seyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoic2VuZCIsImRlc2NyaXB0aW9uIjoiU2VuZCB0byBvbmUgdGFyZ2V0LiIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCIsImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicHJvcGVydGllcyI6eyJhIjp7InR5cGUiOiJzdHJpbmcifSwiYiI6eyJ0eXBlIjoiaW50ZWdlciJ9fX19fSx7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJyZWFkX2ZpbGVzIiwiZGVzY3JpcHRpb24iOiJSZWFkIGZpbGVzLlxuU3VjY2Vzc2Z1bCBkZWNvZGVkIEpTT04gdmFsdWUgKHByb2R1Y2VyIGRlY2xhcmF0aW9uOyBjb3ZlcmFnZS9mcmVzaG5lc3MgdW5rbm93bik6IHtcImRlc2NyaXB0aW9uXCI6XCJyXFx1MDBlOXN1bHRhdFwiLFwicHJvcGVydGllc1wiOntcIm9rXCI6e1widHlwZVwiOlwiYm9vbGVhblwifX0sXCJ0eXBlXCI6XCJvYmplY3RcIn0iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InBhdGgiOnsidHlwZSI6InN0cmluZyJ9fX19fV0sInRlbXBlcmF0dXJlIjoxLjAsInJlYXNvbmluZ19lZmZvcnQiOiJoaWdoIn0="
+  },
+  {
+   "name": "catalog-mistral-large-anthropic-ids",
+   "protocol": "anthropic",
+   "model": "mistral-large-4-0",
+   "base_url": "http://127.0.0.1:9/v1",
+   "messages": "base",
+   "tools": "base",
+   "inference_profile": null,
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "url": "http://127.0.0.1:9/v1/messages",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "anthropic-version",
+     "2023-06-01"
+    ],
+    [
+     "x-api-key",
+     "sk-golden"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6Im1pc3RyYWwtbGFyZ2UtNC0wIiwibWF4X3Rva2VucyI6NDA5Niwic3RyZWFtIjp0cnVlLCJ0ZW1wZXJhdHVyZSI6MS4wLCJ0b29scyI6W3sibmFtZSI6InJ1bl9jb21tYW5kIiwiZGVzY3JpcHRpb24iOiJSdW4gYSBzaGVsbCBjb21tYW5kIOKAlCBib3VuZGVkLiIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJjb21tYW5kIjp7InR5cGUiOiJzdHJpbmcifX0sInJlcXVpcmVkIjpbImNvbW1hbmQiXX19LHsibmFtZSI6InNlbmQiLCJkZXNjcmlwdGlvbiI6IlNlbmQgdG8gb25lIHRhcmdldC4iLCJpbnB1dF9zY2hlbWEiOnsidHlwZSI6Im9iamVjdCIsImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicHJvcGVydGllcyI6eyJhIjp7InR5cGUiOiJzdHJpbmcifSwiYiI6eyJ0eXBlIjoiaW50ZWdlciJ9fX19LHsibmFtZSI6InJlYWRfZmlsZXMiLCJkZXNjcmlwdGlvbiI6IlJlYWQgZmlsZXMuXG5TdWNjZXNzZnVsIGRlY29kZWQgSlNPTiB2YWx1ZSAocHJvZHVjZXIgZGVjbGFyYXRpb247IGNvdmVyYWdlL2ZyZXNobmVzcyB1bmtub3duKToge1wiZGVzY3JpcHRpb25cIjpcInJcXHUwMGU5c3VsdGF0XCIsXCJwcm9wZXJ0aWVzXCI6e1wib2tcIjp7XCJ0eXBlXCI6XCJib29sZWFuXCJ9fSxcInR5cGVcIjpcIm9iamVjdFwifSIsImlucHV0X3NjaGVtYSI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJwYXRoIjp7InR5cGUiOiJzdHJpbmcifX19fV0sInN5c3RlbSI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiWW91IGFyZSBhIHRlc3QgaGFybmVzcy4ifSx7InR5cGUiOiJ0ZXh0IiwidGV4dCI6Ik1hbmFnZWQgc2VjdGlvbi4ifV0sIm1lc3NhZ2VzIjpbeyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IlJ1biBpdCAgICAifSx7InR5cGUiOiJ0ZXh0IiwidGV4dCI6InBsZWFzZSDimIMifSx7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IjxzeXN0ZW0tcmVtaW5kZXI+YW1iaWVudDwvc3lzdGVtLXJlbWluZGVyPiJ9XX0seyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0IjoiUnVubmluZy4ifSx7InR5cGUiOiJ0b29sX3VzZSIsImlkIjoiaVRvMDBKY1ZZIiwibmFtZSI6InJ1bl9jb21tYW5kIiwiaW5wdXQiOnsiY29tbWFuZCI6InRydWUifX1dfSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfcmVzdWx0IiwidG9vbF91c2VfaWQiOiJpVG8wMEpjVlkiLCJjb250ZW50IjoiJCB0cnVlXG5cbltleGl0IGNvZGU6IDBdIn1dfSx7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF91c2UiLCJpZCI6ImVjUVR0eFFmdSIsIm5hbWUiOiJyZWFkX2ZpbGVzIiwiaW5wdXQiOnsicGF0aCI6ImYwLnR4dCJ9fV19LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF9yZXN1bHQiLCJ0b29sX3VzZV9pZCI6ImVjUVR0eFFmdSIsImNvbnRlbnQiOiJGaWxlOiBmMC50eHQgKDEgbGluZXMpXG4gICAxXHRub29wIDBcbiJ9XX0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6IkEgcHJpdmF0ZSBwcm9ncmVzcyBldmVudC4ifV19XX0="
+  },
+  {
+   "name": "catalog-gpt-5.5-kunlun-high",
+   "protocol": "responses",
+   "model": "gpt-5.5",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "loop",
+   "tools": "base",
+   "inference_profile": {
+    "reasoning": {
+     "can_disable": true,
+     "default_effort": "medium",
+     "effort_map": {
+      "max": "xhigh",
+      "ultra": "xhigh"
+     },
+     "support": "supported",
+     "supported_efforts": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+     ],
+     "wire_format": "reasoning_effort"
+    },
+    "sampling": {
+     "omit": [
+      "temperature"
+     ],
+     "temperature": "omit"
+    },
+    "source": "official",
+    "features": {
+     "responses_reasoning_replay": "supported",
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "conv-15",
+   "reasoning": {
+    "thinking_depth": "high"
+   },
+   "url": "https://api.openai.com/v1/responses",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ],
+    [
+     "Mt-Session-Id",
+     "b168354d-4934-53e2-b438-0a5b81a3ddad"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImdwdC01LjUiLCJzdG9yZSI6ZmFsc2UsInN0cmVhbSI6dHJ1ZSwicGFyYWxsZWxfdG9vbF9jYWxscyI6dHJ1ZSwibWF4X291dHB1dF90b2tlbnMiOjQwOTYsInJlYXNvbmluZyI6eyJlZmZvcnQiOiJoaWdoIiwiY29udGV4dCI6ImFsbF90dXJucyJ9LCJpbmNsdWRlIjpbInJlYXNvbmluZy5lbmNyeXB0ZWRfY29udGVudCJdLCJpbnB1dCI6W3sidHlwZSI6Im1lc3NhZ2UiLCJyb2xlIjoiZGV2ZWxvcGVyIiwiY29udGVudCI6W3sidHlwZSI6ImlucHV0X3RleHQiLCJ0ZXh0IjoiU3RhdGljIHByb21wdC4ifSx7InR5cGUiOiJpbnB1dF90ZXh0IiwidGV4dCI6Ik1lbW9yeSBibG9jay4ifV19LHsidHlwZSI6Im1lc3NhZ2UiLCJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJpbnB1dF90ZXh0IiwidGV4dCI6Ikluc3BlY3QgdGhlIHJlcG8uIn1dfSx7InR5cGUiOiJtZXNzYWdlIiwicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOlt7InR5cGUiOiJvdXRwdXRfdGV4dCIsInRleHQiOiJMb29raW5nLiJ9XX0seyJ0eXBlIjoiZnVuY3Rpb25fY2FsbCIsImNhbGxfaWQiOiJ0b29sdV8xIiwibmFtZSI6InJ1bl9jb21tYW5kIiwiYXJndW1lbnRzIjoie1wiY29tbWFuZFwiOiBcImxzXCJ9In0seyJ0eXBlIjoiZnVuY3Rpb25fY2FsbF9vdXRwdXQiLCJjYWxsX2lkIjoidG9vbHVfMSIsIm91dHB1dCI6ImFcbmIifSx7InR5cGUiOiJmdW5jdGlvbl9jYWxsIiwiY2FsbF9pZCI6InRvb2x1XzIiLCJuYW1lIjoicmVhZF9maWxlcyIsImFyZ3VtZW50cyI6IntcInBhdGhcIjogXCJhXCJ9In0seyJ0eXBlIjoiZnVuY3Rpb25fY2FsbCIsImNhbGxfaWQiOiJ0b29sdV8zIiwibmFtZSI6InJlYWRfZmlsZXMiLCJhcmd1bWVudHMiOiJ7XCJwYXRoXCI6IFwiYlwifSJ9LHsidHlwZSI6ImZ1bmN0aW9uX2NhbGxfb3V0cHV0IiwiY2FsbF9pZCI6InRvb2x1XzIiLCJvdXRwdXQiOiJBIn0seyJ0eXBlIjoiZnVuY3Rpb25fY2FsbF9vdXRwdXQiLCJjYWxsX2lkIjoidG9vbHVfMyIsIm91dHB1dCI6Ilt7XCJ0eXBlXCI6IFwidGV4dFwiLCBcInRleHRcIjogXCJCXCJ9XSJ9LHsidHlwZSI6ImZ1bmN0aW9uX2NhbGwiLCJjYWxsX2lkIjoidG9vbHVfNCIsIm5hbWUiOiJydW5fY29tbWFuZCIsImFyZ3VtZW50cyI6IntcImNvbW1hbmRcIjogXCJwd2RcIn0ifSx7InR5cGUiOiJmdW5jdGlvbl9jYWxsX291dHB1dCIsImNhbGxfaWQiOiJ0b29sdV80Iiwib3V0cHV0IjoiL3cifV0sInRvb2xzIjpbeyJ0eXBlIjoiZnVuY3Rpb24iLCJuYW1lIjoicnVuX2NvbW1hbmQiLCJkZXNjcmlwdGlvbiI6IlJ1biBhIHNoZWxsIGNvbW1hbmQg4oCUIGJvdW5kZWQuIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJjb21tYW5kIjp7InR5cGUiOiJzdHJpbmcifX0sInJlcXVpcmVkIjpbImNvbW1hbmQiXX0sInN0cmljdCI6ZmFsc2V9LHsidHlwZSI6ImZ1bmN0aW9uIiwibmFtZSI6InNlbmQiLCJkZXNjcmlwdGlvbiI6IlNlbmQgdG8gb25lIHRhcmdldC4iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInByb3BlcnRpZXMiOnsiYSI6eyJ0eXBlIjoic3RyaW5nIn0sImIiOnsidHlwZSI6ImludGVnZXIifX19LCJzdHJpY3QiOmZhbHNlfSx7InR5cGUiOiJmdW5jdGlvbiIsIm5hbWUiOiJyZWFkX2ZpbGVzIiwiZGVzY3JpcHRpb24iOiJSZWFkIGZpbGVzLlxuU3VjY2Vzc2Z1bCBkZWNvZGVkIEpTT04gdmFsdWUgKHByb2R1Y2VyIGRlY2xhcmF0aW9uOyBjb3ZlcmFnZS9mcmVzaG5lc3MgdW5rbm93bik6IHtcImRlc2NyaXB0aW9uXCI6XCJyXFx1MDBlOXN1bHRhdFwiLFwicHJvcGVydGllc1wiOntcIm9rXCI6e1widHlwZVwiOlwiYm9vbGVhblwifX0sXCJ0eXBlXCI6XCJvYmplY3RcIn0iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InBhdGgiOnsidHlwZSI6InN0cmluZyJ9fX0sInN0cmljdCI6ZmFsc2V9XX0="
+  },
+  {
+   "name": "catalog-gpt-5.4-kunlun-off",
+   "protocol": "responses",
+   "model": "gpt-5.4",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "base",
+   "tools": "base",
+   "inference_profile": {
+    "reasoning": {
+     "can_disable": true,
+     "default_effort": "medium",
+     "effort_map": {
+      "max": "xhigh",
+      "ultra": "xhigh"
+     },
+     "support": "supported",
+     "supported_efforts": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+     ],
+     "wire_format": "reasoning_effort"
+    },
+    "sampling": {
+     "omit": [
+      "temperature"
+     ],
+     "temperature": "omit"
+    },
+    "source": "official",
+    "features": {
+     "responses_reasoning_replay": "supported",
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "reasoning": {
+    "thinking_enabled": false
+   },
+   "url": "https://api.openai.com/v1/responses",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImdwdC01LjQiLCJzdG9yZSI6ZmFsc2UsInN0cmVhbSI6dHJ1ZSwicGFyYWxsZWxfdG9vbF9jYWxscyI6dHJ1ZSwibWF4X291dHB1dF90b2tlbnMiOjQwOTYsInJlYXNvbmluZyI6eyJlZmZvcnQiOiJub25lIiwiY29udGV4dCI6ImFsbF90dXJucyJ9LCJpbmNsdWRlIjpbInJlYXNvbmluZy5lbmNyeXB0ZWRfY29udGVudCJdLCJpbnB1dCI6W3sidHlwZSI6Im1lc3NhZ2UiLCJyb2xlIjoiZGV2ZWxvcGVyIiwiY29udGVudCI6W3sidHlwZSI6ImlucHV0X3RleHQiLCJ0ZXh0IjoiWW91IGFyZSBhIHRlc3QgaGFybmVzcy4ifV19LHsidHlwZSI6Im1lc3NhZ2UiLCJyb2xlIjoiZGV2ZWxvcGVyIiwiY29udGVudCI6W3sidHlwZSI6ImlucHV0X3RleHQiLCJ0ZXh0IjoiTWFuYWdlZCBzZWN0aW9uLiJ9XX0seyJ0eXBlIjoibWVzc2FnZSIsInJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6ImlucHV0X3RleHQiLCJ0ZXh0IjoiUnVuIGl0ICAgICJ9LHsidHlwZSI6ImlucHV0X3RleHQiLCJ0ZXh0IjoicGxlYXNlIOKYgyJ9LHsidHlwZSI6ImlucHV0X3RleHQiLCJ0ZXh0IjoiPHN5c3RlbS1yZW1pbmRlcj5hbWJpZW50PC9zeXN0ZW0tcmVtaW5kZXI+In1dfSx7InR5cGUiOiJtZXNzYWdlIiwicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOlt7InR5cGUiOiJvdXRwdXRfdGV4dCIsInRleHQiOiJSdW5uaW5nLiJ9XX0seyJ0eXBlIjoiZnVuY3Rpb25fY2FsbCIsImNhbGxfaWQiOiJjYWxsX2EiLCJuYW1lIjoicnVuX2NvbW1hbmQiLCJhcmd1bWVudHMiOiJ7XCJjb21tYW5kXCI6IFwidHJ1ZVwifSJ9LHsidHlwZSI6ImZ1bmN0aW9uX2NhbGxfb3V0cHV0IiwiY2FsbF9pZCI6ImNhbGxfYSIsIm91dHB1dCI6IiQgdHJ1ZVxuXG5bZXhpdCBjb2RlOiAwXSJ9LHsidHlwZSI6ImZ1bmN0aW9uX2NhbGwiLCJjYWxsX2lkIjoiY2FsbF9iIiwibmFtZSI6InJlYWRfZmlsZXMiLCJhcmd1bWVudHMiOiJ7XCJwYXRoXCI6IFwiZjAudHh0XCJ9In0seyJ0eXBlIjoiZnVuY3Rpb25fY2FsbF9vdXRwdXQiLCJjYWxsX2lkIjoiY2FsbF9iIiwib3V0cHV0IjoiRmlsZTogZjAudHh0ICgxIGxpbmVzKVxuICAgMVx0bm9vcCAwXG4ifSx7InR5cGUiOiJtZXNzYWdlIiwicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoiaW5wdXRfdGV4dCIsInRleHQiOiJBIHByaXZhdGUgcHJvZ3Jlc3MgZXZlbnQuIn1dfV0sInRvb2xzIjpbeyJ0eXBlIjoiZnVuY3Rpb24iLCJuYW1lIjoicnVuX2NvbW1hbmQiLCJkZXNjcmlwdGlvbiI6IlJ1biBhIHNoZWxsIGNvbW1hbmQg4oCUIGJvdW5kZWQuIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJjb21tYW5kIjp7InR5cGUiOiJzdHJpbmcifX0sInJlcXVpcmVkIjpbImNvbW1hbmQiXX0sInN0cmljdCI6ZmFsc2V9LHsidHlwZSI6ImZ1bmN0aW9uIiwibmFtZSI6InNlbmQiLCJkZXNjcmlwdGlvbiI6IlNlbmQgdG8gb25lIHRhcmdldC4iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInByb3BlcnRpZXMiOnsiYSI6eyJ0eXBlIjoic3RyaW5nIn0sImIiOnsidHlwZSI6ImludGVnZXIifX19LCJzdHJpY3QiOmZhbHNlfSx7InR5cGUiOiJmdW5jdGlvbiIsIm5hbWUiOiJyZWFkX2ZpbGVzIiwiZGVzY3JpcHRpb24iOiJSZWFkIGZpbGVzLlxuU3VjY2Vzc2Z1bCBkZWNvZGVkIEpTT04gdmFsdWUgKHByb2R1Y2VyIGRlY2xhcmF0aW9uOyBjb3ZlcmFnZS9mcmVzaG5lc3MgdW5rbm93bik6IHtcImRlc2NyaXB0aW9uXCI6XCJyXFx1MDBlOXN1bHRhdFwiLFwicHJvcGVydGllc1wiOntcIm9rXCI6e1widHlwZVwiOlwiYm9vbGVhblwifX0sXCJ0eXBlXCI6XCJvYmplY3RcIn0iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InBhdGgiOnsidHlwZSI6InN0cmluZyJ9fX0sInN0cmljdCI6ZmFsc2V9XX0="
+  },
+  {
+   "name": "catalog-gpt-6-astra-legacy-xhigh-raises",
+   "protocol": "responses",
+   "model": "gpt-6-astra",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "base",
+   "tools": "base",
+   "inference_profile": {
+    "sampling": {
+     "omit": [
+      "temperature"
+     ],
+     "temperature": "omit"
+    },
+    "source": "official",
+    "features": {
+     "responses_reasoning_replay": "supported",
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "reasoning": {
+    "thinking_depth": "xhigh"
+   },
+   "error": {
+    "class": "ProtocolConversionError",
+    "message": "protocol_conversion:unsupported_reasoning"
+   }
+  },
+  {
+   "name": "catalog-gpt-6-astra-legacy-on-chat",
+   "protocol": "openai",
+   "model": "gpt-6-astra",
+   "base_url": "https://api.openai.com/v1",
+   "messages": "base",
+   "tools": "base",
+   "inference_profile": {
+    "sampling": {
+     "omit": [
+      "temperature"
+     ]
+    },
+    "source": "official",
+    "features": {
+     "cache_affinity_mt_session_id": "supported"
+    }
+   },
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "reasoning": {
+    "thinking_depth": "xhigh"
+   },
+   "url": "https://api.openai.com/v1/chat/completions",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImdwdC02LWFzdHJhIiwibWVzc2FnZXMiOlt7InJvbGUiOiJzeXN0ZW0iLCJjb250ZW50IjoiWW91IGFyZSBhIHRlc3QgaGFybmVzcy4ifSx7InJvbGUiOiJzeXN0ZW0iLCJjb250ZW50IjoiTWFuYWdlZCBzZWN0aW9uLiJ9LHsicm9sZSI6InVzZXIiLCJjb250ZW50IjoiUnVuIGl0ICAgIHBsZWFzZSDimIM8c3lzdGVtLXJlbWluZGVyPmFtYmllbnQ8L3N5c3RlbS1yZW1pbmRlcj4ifSx7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjoiUnVubmluZy4iLCJ0b29sX2NhbGxzIjpbeyJpZCI6ImNhbGxfYSIsInR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJydW5fY29tbWFuZCIsImFyZ3VtZW50cyI6IntcImNvbW1hbmRcIjogXCJ0cnVlXCJ9In19XX0seyJyb2xlIjoidG9vbCIsImNvbnRlbnQiOiIkIHRydWVcblxuW2V4aXQgY29kZTogMF0iLCJ0b29sX2NhbGxfaWQiOiJjYWxsX2EifSx7InJvbGUiOiJhc3Npc3RhbnQiLCJ0b29sX2NhbGxzIjpbeyJpZCI6ImNhbGxfYiIsInR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJyZWFkX2ZpbGVzIiwiYXJndW1lbnRzIjoie1wicGF0aFwiOiBcImYwLnR4dFwifSJ9fV19LHsicm9sZSI6InRvb2wiLCJjb250ZW50IjoiRmlsZTogZjAudHh0ICgxIGxpbmVzKVxuICAgMVx0bm9vcCAwXG4iLCJ0b29sX2NhbGxfaWQiOiJjYWxsX2IifSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6IkEgcHJpdmF0ZSBwcm9ncmVzcyBldmVudC4ifV0sIm1heF90b2tlbnMiOjQwOTYsInN0cmVhbSI6dHJ1ZSwidG9vbHMiOlt7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJydW5fY29tbWFuZCIsImRlc2NyaXB0aW9uIjoiUnVuIGEgc2hlbGwgY29tbWFuZCDigJQgYm91bmRlZC4iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7ImNvbW1hbmQiOnsidHlwZSI6InN0cmluZyJ9fSwicmVxdWlyZWQiOlsiY29tbWFuZCJdfX19LHsidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InNlbmQiLCJkZXNjcmlwdGlvbiI6IlNlbmQgdG8gb25lIHRhcmdldC4iLCJwYXJhbWV0ZXJzIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInByb3BlcnRpZXMiOnsiYSI6eyJ0eXBlIjoic3RyaW5nIn0sImIiOnsidHlwZSI6ImludGVnZXIifX19fX0seyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImRlc2NyaXB0aW9uIjoiUmVhZCBmaWxlcy5cblN1Y2Nlc3NmdWwgZGVjb2RlZCBKU09OIHZhbHVlIChwcm9kdWNlciBkZWNsYXJhdGlvbjsgY292ZXJhZ2UvZnJlc2huZXNzIHVua25vd24pOiB7XCJkZXNjcmlwdGlvblwiOlwiclxcdTAwZTlzdWx0YXRcIixcInByb3BlcnRpZXNcIjp7XCJva1wiOntcInR5cGVcIjpcImJvb2xlYW5cIn19LFwidHlwZVwiOlwib2JqZWN0XCJ9IiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJwYXRoIjp7InR5cGUiOiJzdHJpbmcifX19fX1dLCJyZWFzb25pbmdfZWZmb3J0IjoieGhpZ2gifQ=="
+  },
+  {
+   "name": "generic-openai-legacy-depth",
+   "protocol": "openai",
+   "model": "golden-model",
+   "base_url": "http://127.0.0.1:9/v1",
+   "messages": "base",
+   "tools": "base",
+   "inference_profile": null,
+   "extended_cache_ttl": false,
+   "lineage": "",
+   "reasoning": {
+    "thinking_depth": "high"
+   },
+   "url": "http://127.0.0.1:9/v1/chat/completions",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ],
+    [
+     "Authorization",
+     "Bearer sk-golden"
+    ]
+   ],
+   "payload_b64": "eyJtb2RlbCI6ImdvbGRlbi1tb2RlbCIsIm1lc3NhZ2VzIjpbeyJyb2xlIjoic3lzdGVtIiwiY29udGVudCI6IllvdSBhcmUgYSB0ZXN0IGhhcm5lc3MuIn0seyJyb2xlIjoic3lzdGVtIiwiY29udGVudCI6Ik1hbmFnZWQgc2VjdGlvbi4ifSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6IlJ1biBpdCAgICBwbGVhc2Ug4piDPHN5c3RlbS1yZW1pbmRlcj5hbWJpZW50PC9zeXN0ZW0tcmVtaW5kZXI+In0seyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6IlJ1bm5pbmcuIiwidG9vbF9jYWxscyI6W3siaWQiOiJjYWxsX2EiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJhcmd1bWVudHMiOiJ7XCJjb21tYW5kXCI6IFwidHJ1ZVwifSJ9fV19LHsicm9sZSI6InRvb2wiLCJjb250ZW50IjoiJCB0cnVlXG5cbltleGl0IGNvZGU6IDBdIiwidG9vbF9jYWxsX2lkIjoiY2FsbF9hIn0seyJyb2xlIjoiYXNzaXN0YW50IiwidG9vbF9jYWxscyI6W3siaWQiOiJjYWxsX2IiLCJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicmVhZF9maWxlcyIsImFyZ3VtZW50cyI6IntcInBhdGhcIjogXCJmMC50eHRcIn0ifX1dfSx7InJvbGUiOiJ0b29sIiwiY29udGVudCI6IkZpbGU6IGYwLnR4dCAoMSBsaW5lcylcbiAgIDFcdG5vb3AgMFxuIiwidG9vbF9jYWxsX2lkIjoiY2FsbF9iIn0seyJyb2xlIjoidXNlciIsImNvbnRlbnQiOiJBIHByaXZhdGUgcHJvZ3Jlc3MgZXZlbnQuIn1dLCJtYXhfdG9rZW5zIjo0MDk2LCJzdHJlYW0iOnRydWUsInRvb2xzIjpbeyJ0eXBlIjoiZnVuY3Rpb24iLCJmdW5jdGlvbiI6eyJuYW1lIjoicnVuX2NvbW1hbmQiLCJkZXNjcmlwdGlvbiI6IlJ1biBhIHNoZWxsIGNvbW1hbmQg4oCUIGJvdW5kZWQuIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJjb21tYW5kIjp7InR5cGUiOiJzdHJpbmcifX0sInJlcXVpcmVkIjpbImNvbW1hbmQiXX19fSx7InR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJzZW5kIiwiZGVzY3JpcHRpb24iOiJTZW5kIHRvIG9uZSB0YXJnZXQuIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJwcm9wZXJ0aWVzIjp7ImEiOnsidHlwZSI6InN0cmluZyJ9LCJiIjp7InR5cGUiOiJpbnRlZ2VyIn19fX19LHsidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InJlYWRfZmlsZXMiLCJkZXNjcmlwdGlvbiI6IlJlYWQgZmlsZXMuXG5TdWNjZXNzZnVsIGRlY29kZWQgSlNPTiB2YWx1ZSAocHJvZHVjZXIgZGVjbGFyYXRpb247IGNvdmVyYWdlL2ZyZXNobmVzcyB1bmtub3duKToge1wiZGVzY3JpcHRpb25cIjpcInJcXHUwMGU5c3VsdGF0XCIsXCJwcm9wZXJ0aWVzXCI6e1wib2tcIjp7XCJ0eXBlXCI6XCJib29sZWFuXCJ9fSxcInR5cGVcIjpcIm9iamVjdFwifSIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsicGF0aCI6eyJ0eXBlIjoic3RyaW5nIn19fX19XSwidGVtcGVyYXR1cmUiOjEuMH0="
   }
  ]
 }

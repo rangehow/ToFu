@@ -151,7 +151,7 @@ def test_cache_publication_failure_does_not_lose_the_index(project, tmp_path):
 
 def test_measurement_rejects_a_faster_but_incomplete_index(project, monkeypatch):
     from lib.project_mod import verification_index
-    from scripts.benchmark_verification import measure
+    from lib.project_mod.verification_index import measure
     original = verification_index.build_index
 
     def lose_reference(*args, **kwargs):
@@ -162,3 +162,46 @@ def test_measurement_rejects_a_faster_but_incomplete_index(project, monkeypatch)
     monkeypatch.setattr(verification_index, 'build_index', lose_reference)
     with pytest.raises(AssertionError, match='reference sets differ'):
         measure(project, repetitions=1)
+
+
+def test_measurement_public_entrypoint_needs_no_private_script(project, monkeypatch):
+    import builtins
+    from lib.project_mod.verification_index import measure
+
+    original = builtins.__import__
+
+    def public_import(name, *args, **kwargs):
+        if name == 'scripts.benchmark_verification':
+            raise ModuleNotFoundError("No module named 'scripts.benchmark_verification'")
+        return original(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, '__import__', public_import)
+    with pytest.raises(ModuleNotFoundError, match='benchmark_verification'):
+        public_import('scripts.benchmark_verification', fromlist=['measure'])
+    result = measure(project, repetitions=2)
+    assert result['equivalent_reference_sets'] is True
+    assert result['files'] == 3
+    assert result['cold_blobs_parsed'] == [2, 2]
+    assert set(result['samples_seconds']) == {
+        'ordinary_cold', 'content_cold', 'content_warm', 'scoped_cold'}
+    assert all(len(samples) == 2 for samples in result['samples_seconds'].values())
+    test_measurement_rejects_a_faster_but_incomplete_index(project, monkeypatch)
+
+
+@pytest.mark.parametrize('broken', ['warm', 'scoped'])
+def test_measurement_rejects_incomplete_warm_or_scoped_work(project, monkeypatch, broken):
+    from lib.project_mod import verification_index
+    original = verification_index.build_index
+    calls = 0
+
+    def incomplete(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        result = original(*args, **kwargs)
+        if (broken == 'warm' and calls == 2) or (broken == 'scoped' and calls == 3):
+            result.index.clear()
+        return result
+
+    monkeypatch.setattr(verification_index, 'build_index', incomplete)
+    with pytest.raises(AssertionError):
+        verification_index.measure(project, repetitions=1)

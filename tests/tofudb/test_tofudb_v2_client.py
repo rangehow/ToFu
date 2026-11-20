@@ -164,6 +164,28 @@ def test_send_many_declines_an_exchange_it_cannot_send_in_one_segment() -> None:
 
 
 @pytest.mark.parametrize("operation,command_id", [
+    ("a" * 129, None),
+    ("record.put", "c" * 257),
+    ("record.put", ""),
+])
+def test_a_field_the_daemon_refuses_is_rejected_before_any_byte_is_sent(operation, command_id):
+    # The daemon closes the connection on such a frame, which a client would
+    # replay as an availability failure that can never succeed.
+    session, peer_socket = _socketpair_session()
+    try:
+        with pytest.raises(ValueError, match=r'^invalid storage\.v2 (operation|command ID)$'):
+            session.request(operation, {}, command_id=command_id, deadline_unix_ms=10_000)
+        with pytest.raises(ValueError):
+            session.request_many([("a" * 129, {})], deadline_unix_ms=10_000)
+        peer_socket.setblocking(False)
+        with pytest.raises(BlockingIOError):
+            peer_socket.recv(1)
+    finally:
+        peer_socket.close()
+        session._sock.close()
+
+
+@pytest.mark.parametrize("operation,command_id", [
     ("tool_result_artifact.put", "large-tool-result"),
     ("swarm.agent.save", "large-agent"),
     ("turn.projection.update", "large-turn"),

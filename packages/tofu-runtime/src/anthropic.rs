@@ -162,6 +162,19 @@ pub fn convert_usage(raw: &Map<String, Value>) -> Result<Value, Error> {
     };
     let prompt = sum(totals[0], totals[2], totals[3])?;
     let mut out = json!({"prompt_tokens":prompt,"completion_tokens":totals[1],"total_tokens":sum(prompt,totals[1],0)?,"input_tokens":totals[0],"output_tokens":totals[1],"cache_creation_input_tokens":totals[2],"cache_read_input_tokens":totals[3],"effective_prompt_tokens":sum(top[0],top[2],top[3])?,"effective_output_tokens":top[1]});
+    let input_observed = if iterations.is_empty() {
+        raw.get(keys[0]).and_then(Value::as_u64).is_some()
+    } else {
+        iterations.iter().any(|row| row.get(keys[0]).and_then(Value::as_u64).is_some())
+    };
+    if input_observed {
+        out["_wire_anthropic_input_tokens"] = prompt.into();
+    }
+    if std::iter::once(raw).chain(iterations.iter().copied())
+        .any(|row| row.get(keys[3]).and_then(Value::as_u64).is_some())
+    {
+        out["_wire_anthropic_cached_tokens"] = totals[3].into();
+    }
     if totals[4] > 0 {
         out["thinking_tokens"] = totals[4].into();
         out["reasoning_tokens"] = totals[4].into();

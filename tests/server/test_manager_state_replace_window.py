@@ -50,15 +50,6 @@ def test_planned_restart_read_during_replace_sees_the_restart(tmp_path, monkeypa
     assert seen.get('outcome') == 'started'
 
 
-def test_manager_ready_read_during_replace_sees_the_ready_manager(tmp_path, monkeypatch):
-    ready = {'desired': 'running', 'observed': 'running', 'unreadySince': None}
-    root, path = _state_root(tmp_path, ready)
-    window = ReplaceWindow(monkeypatch, str(path))
-    window.run_writer(lambda: _publish(path, ready))
-
-    assert window.read_during_gap(lambda: oob_alert.manager_ready(root, time.time())) is True
-
-
 def test_restart_outcome_read_during_replace_sees_the_outcome(tmp_path, monkeypatch):
     outcome = {'lastRestart': {'outcome': 'spawned'}}
     root, path = _state_root(tmp_path, outcome)
@@ -83,6 +74,5 @@ def test_absent_state_reads_create_no_lock_file(tmp_path):
     (root / 'data').mkdir(parents=True)
 
     assert oob_alert.planned_restart(root) == {}
-    assert oob_alert.manager_ready(root, time.time()) is False
     assert sm.read_restart_outcome(str(root)) == {}
     assert os.listdir(root / 'data') == []

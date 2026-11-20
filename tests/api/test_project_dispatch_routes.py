@@ -18,7 +18,7 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.mark.parametrize('view,action,definition', [
-    ('project_assignment_create', 'authorize_and_dispatch', 'request'),
+    ('project_assignment_create', 'authorize_and_dispatch', 'publicRequest'),
     ('project_assignment_dispatch', 'dispatch', 'retry'),
     ('project_assignment_revoke', 'revoke', 'revoke'),
     ('project_assignment_review', 'review', 'reviewRequest'),
@@ -29,7 +29,7 @@ def test_assignment_routes_delegate_exact_principal_scope_and_request_contract(m
     principal = PrincipalContext.user(subject_id='synthetic', owner_user_id=7,
                                       tenant_id='tenant-a', scopes={'chat'})
     bodies = {
-        'request': {'projectPath': '/project', 'coordinatorId': 'coordinator', 'recipientId': 'recipient',
+        'publicRequest': {'projectPath': '/project', 'coordinatorId': 'coordinator', 'recipientId': 'recipient',
             'authorizationSource': {'conversationId': 'coordinator', 'turnId': 'source', 'projectionRevision': 1},
             'brief': 'Consult only', 'model': 'model-a',
             'budget': {'maxTokens': 100, 'maxModelRequests': 1, 'deadline': 2000}},
@@ -280,3 +280,14 @@ def test_client_disconnect_stops_the_history_build_before_its_next_row(monkeypat
     # and no row after the in-flight one is read.
     assert asyncio.run(run()) is None
     assert reads == ['turn-2', 'attempt-2']
+
+
+def test_public_assignment_parser_refuses_internal_board_keys_before_service(monkeypatch):
+    from routes.api_v1 import project_brain as routes
+    from lib import quart_sync
+    calls = []
+    monkeypatch.setattr(quart_sync, 'request_json', lambda **kwargs: {'boardTaskKeys': ['f' * 32]})
+    monkeypatch.setattr(routes, '_dispatch_service', lambda path: calls.append(path))
+    monkeypatch.setattr(routes, '_safe_route_error_response', lambda error: error)
+    error = inspect.unwrap(routes.project_assignment_create)()
+    assert 'boardTaskKeys' in str(error) and calls == []

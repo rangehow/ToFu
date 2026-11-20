@@ -5,29 +5,92 @@ Runs in an isolated environment with pyarrow (evaluation-only dependency):
       PAPERS.parquet OUT.jsonl PER_CLASS PARAGRAPHS.parquet [...]
 
 Standard library + pyarrow only. Selection is deterministic: within each
-class, papers sorted by SHA-256 of their OpenReview id. Papers without
-paragraph text are skipped in that order, so each class still gets PER_CLASS.
+class, papers are sorted by SHA-256 of their OpenReview id. Papers with
+fewer than ten nonblank body paragraphs are skipped until each class
+reaches PER_CLASS or exhausts its candidates.
 """
 import hashlib
 import json
 import sys
-
-import pyarrow.compute as pc
-import pyarrow.parquet as pq
+from itertools import islice
 
 VENUE = 'ICLR.cc/2025/Conference'
 ACCEPT = ('ICLR 2025 Oral', 'ICLR 2025 Spotlight', 'ICLR 2025 Poster')
 REJECT = ('Rejected_Submission',)
+_PARAGRAPH_COLUMNS = ['paper_openreview_id', 'paragraph_idx', 'section']
+_MIN_BODY_PARAGRAPHS = 10
 
 
 def key(paper_id):
     return hashlib.sha256(paper_id.encode()).hexdigest()
 
 
+def _read_rows(path, columns, *, filters=None):
+    import pyarrow.parquet as pq
+
+    return pq.read_table(path, columns=columns, filters=filters).to_pylist()
+
+
+def _paragraphs(paths, wanted, *, with_content=False):
+    grouped = {}
+    if wanted:
+        columns = _PARAGRAPH_COLUMNS + (['content'] if with_content else [])
+        for path in paths:
+            rows = _read_rows(path, columns, filters=[
+                ('venue', '=', VENUE), ('paper_openreview_id', 'in', wanted)])
+            for row in rows:
+                grouped.setdefault(row.pop('paper_openreview_id'), []).append(row)
+    return grouped
+
+
+def _body_paragraphs(rows):
+    for row in sorted(rows, key=lambda row: int(row['paragraph_idx'])):
+        section = str(row.get('section') or '')
+        if section.strip().casefold() in ('references', 'bibliography'):
+            break
+        yield section, row
+
+
+def _candidates(pool, metadata):
+    for row in pool:
+        body = _body_paragraphs(metadata.get(row['paper_openreview_id'], ()))
+        if sum(1 for _ in body) >= _MIN_BODY_PARAGRAPHS:
+            yield row
+
+
+def _usable_body(rows):
+    body = []
+    for section, paragraph in _body_paragraphs(rows):
+        content = paragraph.get('content')
+        if isinstance(content, str) and content.strip():
+            body.append(f'[{section}] {content}')
+    return body
+
+
+def _select(pools, paragraph_paths, per_class):
+    wanted = sorted({row['paper_openreview_id'] for pool in pools.values() for row in pool})
+    metadata = _paragraphs(paragraph_paths, wanted)
+    candidates = {label: _candidates(pool, metadata) for label, pool in pools.items()}
+    selected = {label: [] for label in pools}
+    # Metadata can rule papers out but cannot establish that their text is usable.
+    # Read ahead only as far as the remaining quota, then backfill any shortfall.
+    while batch := [(label, row) for label, pool in candidates.items()
+                    for row in islice(pool, per_class - len(selected[label]))]:
+        text = _paragraphs(paragraph_paths, sorted({row['paper_openreview_id'] for _, row in batch}),
+                           with_content=True)
+        for label, row in batch:
+            body = _usable_body(text.get(row['paper_openreview_id'], ()))
+            if len(body) >= _MIN_BODY_PARAGRAPHS:
+                selected[label].append((row, body))
+    for label, papers in selected.items():
+        print(f'class {label}: {len(papers)} papers', file=sys.stderr)
+        for row, body in papers:
+            yield label, row, body
+
+
 def main(papers_path, out_path, per_class, *paragraph_paths):
     per_class = int(per_class)
-    papers = pq.read_table(papers_path, columns=[
-        'venue', 'paper_openreview_id', 'title', 'paper_decision']).to_pylist()
+    papers = _read_rows(papers_path, ['venue', 'paper_openreview_id', 'title', 'paper_decision'])
     pools = {1: [], 0: []}
     for row in papers:
         if row['venue'] != VENUE:
@@ -38,48 +101,13 @@ def main(papers_path, out_path, per_class, *paragraph_paths):
             pools[0].append(row)
     for label in pools:
         pools[label].sort(key=lambda row: key(row['paper_openreview_id']))
-    # The paragraph mirror covers only part of the venue: select among the
-    # papers that have text, then read those papers' paragraphs.
-    with_text = set()
-    for path in paragraph_paths:
-        table = pq.read_table(path, columns=['venue', 'paper_openreview_id'])
-        table = table.filter(pc.equal(table['venue'], VENUE))
-        with_text |= set(table['paper_openreview_id'].to_pylist())
-    for label in pools:
-        pools[label] = [row for row in pools[label]
-                        if row['paper_openreview_id'] in with_text]
-    wanted = {row['paper_openreview_id'] for label in pools
-              for row in pools[label][:per_class * 2]}
-    text = {}
-    for path in paragraph_paths:
-        table = pq.read_table(path, columns=[
-            'paper_openreview_id', 'paragraph_idx', 'section', 'content'])
-        table = table.filter(pc.is_in(table['paper_openreview_id'],
-                                      value_set=__import__('pyarrow').array(sorted(wanted))))
-        for row in table.to_pylist():
-            text.setdefault(row['paper_openreview_id'], []).append(row)
+    selected = list(_select(pools, paragraph_paths, per_class))
     with open(out_path, 'w') as sink:
-        for label in (1, 0):
-            kept = 0
-            for row in pools[label]:
-                if kept == per_class:
-                    break
-                rows = sorted(text.get(row['paper_openreview_id']) or [],
-                              key=lambda r: int(r['paragraph_idx']))
-                body = []
-                for paragraph in rows:
-                    section = str(paragraph.get('section') or '')
-                    if section.strip().casefold() in ('references', 'bibliography'):
-                        break
-                    body.append(f'[{section}] {paragraph["content"]}')
-                if len(body) < 10:
-                    continue
-                kept += 1
-                sink.write(json.dumps({
-                    'id': row['paper_openreview_id'], 'title': row['title'],
-                    'decision': row['paper_decision'], 'accepted': label,
-                    'text': '\n'.join(body)}) + '\n')
-            print(f'class {label}: {kept} papers', file=sys.stderr)
+        for label, row, body in selected:
+            sink.write(json.dumps({
+                'id': row['paper_openreview_id'], 'title': row['title'],
+                'decision': row['paper_decision'], 'accepted': label,
+                'text': '\n'.join(body)}) + '\n')
 
 
 if __name__ == '__main__':

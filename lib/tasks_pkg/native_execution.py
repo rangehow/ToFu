@@ -176,9 +176,20 @@ def compile_native_application_route(repository, principal, selection, *, policy
                 or issued_group.route_identity.get("tenant_id") != boundary.tenant_id):
             raise NativeRouteError("native_route_owner")
         expected = issued_group.route_identity
+    from lib.oauth.accounts import SubscriptionAccounts
+
+    def bind_resolver(authority):
+        if issued_group is None:
+            binding = SubscriptionAccounts.issued_default(authority, 'codex')
+        else:
+            scoped = issued_group.primary.slot.subscription_account
+            binding = scoped[0] if scoped is not None else None
+        return NativeCodexCredentialResolver(repository=repository, principal=principal, account_binding=binding)
+
     return compile_native_route(repository,boundary,selection,policy=policy,
         expected_route_identity=expected,
-        credential_resolver=NativeCodexCredentialResolver(repository=repository,principal=principal))
+        credential_resolver=NativeCodexCredentialResolver(repository=repository,principal=principal),
+        bind_credential_resolver=bind_resolver)
 
 
 def prepare_native_application_template(task: dict, metadata: Mapping[str, Any]) -> dict:

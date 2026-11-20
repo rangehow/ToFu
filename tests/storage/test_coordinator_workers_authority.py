@@ -268,3 +268,261 @@ def test_native_delegate_execute_await_report_and_restart(native_dispatch_author
         engine.crash_cycle()
         assert recover_coordinator(repo, service=service) == []
         assert len(continuations) == 1
+
+
+def _settle_native_prompt_overflow(task, messages, monkeypatch):
+    """Fail the summary seam; keep real token admission, activity and terminal writes."""
+    from lib.llm.llm_errors import ContextCompactionError
+    from lib.tasks_pkg import manager
+    from lib.tasks_pkg.compaction import _prompt_admission as prompt
+    from lib.tasks_pkg.compaction._layer2 import _compact
+    from lib.tasks_pkg.failure_attribution import record_active_round
+    from lib.tasks_pkg.orchestrator._post_loop import handle_task_fatal
+
+    def unavailable_summary(*args, **kwargs):
+        kwargs['_result_meta'].update(compacted=False, reason='summary failed',
+                                      summaryFailureReason='summary_dispatch_failed')
+
+    with monkeypatch.context() as fault:
+        # Synthetic narrow route; the prompt itself and its measured size are real.
+        fault.setattr(prompt, '_resolved_ceiling', lambda *a, **kw: (128, 128))
+        fault.setattr(_compact, 'execute_compact_tool', unavailable_summary)
+        # Simulate shutdown after the terminal commit, before the retry drain.
+        fault.setattr(manager, 'task_admission_closed', lambda: True)
+        record_active_round(task, 0)
+        try:
+            prompt.enforce_dispatch_prompt_limit(messages, [], task, round_num=0,
+                                                model=task['config']['model'])
+        except ContextCompactionError as failure:
+            assert 'summary_dispatch_failed' in str(failure)
+            assert task['_lastPromptAdmission']['totalTokens'] > 128
+            handle_task_fatal(task, failure, allow_retry=False)
+        else:
+            pytest.fail('The oversized Coordinator prompt was admitted')
+    assert not task.get('_terminalTurnPending')
+
+
+@pytest.mark.parametrize('complete_at_commit', [False, True])
+def test_native_prompt_overflow_blocks_once_across_two_reopens(
+        native_dispatch_authority, tmp_path, monkeypatch, complete_at_commit):
+    """A real non-retryable local overflow must settle once without erasing the working view."""
+    from lib import turn_lifecycle as turns
+    from lib.conversation_sync.command_service import ConversationTurnCommandService
+    from lib.conversations import coordinator_births, coordinator_workers
+    from lib.conversations.coordinator_progress import CoordinatorTaskProgress
+    from lib.conversations.coordinator_reports import CoordinatorReports
+    from lib.conversations.coordinator_tools import execute_coordinator_tool
+    from lib.conversations.project_coordination import ProjectCoordinationRepository
+    from lib.identity import PrincipalContext
+    from lib.project_dispatch import admission, continuation, recovery
+    from lib.project_dispatch.delegation import capture_worker_policy
+    from lib.project_dispatch.repository import CONTRACT, ProjectDispatchRepository
+    from lib.project_dispatch.service import ProjectDispatchService
+    from lib.storage.model_continuation import ModelContinuationStore, settled_witness
+    from lib.tasks_pkg.model_replay import policy_witness
+    from lib.tasks_pkg.workspace_delivery import bind_worker_workspace
+    from lib.integration_control import checkpoint_workspace
+    import json
+    import time
+
+    factory, owner, engine = native_dispatch_authority
+    # The requirements reader imports this facade by value; point each test
+    # invocation at its own engine even when the module is already imported.
+    from lib.acceptance import turns as acceptance_turns
+    monkeypatch.setattr(acceptance_turns, 'get_storage_client', factory)
+    root = tmp_path / 'project'
+    root.mkdir()
+    _git(root, 'init', '-b', 'wake-replay')
+    _git(root, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+         'commit', '--allow-empty', '-m', 'baseline')
+    project = str(root)
+    monkeypatch.setenv('TOFU_INTEGRATION_WORKSPACE_DIR', str(tmp_path / 'workspaces'))
+    monkeypatch.setattr(coordinator_births, 'spawn', lambda body, name: body())
+    binding = ProjectCoordinationRepository(owner).create(project, folder_id='native-folder',
+        expected_revision=0, command_id='coordinator')
+    conv = binding['conversationId']
+    scope = {'user_id': owner, 'conversation_id': conv}
+    lane = dict(scope, lane_id='main')
+    board = CoordinatorTaskProgress(owner, project, notify=lambda: None)
+    board_title = 'Verify the restored task board'
+    board.publish({'owner': owner, 'projectPath': project, 'coordinatorId': conv,
+                   'bindingRevision': binding['revision']},
+                  {'summary': 'Verification is underway.', 'tasks': [
+                      {'title': board_title, 'status': 'in_progress',
+                       'progress': ('Compare the transcript, work receipts, and the retained task board '
+                                    'against the acknowledged model history and its recovery checkpoint.')}]})
+    board_before = board.read()
+    source = turns.create_turn_pair(conv, user_id=owner, command_id='source',
+        input_projection={'content': 'Verify the whole result'}, config={})
+    principal = PrincipalContext.user(subject_id=f'user:{owner}', owner_user_id=owner,
+                                      tenant_id='native-test', scopes=[])
+    lead = {'id': 'native-file-overflow-source', 'convId': conv, '_userId': owner,
+            '_attended': True, '_turnId': source['turn']['turnId'],
+            '_attemptId': source['attempt']['attemptId'], '_principalContext': principal.to_payload(),
+            'config': {'projectPath': project, 'codeExecEnabled': True}}
+    turns.bind_task(lead['_attemptId'], lead['id'], user_id=owner)
+    turns.mark_task_started(lead['_attemptId'], lead['id'], user_id=owner)
+    tools = ['read_files', *CONTRACT['continuationTools']]
+    capture_worker_policy(lead, lead['config'], [{'function': {'name': name}} for name in tools],
+                          'fixture-model', worker_model='fixture-model')
+    clock = [time.time()]
+    schedules, launches, wakes, worker_checkpoints = [], [], [], {}
+    repo = ProjectDispatchRepository(owner, project, clock=lambda: clock[0])
+    monkeypatch.setattr(continuation, 'schedule_wake', lambda *a, **k: schedules.append(a[2]))
+    monkeypatch.setattr(continuation, '_LANE_OBSERVATIONS', {})
+
+    def start(recipient, cfg, data, watermark, bind, **kwargs):
+        task_id = 'native-file-overflow-' + uuid.uuid4().hex
+        bind(task_id)
+        turns.mark_task_started(cfg['_attemptId'], task_id, user_id=owner)
+        launches.append(recipient)
+        principal = admission.principal_for(cfg[admission.KEY])
+        task = {'id': task_id, 'convId': recipient, '_userId': owner, 'config': cfg,
+                '_turnId': cfg['_turnId'], '_attemptId': cfg['_attemptId'],
+                '_principalContext': principal.to_payload(), '_tenant_id': principal.tenant_id,
+                '_attended': False, 'status': 'running', 'messages': [], 'toolRounds': [], 'events': [],
+                'abort_event': threading.Event()}
+        if recipient == conv:
+            wakes.append(task)
+        else:
+            admission.bind_account(task)
+            bind_worker_workspace(task)
+            workspace = admission.owned_workspace(task)
+            (Path(workspace['workspace_path']) / 'evidence.txt').write_text('Retained Worker evidence\n')
+            checkpoint_workspace(project, workspace['task_id'], user_id=owner)
+            worker_checkpoints[workspace['task_id']] = repo.get_workspace(project, workspace['task_id'], user_id=owner)
+        return task_id, None
+
+    commands = ConversationTurnCommandService(build_user_message=lambda message, *a: message,
+        was_aborted_after=lambda *a: False, start_task=start)
+    service = ProjectDispatchService(repo, commands=commands)
+    monkeypatch.setattr(coordinator_workers, 'ProjectDispatchService', lambda _: service)
+
+    def settle(task_id, attempt_id, content):
+        factory(write=True).command('turn.event.record', dict(user_id=owner, attempt_id=attempt_id,
+            task_id=task_id, terminal=True, status='completed', projection={'content': content},
+            settlement={'outcome': 'completed', 'cause': 'stop', 'resumeOptions': []}), uuid.uuid4().hex)
+
+    assigned = []
+    for title in ('Finished evidence', 'Still-running evidence'):
+        receipt = json.loads(execute_coordinator_tool(lead, 'delegate_project_work',
+            {'title': title, 'brief': 'Inspect the assigned evidence.', 'idempotency_key': title}))
+        assert receipt.get('assignment_id'), receipt
+        assigned.append(repo.read(receipt['assignment_id']))
+    done, running = assigned
+    settle(done['execution']['taskId'], done['execution']['attemptId'], 'Worker finding')
+    source_reply = 'Initial Coordinator analysis'
+    settle(lead['id'], lead['_attemptId'], source_reply)
+    def get_turn(identity):
+        return turns.get_turn(conv, identity, user_id=owner)
+
+    replay_policy = {'excludeLast': True}
+    continuation_store = ModelContinuationStore(client=factory())
+    source_turn = factory().query('turn.get', dict(scope, turn_id=lead['_turnId']))
+    assert source_turn['status'] == 'completed'
+    proof = continuation_store.read_context(**scope, turn_id=lead['_turnId'], replay=False)['historyProof']
+    prefix = [{'role': 'user', 'content': 'Verify the whole result'},
+              {'role': 'assistant', 'content': 'Retained working-view checkpoint'}]
+    checkpoint = {'historyProof': proof, 'turns': [settled_witness(source_turn)], 'messages': prefix,
+                  'policy': policy_witness(replay_policy), 'lastModelActivityAtMs': 1}
+    assert continuation_store.put(**lane, projection=checkpoint)
+    before = continuation_store.get(**lane)
+    assert before['messages'] == prefix
+    assert continuation.recover_coordinator(repo, service=service) == ['accepted']
+    failed, = wakes
+    cfg = dict(replay_policy)
+    messages = turns.build_api_messages(conv, failed['_turnId'], cfg, user_id=owner)
+    assert cfg['_modelReplayStatus'] == 'restored' and messages[:-1] == prefix
+    assert board_title in messages[-1]['content']
+    _settle_native_prompt_overflow(failed, messages, monkeypatch)
+    failed_turn = get_turn(failed['_turnId'])
+    failed_input = get_turn(failed_turn['parentTurnId'])
+    assert failed_turn['status'] == 'failed'
+    assert failed_turn['settlement']['error']['failureAttribution']['roundNum'] == 1
+    assert 'summary_dispatch_failed' in failed_turn['settlement']['error']['raw']
+    assert failed_turn['settlement']['error']['retryPolicy']['automatic'] is False
+    assert not failed_turn['projection'].get('apiRounds')
+    assert any(item['reasonCode'] == 'context_compaction' and item['status'] == 'failed'
+               for item in failed_turn['projection']['activityTimeline']['entries'])
+    assert failed_input['projection']['content'] == messages[-1]['content']
+
+    def assert_preserved():
+        assert CoordinatorTaskProgress(owner, project).read() == board_before
+        assert ModelContinuationStore(client=factory()).get(**lane) == before
+        assert get_turn(failed['_turnId']) == failed_turn
+        assert get_turn(failed_turn['parentTurnId']) == failed_input
+        assert len(worker_checkpoints) == 2
+        for work_id, checkpoint in worker_checkpoints.items():
+            assert checkpoint['checkpoint_sha']
+            assert repo.get_workspace(project, work_id, user_id=owner) == checkpoint
+
+    def reopen():
+        engine.crash_cycle()
+        # Storage is a new process; the host's in-memory wake observations/timer are lost too.
+        schedules.clear()
+        continuation._LANE_OBSERVATIONS.clear()
+        fresh = ProjectDispatchRepository(owner, project, clock=lambda: clock[0])
+        assert_preserved()
+        outcomes = []
+
+        def recover(owner, project, *, repository):
+            outcomes.append(recovery.recover_project_dispatch(owner, project, repository=repository,
+                service=ProjectDispatchService(repository, commands=commands), clock=repository.clock))
+
+        assert recovery.recover_persisted_dispatch(client=factory(), repository_factory=lambda *a: fresh,
+                                                   recovery=recover) == 1
+        return fresh, outcomes[0]
+
+    def blocked_reports():
+        return [turn for turn in turns.list_turns(conv, user_id=owner)['turns']
+                if turn['kind'] == 'coordinator_report.blocked']
+
+    if complete_at_commit:
+        commit = ProjectDispatchRepository._commit_value
+        fired = []
+
+        def settle_before_dispatch_commit(self, original, value, version, **kwargs):
+            if not fired and value.get('coordinatorSettlements'):
+                fired.append(True)
+                settle(running['execution']['taskId'], running['execution']['attemptId'], 'New Worker evidence')
+                assert self.read(running['id']) == running
+            return commit(self, original, value, version, **kwargs)
+
+        with monkeypatch.context() as fault:
+            fault.setattr(ProjectDispatchRepository, '_commit_value', settle_before_dispatch_commit)
+            repo, outcome = reopen()
+        assert fired and outcome['accepted'] == 0
+        assert not blocked_reports() and not repo._load()[0].get('coordinatorSettlements')
+        repo, outcome = reopen()
+        assert outcome['accepted'] == 1 and not blocked_reports()
+        assert launches == [done['request']['recipientId'], running['request']['recipientId'], conv, conv]
+        return
+
+    publish = CoordinatorReports.publish
+
+    def lose_report_ack(self, *args, **kwargs):
+        publish(self, *args, **kwargs)
+        raise ConnectionError('lost acknowledgement after writing the blocked report')
+
+    # First reopen commits a stop and publishes the ordinary report, but the
+    # dispatch book does not see that publication's acknowledgement.
+    with monkeypatch.context() as fault:
+        fault.setattr(CoordinatorReports, 'publish', lose_report_ack)
+        repo, outcome = reopen()
+    assert outcome['accepted'] == 0 and not schedules
+    [pending_stop] = repo._load()[0]['coordinatorSettlements']
+    assert pending_stop['sourceAttemptId'] == lead['_attemptId']
+    assert pending_stop['stopReport'] == 'automatic_retry_blocked' and 'reportTurnId' not in pending_stop
+    [report] = blocked_reports()
+    assert 'unsafe to retry automatically' in report['projection']['content']
+
+    # Second reopen reconciles that exact Turn, with no additional wake or report.
+    repo, outcome = reopen()
+    assert outcome['accepted'] == 0 and not schedules
+    assert repo._load()[0]['coordinatorSettlements'] == [{**pending_stop, 'reportTurnId': report['turnId']}]
+    assert blocked_reports() == [report]
+    assert continuation.recover_coordinator(repo, service=ProjectDispatchService(repo, commands=commands)) == []
+    assert launches == [done['request']['recipientId'], running['request']['recipientId'], conv]
+    assert repo.read(running['id']) == running
+    assert turns.get_attempt(running['execution']['attemptId'], user_id=owner)['status'] == 'running'
+    assert_preserved()

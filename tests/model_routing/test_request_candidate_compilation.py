@@ -57,6 +57,10 @@ def test_request_validates_one_snapshot_for_primary_and_fallback(authority, monk
     try:
         assert identities(group.candidates) == identities(primary + fallback)
         assert [h.slot.route_rank for h in group.handles] == list(range(len(group.handles)))
+        for handle, candidate in zip(group.handles, group.candidates, strict=True):
+            card = candidate.offering['actual_pricing']
+            assert handle.slot.route_actual_pricing == card
+            assert handle.slot.route_actual_pricing is not card
         assert len(authority.reads) == len(normalized) == 1
         assert authority.document == snapshot
     finally:

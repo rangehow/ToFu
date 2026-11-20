@@ -497,6 +497,7 @@ def test_preparation_failure_keeps_actionable_model_cause_and_unknown_effects(cl
     assert 'model_route_unavailable' in error['detail']
     assert error['retryable'] is False
     assert error['retryPolicy']['automatic'] is False
+    assert 'cutCallsClassifiedSafe' not in error
     assert 'private diagnostic' not in str(error)
     assert calls == ['preparation']
 

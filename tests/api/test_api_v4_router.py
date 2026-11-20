@@ -332,6 +332,10 @@ def test_projects_read_pages_the_owners_bound_projects_in_wire_form(
         {'title': 'Shipped', 'message': 'Delivered and verified.', 'kind': 'delivery',
          'idempotency_key': 'shipped'})
     latest = CoordinatorReports(1, alpha['projectPath']).read()['latest']
+    from lib.turn_lifecycle import bind_task, create_turn_pair
+    pending = create_turn_pair(alpha['conversationId'], command_id='directory-health',
+                               input_projection={'content': 'Private input'}, config={}, user_id=1)
+    bind_task(pending['attempt']['attemptId'], 'directory-health-task', user_id=1)
 
     page = read()
     assert page['nextCursor'] is None
@@ -344,12 +348,15 @@ def test_projects_read_pages_the_owners_bound_projects_in_wire_form(
         'projectPath': alpha['projectPath'], 'coordinatorConversationId': alpha['conversationId'],
         'bindingRevision': alpha['revision'], 'availability': 'available', 'activeWorkers': 0,
         'activeRequests': 0, 'workersCoverage': 'complete',
+        'executionHealth': {'state': 'observed', 'turnId': pending['turn']['turnId'],
+                            'status': 'pending', 'authorityWithdrawn': False},
         'lastReport': {'turnId': latest['turnId'], 'kind': 'delivery', 'title': 'Shipped',
                        'createdAt': latest['createdAt'], 'unread': True}}
     assert listed[beta['projectPath']] == {
         'projectPath': beta['projectPath'], 'coordinatorConversationId': beta['conversationId'],
         'bindingRevision': beta['revision'], 'availability': 'available', 'activeWorkers': 0,
-        'activeRequests': 0, 'workersCoverage': 'complete', 'lastReport': None}
+        'activeRequests': 0, 'workersCoverage': 'complete', 'lastReport': None,
+        'executionHealth': {'state': 'no_bound_attempt'}}
     # An unavailable lead has no activity facts at all, not zeros.
     assert listed[archived['projectPath']] == {
         'projectPath': archived['projectPath'], 'coordinatorConversationId': archived['conversationId'],
@@ -377,6 +384,8 @@ def test_projects_wire_renames_every_fact_without_inventing_any():
         {'project_path': '/work/alpha', 'coordinator_conversation_id': 'coordinator-a', 'binding_revision': 3,
          'availability': 'available', 'active_workers': 2, 'active_requests': 1,
          'workers_coverage': 'newest_page',
+         'execution_health': {'state': 'observed', 'turn_id': 'turn-12', 'status': 'failed',
+                              'authority_withdrawn': True},
          'last_report': {'turn_id': 'turn-9', 'kind': 'blocked', 'title': 'Waiting on keys',
                          'created_at': 1700, 'unread': False},
          'board_summary': 'Ship the parser fix', 'board_revision': 4, 'open_commitments': 2,
@@ -395,6 +404,8 @@ def test_projects_wire_renames_every_fact_without_inventing_any():
         {'projectPath': '/work/alpha', 'coordinatorConversationId': 'coordinator-a', 'bindingRevision': 3,
          'availability': 'available', 'activeWorkers': 2, 'activeRequests': 1,
          'workersCoverage': 'newest_page',
+         'executionHealth': {'state': 'observed', 'turnId': 'turn-12', 'status': 'failed',
+                             'authorityWithdrawn': True},
          'lastReport': {'turnId': 'turn-9', 'kind': 'blocked', 'title': 'Waiting on keys',
                         'createdAt': 1700, 'unread': False},
          'boardSummary': 'Ship the parser fix', 'boardRevision': 4, 'openCommitments': 2,
@@ -507,3 +518,48 @@ def test_owner_delegation_history_returns_every_record_and_filters(flask_client,
     assert {item['requester']['conversationId'] for item in lead.get_json()['actions']} == {'lead-b'}
     assert flask_client.get('/api/v4/router/owner-delegation/history?scope=bogus').status_code == 400
     assert flask_client.get('/api/v4/router/owner-delegation/history?since=x').status_code == 400
+
+
+def test_confirm_default_settles_a_nonblocking_question_without_reaching_the_lead(flask_client, chat_sidecar,
+                                                                                  monkeypatch):
+    """docs/ROUTER.md R10 'The owner confirms a default': the record and the card settle; no Turn or steer."""
+    from lib.router.proactive.questions import NAMESPACE, open_questions
+    from lib.storage import get_storage_client
+    from tests.router.test_owner_question_withdraw import Turns, _card
+    import lib.turn_lifecycle as lifecycle
+    turns = Turns()
+    monkeypatch.setattr(lifecycle, 'get_turn', lambda conversation_id, turn_id, *, user_id, **kwargs:
+                        turns.get('coordinator-lead', turn_id, user_id=user_id))
+    monkeypatch.setattr(lifecycle, 'update_turn_projection', turns.update)
+    lead, guidance = 'coordinator-lead', 'hg_confirm_route'
+    turns.add('turn-' + guidance, [_card(guidance, status='done', guidanceBlocking=False)])
+    get_storage_client(write=True).command('record.put', {
+        'namespace': NAMESPACE, 'key': f'1:{lead}:{guidance}', 'expected_version': 0, 'value': {
+            'owner': 1, 'coordinatorId': lead, 'projectPath': '/p', 'guidanceId': guidance,
+            'turnId': 'turn-' + guidance, 'blocking': False, 'question': 'Which scope?', 'default': 'both',
+            'createdAt': 1, 'laneId': 'main', 'ordinal': 3, 'answersRecorded': True}}, 'seed-' + guidance)
+    endpoint = '/api/v4/router/questions/confirm-default'
+    body = {'coordinatorId': lead, 'guidanceId': guidance}
+    assert flask_client.post(endpoint, json=body).status_code == 400, 'an Idempotency-Key is required'
+    assert flask_client.post(endpoint, json={**body, 'extra': 1},
+                             headers={'Idempotency-Key': 'c0'}).status_code == 400
+    confirmed = flask_client.post(endpoint, json=body, headers={'Idempotency-Key': 'c1'})
+    assert confirmed.status_code == 200, confirmed.get_json()
+    data = confirmed.get_json()
+    assert data['card'] == 'card' and data['defaultAcceptedBy'] == 1 and data['defaultAcceptedAt'] > 0
+    assert turns.turns['turn-' + guidance]['projection']['toolRounds'][0]['guidanceDefaultAccepted']['by'] == 1
+    assert [q for q in open_questions(1, coordinator_id=lead) if q['guidanceId'] == guidance] == []
+    again = flask_client.post(endpoint, json=body, headers={'Idempotency-Key': 'c2'})
+    assert again.status_code == 200 and again.get_json() == data
+    missing = flask_client.post(endpoint, json={**body, 'guidanceId': 'hg_nope'}, headers={'Idempotency-Key': 'c3'})
+    assert missing.status_code == 409 and len(turns.updates) == 1
+
+
+def test_office_answers_a_stopping_feed_with_a_503_not_a_500(flask_client, monkeypatch):
+    from lib.router import office_facts
+
+    def stopping(owner):
+        raise office_facts.OfficeFactsClosed('Office facts are stopping')
+    monkeypatch.setattr(office_facts, 'snapshot', stopping)
+    response = flask_client.get('/api/v4/router/office')
+    assert response.status_code == 503, response.get_data(as_text=True)

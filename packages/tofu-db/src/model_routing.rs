@@ -255,24 +255,26 @@ fn current_secret_references(
     let Some((_, document)) = read_authority(database, transaction, tenant_label)? else {
         return Ok(references);
     };
-    let Some(credentials) = document.get("credentials") else {
-        return Ok(references);
-    };
-    let credentials = credentials
-        .as_array()
-        .ok_or_else(|| invalid_data("stored model-routing credentials are invalid"))?;
-    for credential in credentials {
-        let credential = credential
-            .as_object()
-            .ok_or_else(|| invalid_data("stored model-routing credential is invalid"))?;
-        let reference = match credential.get("secret_reference") {
-            None | Some(Value::Null) => continue,
-            Some(value) => value
-                .as_str()
-                .ok_or_else(|| invalid_data("stored model-routing secret reference is invalid"))?,
+    for field in ["credentials", "subscription_accounts"] {
+        let Some(credentials) = document.get(field) else {
+            continue;
         };
-        if !reference.trim().is_empty() {
-            references.insert(reference.trim().to_owned());
+        let credentials = credentials
+            .as_array()
+            .ok_or_else(|| invalid_data("stored model-routing credential collection is invalid"))?;
+        for credential in credentials {
+            let credential = credential
+                .as_object()
+                .ok_or_else(|| invalid_data("stored model-routing credential is invalid"))?;
+            let reference = match credential.get("secret_reference") {
+                None | Some(Value::Null) => continue,
+                Some(value) => value.as_str().ok_or_else(|| {
+                    invalid_data("stored model-routing secret reference is invalid")
+                })?,
+            };
+            if !reference.trim().is_empty() {
+                references.insert(reference.trim().to_owned());
+            }
         }
     }
     Ok(references)
@@ -329,6 +331,21 @@ pub(crate) fn commit(
         || request.document.get("revision").and_then(Value::as_u64) != Some(next_revision)
     {
         return Err(invalid_input("model-routing document revision is invalid"));
+    }
+    if let Some(accounts) = request.document.get("subscription_accounts") {
+        let accounts = accounts
+            .as_array()
+            .ok_or_else(|| invalid_input("invalid subscription accounts"))?;
+        for account in accounts {
+            let reference = account
+                .get("secret_reference")
+                .and_then(Value::as_str)
+                .filter(|value| value.starts_with("oauth_"))
+                .ok_or_else(|| invalid_input("invalid subscription secret reference"))?;
+            if read_secret(database, transaction, &request.tenant_label, reference)?.is_none() {
+                return Err(conflict("subscription account secret unavailable"));
+            }
+        }
     }
     if let Some(receipt) = &request.migration_receipt {
         if let Some((_, current_document)) = &current {

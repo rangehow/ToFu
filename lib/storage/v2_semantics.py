@@ -14,8 +14,30 @@ from tofu_db.generated_v2 import COMMIT_NOTICE_CONTRACT, MAX_COMMIT_NOTICE_KEY_B
 from lib.storage.generated_v2_semantics import BOUNDED_PROGRESS_OPERATIONS, OWNER_OMITTED_OPERATIONS, NOTIFICATION_TOPICS
 
 
+# SQL exact lifecycle selectors on existing operations. task_id on a legacy
+# session save or on acknowledge_results is already supported natively.
+_SQL_SWARM_LIFECYCLE_FIELDS = {
+    'swarm.session.save': 'save_mode',
+    'swarm.session.terminate': 'run_id',
+    'swarm.agent.save': 'run_id',
+    'swarm.agent.append': 'run_id',
+    'swarm.agent.checkpoint.mark': 'run_id',
+    'swarm.agents.mark_delivered': 'task_id',
+}
+_SQL_SWARM_LIFECYCLE_OPERATIONS = frozenset({
+    'swarm.session.delete_exact', 'swarm.session.lifecycle.get',
+})
+
+
 def request_payload(operation: str, payload: Mapping[str, Any] | None, *, owner_id: int) -> dict[str, Any]:
     body = wire_payload(payload)
+    exact_field = _SQL_SWARM_LIFECYCLE_FIELDS.get(operation)
+    if (operation in _SQL_SWARM_LIFECYCLE_OPERATIONS
+            or (exact_field is not None and exact_field in body)):
+        raise StorageError('database_protocol_error', 'Native exact swarm lifecycle is unsupported')
+    if (operation == 'swarm.agents.page' and 'user_id' not in body
+            and {'expected_updated_at', 'expected_task_id', 'snapshot_cut'}.intersection(body)):
+        raise StorageError('database_protocol_error', 'Swarm snapshot cut requires an explicit owner')
     # Payload-free system queries and lease-fenced worker commands carry no
     # application owner field. The wire session still carries its authority
     # scope; adding an owner would violate these operations' strict contract.

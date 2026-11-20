@@ -11,7 +11,7 @@
     "slotAdmission": "sparse-usize-identifiers-without-slot-count-quota",
     "literalAdmission": "checked-size-without-aggregate-byte-quota",
     "maximumLegacyDocumentBytes": 8388608,
-    "maximumExecutableOperations": 386
+    "maximumExecutableOperations": 389
   },
   "physicalBounds": {
     "maximumEntityKeyBytes": 3072,
@@ -1597,6 +1597,8 @@
         "agent save atomically updates core state exact per-session count resumable count and owner-local resumable index",
         "completed undelivered and pending running or retrying agents contribute exactly once to the resumable count",
         "delivery acknowledgement rewrites only compact state and updates resumable eligibility without materializing message history",
+        "delivery acknowledgement requires the exact current task id and legacy writer epoch zero; a nonzero epoch returns acknowledged false without changing agent delivery or resumability",
+        "opt-in agent pages check the exact owner, swarm key, run, header revision and complete checkpoint-source witness before returning any continuation; bare legacy pages retain their existing shape",
         "session deletion retires at most 1000 agents and every document state count index claim receipt and outbox edge in one transaction",
         "session get with agents rejects aggregate responses above the 64 MiB stream ceiling minus response slack rather than returning incomplete recovery state",
         "startup resumable list returns only owner-local session keys and agent pages pack whole agents below the stream ceiling with an explicit continuation so retained history never needs one response",
@@ -1655,7 +1657,6 @@
       "eventSequenceNamespace": "integration_event_sequence",
       "eventCountNamespace": "integration_event_counts",
       "workspaceAdmission": "demand-without-count-quota",
-      "maximumStatusRows": 1000,
       "maximumEventsPerProject": 300,
       "maximumStatusEvents": 30,
       "maximumProjectRootCharacters": 4096,
@@ -1669,7 +1670,7 @@
         "global ready and integrating covering indexes plus an exact project active claim select one oldest eligible workspace without a table anti-join",
         "claim recovery scans at most 1000 active rows and atomically requeues every stale integrating row before claiming one ready row",
         "register checkpoint submit retry discard quarantine requeue merge and failure transitions update document indexes project claim receipt events and outbox in one OCC transaction",
-        "each owner project retains exactly the newest 300 events and status returns at most 1000 workspaces plus 30 events",
+        "each owner project retains exactly the newest 300 events and status returns every project workspace plus 30 events",
         "all aggregate projections reject responses above 8 MiB and no startup or foreground operation scans terminal workspace history"
       ],
       "fields": [
@@ -4009,6 +4010,12 @@
       "receiptRequired": true
     },
     {
+      "name": "conversation.portable_import",
+      "kind": "command",
+      "table": "conversations",
+      "receiptRequired": true
+    },
+    {
       "name": "conversation.purge",
       "kind": "command",
       "table": "conversations",
@@ -5317,6 +5324,12 @@
       "receiptRequired": true
     },
     {
+      "name": "record.device_policy_commit",
+      "kind": "command",
+      "table": "storage_records",
+      "receiptRequired": true
+    },
+    {
       "name": "record.get",
       "kind": "query",
       "table": "storage_records",
@@ -5480,6 +5493,15 @@
     },
     {
       "name": "swarm.agents.page",
+      "snapshotCut": {
+        "selectors": ["user_id", "expected_task_id", "expected_updated_at"],
+        "activationFields": ["expected_task_id", "expected_updated_at", "snapshot_cut"],
+        "tokenField": "snapshot_cut",
+        "tokenEncoding": "opaque authority-local lowercase SHA-256 hex",
+        "continuation": "With nonempty after_agent_id, supply the first page token and repeat all selectors. Without a cursor, omit the token to capture a cut.",
+        "mismatchError": "database_conflict",
+        "malformedError": "database_protocol_error"
+      },
       "kind": "query",
       "table": "swarm_sessions",
       "receiptRequired": false
@@ -5907,6 +5929,12 @@
     {
       "name": "turn.related.announce",
       "kind": "command",
+      "table": "conversation_turns",
+      "receiptRequired": false
+    },
+    {
+      "name": "turn.resume.plan.read",
+      "kind": "query",
       "table": "conversation_turns",
       "receiptRequired": false
     },

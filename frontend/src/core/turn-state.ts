@@ -113,6 +113,21 @@ export interface TurnState {
   pushWithheld?: boolean;
 }
 
+export function activeTurnAttemptId(turn: ProjectionTurn | undefined): string | null {
+  return turn && (turn.status === 'pending' || turn.status === 'running')
+    ? turn.currentAttemptId || null : null;
+}
+
+/** Current commandable attempt IDs and their owning Turns, across all lanes. */
+export function activeTurnAttempts(state: TurnState | null | undefined): ReadonlyMap<string, string> {
+  const attempts = new Map<string, string>();
+  if (state) for (const [turnId, turn] of entityRecordEntries(state.turnsById)) {
+    const attemptId = activeTurnAttemptId(turn);
+    if (attemptId) attempts.set(attemptId, turnId);
+  }
+  return attempts;
+}
+
 export type TurnAction =
   | { type: 'snapshot'; snapshot: TurnSnapshotInput }
   | { type: 'command_response'; response: TurnCommandResult }

@@ -45,17 +45,19 @@ def test_a_future_commitment_is_a_wait_not_a_stall(board):
     r.attempts['coordinator-attempt']['status'] = 'completed'
     assert r.wake() == ['accepted']
     due = r.c.now[0] + 3600
-    r.publish([{'title': 'Report the quota-reset result', 'status': 'pending', 'due': iso(due)}])
+    r.publish([{'title': 'Report the quota-reset result', 'status': 'pending', 'due': iso(due),
+                'blocker': {'kind': 'next_action', 'action': 'Report the quota-reset result'}}])
     end(r, controls(r)[-1], delivered=False)
     assert r.wake() == [], 'waiting for the committed time is not a stalled turn'
     assert r.scheduled[-1] == due
     r.c.now[0] = due + 1
     assert r.wake() == ['accepted']
-    control = controls(r)[-1]['request']
+    assignment = controls(r)[-1]
+    control = assignment['request']
     assert control['coordinatorWake']['reason'] == 'commitment_due'
     assert control['coordinatorWake']['commitments'] == [
         {'title': 'Report the quota-reset result', 'dueAt': int(due * 1000)}]
-    assert 'Report the quota-reset result' in control['brief']
+    assert 'Report the quota-reset result' in continuation.wake_brief(r.c.repo, assignment)
     assert r.boards, 'a board write arms the due time'
     # The wake is receipted in the board head, so replaying the pass does not re-wake it.
     assert r.wake() == []
@@ -74,6 +76,27 @@ def test_a_due_commitment_wakes_while_a_worker_is_still_running(board):
     assert r.wake() == ['accepted']
     assert controls(r)[-1]['request']['coordinatorWake']['reason'] == 'commitment_due'
     assert r.attempts[worker['execution']['attemptId']]['status'] == 'running'
+    assert r.wake() == [] and len(controls(r)) == 1
+
+
+def test_many_long_promises_survive_the_bounded_stored_wake_brief(board):
+    r = board
+    worker = delegate(r)
+    end(r, worker, status='running', delivered=False)
+    r.attempts['coordinator-attempt']['status'] = 'completed'
+    due = r.c.now[0] + 10
+    titles = [f'Promise {index:02d} ' + '长' * 180 for index in range(29)]
+    r.publish([{'title': title, 'status': 'pending', 'due': iso(due),
+                'blocker': {'kind': 'next_action', 'action': 'Report ' + title}} for title in titles])
+    r.c.now[0] += 20
+    assert r.wake() == ['accepted']
+    assignment = controls(r)[-1]
+    request = assignment['request']
+    assert [row['title'] for row in request['coordinatorWake']['commitments']] == titles
+    assert continuation.CONTINUATION_BRIEF_MARK in request['brief']
+    rendered = continuation.wake_brief(r.c.repo, assignment)
+    assert all(title in rendered for title in titles)
+    assert continuation.CONTINUATION_BRIEF_MARK in rendered
     assert r.wake() == [] and len(controls(r)) == 1
 
 
@@ -110,7 +133,8 @@ def test_a_commitment_of_another_coordinator_or_binding_is_ignored(board):
                    'bindingRevision': 1},
                   {'summary': 'Another project', 'tasks': [
                       {'title': 'Somebody else promised this', 'status': 'pending',
-                       'due': iso(r.c.now[0] + 5)}]})
+                       'due': iso(r.c.now[0] + 5),
+                       'blocker': {'kind': 'next_action', 'action': 'Report the other outcome'}}]})
     r.wake()
     assert all(row['request']['coordinatorWake']['reason'] != 'commitment_due'
                or row['request']['coordinatorWake']['commitments'] == [

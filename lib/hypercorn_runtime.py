@@ -36,6 +36,7 @@ from hypercorn.config import Config, Sockets
 from hypercorn.typing import AppWrapper, Framework, LifespanState
 from hypercorn.utils import ShutdownError, raise_shutdown, repr_socket_addr, wrap_app
 
+from lib.agent_core.push import PUSH_MAX_MESSAGE_BYTES
 from lib.storage.startup_budget import lifespan_startup_timeout
 
 
@@ -407,8 +408,9 @@ def build_hypercorn_config(
     config.startup_timeout = lifespan_startup_timeout(env)
     # /api/push accepts only tiny subscription/control frames and 16 KiB
     # control-RPC requests. Reject oversized WebSocket messages in Hypercorn
-    # before Quart allocates/parses a 16 MiB default frame.
-    config.websocket_max_message_size = 64 * 1024
+    # before Quart allocates/parses a 16 MiB default frame; the push channel
+    # and the Rust front door enforce the same declared bound.
+    config.websocket_max_message_size = PUSH_MAX_MESSAGE_BYTES
     # Transport-level grace on shutdown. Hypercorn waits for EVERY open
     # connection task to finish up to this budget, and a connected browser
     # always holds a long-lived push channel — so the full window is burned

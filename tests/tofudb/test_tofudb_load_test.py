@@ -51,7 +51,8 @@ def test_child_environment_inherits_no_production_settings(harness, tmp_path, mo
 def test_child_environment_keeps_the_medium_client_for_both_backends(harness, tmp_path, monkeypatch, backend):
     """Production reaches DolphinFS through a preloaded userspace client; a
     child without it measures kernel FUSE, a different medium."""
-    monkeypatch.setenv('LD_PRELOAD', '/opt/client/libpreload.so')
+    preload = '/opt/client/libpreload.so:/tmp/faultfs.so'
+    monkeypatch.setenv('LD_PRELOAD', preload)
     monkeypatch.setenv('LIBBGFS_CONFIG_FILE', '/opt/client/preload.conf')
     monkeypatch.setenv('FAULTFS_FSYNC_US', '770')
     monkeypatch.setenv('TOFU_UNRELATED_SETTING', '1')
@@ -59,7 +60,11 @@ def test_child_environment_keeps_the_medium_client_for_both_backends(harness, tm
     env = harness._child_environment(tmp_path, tmp_path / 'scratch', engine, 'a' * 64, 'strict', backend)
     assert env['LD_PRELOAD'] == '/opt/client/libpreload.so'
     assert env['LIBBGFS_CONFIG_FILE'] == '/opt/client/preload.conf'
-    assert env['FAULTFS_FSYNC_US'] == '770'
+    assert 'FAULTFS_FSYNC_US' not in env
+    injected = harness._child_environment(tmp_path, tmp_path / 'scratch', engine, 'a' * 64,
+                                          'strict', backend, faultfs=True)
+    assert injected['FAULTFS_FSYNC_US'] == '770'
+    assert injected['LD_PRELOAD'] == preload
     assert 'TOFU_UNRELATED_SETTING' not in env
 
 
@@ -245,6 +250,16 @@ def _fake_engine(tmp_path):
     return engine, calls
 
 
+def test_reused_engine_pin_is_checked(harness, tmp_path):
+    engine, _ = _fake_engine(tmp_path)
+    root = tmp_path / 'run'
+    pinned, _ = harness._pin_engine(engine, root)
+    pinned.chmod(0o700)
+    pinned.write_text('substituted executable')
+    with pytest.raises(SystemExit, match='cached engine pin'):
+        harness._pin_engine(engine, root)
+
+
 def test_a_fixture_engine_opens_with_a_current_backup_generation(harness, tmp_path, monkeypatch):
     """Without one, its first fallback epoch is due at boot and copies the whole fixture
     into an empty store; production keeps a recent generation."""
@@ -386,3 +401,95 @@ def test_synthetic_text_has_exactly_the_requested_size(harness):
     for size in (1, 64, len(harness._TEXT) - 1, len(harness._TEXT), 5_000):
         for _ in range(50):
             assert len(harness._text(rng, size)) == size
+
+
+@pytest.mark.parametrize('backend', ['tofudb', 'sqlite'])
+@pytest.mark.parametrize('trailing_args', [[], [''], ['', ''], ['nonempty']])
+def test_launched_synthetic_arm_binds_actual_private_roots_and_staging(
+        harness, tmp_path, monkeypatch, backend, trailing_args):
+    import json
+    import os
+    import subprocess
+    import sys
+
+    from tests.support.sql_authority_identity import assert_child_identity, child_identity
+
+    monkeypatch.delenv('LD_PRELOAD', raising=False)
+    for key in tuple(os.environ):
+        if key.startswith('LIBBGFS_'):
+            monkeypatch.delenv(key)
+    monkeypatch.setenv('TOFU_STORAGE_CONNECTION_FILE', '/fixture-live/connection.json')
+    monkeypatch.setenv('TOFU_PROJECT_PATH', '/fixture-live/project')
+    monkeypatch.setenv('TOFU_DATA_DIR', '/fixture-live/data')
+    root = tmp_path / backend
+    scratch = tmp_path / (backend + '-staging')
+    scratch.mkdir()
+    engine = root / 'not-executed' if backend == 'tofudb' else None
+    env = harness._child_environment(root, scratch, engine, 'a' * 64, 'strict', backend)
+    # No authority or engine runs: both labels execute this identical local fixture.
+    fixture = '''import hashlib, json, os, socket, sys, tempfile
+from pathlib import Path
+with open('fixture-output', 'wb') as output:
+    output.write(b'same-input')
+project = os.open(os.environ['TOFU_PROJECT_PATH'], os.O_RDONLY)
+data = os.open(os.environ['TOFU_DATA_DIR'], os.O_RDONLY)
+endpoint = Path('project/fixture.sock')
+with socket.socket(socket.AF_UNIX) as server, tempfile.NamedTemporaryFile() as staging:
+    server.bind(str(endpoint))
+    staging.write(b'same-input')
+    stage = os.fstat(staging.fileno())
+    receipt = dict(pid=os.getpid(), cwd_inode=Path.cwd().stat().st_ino,
+        project_inode=os.fstat(project).st_ino, data_inode=os.fstat(data).st_ino,
+        staging_device=stage.st_dev, staging_inode=stage.st_ino,
+        staging_parent_inode=Path(os.readlink('/proc/self/fd/' + str(staging.fileno()))).parent.stat().st_ino,
+        endpoint_inode=Path(server.getsockname()).stat().st_ino,
+        inherited_connection='TOFU_STORAGE_CONNECTION_FILE' in os.environ,
+        fixture_sha256=hashlib.sha256(Path('fixture-output').read_bytes()).hexdigest())
+    print(json.dumps(receipt), flush=True)
+    sys.stdin.read()
+os.close(project)
+os.close(data)
+endpoint.unlink()
+'''
+    command = [sys.executable, '-c', fixture, *trailing_args]
+    with subprocess.Popen(command, cwd=root, env=env, stdin=subprocess.PIPE,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as child:
+        try:
+            receipt = json.loads(child.stdout.readline())
+            identity = child_identity(SimpleNamespace(_process=child), command)
+            assert_child_identity(identity)
+            assert receipt['pid'] == identity['pid']
+            assert receipt['cwd_inode'] == root.stat().st_ino
+            assert receipt['project_inode'] == (root / 'project').stat().st_ino
+            assert receipt['data_inode'] == (root / 'data').stat().st_ino
+            assert receipt['staging_parent_inode'] == scratch.stat().st_ino
+            assert receipt['staging_device'] == scratch.stat().st_dev
+            assert receipt['staging_inode'] > 0
+            assert receipt['endpoint_inode'] == (root / 'project' / 'fixture.sock').stat().st_ino
+            assert receipt['inherited_connection'] is False
+            assert (root / 'fixture-output').read_bytes() == b'same-input'
+            assert receipt['fixture_sha256'] == harness.hashlib.sha256(b'same-input').hexdigest()
+
+            if trailing_args:
+                omitted = command[:-len(trailing_args)]
+                child.args = omitted
+                mismatch = child_identity(SimpleNamespace(_process=child), omitted)
+                assert mismatch['popen_args'] == mismatch['requested_command']
+                with pytest.raises(AssertionError, match='actual child command differs'):
+                    assert_child_identity(mismatch)
+
+            claimed = [sys.executable, '-c', 'pass']
+            child.args = claimed
+            mismatch = child_identity(SimpleNamespace(_process=child), claimed)
+            assert mismatch['popen_args'] == mismatch['requested_command']
+            with pytest.raises(AssertionError, match='actual child command differs'):
+                assert_child_identity(mismatch)
+            for missing in ('cmdline', 'executable'):
+                incomplete = dict(identity)
+                incomplete.pop(missing)
+                with pytest.raises(KeyError):
+                    assert_child_identity(incomplete)
+        finally:
+            child.communicate()
+        assert child.returncode == 0
+    assert not (root / 'project' / 'fixture.sock').exists()

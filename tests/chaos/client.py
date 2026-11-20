@@ -36,7 +36,8 @@ class ApiError(RuntimeError):
         self.status, self.body = status, body
 
 
-def model_routing_document(provider_url: str, revision: int, *, reasoning: dict | None = None) -> dict:
+def model_routing_document(provider_url: str, revision: int, *, reasoning: dict | None = None,
+                           protocol: str = 'anthropic') -> dict:
     model_ref = {'creator_id': CREATOR_ID, 'model_id': MODEL_ID}
     capabilities = ['text', 'tools']
     return {
@@ -53,7 +54,7 @@ def model_routing_document(provider_url: str, revision: int, *, reasoning: dict 
         'provider_accesses': [{'provider_access_id': 'chaos-access', 'provider_id': 'chaos',
                                'enabled': True, 'quota_policy': {}}],
         'connections': [{'connection_id': 'chaos-anthropic', 'provider_access_id': 'chaos-access',
-                         'base_url': provider_url, 'protocol': 'anthropic',
+                         'base_url': provider_url, 'protocol': protocol,
                          'enabled': True, 'priority': 0, 'extra_headers': {}}],
         'credentials': [{'credential_id': 'chaos-identity', 'provider_access_id': 'chaos-access',
                          'kind': 'local_identity', 'secret_reference': '', 'key_hint': '', 'enabled': True,
@@ -90,13 +91,15 @@ class InstanceClient:
                 payload = raw.decode(errors='replace')
             raise ApiError(error.code, payload) from None
 
-    def install_route(self, provider_url: str, *, reasoning: dict | None = None) -> None:
+    def install_route(self, provider_url: str, *, reasoning: dict | None = None,
+                      protocol: str = 'anthropic') -> None:
         current = self.request('GET', '/api/v4/model-routing')
         data = current.get('data', current)
         revision = data['revision']
         self.request('PUT', '/api/v4/model-routing', {
             'expected_revision': revision,
-            'model_routing': model_routing_document(provider_url, revision, reasoning=reasoning)})
+            'model_routing': model_routing_document(provider_url, revision, reasoning=reasoning,
+                                                     protocol=protocol)})
 
     def create_turn(self, conversation_id: str, text: str, *, workspace: str, first: bool,
                     command_id: str | None = None, config: dict | None = None) -> dict:

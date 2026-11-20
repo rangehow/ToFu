@@ -9,7 +9,6 @@ import pytest
 from lib.llm.body import build_body
 from lib.llm.request import seal_request, semantic_request_id
 from lib.tasks_pkg.context_composer import append_injection
-from tests.support.gateway_profiles import install_gateway_profiles
 
 pytestmark = pytest.mark.unit
 
@@ -70,13 +69,10 @@ def test_identical_merged_events_keep_distinct_positions_through_provider_projec
     assert messages == original
 
 
-def test_gateway_rewrite_preserves_exact_event_range_and_names_its_stage(monkeypatch):
-    install_gateway_profiles(monkeypatch, {
-        'id': 'test-blocked-terms', 'hosts': [], 'provider_ids': ['blocked-terms*'],
-        'traits': {'blocked_term_sanitize': True}})
+def test_gateway_rewrite_preserves_exact_event_range_and_names_its_stage():
     messages = [{'role': 'user', 'content': 'request'}]
     append_injection(messages, 'tool_progress', 'FLG 中文 event')
-    body = prepare(messages, 'blocked-terms_test')
+    body = prepare(messages, 'example_corp_test')
     row, = body['_context_lineage']['sources']
     assert row['status'] == 'located'
     assert text_at(body, row['output']) == 'F\u200bLG 中文 event'

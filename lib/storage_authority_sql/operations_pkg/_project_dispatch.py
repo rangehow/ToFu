@@ -17,6 +17,7 @@ from lib.storage.generated_project_dispatch_contract import SPEC
 from lib.storage.protocol import validate_finite_json_numbers
 from ._common import _integer, _required_text
 from ._records import _record_get_owned, _record_list_owned, _record_put_owned, _record_delete_owned
+from ._turns_core import _turn_status_and_settlement
 
 HEADS = SPEC['namespaces']['heads']
 DOCUMENTS = SPEC['namespaces']['documents']
@@ -110,6 +111,31 @@ def projects(session, payload):
     return _page(session, payload, HEADS, f'{_owner(payload)}:', True)
 
 
+def _require_turn_witnesses(session, owner, witnesses):
+    if not isinstance(witnesses, list) or len(witnesses) > LIMITS['commitChanges']:
+        _invalid('Invalid dispatch Turn witnesses')
+    prepared = {}
+    for row in witnesses:
+        if not isinstance(row, dict) or row.keys() != {
+                'conversation_id', 'turn_id', 'attempt_id', 'projection_revision', 'status'}:
+            _invalid('Invalid dispatch Turn witness')
+        conv, ident, attempt, status = (row[key] for key in ('conversation_id', 'turn_id', 'attempt_id', 'status'))
+        for part, empty in ((conv, False), (ident, False), (attempt, True), (status, False)):
+            _identity(part, empty=empty)
+        if (conv, ident) in prepared:
+            _invalid('Duplicate dispatch Turn witness')
+        prepared[conv, ident] = (_revision(row, 'projection_revision'), attempt, status)
+    for conv in sorted({conv for conv, _ in prepared}):
+        session.lock_key('turn_conversation', f'{owner}:{conv}')
+    for (conv, ident), expected in sorted(prepared.items()):
+        current = session.fetch_one_for_update(
+            'SELECT projection_revision, current_attempt_id, status, settlement_json FROM storage_conversation_turns '
+            'WHERE conversation_id=? AND turn_id=? AND user_id=?', (conv, ident, owner))
+        if current is None or (current['projection_revision'], current['current_attempt_id'] or '',
+                               _turn_status_and_settlement(current)[0]) != expected:
+            raise StorageError('database_conflict', 'Dispatch Turn witness changed')
+
+
 def commit(session, payload):
     owner, project, key = _scope(payload)
     changes = payload.get('changes')
@@ -151,6 +177,8 @@ def commit(session, payload):
             _invalid('Dispatch commit exceeds transport bound')
         prepared.append((deleting, {'namespace': DOCUMENTS, 'key': child_key,
             'expected_version': _revision(change, 'expected_version'), 'value': change.get('value')}))
+
+    _require_turn_witnesses(session, owner, payload.get('turn_witnesses', []))
 
     # All validation precedes mutations. The shared operation transaction rolls
     # back the head too when any later child CAS fails or the receipt fails.

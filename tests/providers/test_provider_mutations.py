@@ -16,6 +16,8 @@ def _mutation_view(tmp_path, scenario):
   const newInput = () => document.querySelector('.stg-key-card--new input');
   const newCard = () => document.querySelector('.stg-key-card--new');
   const reply = bundle => ({provider: bundle, revision: 2});
+  const canonical = JSON.parse(JSON.stringify(_stgModelRouting));
+  Api.modelRouting.get = async () => ({model_routing: canonical, revision: 1});
 ''' + scenario)
 
 
@@ -179,7 +181,11 @@ def test_provider_commit_preserves_unrelated_unsaved_draft_and_its_cas(tmp_path,
 
 def test_refresh_failure_does_not_discard_the_draft_or_reject_an_acknowledged_add(tmp_path):
     out = _authority_view(tmp_path, r'''
-  Api.modelRouting.get = async () => {throw new Error('synthetic refresh outage');};
+  const read = Api.modelRouting.get;
+  Api.modelRouting.get = async () => {
+    if (writes.length) throw new Error('synthetic refresh outage');
+    return read();
+  };
   let rejected = false;
   try {await _saveNewProviderCredential(_modelRoutingProviderContext('p1'), 'synthetic-new-key');}
   catch {rejected = true;}
@@ -570,3 +576,86 @@ def test_provider_add_joins_the_shared_routing_write_chain(tmp_path):
   out.cards = cards();
 ''')
     assert out == {'before': 2, 'staged': True, 'after': 3, 'cards': ['p1', 'p2', 'p3:open']}
+
+
+def test_new_key_is_not_exposed_to_dispatch_before_policy_save(tmp_path):
+    out = _mutation_view(tmp_path, r'''
+  const writes = [];
+  Api.modelRouting.saveProvider = async (id, bundle) => {
+    writes.push(JSON.parse(JSON.stringify(bundle))); return reply(bundle);
+  };
+  await _saveNewProviderCredential(_modelRoutingProviderContext('p1'), 'synthetic-R3');
+  const row = writes[0].credentials.at(-1);
+  out.enabled = row.enabled;
+''')
+    assert out['enabled'] is False
+
+
+@pytest.mark.parametrize('staged_field', ['activation', 'connection'])
+def test_add_b_does_not_commit_unsaved_add_a_policy(tmp_path, staged_field):
+    out = _authority_view(tmp_path, r'''
+  await _saveNewProviderCredential(_modelRoutingProviderContext('p1'), 'synthetic-A');
+  const a = _stgModelRouting.credentials.at(-1);
+  const aId = a.credential_id;
+  if (FIELD === 'activation') _onV2KeyToggle('p1', aId, true);
+  if (FIELD === 'connection') _stgModelRouting.connections[0].base_url = 'https://unsaved.example/v1';
+  const originalSave = Api.modelRouting.saveProvider;
+  let sent;
+  Api.modelRouting.saveProvider = (id, bundle, revision) => {
+    if (revision !== serverRevision) throw new Error('stale CAS');
+    sent = clone(bundle);
+    return originalSave(id, bundle, revision);
+  };
+  await _saveNewProviderCredential(_modelRoutingProviderContext('p1'), 'synthetic-B');
+  // A third add must use canonical CAS even while the dirty editor holds its old CAS.
+  await _saveNewProviderCredential(_modelRoutingProviderContext('p1'), 'synthetic-C');
+  out.serverA = server.credentials.find(row => row.credential_id === aId);
+  out.enabled = server.credentials.map(row => row.enabled);
+  out.connection = sent.connections[0].base_url;
+  out.editorA = _stgModelRouting.credentials.find(row => row.credential_id === aId);
+  out.revisions = writes.map(row => row.revision);
+'''.replace('FIELD', repr(staged_field)))
+    assert out['serverA']['enabled'] is False
+    assert out['connection'] != 'https://unsaved.example/v1'
+    assert out['enabled'][-3:] == [False, False, False]
+    assert out['revisions'] == [1, 2, 3]
+    if staged_field == 'activation':
+        assert out['editorA']['enabled'] is True
+
+
+def test_unsaved_activation_toggle_back_off_never_creates_runtime_override(tmp_path):
+    out = _authority_view(tmp_path, r'''
+  await _saveNewProviderCredential(_modelRoutingProviderContext('p1'), 'synthetic-A');
+  const a = _stgModelRouting.credentials.at(-1);
+  const overrides = [];
+  Api.dispatch = {keyStats: async () => ({key_namespace: 'owner:', providers: {}}),
+    keyOverride: async body => {overrides.push(body); return {row: {enabled: false}};}};
+  _loadV2KeyStats();
+  await tick();
+  _onV2KeyToggle('p1', a.credential_id, true);
+  _onV2KeyToggle('p1', a.credential_id, false);
+  await tick();
+  out.enabled = a.enabled;
+  out.overrides = overrides;
+  out.canonicalEnabled = server.credentials.at(-1).enabled;
+''')
+    assert out == {'enabled': False, 'overrides': [], 'canonicalEnabled': False}
+
+
+@pytest.mark.parametrize('failure', ['outage', 'missing', 'replaced-access'])
+def test_immediate_add_never_falls_back_to_draft_without_canonical_authority(tmp_path, failure):
+    out = _authority_view(tmp_path, r'''
+  Api.modelRouting.get = async () => {
+    if (FAILURE === 'outage') throw new Error('canonical unavailable');
+    if (FAILURE === 'missing') return null;
+    const replaced = clone(server);
+    replaced.provider_accesses[0].provider_access_id = 'replaced-access';
+    return {model_routing: replaced, revision: serverRevision};
+  };
+  let rejected = false;
+  try { await _saveNewProviderCredential(_modelRoutingProviderContext('p1'), 'synthetic-B'); }
+  catch { rejected = true; }
+  out.rejected = rejected;
+  out.writes = writes.length;
+'''.replace('FAILURE', repr(failure)))
+    assert out == {'rejected': True, 'writes': 0}

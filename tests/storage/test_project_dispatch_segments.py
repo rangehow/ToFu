@@ -52,6 +52,45 @@ def page(store, collection='indexes', **options):
     return factory(write=False).query('project.dispatch.list', {**scope, 'collection': collection, **options})
 
 
+def test_dispatch_commit_rejects_changed_turn_without_writing_head_or_receipt(store, monkeypatch):
+    from lib import turn_lifecycle as turns
+    factory, scope, _ = store
+    owner = scope['user_id']
+    monkeypatch.setattr(turns, '_turn_client', lambda **kw: factory(**kw))
+    conv = uuid.uuid4().hex
+    pair = turns.create_turn_pair(conv, command_id='worker', config={}, user_id=owner,
+        input_projection={'content': 'Worker'},
+        conversation_defaults={'allowCreate': True, 'title': 'Worker', 'settings': {}})
+    attempt = pair['attempt']['attemptId']
+    turn_id = pair['turn']['turnId']
+    turns.bind_task(attempt, 'worker-task', user_id=owner)
+    turns.mark_task_started(attempt, 'worker-task', user_id=owner)
+
+    def witness():
+        turn = turns.get_turn(conv, turn_id, user_id=owner, include_projection=False)
+        return {'conversation_id': conv, 'turn_id': turn_id, 'attempt_id': attempt,
+                'projection_revision': turn['projectionRevision'], 'status': turn['status']}
+
+    def stop(pin, command_id='stop'):
+        return factory(write=True).command('project.dispatch.commit', {**scope,
+            'expected_revision': 1, 'head': {'nextSequence': 2},
+            'changes': [change('stop', collection='settlements')], 'turn_witnesses': [pin]}, command_id)
+
+    commit(store)
+    stale = witness()
+    factory(write=True).command('turn.event.record', {'user_id': owner, 'attempt_id': attempt,
+        'task_id': 'worker-task', 'terminal': True, 'status': 'completed',
+        'projection': {'content': 'Fresh evidence'},
+        'settlement': {'outcome': 'completed', 'cause': 'stop', 'resumeOptions': []}}, 'worker-end')
+    for bad in (stale, {**witness(), 'conversation_id': uuid.uuid4().hex}):
+        with pytest.raises(StorageError) as refused:
+            stop(bad)
+        assert refused.value.code == 'database_conflict'
+        assert get(store, 'root', 'head')['version'] == 1 and get(store, 'stop', 'settlements') is None
+    assert stop(witness())['version'] == 2
+    assert stop(witness())['version'] == 2  # Exact command replay returns its original receipt.
+
+
 def test_atomic_receipt_replay_and_late_conflict_rollback(store):
     original = commit(store, changes=[change('a'), change('b')], command_id='first')
     assert original['version'] == 1

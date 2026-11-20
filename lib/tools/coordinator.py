@@ -1,5 +1,6 @@
 """Model-visible dispatch-only Coordinator tools; handlers reuse existing owners."""
 
+from lib.openapi import inline_schema_definition
 from lib.project_dispatch.contract import schema as _dispatch_schema
 from lib.router.contract import schema as _router_schema
 
@@ -62,18 +63,21 @@ COORDINATOR_TOOLS = [
           'its binding dispatched in any request. '
           'Any lead (the Global Router, or a Project Coordinator under the owner\'s full grant): when your current '
           'request has no owner message of its own (a standing instruction, a nonhuman notice, a wake), or the '
-          'session belongs to another project you were asked to help, pass owner_delegation to act under the '
-          'delegation the owner granted ("Act for me"); it allows continue, checkpoint_resume, stop, hold, resume and set_model, never regenerate, is '
+          'session belongs to another project you were asked to help, pass owner_delegation for continue, '
+          'checkpoint_resume, stop, hold or resume to use the grant ("Act for me"). The delegation never '
+          'allows regenerate. Delegated control is '
           'recorded in the '
           'owner\'s audit log, and a session of another project tells that project\'s lead (target_lead_notified). '
           'set_model changes the model of an existing Session without replacing it: the conversation, context, '
           'grant, checkout and tool checkpoint are preserved, and only the next accepted attempt (Continue, '
           'follow_up or a continuation) uses the new model — an attempt already running is never rewritten. '
           'Use it for a legitimate provider/model routing change (for example a provider content-filter '
-          'refusal), with model (a routable model id, or null to return to the session\u2019s original model) and '
+          'refusal), with model (a routable model id, or null to clear the session override) and '
           'reason; turn_id and attempt_id pin the session state you read. This changes no permission and '
-          'never rewrites provider output. The owner or, under owner_delegation, a lead chooses '
-          'the model; a Coordinator cannot re-route its own request without it. '
+          'never rewrites provider output. For set_model, omit owner_delegation for the current owner request '
+          'within its scope or to use the live full standing grant as a bound lead. The server checks the grant '
+          'and records the delegated action using reason. You may still pass owner_delegation to name a '
+          'specific owner trigger; an explicit object always uses the existing delegated path. '
           'After a lost response, retry identical arguments and idempotency_key. Acceptance is not completion.',
           {'conversation_id': {'type': 'string', 'minLength': 1},
            'turn_id': {'type': 'string', 'minLength': 1},
@@ -83,7 +87,7 @@ COORDINATOR_TOOLS = [
            'model': {'type': ['string', 'null'], 'minLength': 1, 'maxLength': 256,
                      'description': 'set_model only: the session\u2019s next-attempt model; null restores its original.'},
            'reason': {'type': 'string', 'minLength': 1, 'maxLength': 2048,
-                      'description': 'set_model only: why the owner asked for this model change.'},
+                      'description': 'set_model only: why the model should change; audited (max 2000 characters when using standing delegation).'},
            'expected_revision': {'type': 'integer', 'minimum': 1},
            'resume_anchor': {'type': 'object', 'description': 'Exact anchor from settlement.resumeOptions.'},
            'instruction': {**_dispatch_schema('request')['properties']['brief'],
@@ -151,44 +155,40 @@ COORDINATOR_TOOLS.append(_tool('report_to_user',
                        'text or ZIP). Each is published as a file the human opens from the report and the '
                        'task board. The whole report is refused if any file cannot be published.'},
      'tasks': {'type': 'array', 'uniqueItems': True,
-               'items': {'type': 'string', 'minLength': 1,
-                         'maxLength': _REPORT_CONTRACT['$defs']['progressTask']['properties']['title']['maxLength']},
+               'items': inline_schema_definition(_REPORT_CONTRACT, 'progressText'),
                'description': 'Titles of the tasks on your task board (update_task_progress) this report is about, '
                               'as written there. Optional; a title that matches no task leaves the report unlinked '
                               'from it, never refused. When you complete a task without naming it in a delivery '
                               'report, Tofu adds its final progress note as the task\'s work report.'}},
     _report['required']))
 
-# The human follows progress only through this board, so its schema is the
-# contract the browser renders. Inline the task item: tool schemas carry no $defs.
-_progress = _REPORT_CONTRACT['$defs']['progressRequest']
-_progress_task = _REPORT_CONTRACT['$defs']['progressTask']
+# The tool and browser views share the board's exact text and task definitions.
+_progress = inline_schema_definition(_REPORT_CONTRACT, 'progressToolCall')['properties']
+_progress_source = _REPORT_CONTRACT['$defs']['progressToolCall']['properties']
+for _field in ('summary', 'tasks'):
+    _progress[_field]['description'] = _progress_source[_field]['description']
 COORDINATOR_TOOLS.append(_tool('update_task_progress',
-    'Keep the human\'s task board current. It is pinned above this conversation and is how the human follows '
-    'progress without tracking sessions, so write it for them: one entry per task they care about, in their words, '
-    'most relevant first. Never list Workers, conversations, assignment IDs or internal steps, and never put '
-    'questions or requests for the human on the board (ask with ask_human). Send the complete board every time; '
-    'tasks you omit disappear. Update it whenever a task starts, advances meaningfully, finishes or is dropped. '
-    'A task carrying due is a promise to the human: set due whenever you tell them you will do or report something '
-    'later (for example "I will report when X finishes" or "I will resume at 23:20"). You are woken once at that '
-    'time if it is still open, so finish it or report then; re-date it with a reason, or cancel it and say why. An '
-    'open promise cannot be omitted or lose its due. Do not date ordinary tasks.',
-    {'summary': {**_progress['properties']['summary'],
-                 'description': 'One sentence for the human on where things stand overall.'},
-     'tasks': {**_progress['properties']['tasks'],
-               'description': 'The complete board in display order.',
-               'items': {**_progress_task, 'properties': {
-                   'title': {**_progress_task['properties']['title'],
-                             'description': 'The task in the human\'s words.'},
-                   'status': {**_progress_task['properties']['status'],
-                              'description': 'pending: not started; in_progress; completed; cancelled: dropped.'},
-                   'progress': {**_progress_task['properties']['progress'],
-                                'description': 'One line: what is done and what happens next.'},
-                   'due': {**_progress_task['properties']['due'],
-                           'description': 'Only for a promise: ISO 8601 date-time with offset, in the future. '
-                           'Example: 2026-11-09T23:20:00+08:00.'},
-               }}}},
-    _progress['required']))
+    'Keep the human\'s task board current: one entry per task they care about, in their words, '
+    'not sessions, Workers, internal steps or questions (use ask_human). Choose exactly one: '
+    'changes for routine updates, tasks with summary for a complete replacement, '
+    'or read to inspect the current board. Use changes and the exact title to avoid losing unrelated tasks. '
+    'Title, progress, reason and summary are single-line text. A new or changed pending task must carry a typed '
+    'blocker naming exactly one of: active_dispatch (assignmentId of a Worker this Coordinator dispatched that is '
+    'running now), blocked_by_dependency (assignmentId and the revision that must settle), needs_external_resource '
+    '(the exact resource, the check that proves it is present, and either ownerAction — the one concrete thing the '
+    'owner does elsewhere to obtain it — or unavailable with the limit that stays unverified), needs_owner_decision '
+    '(the ask_human questionId and its question in plain language), or next_action (the concrete action a Worker can '
+    'start now). An unavailable resource is a terminal limit, not a wait. An in-progress task may carry one too. reason is '
+    'only a supplemental note: prose such as "waiting for a receipt" never states the wait, and a pending row '
+    'without a verifying blocker is refused. A pending row naming no running assignment, dependency or concrete '
+    'next action is marked idle in your continuation context: start it, dispatch it, or name a typed wait. '
+    'Pending is not a dispatch or a queue. '
+    'Mark unwanted work cancelled with reason before removing it; never silently omit unfinished work. Update '
+    'the board when work starts, advances or finishes. A task carrying due is a promise to the human: set due '
+    'whenever you tell them you will do or report something later. You are woken once at that time if it is '
+    'still open; finish it or report then, re-date with a reason, or cancel and say why. '
+    'An open promise cannot be omitted or lose its due. Do not date ordinary tasks.',
+    _progress, []))
 
 for _name, _definition, _description in (
     ('get_project_workers', 'getProjectWorkers',
@@ -219,7 +219,9 @@ for _name, _definition, _description in (
      'When the assignment has acceptance checks (request.acceptance in get_project_assignment), judge each '
      'by its number in acceptance_results with the evidence you read: met only when the evidence shows it, '
      'unknown when you could not verify it. An accept must judge every check and is refused while any is '
-     'unmet; choose rework or reject instead. '
+     'unmet; choose rework or reject instead. An unknown check never blocks an accept or its publication: '
+     'integrate the verified work and state in your report what could not be verified and what it would need. '
+     'Do not rework work whose only gap is a precondition this project cannot obtain. '
      'To integrate verified code, include the exact delivery.checkpointSha from get_project_assignment; '
      'this uses the existing isolated-workspace publication checks. This records Coordinator review, '
      'never human acceptance. Publication is asynchronous: poll the assignment_id, which waits until its '
@@ -241,9 +243,17 @@ for _name, _definition, _description in (
      'For verified prerequisites, provide dependencies with exact assignment/grant/result revisions and file checkpoint SHA. '
      'Pending review/publication defers execution through the existing dependency gate. '
      'For repairs, review the prior result with decision=rework and pass its exact rework_of pin; the graph links the new assignment. '
+     'Optionally name board_task_keys from update_task_progress(read={}).taskKeys for explicit many-to-many '
+     'board coverage; it is descriptive only, never authority. Omitted coverage is unknown (rework inherits). '
      'No per-worker user action is required. The Worker lives in this Coordinator’s collapsible sidebar conversation group and remains directly openable. Supply a concrete brief with context, '
      'dependencies and ownership, and list each concrete, checkable requirement of the result in acceptance: '
-     'the Worker reports evidence per numbered check and your review judges each one. Worker capabilities and model are frozen from this request. There is no '
+     'the Worker reports evidence per numbered check and your review judges each one. '
+     'For work whose defects a self-check misses (papers, data analyses, claims, references), add review '
+     'with reviewer roles (correctness = data audit, overclaim, references, custom with focus): the result '
+     'then goes through an automatic independent review loop. Each round starts every reviewer as a new Worker '
+     'with no author context; failed findings go back to this Worker and fresh reviewers re-audit, until every '
+     'reviewer passes or an impasse is reported. Poll the returned review_loop_id instead of auditing yourself. '
+     'Worker capabilities and model are frozen from this request. There is no '
      'spending limit. '
      'Reuse exactly the same arguments and idempotency_key after an uncertain response. '
      'Workers run in isolated Git worktrees of this project. Tofu prepares a plain project folder itself '
@@ -317,6 +327,19 @@ COORDINATOR_TOOLS.append(_tool('restart_server', (
     'the restart ends, completed or not, you receive one nonhuman restart-complete notice as a new turn; '
     'report the outcome from it.'),
     _router_arguments('restartServer')['properties'], _router_arguments('restartServer')['required']))
+_repair = _router_arguments('projectRepair')
+COORDINATOR_TOOLS.append(_tool('repair_project', (
+    'Project Lead: action=replace_own_binding, under_delegation=true, reason and idempotency_key. '
+    'Replaces only your current binding with a fresh empty Coordinator in your project; do not pass '
+    'project_path, title or note. Existing work and receipts stay in their conversations, but grants pinned '
+    'to the old binding lose authority. Use only when binding replacement is necessary, not for transient '
+    'failures. If you cannot run, recovery belongs to the Global Router. '
+    'Global Router: action=open_repair_conversation (default), project_path, title, note, reason, one owner '
+    'trigger and idempotency_key. Opens and starts one ordinary conversation only if the target lead cannot '
+    'run. The owner words are its request; note is nonhuman evidence. A transient failure belongs to '
+    'control_conversation instead. The Global Router receives a nonhuman notice when the repair Turn settles. '
+    'Both actions are audited and never repeat an effect with the same key.'),
+    _repair['properties'], _repair['required']))
 for _name, _definition, _description in (
     ('route_to_project', 'routeToProject',
      'Forward work to the Project Router (the bound Project Coordinator) of one project. Without instruction_id, '
@@ -375,17 +398,6 @@ for _name, _definition, _description in (
      'message. Human-only actions (secrets, login approval, QR pairing) return '
      'needs_owner_action with the Settings remedy; destructive or external actions are refused, never inferred. '
      'Every change is in the owner\'s audit log; revoking "Act for me" stops it.'),
-    ('repair_project', 'projectRepair',
-     'Open and start one repair conversation in a project whose Project Router cannot run, under the owner\'s '
-     'delegation ("Act for me"). It is refused unless that Router cannot run: its binding is unavailable, or its '
-     'newest work Turn failed (a Stop does not count). Resume a transient provider failure with '
-     'control_conversation first; use this when the failure needs a fix in the project, which no Project Router '
-     'can make while it is down. The conversation lives in the project\'s folder and root and works like the '
-     'owner\'s own conversation there. Name one owner trigger; the owner words it names become its request. Put '
-     'the failure, its evidence, the fix and how to verify it in note, which travels with them as labelled '
-     'nonhuman evidence. Give reason and idempotency_key: a retry with the same key never opens a second '
-     'conversation. When its Turn ends you receive one nonhuman repair-outcome notice. Every call is in the '
-     'owner\'s audit log; revoking "Act for me" stops it.'),
     ('broadcast_project_message', 'broadcastProjectMessage',
      'Send one fix, workaround or instruction to every Project Router and every running Worker at once '
      '(targets ["all"]) or to the projects you name, instead of relaying it lead by lead. Each recipient '

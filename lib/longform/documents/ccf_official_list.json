@@ -1,0 +1,107 @@
+{
+ "schema": "tofu.ccf-official-list/1",
+ "status": "verified",
+ "source": {
+  "edition": "第七版《中国计算机学会推荐国际学术会议和期刊目录》（2026）",
+  "edition_date": "2026-03-31",
+  "corrected_date": "2026-04-09",
+  "retrieved": "2026-11-18",
+  "url": "https://www.ccf.org.cn/ccf/contentcore/resource/download?ID=112CF3BF7E1140ACEB271ADAED12A67ADFABB8FF099E40C2759502A85C8A281F",
+  "announcement_url": "https://www.ccf.org.cn/Academic_Evaluation/By_category",
+  "announcement_quote": "中国计算机学会 2026年03月31日 （目录于4月9日更新，修正了一个勘误）",
+  "sha256": "271b630b576bf8a4f802e767f5694caded93680e22b3a19bef7902591c45c1d3"
+ },
+ "venues": {
+  "aaai": {
+   "tier": "A",
+   "url": "https://www.ccf.org.cn/ccf/contentcore/resource/download?ID=112CF3BF7E1140ACEB271ADAED12A67ADFABB8FF099E40C2759502A85C8A281F",
+   "page": 57,
+   "quote": "1 AAAI AAAIConferenceonArtificialIntelligence AAAI http://dblp.uni-trier.de/db/conf/aaai/",
+   "table_heading": "一、A 类"
+  },
+  "neurips": {
+   "tier": "A",
+   "url": "https://www.ccf.org.cn/ccf/contentcore/resource/download?ID=112CF3BF7E1140ACEB271ADAED12A67ADFABB8FF099E40C2759502A85C8A281F",
+   "page": 57,
+   "quote": "2 NeurIPS ConferenceonNeuralInformationProcessingSystems MITPress http://dblp.uni-trier.de/db/conf/nips/",
+   "table_heading": "一、A 类"
+  },
+  "acl": {
+   "tier": "A",
+   "url": "https://www.ccf.org.cn/ccf/contentcore/resource/download?ID=112CF3BF7E1140ACEB271ADAED12A67ADFABB8FF099E40C2759502A85C8A281F",
+   "page": 57,
+   "quote": "3 ACL AnnualMeetingoftheAssociationforComputationalLinguistics ACL http://dblp.uni-trier.de/db/conf/acl/",
+   "table_heading": "一、A 类"
+  },
+  "cvpr": {
+   "tier": "A",
+   "url": "https://www.ccf.org.cn/ccf/contentcore/resource/download?ID=112CF3BF7E1140ACEB271ADAED12A67ADFABB8FF099E40C2759502A85C8A281F",
+   "page": 57,
+   "quote": "4 CVPR IEEE/CVFComputerVisionandPatternRecognitionConference IEEE http://dblp.uni-trier.de/db/conf/cvpr/",
+   "table_heading": "一、A 类"
+  },
+  "iccv": {
+   "tier": "A",
+   "url": "https://www.ccf.org.cn/ccf/contentcore/resource/download?ID=112CF3BF7E1140ACEB271ADAED12A67ADFABB8FF099E40C2759502A85C8A281F",
+   "page": 57,
+   "quote": "5 ICCV InternationalConferenceonComputerVision IEEE http://dblp.uni-trier.de/db/conf/iccv/",
+   "table_heading": "一、A 类"
+  },
+  "icml": {
+   "tier": "A",
+   "url": "https://www.ccf.org.cn/ccf/contentcore/resource/download?ID=112CF3BF7E1140ACEB271ADAED12A67ADFABB8FF099E40C2759502A85C8A281F",
+   "page": 57,
+   "quote": "6 ICML InternationalConferenceonMachineLearning ACM http://dblp.uni-trier.de/db/conf/icml/",
+   "table_heading": "一、A 类"
+  },
+  "iclr": {
+   "tier": "A",
+   "url": "https://www.ccf.org.cn/ccf/contentcore/resource/download?ID=112CF3BF7E1140ACEB271ADAED12A67ADFABB8FF099E40C2759502A85C8A281F",
+   "page": 57,
+   "quote": "7 ICLR InternationalConferenceonLearningRepresentations OpenReview https://dblp.uni-trier.de/db/conf/iclr/index.html",
+   "table_heading": "一、A 类"
+  },
+  "emnlp": {
+   "tier": "B",
+   "url": "https://www.ccf.org.cn/ccf/contentcore/resource/download?ID=112CF3BF7E1140ACEB271ADAED12A67ADFABB8FF099E40C2759502A85C8A281F",
+   "page": 58,
+   "quote": "2 EMNLP ConferenceonEmpirical MethodsinNaturalLanguageProcessing ACL http://dblp.uni-trier.de/db/conf/emnlp/",
+   "table_heading": "二、B 类"
+  },
+  "eccv": {
+   "tier": "B",
+   "url": "https://www.ccf.org.cn/ccf/contentcore/resource/download?ID=112CF3BF7E1140ACEB271ADAED12A67ADFABB8FF099E40C2759502A85C8A281F",
+   "page": 58,
+   "quote": "4 ECCV EuropeanConferenceonComputerVision Springer http://dblp.uni-trier.de/db/conf/eccv/",
+   "table_heading": "二、B 类"
+  },
+  "naacl": {
+   "tier": "B",
+   "url": "https://www.ccf.org.cn/ccf/contentcore/resource/download?ID=112CF3BF7E1140ACEB271ADAED12A67ADFABB8FF099E40C2759502A85C8A281F",
+   "page": 58,
+   "quote": "13 NAACL NorthAmericanChapteroftheAssociationforComputationalLinguistics AssociationforComputationalLinguistics http://dblp.uni-trier.de/db/conf/naacl/",
+   "table_heading": "二、B 类"
+  },
+  "ijcai": {
+   "tier": "B",
+   "url": "https://www.ccf.org.cn/ccf/contentcore/resource/download?ID=112CF3BF7E1140ACEB271ADAED12A67ADFABB8FF099E40C2759502A85C8A281F",
+   "page": 58,
+   "quote": "14 IJCAI InternationalJointConferenceonArtificialIntelligence MorganKaufmann http://dblp.uni-trier.de/db/conf/ijcai/",
+   "table_heading": "二、B 类"
+  },
+  "kdd": {
+   "tier": "A",
+   "url": "https://www.ccf.org.cn/ccf/contentcore/resource/download?ID=112CF3BF7E1140ACEB271ADAED12A67ADFABB8FF099E40C2759502A85C8A281F",
+   "page": 35,
+   "quote": "2 SIGKDD ACMSIGKDDConferenceonKnowledgeDiscoveryandDataMining ACM http://dblp.uni-trier.de/db/conf/kdd/",
+   "table_heading": "一、A 类"
+  }
+ },
+ "limitations": "The category HTML disagrees with the current seventh-edition PDF (ICLR/IJCAI). The pinned PDF governs this portfolio policy. COLM is explicitly forbidden by owner policy irrespective of list membership. Unlisted targets remain unknown, not inferred non-A.",
+ "recognition_scope": {
+  "url": "https://www.ccf.org.cn/Academic_Evaluation/By_category",
+  "location": "2026-03-31 seventh-edition announcement, first body paragraph (HTML; no PDF page number)",
+  "quote": "会议论文指\"full paper\"或\"regular paper\"（正式发表的长文），对于会议上其他形式发表的论文如short paper、demo paper、technical brief、summary、findings以及作为伴随会议的workshop等不计入目录考虑的范围。",
+  "interpretation": "Publication-recognition scope, not a change to the conference tier or an additional owner mandate banning paper types."
+ }
+}

@@ -23,19 +23,46 @@ from lib.production.stages import StageFailed
 
 pytestmark = pytest.mark.unit
 
+
+@pytest.fixture(autouse=True)
+def _template_seams(monkeypatch):
+    """The venue freshness check and the conformance gate reach the venue's
+    pages and its official kit; their own suite is test_venue_conformance."""
+    monkeypatch.setattr(pl, '_check_freshness', lambda edition: {
+        'edition': edition, 'conference': edition, 'verdict': 'current'})
+    def conformance(ctx, build, main):
+        pdf = Path(build) / f'{Path(main).stem}.pdf'
+        return {'edition': 'arr-rolling', 'stage': 'submission', 'passed': True,
+                'submission_ready': True, 'draft_label': '', 'rows': [], 'failures': [],
+                'pdf_sha256': hashlib.sha256(pdf.read_bytes()).hexdigest() if pdf.is_file() else ''}
+    monkeypatch.setattr(pl, '_conformance', conformance)
+
 FIXTURES = Path(__file__).parent / 'fixtures'
 
 
 # ── rules ───────────────────────────────────────────────────────────────────
 
-def test_confident_voice_lint_flags_hedges_outside_limitations():
+def test_paper_lint_refuses_fences_outside_limitations():
     rules = rules_for('paper')
-    text = 'We believe our method is arguably better.'
+    text = 'We do not claim generality; this is merely a first step.'
     findings = lint_text(rules, 'introduction', text)
-    assert any("'we believe'" in item for item in findings)
-    assert any("'arguably'" in item for item in findings)
+    assert any("'we do not claim'" in item for item in findings)
+    assert any("'merely'" in item for item in findings)
+    assert any("'a first step'" in item for item in findings)
     assert lint_text(rules, 'limitations', text) == []
     assert lint_text(rules, 'introduction', 'Our method is better.') == []
+
+
+def test_paper_lint_allows_calibrated_hedges_and_refuses_overclaims():
+    # Owner 2026-11-18: claim less, phrase carefully, but no fence sentences.
+    rules = rules_for('paper')
+    calibrated = ('The gap suggests that rounding, not capacity, may explain the '
+                  'loss; it is consistent with the update-size analysis.')
+    assert lint_text(rules, 'introduction', calibrated) == []
+    over = lint_text(rules, 'experiments', 'Our method always outperforms baselines in all cases.')
+    assert any('paper.no-overclaim' in item for item in over)
+    assert any('paper.no-overclaim' in item for item in lint_text(
+        rules, 'limitations', 'This universally holds.'))
 
 
 def test_resume_lint_carries_owner_corrections():
@@ -55,7 +82,8 @@ def test_reported_numbers_ignore_identifiers_and_dimensions():
 
 def test_every_owner_correction_is_a_registered_rule():
     paper = {rule.id for rule in rules_for('paper')}
-    assert {'paper.official-template', 'paper.confident-voice', 'paper.figure-qa',
+    assert {'paper.official-template', 'paper.no-fences', 'paper.no-overclaim',
+            'paper.calibrated-claims', 'paper.figure-qa',
             'paper.compile-clean', 'paper.independent-review', 'paper.blind-ab',
             'paper.solid-experiments', 'paper.novelty'} <= paper
     resume = {rule.id for rule in rules_for('resume')}
@@ -122,7 +150,7 @@ def test_document_judge_follows_its_rubric_scores_over_a_contradicting_winner(
 def test_blind_pairwise_needs_a_win_in_both_orders():
     first_always = lambda pair: (0, 'first', [{}, {}])
     assert blind_pairwise(first_always, {'v': 'new'}, {'v': 'old'},
-                          seed='s')['verdict'] == 'split'
+                          seed='s')['verdict'] == 'no preference'
     prefers_new = lambda pair: (0 if pair[0]['v'] == 'new' else 1, 'new', [{}, {}])
     result = blind_pairwise(prefers_new, {'v': 'new'}, {'v': 'old'}, seed='s')
     assert result['preferred'] and {r['candidate_position'] for r in result['rounds']} == {1, 2}
@@ -150,7 +178,8 @@ def _ctx(paper: Path, tmp_path: Path) -> dict:
 def _kit(fetched_at=200.0, commit='a' * 40):
     return {'upstream_commit': commit, 'archive_sha256': 'b' * 64 if commit else '',
             'source_url': 'https://example.invalid/kit.zip', 'files': {'x.sty': 'c'},
-            'fetched_at': fetched_at}
+            'fetched_at': fetched_at, 'edition': 'arr-rolling', 'submission_ready': True,
+            'freshness': {'verdict': 'current'}}
 
 
 def test_intake_gate_refuses_shared_judge_and_stale_template(tmp_path):
@@ -249,13 +278,46 @@ def test_outline_gate_enforces_coverage_and_confirmed_facts(tmp_path, monkeypatc
     assert any('placed exactly once' in e for e in pl._gate_outline(ctx, missing_figure))
 
 
+def test_outline_and_draft_prompts_carry_the_registry_paper_outlines(tmp_path, monkeypatch):
+    # The shipped data may hold no outlines (the draft ablation removed them,
+    # docs/PAPER_STYLE_EVIDENCE.md); the wiring is specified on a data file.
+    from lib.longform.documents import rules as rules_mod
+    data = json.loads(rules_mod.DATA_RULES_PATH.read_text())
+    data['outlines'] = {'method': {
+        'applies_to': 'proposes a new method', 'abstract': ['context', 'problem', 'method', 'result'],
+        'introduction': ['context', 'method', 'contributions'], 'contributions': 'in prose',
+        'exemplars': {'result': 'We obtain relative improvements of up to 40%.'}, 'evidence': 'e'}}
+    data_file = tmp_path / 'style_rules.json'
+    data_file.write_text(json.dumps(data))
+    monkeypatch.setattr(rules_mod, 'DATA_RULES_PATH', data_file)
+    guidance = rules_mod.outline_guidance('paper')
+    assert rules_mod.outline_guidance('resume') == ''
+    assert 'method (proposes a new method): abstract context -> problem -> method -> result' in guidance
+    assert 'We obtain relative improvements of up to 40%.' in guidance
+    ctx = _with_evidence(_with_dossier(_ctx(_sample(tmp_path), tmp_path)), monkeypatch)
+    prompts = []
+
+    def chat(_ctx, _role, messages, label):
+        prompts.append((label, messages[0]['content']))
+        if label == 'outline':
+            return json.dumps(_outline())
+        return '<latex>Body.</latex>'
+    monkeypatch.setattr(pl, '_chat', chat)
+    monkeypatch.setattr(pl, '_packages', lambda _ctx: 'amsmath')
+    ctx['artifacts']['outline'] = pl._run_outline(ctx)
+    pl._run_draft(ctx)
+    labels = [label for label, _prompt in prompts]
+    assert 'outline' in labels and any(label.startswith('draft:') for label in labels)
+    assert all(guidance in prompt for _label, prompt in prompts)
+
+
 def test_draft_gate_refuses_invented_numbers_hedges_and_unknown_keys(tmp_path, monkeypatch):
     ctx = _with_evidence(_with_dossier(_ctx(_sample(tmp_path), tmp_path)), monkeypatch)
     ctx['artifacts']['outline'] = _outline()
     errors = pl._section_check(ctx, 'introduction',
                                r'We believe loss is 2.718~\citep{nobody2020}.')
     assert any('no-invented-numbers' in e for e in errors)
-    assert any('confident-voice' in e for e in errors)
+    assert any('paper.no-fences' in e for e in errors)
     assert any('unknown keys' in e for e in errors)
     assert pl._section_check(ctx, 'introduction',
                              r'Loss reaches 3.124~\citep{kalamkar2019study}.') == []
@@ -298,7 +360,7 @@ def test_render_repairs_while_badness_falls_and_keeps_the_best(tmp_path, monkeyp
     from lib.longform.documents import render as render_mod
     ctx = _with_evidence(_with_dossier(_ctx(_sample(tmp_path), tmp_path)), monkeypatch)
     ctx['artifacts']['outline'] = _outline()
-    ctx['artifacts']['intake'] = {'kit': {'files': {}, 'page_limit': 8},
+    ctx['artifacts']['intake'] = {'kit': {'files': {}, 'page_limit': 8, 'family': 'acl', 'edition': 'arr-rolling'},
                                   'owner_directives': {'items': []}, 'draft': None}
     ctx['artifacts']['draft'] = {'sections': {}}
     ctx['artifacts']['revise'] = {'sections': {sid: f'v0 {sid}' for sid, _t in
@@ -320,11 +382,42 @@ def test_render_repairs_while_badness_falls_and_keeps_the_best(tmp_path, monkeyp
     repairs = []
     monkeypatch.setattr(pl, '_chat', lambda c, role, messages, label: (
         repairs.append(label), f'<latex id="method">v{len(repairs)} method</latex>')[1])
+    checked = tmp_path / 'checked.pdf'
+    checked.write_bytes(b'%PDF-1.4 checked build')
+    digest = hashlib.sha256(checked.read_bytes()).hexdigest()
+    monkeypatch.setattr(pl, '_conformance', lambda *args: {
+        'passed': True, 'failures': [], 'pdf': str(checked), 'pdf_sha256': digest,
+        'pages': 4, 'body_pages': 4})
     art = pl._run_render(ctx)
+    assert art['pdf'] == str(checked) and art['pdf_sha256'] == digest
+    ctx['artifacts']['render'] = art
+    assert pl._gate_deliver(ctx, {'pdf': str(checked), 'provenance': {'unsourced': []}}) == []
     assert repairs == ['render-repair', 'render-repair']
     assert compiled == [3, 1, 2, 1]
     assert art['sections']['method'] == 'v1 method' and art['overfull'] == ['1pt']
     assert pl._gate_render(ctx, art) == ['1 overfull box(es)']
+
+
+@pytest.mark.parametrize('portfolio_policy', [None, 'owner-ccf-a'])
+def test_delivery_refuses_pdf_not_inspected_by_conformance(tmp_path, portfolio_policy):
+    delivered = tmp_path / 'delivered.pdf'
+    delivered.write_bytes(b'%PDF delivered render')
+    inspected = tmp_path / 'inspected.pdf'
+    inspected.write_bytes(b'%PDF different conformance build')
+    ctx = {'portfolio_policy': portfolio_policy, 'artifacts': {'render': {
+        'pdf_sha256': hashlib.sha256(delivered.read_bytes()).hexdigest(),
+        'conformance': {'passed': True,
+                        'pdf_sha256': hashlib.sha256(inspected.read_bytes()).hexdigest()}}}}
+    errors = pl._gate_deliver(ctx, {'pdf': str(delivered),
+                                   'provenance': {'unsourced': []}})
+    assert errors == ['delivered PDF differs from the template-conformance PDF']
+    render = ctx['artifacts']['render']
+    render['conformance']['pdf_sha256'] = render['pdf_sha256']
+    artifact = {'pdf': str(delivered), 'provenance': {'unsourced': []}}
+    assert pl._gate_deliver(ctx, artifact) == []
+    delivered.write_bytes(b'%PDF changed after render and conformance')
+    assert pl._gate_deliver(ctx, artifact) == [
+        'delivered PDF differs from the render-QA PDF']
 
 
 # ── full run ────────────────────────────────────────────────────────────────
@@ -385,14 +478,15 @@ def _fake_chat(ctx, role, messages, label):
     raise AssertionError(f'unexpected model call {label}')
 
 
-def _fake_acl_kit(venue, destination):
+def _fake_acl_kit(edition, destination):
     """A stand-in for the fetched ACL kit (the real fetch is network)."""
     destination.mkdir(parents=True, exist_ok=True)
     sty = ('\\ProvidesPackage{acl}\n\\DeclareOption*{}\n\\ProcessOptions\\relax\n'
            '\\RequirePackage[margin=1in]{geometry}\n\\RequirePackage{natbib}\n'
            '\\bibliographystyle{plainnat}\n')
     (destination / 'acl.sty').write_text(sty)
-    return {'venue': 'acl', 'source_url': 'https://example.invalid/kit.zip',
+    return {'venue': 'arr', 'edition': edition, 'family': 'acl',
+            'source_url': 'https://example.invalid/kit.zip',
             'landing_page': 'https://example.invalid', 'upstream_commit': 'f' * 40,
             'archive_sha256': 'e' * 64, 'kit': '', 'engine': 'pdflatex', 'year': 2026,
             'files': {'acl.sty': hashlib.sha256(sty.encode()).hexdigest()},
@@ -423,12 +517,24 @@ def test_full_pipeline_delivers_and_resumes(tmp_path, monkeypatch):
     assert artifacts['critique']['verdict']['calibrated'] in (True, False)
     manifest = json.loads((paper / 'delivered' / 'manifest.json').read_text())
     assert manifest['blind']['verdict'] == 'candidate'
+    delivered_bytes = (paper / 'delivered' / manifest['pdf']).read_bytes()
+    assert delivered_bytes == Path(artifacts['render']['pdf']).read_bytes()
+    assert hashlib.sha256(delivered_bytes).hexdigest() == artifacts['render'][
+        'conformance']['pdf_sha256'] == artifacts['render']['pdf_sha256']
+    assert manifest['provenance']['unsourced'] == [] and manifest['provenance']['checked']['numbers']
     assert (paper / 'delivered' / 'experiment_requests.json').is_file()
     for index, name in enumerate(pl.STAGE_NAMES, 1):
         assert (tmp_path / 'work' / 'artifacts' / f'{index:02d}-{name}.json').is_file()
     first_run = len(calls)
     pl.run_document_pipeline(str(paper), str(tmp_path / 'work'))
-    assert len(calls) == first_run, 'a rerun with unchanged inputs resumes every stage'
+    assert all(label in ('render-repair', 'blind-ab') for label in calls[first_run:]), (
+        'writing stages resume, but render/delivery must revalidate current official rules')
+    before = hashlib.sha256((paper / 'delivered' / manifest['pdf']).read_bytes()).hexdigest()
+    monkeypatch.setattr(pl, '_check_freshness', lambda eid: {
+        'conference': eid, 'verdict': 'unverifiable', 'archive': {'error': 'offline'}})
+    with pytest.raises(StageFailed):
+        pl.run_document_pipeline(str(paper), str(tmp_path / 'work'))
+    assert hashlib.sha256((paper / 'delivered' / manifest['pdf']).read_bytes()).hexdigest() == before
 
 
 @pytest.mark.skipif(not _tex_ready(), reason='latexmk with pgfplots/natbib not installed')
@@ -457,96 +563,13 @@ def test_blind_gate_refuses_delivery_when_previous_wins(tmp_path, monkeypatch):
 
 # ── venues ──────────────────────────────────────────────────────────────────
 
-def _zip(entries: dict, comment: bytes = b'') -> bytes:
-    import io
-    import zipfile
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, 'w') as archive:
-        for name, content in entries.items():
-            archive.writestr(name, content)
-        archive.comment = comment
-    return buffer.getvalue()
-
-
-_NOW_2026 = 1794960000.0   # 2026-11-17
-
-
-def _venue_downloads():
-    """Each venue's official locations, shaped like the real ones (2026-11-18)."""
-    icml = _zip({'icml2027.sty': 's', 'icml2027.bst': 'b', 'fancyhdr.sty': 'f',
-                 'example_paper.tex': 't', 'example_paper.bib': ''})
-    neurips = _zip({'neurips_2026.sty': 's', 'neurips_2026.tex': 't', 'checklist.tex': 'c'})
-    aaai = _zip({'AuthorKit27/aaai2027.sty': 's', 'AuthorKit27/aaai2027.bst': 'b',
-                 'AuthorKit27/AnonymousSubmission2027.tex': 't',
-                 'AuthorKit27/Figures/figure1.pdf': 'p'})
-    cvpr = _zip({'cvpr.sty': 's', 'ieeenat_fullname.bst': 'b', 'preamble.tex': 'p',
-                 'main.tex': 't', 'sec/1_intro.tex': 'i'})
-    colm = _zip({'Template-master/colm2026_conference.sty': 's',
-                 'Template-master/colm2026_conference.bst': 'b',
-                 'Template-master/colm2026_conference.tex': 't',
-                 'Template-master/math_commands.tex': 'm'}, b'9' * 40)
-    iclr = _zip({'Master-Template-master/iclr2026/iclr2026_conference.sty': 'old',
-                 'Master-Template-master/iclr2027/iclr2027_conference.sty': 's',
-                 'Master-Template-master/iclr2027/iclr2027_conference.tex': 't',
-                 'Master-Template-master/iclr2027/math_commands.tex': 'm'}, b'8' * 40)
-    pages = {
-        'https://icml.cc/Conferences/2027/AuthorInstructions':
-            b'<a href="https://media.icml.cc/Conferences/ICML2027/styles/icml2027.zip">',
-        'https://media.icml.cc/Conferences/ICML2027/styles/icml2027.zip': icml,
-        'https://neurips.cc/Conferences/2026/CallForPapers':
-            b'<a href="https://media.neurips.cc/Conferences/NeurIPS2026/'
-            b'Formatting_Instructions_For_NeurIPS_2026.zip">',
-        'https://media.neurips.cc/Conferences/NeurIPS2026/'
-        'Formatting_Instructions_For_NeurIPS_2026.zip': neurips,
-        'https://aaai.org/authorkit27/': aaai,
-        'https://cvpr.thecvf.com/Conferences/2027/AuthorGuidelines':
-            b'<a href="https://media.eventhosts.cc/Conferences/CVPR2027/'
-            b'author-kit-CVPR2027-v1-latex.zip">',
-        'https://media.eventhosts.cc/Conferences/CVPR2027/author-kit-CVPR2027-v1-latex.zip': cvpr,
-        'https://github.com/COLM-org/Template/archive/refs/heads/master.zip': colm,
-        'https://github.com/ICLR/Master-Template/archive/refs/heads/master.zip': iclr,
-    }
-    asked = []
-
-    def download(url):
-        asked.append(url)
-        if url not in pages:
-            raise RuntimeError(f'{url}: HTTP 404')
-        return pages[url], url
-    return download, asked
-
-
-@pytest.mark.parametrize('venue, year, kit_file, sample, limit', [
-    ('icml', 2027, 'icml2027.sty', 'example_paper.tex', 8),
-    ('neurips', 2026, 'neurips_2026.sty', 'neurips_2026.tex', 9),
-    ('aaai', 2027, 'aaai2027.sty', 'AnonymousSubmission2027.tex', 7),
-    ('cvpr', 2027, 'cvpr.sty', 'main.tex', 8),
-    ('colm', 2026, 'colm2026_conference.sty', 'colm2026_conference.tex', 9),
-    ('iclr', 2027, 'iclr2027_conference.sty', 'iclr2027_conference.tex', 9),
-])
-def test_venue_kit_is_the_newest_official_one(tmp_path, venue, year, kit_file, sample, limit):
-    from lib.longform.documents.venues import fetch_official_kit
-    download, asked = _venue_downloads()
-    kit = fetch_official_kit(venue, tmp_path / venue, download=download, now=_NOW_2026)
-    assert kit['year'] == year and kit_file in kit['files']
-    assert kit['page_limit'] == limit and kit['anonymity'] and kit['page_limit_source']
-    assert kit['sample'] == sample
-    assert (Path(kit['sample_dir']) / sample).is_file()
-    assert (tmp_path / venue / kit_file).read_text() == 's'
-    if venue == 'neurips':   # the coming year is probed first, then this year
-        assert asked[0] == 'https://neurips.cc/Conferences/2027/CallForPapers'
-    if venue == 'iclr':
-        assert 'iclr2026_conference.sty' not in kit['files']
-        assert kit['upstream_commit'] == '8' * 40
-
-
-def test_unregistered_or_unpublished_venue_is_refused(tmp_path):
-    from lib.longform.documents.venues import fetch_official_kit
-    with pytest.raises(ValueError, match='no registered official'):
-        fetch_official_kit('emnlp-findings', tmp_path)
-    with pytest.raises(ValueError, match='no official icml kit'):
-        fetch_official_kit('icml', tmp_path, download=lambda url: (_ for _ in ()).throw(
-            RuntimeError(f'{url}: HTTP 404')), now=_NOW_2026)
+def test_unregistered_or_unpinned_venue_is_refused(tmp_path):
+    from lib.longform.documents.venue_registry import TemplateRefused
+    from lib.longform.documents.venues import fetch_official_kit, venue_terms
+    with pytest.raises(TemplateRefused, match='has no official template in the registry'):
+        venue_terms('emnlp-findings', year=2026)
+    with pytest.raises(TemplateRefused, match='unverified; it has no buildable'):
+        fetch_official_kit('icml-2028', tmp_path)
 
 
 def test_venue_page_limit_bounds_the_brief(tmp_path):
@@ -666,13 +689,34 @@ def _draft_chat(calls):
                 {'old': _DRAFT_CLAIM, 'new': 'Selective rounding works.'}])
         if label in ('revise-ab', 'blind-ab'):
             pair = json.loads(content.split('Candidates:\n', 1)[1])
-            newer = 0 if 'seems to stall' not in json.dumps(pair[0]) \
-                and 'seems to\\nstall' not in json.dumps(pair[0]) else 1
+            newer = 0 if 'is believed to lose accuracy' not in ' '.join(
+                json.dumps(pair[0]).replace('\\n', ' ').split()) else 1
             scores = [{'novelty': 5}, {'novelty': 5}]
             scores[newer] = {'novelty': 8}
             return json.dumps({'winner': newer + 1, 'reason': 'crisper', 'scores': scores})
         raise AssertionError(f'unexpected model call {label}')
     return chat
+
+
+@pytest.mark.parametrize('label', ['revise-ab', 'blind-ab'])
+@pytest.mark.parametrize('candidate_position', [0, 1])
+def test_draft_chat_identifies_revised_fixture_in_both_orders(label, candidate_position):
+    previous = (FIXTURES / 'sample_paper' / 'draft' / 'main.tex').read_text()
+    old = 'is believed to lose accuracy, and we think the cause might be rounding.'
+    new = 'loses accuracy, and rounding is the cause.'
+    assert old in previous
+    assert 'seems to stall' not in previous
+    candidate = previous.replace(old, new)
+    pair = [{'text': previous}, {'text': previous}]
+    pair[candidate_position] = {'text': candidate}
+    if label == 'blind-ab':
+        pair = [{'text': row['text'].replace('is believed to lose', 'is believed to\nlose')}
+                for row in pair]
+    result = json.loads(_draft_chat([])(None, 'judge', [
+        {'content': 'Candidates:\n' + json.dumps(pair)}], label))
+    assert result['winner'] == candidate_position + 1
+    assert result['scores'][candidate_position] == {'novelty': 8}
+    assert result['scores'][1 - candidate_position] == {'novelty': 5}
 
 
 @pytest.mark.skipif(not _tex_ready(), reason='latexmk with pgfplots/natbib not installed')
@@ -706,13 +750,16 @@ def test_existing_draft_is_revised_in_place_by_targeted_edits(tmp_path, monkeypa
     assert artifacts['blind']['preferred'] is True
     delivered = paper / 'delivered'
     revised = (delivered / 'source' / 'main.tex').read_text()
-    assert 'but it stalls.' in revised and 'seems to stall' not in revised
+    assert 'loses accuracy, and rounding is the cause.' in revised
+    assert 'is believed to lose accuracy' not in revised
     assert 'tofu-pipeline-body-end' not in revised and '9.999' not in revised
     assert _DRAFT_CLAIM in revised, 'a supported result survives revision'
     assert (delivered / 'source' / 'figures' / 'loss_curve.pdf').read_bytes() == figure_bytes
     assert (paper / 'main.tex').read_text() == original, 'the owner\'s draft is untouched'
     patch = (delivered / 'revision.patch').read_text()
-    assert 'seems to stall' in patch and '9.999' not in patch
+    assert '-Pure BF16 training without an FP32 master copy is believed' in patch
+    assert '+Pure BF16 training without an FP32 master copy loses accuracy' in patch
+    assert '9.999' not in patch
     assert '+' + _DRAFT_CLAIM not in patch, 'unflagged sentences are left alone'
     manifest = json.loads((delivered / 'manifest.json').read_text())
     assert manifest['mode'] == 'revised existing draft'
@@ -730,3 +777,422 @@ def test_render_judges_only_sources_the_document_inputs(tmp_path):
     (tmp_path / 'kit_sample' / 'sample.tex').write_text('\\includegraphics{myfile}')
     assert ed.reachable_tex(tmp_path, 'main.tex') == {'main.tex', 'sec/a.tex', 'sec/b.tex',
                                                       'c.tex'}
+
+
+# ── pilot defects (mechanism paper, 2026-11-18) ─────────────────────────────
+
+def _intake_for(ctx, **draft):
+    ctx['artifacts']['intake'] = {
+        'brief': ctx['brief'], 'kit': _kit(), 'owner_directives': {'items': []},
+        'rules': [rule.id for rule in rules_for(ctx['doc_type'].name)],
+        'draft': draft or None}
+    return ctx
+
+
+def test_dossier_stage_reruns_when_dossier_json_or_a_cited_file_changes(tmp_path):
+    paper = _sample(tmp_path)
+    ctx = _intake_for(_ctx(paper, tmp_path))
+    state = tmp_path / 'work' / 'state' / 'dossier.json'
+
+    def dossier_stage():
+        pl.run_workflow(pl._workflow('dossier', ('dossier',),
+                                     {'dossier': pl._input_version(ctx)}),
+                        ctx, state_path=str(state))
+        return ctx['artifacts']['dossier']
+    first = dossier_stage()
+    raw = json.loads((paper / 'dossier.json').read_text())
+    raw['facts'][0]['text'] += ' Edited after the first run.'
+    (paper / 'dossier.json').write_text(json.dumps(raw))
+    second = dossier_stage()
+    assert second['facts'][0]['text'].endswith('Edited after the first run.'), \
+        'an edited dossier.json must rerun the dossier stage'
+    assert second['digest'] != first['digest']
+    before = pl._input_version(ctx)
+    summary = paper / 'results' / 'summary.json'
+    summary.write_text(summary.read_text() + '\n')
+    assert pl._input_version(ctx) != before, 'a cited source file is a stage input'
+
+
+def test_reading_text_expands_the_papers_own_number_macros():
+    from lib.longform.documents import existing_draft as ed
+    tex = ('\\makeatletter\n'
+           '\\newcommand{\\nm}[1]{\\ifcsname nm@#1\\endcsname\\csname nm@#1\\endcsname'
+           '\\else\\errmessage{undefined number #1}\\fi}\n'
+           '\\expandafter\\def\\csname nm@gap.q06b\\endcsname{0.42}\n'
+           '\\newcommand{\\method}{SwiftRound}\n\\newcommand{\\pct}[1]{#1\\%}\n'
+           '\\begin{document}\\method{} closes \\nm{gap.q06b} of the gap '
+           '(\\pct{\\nm{gap.q06b}}); \\nm{missing.key} stays.\\end{document}')
+    macros = ed.macros(tex)
+    body = ed.expand_macros(tex.split('\\begin{document}')[1], macros)
+    assert 'SwiftRound closes 0.42 of the gap (0.42\\%)' in body
+    assert '\\nm{missing.key}' in body, 'an undefined key is left visible, not invented'
+
+
+_MACRO_DRAFT = (
+    '\\documentclass{article}\n\\input{numbers}\n\\begin{document}\n'
+    '\\begin{abstract}bf16 realizes only \\nm{cv.ratio} of the fp32 displacement.'
+    '\\end{abstract}\n'
+    '\\section{Introduction}\\label{sec:intro}\nbf16 realizes only \\nm{cv.ratio} of the '
+    'fp32 displacement (\\cref{fig:a,tab:b}). We interpret this as a storage deficit.\n'
+    '\\begin{figure}\\includegraphics{a.pdf}\\caption{A}\\label{fig:a}\\end{figure}\n'
+    '\\begin{table}\\caption{B}\\label{tab:b}\\end{table}\n'
+    '\\section{Results}\\label{sec:results}\nThe gap is \\nm{gap} EM.\n'
+    '\\bibliography{refs}\n\\end{document}\n')
+_NUMBERS_TEX = ('\\makeatletter\n\\newcommand{\\nm}[1]{\\ifcsname nm@#1\\endcsname'
+                '\\csname nm@#1\\endcsname\\else\\errmessage{undefined number #1}\\fi}\n'
+                '\\expandafter\\def\\csname nm@cv.ratio\\endcsname{0.31}\n'
+                '\\expandafter\\def\\csname nm@gap\\endcsname{0.457}\n\\makeatother\n')
+
+
+def _draft_ctx(tmp_path, *, role='', main=_MACRO_DRAFT, extra_files=None):
+    from lib.longform.documents import existing_draft as ed
+    paper = _sample(tmp_path)
+    ctx = _ctx(paper, tmp_path)
+    ctx['brief'] = dict(ctx['brief'], draft={'main': 'main.tex'}, **({'role': role} if role else {}))
+    source = Path(ctx['workdir']) / 'source'
+    source.mkdir(parents=True)
+    (source / 'main.tex').write_text(main)
+    (source / 'numbers.tex').write_text(_NUMBERS_TEX)
+    for rel, text in (extra_files or {}).items():
+        (source / rel).write_text(text)
+    _intake_for(ctx, main='main.tex', files={}, stale_template_files=[], pdf='')
+    ctx['artifacts']['dossier'] = {'facts': [], 'figures': [], 'bib': '', 'bib_keys': [],
+                                   'number_gaps': {}, 'awaiting_owner': []}
+    ctx['artifacts']['draft'] = pl._run_draft_existing(ctx)
+    ctx['artifacts']['outline'] = {'existing': True, 'sections': [
+        {'id': row['id'], 'title': row['title'], 'takeaway': 't', 'facts': [], 'figures': []}
+        for row in ed.sections(pl._draft_text(ctx))]}
+    return ctx
+
+
+def test_review_and_evidence_read_expanded_numbers_not_placeholders(tmp_path, monkeypatch):
+    ctx = _draft_ctx(tmp_path)
+    seen = {}
+
+    def chat(ctx_, role, messages, label):
+        text = '\n'.join(m['content'] for m in messages)
+        seen[label] = text
+        if label == 'critique':
+            placeholder = '\\nm{' in text
+            return json.dumps({
+                'scores': {name: 6 for name, _m in document_type('paper').rubric},
+                'overall': 5, 'checklist': [{'rule': r.id, 'pass': not placeholder, 'quote': 'q'}
+                                            for r in rules_for('paper') if r.kind == 'checklist'],
+                'findings': ([{'section': 'abstract', 'issue': 'unresolved placeholders',
+                               'fix': 'render the macros'}] if placeholder else [])})
+        if label == 'evidence-draft':
+            return json.dumps([{'quote': 'bf16 realizes only 0.31 of the fp32 displacement',
+                                'section': 'introduction', 'evidence': ['fig:a'],
+                                'strength': 'strong', 'rationale': 'figure'}])
+        raise AssertionError(label)
+    monkeypatch.setattr(pl, '_chat', chat)
+    critique = pl._run_critique(ctx)
+    assert '\\nm{' not in seen['critique'] and '0.31' in seen['critique']
+    assert critique['review']['findings'] == []
+    ctx['artifacts']['evidence'] = {}
+    evidence = pl._run_evidence(ctx)
+    assert '\\nm{' not in seen['evidence-draft'].split('Draft:', 1)[1]
+    assert 'csname' not in seen['evidence-draft'], 'the definitions table is not prose'
+    calibrated = next(r for r in rules_for('paper') if r.id == 'paper.calibrated-claims')
+    assert calibrated.origin in seen['critique'], 'the reviewer sees the owner\'s words'
+    assert not [e for e in pl._gate_evidence(ctx, evidence) if 'verbatim' in e]
+
+
+def test_ab_judge_is_style_blind_task_venue_and_documents_only(tmp_path, monkeypatch):
+    """A judge told the registry rules rewards rule-following itself (21-4-1
+    vs 13-3-10 style-blind on 26 drafts, docs/PAPER_STYLE_EVIDENCE.md), so the
+    delivery and adoption A/B never sees a rule; writer, reviewer and lints do."""
+    ctx = _ctx(_sample(tmp_path), tmp_path)
+    ctx['brief'] = {**ctx['brief'], 'venue': 'ICML', 'page_limit': 8}
+    prompts = []
+    monkeypatch.setattr(pl, '_chat', lambda c, role, messages, label: (
+        prompts.append(messages[-1]['content']),
+        json.dumps({'winner': 1, 'reason': 'r', 'scores': [{}, {}]}))[1])
+    pl._judge_pair(ctx, 'blind-ab')([{'text': 'first doc'}, {'text': 'second doc'}])
+    prompt = prompts[0]
+    for type_name in ('paper', 'resume', 'longform'):
+        for rule in rules_for(type_name):
+            assert rule.id not in prompt and rule.text not in prompt, rule.id
+            assert rule.origin not in prompt, rule.id
+    assert 'rule' not in prompt.lower()
+    assert ctx['doc_type'].reviewer in prompt
+    assert ctx['brief']['title'] in prompt and ctx['brief']['goal'] in prompt
+    assert 'ICML' in prompt and '8 body pages' in prompt
+    assert 'first doc' in prompt and 'second doc' in prompt
+
+
+def test_position_biased_blind_judge_reports_no_preference_with_both_scores():
+    always_second = lambda pair: (1, 'second reads better', [{'clarity': 7}, {'clarity': 8}])
+    result = blind_pairwise(always_second, {'v': 'new'}, {'v': 'old'}, seed='s')
+    assert result['verdict'] == 'no preference' and not result['preferred']
+    assert result['position_bias'] is True
+    assert len(result['rounds']) == 2
+    assert all(row['candidate_scores'] and row['baseline_scores'] for row in result['rounds'])
+    assert result['totals'] == {'candidate': 15, 'baseline': 15}
+
+
+def test_blind_report_states_no_preference_and_both_orders(tmp_path, monkeypatch):
+    from lib.longform.documents import render as render_mod
+    ctx = _ctx(_sample(tmp_path), tmp_path)
+    new_pdf, old_pdf = tmp_path / 'new.pdf', tmp_path / 'old.pdf'
+    new_pdf.write_bytes(b'new')
+    old_pdf.write_bytes(b'old')
+    ctx['artifacts']['render'] = {'pdf': str(new_pdf), 'baseline_pdf': str(old_pdf),
+                                  'pdf_sha256': 'x'}
+    monkeypatch.setattr(render_mod, 'pdf_pages', lambda p: 9)
+    monkeypatch.setattr(render_mod, 'pdf_text', lambda p: Path(p).read_text())
+    monkeypatch.setattr(pl, '_chat', lambda *a, **k: json.dumps(
+        {'winner': 2, 'reason': 'second', 'scores': [{'clarity': 7}, {'clarity': 8}]}))
+    art = pl._run_blind(ctx)
+    md = (Path(ctx['workdir']) / 'artifacts' / '10-blind.md').read_text()
+    assert 'no preference' in md and 'position' in md
+    assert md.count("{'clarity'") == 4
+    errors = pl._gate_blind(ctx, art)
+    assert errors and 'no preference' in errors[0] and 'position' in errors[0]
+
+
+def _float_draft():
+    """Five floats nobody references, like the mechanism paper's render failure."""
+    floats = ''.join(f'\\begin{{table}}[t]\\caption{{T{i}}}\\label{{tab:t{i}}}\\end{{table}}\n'
+                     for i in range(5))
+    prose = ''.join(f'Claim {i} holds with a gap of \\nm{{gap}} EM in setting {i}.\n'
+                    for i in range(21))
+    return ('\\documentclass{article}\n\\input{numbers}\n\\begin{document}\n'
+            '\\section{Results}\\label{sec:results}\n' + prose + floats
+            + '\\bibliography{refs}\n\\end{document}\n')
+
+
+def _final_repair_reply():
+    refs = [{'section': 'results', 'old': f'Claim {i} holds with a gap of \\nm{{gap}} EM in '
+             f'setting {i}.', 'new': f'Claim {i} holds with a gap of \\nm{{gap}} EM in '
+             f'setting {i} (\\cref{{tab:t{i}}}).'} for i in range(5)]
+    rewrites = [{'section': 'results', 'old': f'Claim {i} holds with a gap of \\nm{{gap}} EM '
+                 f'in setting {i}.', 'new': f'Setting {i} shows the claim.'}
+                for i in range(5, 21)]
+    rewrites += [{'section': 'results', 'old': f'setting {i} (\\cref{{tab:t{i}}})',
+                  'new': f'its setting (\\cref{{tab:t{i}}})'} for i in range(5)]
+    placement = [{'section': 'results', 'old': '\\begin{table}[t]\\caption{T0}',
+                  'new': '\\begin{table}[!htbp]\\caption{T0}'}]
+    return refs + placement + rewrites
+
+
+def test_final_render_repair_fixes_floats_and_refuses_prose_rewrites(tmp_path, monkeypatch):
+    ctx = _draft_ctx(tmp_path, role='final', main=_float_draft())
+    files = dict(ctx['artifacts']['draft']['files'])
+    prompts = []
+    monkeypatch.setattr(pl, '_chat', lambda c, role, messages, label: (
+        prompts.append(messages[-1]['content']), json.dumps(_final_repair_reply()))[1])
+    failures = [f'figure_not_referenced: \\label{{tab:t{i}}} inside a table is never '
+                'referenced' for i in range(5)]
+    new, applied, refused = pl._repair_edits(ctx, files, failures, 'graphicx')
+    assert len(applied) == 6, refused
+    assert sum('\\cref{tab:t' in row['new'] for row in applied) == 5
+    assert '\\begin{table}[!htbp]\\caption{T0}' in new['main.tex'], 'float placement is layout'
+    prose = [row for row in refused if 'role=final' in row['reason']]
+    assert len(prose) == 21, refused
+    assert 'never reword' in prompts[0]
+    assert 'Setting 7 shows the claim.' not in new['main.tex']
+
+
+def test_brief_schema_knows_role_and_source_and_refuses_unknown_fields(tmp_path):
+    paper = _sample(tmp_path)
+    ctx = _ctx(paper, tmp_path)
+    (Path(ctx['workdir']) / 'source').mkdir(parents=True)
+    (Path(ctx['workdir']) / 'source' / 'main.tex').write_text('x')
+    (paper / 'main.tex').write_text('x')
+    draft = {'main': 'main.tex', 'files': {}, 'stale_template_files': [], 'pdf': ''}
+    final = dict(ctx['brief'], role='final', source=str(paper / 'main.tex'),
+                 draft={'main': 'main.tex'})
+    art = {'brief': final, 'kit': _kit(), 'run_started': 100.0, 'draft': draft}
+    assert pl._gate_intake(ctx, art) == []
+    assert any('role' in e for e in pl._gate_intake(
+        ctx, {**art, 'brief': dict(final, role='polish')}))
+    assert any('role=final' in e for e in pl._gate_intake(
+        ctx, {**art, 'brief': {k: v for k, v in final.items() if k != 'draft'},
+              'draft': None}))
+    assert any('source' in e for e in pl._gate_intake(
+        ctx, {**art, 'brief': dict(final, source='other.tex')}))
+    unknown = pl._gate_intake(ctx, {**art, 'brief': dict(final, role_note='copy edits')})
+    assert any("['role_note']" in e for e in unknown)
+
+
+def test_revise_report_states_dropped_patches_truthfully(tmp_path, monkeypatch):
+    ctx = _draft_ctx(tmp_path)
+    assert pl._reference_check(ctx, ctx['artifacts']['draft']['sections']) == [], \
+        'a cleveref list \\cref{fig:a,tab:b} names two defined labels'
+    ctx['artifacts']['critique'] = {'review': {'findings': [
+        {'section': 'introduction', 'issue': 'i', 'fix': 'f'}]}}
+    ctx['artifacts']['evidence'] = {'rows': []}
+    monkeypatch.setattr(pl, '_reference_check', lambda c, s: ['section x references '
+                                                              "undefined labels ['fig:z']"])
+    monkeypatch.setattr(pl, '_chat', lambda *a, **k: json.dumps([
+        {'old': 'We interpret this as a storage deficit.',
+         'new': 'This indicates a storage deficit.'}]))
+    art = pl._run_revise_existing(ctx)
+    md = (Path(ctx['workdir']) / 'artifacts' / '08-revise.md').read_text()
+    assert 'not needed' not in md
+    assert '1 edits dropped: reference check' in md and "fig:z" in md
+    assert art['dropped'] == {'count': 1, 'reason': 'reference check',
+                              'errors': ["section x references undefined labels ['fig:z']"]}
+
+
+def test_revise_refuses_an_edit_that_adds_an_undefined_reference(tmp_path, monkeypatch):
+    ctx = _draft_ctx(tmp_path)
+    ctx['artifacts']['evidence'] = {'rows': []}
+    _files, applied, rejected = pl._apply_checked_edits(ctx, ctx['artifacts']['draft']['files'], [
+        ('results', {'old': 'The gap is', 'new': 'The gap (\\cref{fig:nowhere}) is'}),
+        ('results', {'old': 'EM.', 'new': 'EM (\\cref{fig:a}).'})])
+    assert len(applied) == 1 and 'fig:nowhere' in rejected[0]['reason']
+
+
+def test_evidence_cites_excerpts_of_large_files_not_whole_files(tmp_path, monkeypatch):
+    paper = _sample(tmp_path)
+    ctx = _ctx(paper, tmp_path)
+    big = {'runs': [{'seed': i, 'em': round(0.1 + i * 1e-6, 7)} for i in range(120000)],
+           'summary': {'q06b': {'bf16': {'em': 0.006}}}}
+    (paper / 'results' / 'big.json').write_text(json.dumps(big))
+    assert (paper / 'results' / 'big.json').stat().st_size > 3_000_000
+    fact = {'id': 'r_big', 'kind': 'result', 'status': 'sourced',
+            'text': 'bf16 held-out EM is 0.006.', 'source': {'path': 'results/big.json'}}
+    ctx['artifacts']['dossier'] = {'facts': [fact], 'figures': []}
+    [material] = pl._evidence_material(ctx, ['r_big'])
+    assert 'source_content' not in material
+    assert 'summary.q06b.bf16.em = 0.006' in material['source_excerpt']
+    assert len(json.dumps(material)) < 2000
+
+
+def test_oversized_model_request_is_refused_before_it_is_sent(tmp_path, monkeypatch):
+    from lib.http_transport import body_policy
+    monkeypatch.setattr(body_policy, 'DEFAULT_BODY_CAP', 1000)
+    sent = []
+    monkeypatch.setattr(pl, '_llm_chat', lambda *a, **k: sent.append(1) or ('ok', {}))
+    ctx = {'workdir': str(tmp_path), 'brief': {'judge_model': 'j'}}
+    with pytest.raises(RuntimeError, match='body cap'):
+        pl._chat(ctx, 'judge', [{'role': 'user', 'content': 'x' * 5000}], 'evidence')
+    assert sent == []
+
+
+def test_final_render_stage_lists_refused_prose_rewrites(tmp_path, monkeypatch):
+    from lib.longform.documents import render as render_mod
+    ctx = _draft_ctx(tmp_path, role='final', main=_float_draft())
+    (Path(ctx['paper_dir']) / 'prev.pdf').write_bytes(b'%PDF')
+    intake = ctx['artifacts']['intake']
+    intake['kit'] = dict(intake['kit'], files={}, page_limit=8)
+    intake['draft']['pdf'] = 'prev.pdf'
+    ctx['artifacts']['revise'] = {'files': {}}
+    reports = iter([5, 0, 0])
+
+    def fake_compile(build, **_k):  # noqa: ARG001
+        n = next(reports)
+        return {'compile_status': 'success', 'pdf': 'x.pdf', 'pdf_sha256': str(n),
+                'body_pages': 4, 'page_limit': 8, 'overfull': [], 'undefined': [],
+                'failures': [f'figure_not_referenced: \\label{{tab:t{i}}}' for i in range(n)]}
+    monkeypatch.setattr(render_mod, 'compile_and_check', fake_compile)
+    monkeypatch.setattr(pl, '_chat', lambda *a, **k: json.dumps(_final_repair_reply()))
+    art = pl._run_render(ctx)
+    assert art['failures'] == []
+    assert sum(len(log['refused']) for log in art['repair_edits']) == 21
+    md = (Path(ctx['workdir']) / 'artifacts' / '09-render.md').read_text()
+    assert '## Refused repair edits (21)' in md and md.count('role=final') == 21
+    assert 'Setting 7 shows the claim.' not in art['files']['main.tex']
+    assert art['files']['main.tex'].count('\\cref{tab:t') == 5
+
+
+def test_final_revise_applies_copy_edits_only_and_defers_reviewer_findings(tmp_path, monkeypatch):
+    main = _MACRO_DRAFT.replace('We interpret this as a storage deficit.',
+                                'We do not claim more; we interpret this as a storage deficit.')
+    ctx = _draft_ctx(tmp_path, role='final', main=main)
+    ctx['artifacts']['critique'] = {'review': {'findings': [
+        {'section': 'results', 'issue': 'scope unclear', 'fix': 'add a caveat sentence'}]}}
+    ctx['artifacts']['evidence'] = {'rows': []}
+    calls = {}
+
+    def chat(c, role, messages, label):
+        calls[label] = messages[-1]['content']
+        if label == 'revise:introduction':
+            return json.dumps([
+                {'old': 'We do not claim more; we interpret', 'new': 'We interpret'},
+                {'old': 'a storage deficit.',
+                 'new': 'a storage deficit. Whether it generalizes remains unresolved.'}])
+        if label == 'revise-ab':
+            return json.dumps({'winner': 1, 'reason': 'r', 'scores': [{}, {}]})
+        raise AssertionError(label)
+    monkeypatch.setattr(pl, '_chat', chat)
+    art = pl._run_revise_existing(ctx)
+    assert 'revise:results' not in calls, 'reviewer findings reword claims; final defers them'
+    assert art['deferred_findings'] and art['deferred_findings'][0]['section'] == 'results'
+    assert [row['new'] for row in art['applied_edits']] == ['We interpret']
+    assert 'sentence' in art['rejected_edits'][0]['reason']
+    md = (Path(ctx['workdir']) / 'artifacts' / '08-revise.md').read_text()
+    assert 'Reviewer findings not applied (role=final): 1' in md
+
+
+def test_body_end_mark_ends_the_last_counted_paragraph():
+    from lib.longform.documents import existing_draft as ed
+    text = 'Conclusion text.\n\n\\section*{Impact Statement}\nI.\n\\bibliography{r}\n'
+    marked = ed.mark_body_end(text, 'END', ('Impact Statement',))
+    # On its own line before a heading the mark is set on the page where that
+    # heading lands, one page late whenever a page break precedes it.
+    assert 'Conclusion text.\\label{END}' in marked
+
+
+def test_page_overrun_names_an_unexempt_unnumbered_section():
+    from lib.longform.documents.render import body_end_location, page_overrun_message
+    aux = ('\\newlabel{tofu-pipeline-body-end}{{8}{9}{AI Disclosure Statement}'
+           '{section*.10}{}}\n')
+    assert body_end_location(aux) == (9, 'AI Disclosure Statement', True)
+    message = page_overrun_message(aux, 8, ('Impact Statement', 'AI Use Statement'))
+    assert message.startswith('body ends on page 9, over the 8-page limit')
+    assert "'AI Disclosure Statement'" in message and "'AI Use Statement'" in message
+    numbered = '\\newlabel{tofu-pipeline-body-end}{{8}{9}{Conclusion}{section.8}{}}\n'
+    assert page_overrun_message(numbered, 8, ()) == 'body ends on page 9, over the 8-page limit'
+
+
+def test_blind_judges_both_versions_on_the_same_extent(tmp_path, monkeypatch):
+    from lib.longform.documents import render as render_mod
+    ctx = _ctx(_sample(tmp_path), tmp_path)
+    new_pdf, old_pdf = tmp_path / 'new.pdf', tmp_path / 'old.pdf'
+    # Two-column extraction found the References heading in one PDF only.
+    new_pdf.write_text('Body new.\nReferences\nA. Appendix new.')
+    old_pdf.write_text('Body old.   References   A. Appendix old.')
+    ctx['artifacts']['render'] = {'pdf': str(new_pdf), 'baseline_pdf': str(old_pdf),
+                                  'pdf_sha256': 'x'}
+    monkeypatch.setattr(render_mod, 'pdf_pages', lambda p: 9)
+    monkeypatch.setattr(render_mod, 'pdf_text', lambda p: Path(p).read_text())
+    prompts = []
+    monkeypatch.setattr(pl, '_chat', lambda c, role, messages, label: (
+        prompts.append(messages[-1]['content']),
+        json.dumps({'winner': 1, 'reason': 'r', 'scores': [{}, {}]}))[1])
+    art = pl._run_blind(ctx)
+    assert all('Appendix new.' in p and 'Appendix old.' in p for p in prompts)
+    assert art['extent'] == 'whole documents'
+
+
+@pytest.mark.parametrize('proof', [None, {}, {'passed': True, 'pdf_sha256': ''}])
+def test_paper_delivery_requires_an_inspected_pdf_hash(tmp_path, proof):
+    from types import SimpleNamespace
+    pdf = tmp_path / 'render.pdf'; pdf.write_bytes(b'%PDF unproven')
+    ctx = {'doc_type': SimpleNamespace(needs_venue=True), 'artifacts': {'render': {
+        'pdf': str(pdf), 'pdf_sha256': hashlib.sha256(pdf.read_bytes()).hexdigest(),
+        'conformance': proof}}}
+    assert pl._gate_deliver(ctx, {'pdf': str(pdf), 'provenance': {'unsourced': []}}) == [
+        'template-conformance PDF hash is missing']
+
+
+def test_delivery_hash_refusal_happens_before_output_copy(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from lib.longform.documents import provenance
+    pdf = tmp_path / 'render.pdf'; pdf.write_bytes(b'%PDF changed')
+    ctx = {'paper_dir': str(tmp_path), 'brief': {'output_dir': 'delivered', 'title': 'Synthetic'},
+           'doc_type': SimpleNamespace(needs_venue=True), 'artifacts': {'render': {
+               'pdf': str(pdf), 'pdf_sha256': hashlib.sha256(pdf.read_bytes()).hexdigest(),
+               'conformance': {'pdf_sha256': '0' * 64}}}}
+    monkeypatch.setattr(pl, '_delivered_text', lambda ctx: {})
+    monkeypatch.setattr(pl, '_provenance_pool', lambda ctx: {})
+    monkeypatch.setattr(provenance, 'check', lambda *args: {'unsourced': []})
+    monkeypatch.setattr(pl, '_persist', lambda ctx, stage, artifact, **kwargs: artifact)
+    monkeypatch.setattr(pl.shutil, 'copy2', lambda *args: pytest.fail('unverified PDF copied'))
+    refused = pl._run_deliver(ctx)
+    assert refused['refused']
+    assert pl._gate_deliver(ctx, refused) == ['delivered PDF differs from the template-conformance PDF']
+    assert not (tmp_path / 'delivered').exists()

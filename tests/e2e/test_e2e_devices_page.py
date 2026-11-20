@@ -37,6 +37,7 @@ class FakeDevicesHome:
     def __init__(self):
         self.nodes = {}
         self.ceilings = {}
+        self.rev = 0
         self.defaults = {'computer': None, 'server': None, 'browser': None}
         self.writes = []
         self.boot_override = None
@@ -61,7 +62,8 @@ class FakeDevicesHome:
             home = self.ceilings.get(node_id, _tiers('read'))
             device = row['tiers'] if row['online'] or row['last_seen'] else None
             out[node_id] = {'node_id': node_id, 'home': home, 'device': device,
-                            'effective': {t: bool(home[t] and device and device[t]) for t in TIERS}}
+                            'effective': {t: bool(home[t] and device and device[t]) for t in TIERS},
+                            'rev': self.rev}
         return out
 
     def handle(self, route):
@@ -107,20 +109,32 @@ class FakeDevicesHome:
             publish()
             return
         if path == '/api/v4/devices/permissions':
-            ok({'permissions': self.permissions(), 'rev': 1, 'liveness_window_s': 15})
+            ok({'permissions': self.permissions(), 'rev': self.rev, 'liveness_window_s': 15})
             return
         if path == '/api/v4/devices/defaults':
             if method == 'PUT':
                 self.writes.append(('defaults', body))
                 self.defaults.update(body)
+                self.rev += 1
                 publish()
-            ok({'defaults': self.defaults, 'rev': 1})
+            result = {'defaults': self.defaults, 'rev': self.rev}
+            if method == 'PUT':
+                result['execution'] = 'not_split'
+            ok(result)
             return
         if path.startswith('/api/v4/devices/') and path.endswith('/ceiling'):
             node_id = path.split('/')[4]
+            if body.get('expected_revision') != self.rev:
+                route.fulfill(status=409, content_type='application/problem+json', body=json.dumps({
+                    'type': 'urn:tofu:problem:stale_device_policy', 'title': 'Conflict',
+                    'status': 409, 'detail': 'Device permissions changed', 'instance': path,
+                    'code': 'stale_device_policy', 'requestId': 'devices-e2e',
+                }))
+                return
             self.writes.append(('ceiling', node_id, body))
+            self.rev += 1
             self.ceilings[node_id] = {**_tiers('read'), **body['tiers'], 'read': True}
-            ok(self.permissions()[node_id])
+            ok({**self.permissions()[node_id], 'execution': 'not_split'})
             publish()
             return
         if path == '/api/v4/desktop/device-waits':
@@ -150,19 +164,19 @@ def shots(screenshot_dir):
     return lambda name: os.path.join(directory, f'{name}.png')
 
 
-def _open(browser, live_server, home, *, lang='en', theme='light', width=1360, height=900):
+def _open(browser, live_server, home, *, lang='en', theme='light', width=1360, height=900, address='#/devices'):
     context = browser.new_context(viewport={'width': width, 'height': height})
     context.add_init_script(f"""
         localStorage.setItem('tofu_ui_lang', '{lang}');
         localStorage.setItem('claude_ui_theme', '{theme}');
-        localStorage.setItem('tofu:landing', 'chat');
+        localStorage.setItem('tofu_landing_workspace', 'chat');
     """)
     page = context.new_page()
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
     for pattern in ('**/api/v4/desktop/**', '**/api/v4/devices/**', '**/api/v4/browser/status', '**/api/health'):
         page.route(pattern, home.handle)
-    page.goto(f'{live_server}/#/devices', wait_until='domcontentloaded')
+    page.goto(f'{live_server}/{address}', wait_until='domcontentloaded')
     page.wait_for_function("window.TofuModules && window.TofuModules.version === 3", timeout=15000)
     page.wait_for_function("typeof window.TofuModules?.resolveAction?.('_obClose') === 'function'", timeout=15000)
     page.evaluate("() => window.TofuModules.resolveAction('_obClose')()")
@@ -179,6 +193,69 @@ def settle(page):
 
 def _row(page, node_id):
     return page.locator(f'[data-device-key="node:{node_id}"]')
+
+
+def test_return_to_chat_and_browser_history_keep_the_current_session(browser, live_server):
+    home = FakeDevicesHome()
+    home.node('workstation', kind='computer')
+    context, page, errors = _open(browser, live_server, home)
+    try:
+        back = page.get_by_role('button', name='Back', exact=True)
+        back.click()  # A cold Devices link has no guaranteed earlier chat entry.
+        expect(page).to_have_url(re.compile(r'#/chat$'))
+        composer = page.locator('#userInput')
+        expect(composer).to_be_visible()
+        composer.fill('Keep this draft')
+        page.locator('#sidebarDevicesPill').click()
+        details = _row(page, 'workstation').get_by_role('button', name='Details for workstation')
+        details.click()
+        drawer = page.get_by_role('dialog', name='workstation')
+        expect(drawer).to_be_visible()
+        home.nodes['workstation']['rtt_ms'] = 41
+        publish()
+        expect(drawer).to_contain_text('41 ms')  # Repainted the opener while it was in the background.
+        page.keyboard.press('Escape')
+        expect(page).to_have_url(re.compile(r'#/devices$'))
+        expect(details).to_be_focused()
+        page.go_back()
+        expect(composer).to_have_value('Keep this draft')
+        expect(composer).to_be_visible()
+        page.go_forward()
+        expect(details).to_be_visible()
+        details.click()
+        drawer.get_by_role('button', name='Remove & revoke').click()
+        confirmation = page.get_by_role('dialog', name='Remove workstation?')
+        expect(confirmation).to_be_visible()
+        page.go_back()
+        expect(confirmation).to_be_hidden()
+        expect(drawer).to_be_hidden()
+        expect(details).to_be_focused()
+        assert not home.writes
+        assert errors == []
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize('child', ['node%3Aworkstation', 'add'])
+def test_direct_child_dismissal_stays_on_devices(browser, live_server, child):
+    home = FakeDevicesHome()
+    home.node('workstation', kind='computer')
+    context, page, errors = _open(browser, live_server, home, address=f'#/devices/{child}')
+    try:
+        dialog = page.locator('dialog[open]')
+        expect(dialog).to_be_visible()
+        length = page.evaluate('history.length')
+        page.keyboard.press('Escape')
+        expect(dialog).to_have_count(0)
+        expect(page).to_have_url(re.compile(r'#/devices$'))
+        back = page.get_by_role('button', name='Back', exact=True)
+        expect(back).to_be_focused()
+        assert page.evaluate('history.length') == length
+        back.click()
+        expect(page.locator('#userInput')).to_be_visible()
+        assert errors == []
+    finally:
+        context.close()
 
 
 def test_pairing_a_headless_node_end_to_end(browser, live_server, shots):
@@ -219,7 +296,7 @@ def test_pairing_a_headless_node_end_to_end(browser, live_server, shots):
         dialog.get_by_role('button', name='Done').click()
         expect(dialog).to_be_hidden()
         assert ('POST', 'gpu-a100-07', 'confirm', {'name': 'gpu-a100-07'}) in home.writes
-        assert ('ceiling', 'gpu-a100-07', {'tiers': {'write': True, 'exec': True, 'gui': False, 'egress': False,
+        assert ('ceiling', 'gpu-a100-07', {'expected_revision': 0, 'tiers': {'write': True, 'exec': True, 'gui': False, 'egress': False,
                                                      'codex_login': False}}) in home.writes
         assert ('defaults', {'server': 'gpu-a100-07'}) in home.writes
         row = _row(page, 'gpu-a100-07')
@@ -237,6 +314,7 @@ def test_pairing_a_headless_node_end_to_end(browser, live_server, shots):
         settle(page)
         page.screenshot(path=shots('pairing-5-listed-en-light'), full_page=True)
         topology = page.locator('.devices-topology')
+        topology.locator('summary').click()
         topology.scroll_into_view_if_needed()
         settle(page)
         topology.screenshot(path=shots('topology-en-light'))
@@ -275,7 +353,7 @@ def test_permission_change_and_node_going_offline(browser, live_server, shots):
         expect(egress).not_to_be_checked()
         egress.check()
         expect(drawer.get_by_role('switch', name='订阅出网：这个家允许')).to_be_checked(timeout=10000)
-        assert ('ceiling', 'ruan-macbook', {'tiers': {'write': True, 'exec': True, 'gui': False, 'egress': True,
+        assert ('ceiling', 'ruan-macbook', {'expected_revision': 0, 'tiers': {'write': True, 'exec': True, 'gui': False, 'egress': True,
                                                       'codex_login': False}}) in home.writes
         gui_device = drawer.get_by_label('屏幕、鼠标和剪贴板：设备允许（只能在设备上修改）')
         expect(gui_device).to_have_text('关')
@@ -327,24 +405,36 @@ def test_home_unreachable_then_restarted_is_shown_honestly(browser, live_server,
         context.close()
 
 
-@pytest.mark.parametrize('lang', ['en', 'zh'])
-def test_narrow_width_and_topology(browser, live_server, shots, lang):
+@pytest.mark.parametrize(('lang', 'theme', 'width'), [('zh', 'tofu', 1360), ('zh', 'tofu', 390),
+                                                       ('en', 'dark', 320), ('en', 'light', 390)])
+def test_fleet_reflows_and_return_stays_in_view(browser, live_server, shots, lang, theme, width):
     home = FakeDevicesHome()
+    long_name = 'fixture-workspace-12345678-1234-5678-9abc-def012345678.example.invalid'
     home.node('ruan-macbook', kind='computer', route='browser_relay', tiers=_tiers('read', 'write', 'exec', 'gui'))
-    home.node('gpu-a100-07', tiers=_tiers('read', 'write', 'exec'))
+    home.node('gpu-a100-07', name=long_name, tiers=_tiers('read', 'write', 'exec'))
     home.node('codelab-eval-2', state='conflict', tiers=_tiers('read'))
-    context, page, errors = _open(browser, live_server, home, lang=lang, width=390, height=844)
+    context, page, errors = _open(browser, live_server, home, lang=lang, theme=theme, width=width, height=844)
     try:
-        expect(_row(page, 'gpu-a100-07')).to_be_visible()
-        expect(page.locator('#sidebar')).to_have_class(re.compile(r'\bcollapsed\b'))
-        page.wait_for_timeout(400)  # the drawer's slide-out transition
-        width = page.evaluate("() => document.querySelector('.devices-page').scrollWidth")
-        assert width <= 390, width
+        expect(_row(page, 'gpu-a100-07')).to_contain_text(long_name)
+        if width < 768:
+            expect(page.locator('#sidebar')).to_have_class(re.compile(r'\bcollapsed\b'))
         settle(page)
-        page.screenshot(path=shots(f'narrow-{lang}-light'), full_page=True)
+        page.screenshot(path=shots(f'fleet-{width}-{lang}-{theme}'))
         topology = page.locator('.devices-topology')
-        topology.scroll_into_view_if_needed()
-        expect(topology.locator('.devices-topology__svg')).to_be_visible()
+        summary = topology.locator('summary')
+        expect(topology.locator('figure')).to_have_count(0)
+        summary.focus()
+        page.keyboard.press('Enter')
+        expect(topology.locator('figure')).to_contain_text(long_name)
+        expect(topology.locator('figure')).to_be_visible()
+        dimensions = page.locator('#devicesPageContainer').evaluate('el => [el.scrollWidth, el.clientWidth]')
+        assert dimensions[0] <= dimensions[1], dimensions
+        page.locator('#devicesPageContainer').evaluate('el => { el.scrollTop = el.scrollHeight; }')
+        back = page.get_by_role('button', name='返回对话' if lang == 'zh' else 'Back', exact=True)
+        expect(back).to_be_in_viewport()
+        page.screenshot(path=shots(f'connections-{width}-{lang}-{theme}'))
+        back.click()
+        expect(page.locator('#userInput')).to_be_visible()
         assert errors == []
     finally:
         context.close()
@@ -376,6 +466,49 @@ def test_settings_keeps_only_defaults_and_a_link(browser, live_server, shots):
         context.close()
 
 
+def test_rejected_device_writes_leave_visible_retryable_controls(browser, live_server):
+    home = FakeDevicesHome()
+    home.node('acknowledged-server')
+    home.node('other-server')
+    home.defaults['server'] = 'acknowledged-server'
+    context, page, errors = _open(browser, live_server, home)
+
+    def reject(route):
+        if route.request.method in ('PUT', 'DELETE'):
+            route.fulfill(status=409, content_type='application/problem+json', json={
+                'type': 'about:blank', 'title': 'Conflict', 'status': 409, 'detail': 'Fixture write refused',
+                'instance': urlsplit(route.request.url).path, 'code': 'conflict', 'requestId': 'devices-e2e-rejected',
+            })
+        else:
+            route.fallback()
+
+    page.route('**/api/v4/devices/defaults', reject)
+    page.route('**/api/v4/desktop/nodes/other-server', reject)
+    try:
+        _row(page, 'other-server').get_by_role('button', name='Details for other-server').click()
+        drawer = page.locator('dialog.devices-drawer-shell')
+        drawer.get_by_role('button', name='Remove & revoke').click()
+        page.get_by_role('dialog', name='Remove other-server?').get_by_role('button', name='Remove & revoke').click()
+        expect(drawer.get_by_text('Fixture write refused', exact=False)).to_be_visible()
+        expect(drawer.get_by_role('button', name='Remove & revoke')).to_be_enabled()
+        expect(page.locator('.ui-toast--success')).to_have_count(0)
+        page.keyboard.press('Escape')
+        expect(drawer).to_be_hidden()
+
+        page.evaluate("() => window.TofuModules.resolveAction('jumpToSetting')('device-defaults')")
+        panel = page.locator('#settingsTab_devices')
+        select = panel.get_by_label('Default for “a server”')
+        expect(select).to_have_value('acknowledged-server')
+        select.select_option('other-server')
+        expect(panel.get_by_role('alert')).to_contain_text('Fixture write refused')
+        expect(select).to_have_value('acknowledged-server')
+        expect(select).to_be_enabled()
+        expect(page.locator('.ui-toast--success')).to_have_count(0)
+        assert errors == []
+    finally:
+        context.close()
+
+
 def test_real_home_routes_feed_the_page_without_a_failed_source(browser, live_server):
     """No fake: the isolated Home's own registries (nodes, permissions, defaults, waits, browsers, health)."""
     context = browser.new_context(viewport={'width': 1360, 'height': 900})
@@ -393,6 +526,100 @@ def test_real_home_routes_feed_the_page_without_a_failed_source(browser, live_se
           return [r.status, Object.keys((await r.json()).data || {}).sort()];
         }""")
         assert status == [200, ['liveness_window_s', 'permissions', 'rev']], status
+        assert errors == []
+    finally:
+        context.close()
+
+
+def test_ceiling_conflict_shows_failure_and_fresh_revocation(browser, live_server):
+    home = FakeDevicesHome()
+    home.node('gpu', tiers=_tiers('read', 'exec', 'write'))
+    home.ceilings['gpu'] = _tiers('read', 'exec')
+    context, page, errors = _open(browser, live_server, home)
+    try:
+        _row(page, 'gpu').get_by_role('button', name='Details for gpu').click()
+        drawer = page.locator('dialog.devices-drawer-shell')
+        exec_switch = drawer.get_by_role('switch', name='Run commands: allowed on this Home')
+        expect(exec_switch).to_be_checked()
+        # Independent writer, with its push delayed until after the local PUT.
+        home.ceilings['gpu'] = _tiers('read')
+        home.rev += 1
+        drawer.get_by_role('switch', name=re.compile('Write.*allowed on this Home')).click()
+        expect(drawer.get_by_text(re.compile('Device permissions changed')).first).to_be_visible()
+        expect(exec_switch).not_to_be_checked()
+        assert home.writes == []
+        assert errors == []
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize('permissions_read', ['missing', 'failed', 'unsupported', 'ordinary'])
+def test_pairing_requires_a_current_permissions_row(browser, live_server, permissions_read):
+    home = FakeDevicesHome()
+    context, page, errors = _open(browser, live_server, home)
+    try:
+        # Health is not under test; leave it to the isolated Home so an
+        # intercepted route.fetch() cannot outlive this short journey.
+        page.unroute('**/api/health')
+        page.get_by_role('button', name='Add device').first.click()
+        dialog = page.locator('dialog.devices-wizard-shell')
+        dialog.get_by_role('button', name='Next').click()
+        expect(dialog.locator('.devices-wizard__digits')).to_have_text('482 913')
+        node_id = 'new-server'
+        home.node(node_id, state='pending', online=False)
+        home.ceilings[node_id] = _tiers('read', 'exec')
+        publish()
+        expect(dialog.get_by_text('new-server wants to join')).to_be_visible()
+
+        def block_permissions(route):
+            if permissions_read == 'missing':
+                route.fulfill(json={
+                    'data': {'permissions': {}, 'rev': home.rev, 'liveness_window_s': 15},
+                    'meta': {'requestId': 'devices-e2e-missing-permissions'},
+                })
+            else:
+                status = 501 if permissions_read == 'unsupported' else 503
+                route.fulfill(status=status, content_type='application/problem+json', json={
+                    'title': 'Fixture permissions unavailable', 'status': status,
+                })
+
+        endpoint = '**/api/v4/devices/permissions'
+        if permissions_read != 'ordinary':
+            page.route(endpoint, block_permissions)
+        dialog.get_by_role('button', name='Confirm').click()
+        expect(dialog.get_by_role('heading', name='Name and allow')).to_be_visible()
+        dialog.get_by_role('textbox', name='Name').fill('Renamed server')
+        dialog.get_by_text('Use as the default for “a server”').click()
+        done = dialog.get_by_role('button', name='Done')
+        if permissions_read != 'ordinary':
+            expect(done).to_be_disabled()
+            assert [write[0] for write in home.writes] == ['pair-code', 'POST']
+            expect(page.locator('.ui-toast--success')).to_have_count(0)
+            retry = dialog.get_by_role('button', name='Retry')
+            if permissions_read == 'unsupported':
+                expect(dialog.get_by_role('status')).to_contain_text("doesn't report Home permissions")
+                expect(retry).to_have_count(0)
+                assert errors == []
+                return
+            expect(dialog.get_by_role('status')).to_contain_text("Couldn't read current permissions for this device")
+            expect(retry).to_be_enabled()
+            expect(dialog.get_by_role('radio', name=re.compile('Read-only'))).to_be_disabled()
+            stale_banner = page.get_by_text("Couldn't refresh permissions; showing earlier values.")
+            expect(stale_banner).to_have_count(int(permissions_read == 'failed'))
+            home.rev += 1
+            page.unroute(endpoint, block_permissions)
+            retry.click()
+        expect(dialog.get_by_role('radio', name=re.compile('Read-only', re.I))).to_be_checked()
+        done.click()
+        expect(dialog).to_be_hidden()
+        assert home.writes[2:] == [
+            ('ceiling', node_id, {'expected_revision': 0 if permissions_read == 'ordinary' else 1,
+                                  'tiers': {'write': False, 'exec': False, 'gui': False, 'egress': False,
+                                            'codex_login': False}}),
+            ('PATCH', node_id, '', {'name': 'Renamed server'}),
+            ('defaults', {'server': node_id}),
+        ]
+        expect(page.locator('.ui-toast--success')).to_contain_text('Renamed server')
         assert errors == []
     finally:
         context.close()

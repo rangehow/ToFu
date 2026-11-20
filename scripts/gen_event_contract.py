@@ -1,205 +1,158 @@
 #!/usr/bin/env python3
-"""Generate the TypeScript streaming-event contract from the Python registry.
+"""Check the streaming-event and push-frame registry against contracts/events_v1.json.
 
-Canonical source: ``lib/agent_core/events.py`` (``EventSpec.schema`` —
-the machine-readable :class:`FieldSpec` tuples the emission gate validates
-against).  Output: ``frontend/src/api/event-contract.generated.ts`` — one
-TS interface per schema'd event, so a frontend handler that reads a field
-the backend never declared is a *typecheck* error, the client-side mirror
-of the ``build_event`` construction gate.
+Authority: ``contracts/events_v1.json`` (Rust rewrite Phase 0, see
+docs/RUST_REWRITE_EVIDENCE.md "Contracts as the single source of Rust types").
+Change the contract first. The Python registry in ``lib/agent_core/events.py``
+(EventSpec / PhaseSpec / PushFrameSpec, the emission gate) is checked against
+it in both directions: an event, phase, push frame or field that exists on one
+side only fails with the difference. This script writes nothing.
 
-Only schema'd events get an interface; un-migrated events stay
-forward-compatible (``UnknownWireEvent``).  Run ``--check`` in CI: any drift
-between the registry and the committed artifact fails the build.
+The clients derived from the contract
+    frontend/src/api/event-contract.generated.ts   TypeScript interfaces
+    packages/tofu-contracts/src/generated_events_v1.rs   serde types + metadata
+are rendered by ``tofu-xtask contracts`` (packages/tofu-xtask; ``make
+contracts`` writes them, ``make contracts-check`` checks them).
 
 Usage:
-    python3 scripts/gen_event_contract.py           # regenerate
-    python3 scripts/gen_event_contract.py --check   # verify freshness
+    python3 scripts/gen_event_contract.py   # registry == contract, else exit 1
 """
 
 from __future__ import annotations
 
 import argparse
+import difflib
+import json
 import os
-import re
 import sys
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), '..'))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-OUTPUT = os.path.join(ROOT, 'frontend', 'src', 'api',
-                      'event-contract.generated.ts')
-
-_TS_KIND_MAP = {
-    'str': 'string',
-    'bool': 'boolean',
-    'int': 'number',
-    'number': 'number',
-    'dict': 'Record<string, unknown>',
-    'list': 'unknown[]',
-    'None': 'null',
-}
+CONTRACT = os.path.join(ROOT, 'contracts', 'events_v1.json')
+CONTRACT_ID = 'tofu.events/v1'
 
 
-def _ts_type(kind: str) -> str:
-    alternatives = []
-    for alternative in (part.strip() for part in kind.split('|')):
-        mapped = _TS_KIND_MAP.get(alternative)
-        if mapped is None:
-            raise ValueError(f'unknown FieldSpec kind alternative: {kind!r}')
-        if mapped not in alternatives:
-            alternatives.append(mapped)
-    return ' | '.join(alternatives)
+# ── Registry projection (the transition's Python side) ──────────────────
+
+def _field(spec) -> dict:
+    return {'name': spec.name, 'kind': spec.kind, 'required': spec.required}
 
 
-def _interface_name(event_type: str) -> str:
-    return ''.join(part.capitalize() or '_' for part in event_type.split('_')) \
-        + 'Event'
+def registry_document() -> dict:
+    """The contract as lib/agent_core/events.py implements it today."""
+    from lib.agent_core import events
+
+    categories = [value for name, value in vars(events.EventCategory).items()
+                  if not name.startswith('_') and isinstance(value, str)]
+    return {
+        'contract': CONTRACT_ID,
+        'eventContractVersion': events.EVENT_CONTRACT_VERSION,
+        'pushFrameContractVersion': events.PUSH_FRAME_CONTRACT_VERSION,
+        'fieldKinds': sorted(events.FIELD_KINDS),
+        'categories': categories,
+        'readPolicies': ['durable', 'informational'],
+        'transportTypes': sorted(events.TRANSPORT_TYPES),
+        'clockStampedTypes': sorted(events._CLOCK_STAMPED_TYPES),
+        'taskEventEnvelope': [
+            {**_field(spec), 'description': prose}
+            for spec, prose in events._TASK_EVENT_ENVELOPE],
+        'events': [{
+            'type': spec.type,
+            'category': spec.category,
+            'purpose': spec.purpose,
+            'terminal': spec.terminal,
+            'requiresResponse': spec.requires_response,
+            'readPolicy': spec.read_policy,
+            'since': spec.since,
+            'fields': dict(spec.fields),
+            'schema': (None if spec.schema is None
+                       else [_field(item) for item in spec.schema]),
+        } for spec in events.all_event_specs()],
+        'phases': [{
+            'phase': spec.phase,
+            'domains': list(spec.domains),
+            'purpose': spec.purpose,
+            'since': spec.since,
+            'fields': dict(spec.fields),
+        } for spec in events.all_phase_specs()],
+        'pushTransportEnvelope': [
+            {**_field(spec), 'description': prose}
+            for spec, prose in events.PUSH_TRANSPORT_ENVELOPE],
+        'pushFrames': [{
+            'type': spec.type,
+            'channel': spec.channel,
+            'task': spec.task,
+            'purpose': spec.purpose,
+            'since': spec.since,
+            'fields': dict(spec.fields),
+            'schema': (None if spec.schema is None
+                       else [_field(item) for item in spec.schema]),
+        } for spec in events.all_push_frame_specs()],
+    }
 
 
-def _push_interface_name(frame_type: str) -> str:
-    # Push frame types mix '_' and '.' (codex.reset_offer.updated).
-    return ''.join(
-        part.capitalize() or '_' for part in re.split(r'[_\.]', frame_type)) \
-        + 'PushFrame'
-def _ts_doc(text: str) -> str:
-    # A literal `*/` in prose would terminate the block comment early and
-    # break the generated TypeScript (events.py:1764 hit exactly this).
-    return ' '.join(text.split()).replace('*/', '* /')
+def load_contract() -> dict:
+    with open(CONTRACT, encoding='utf-8') as handle:
+        document = json.load(handle)
+    if document.get('contract') != CONTRACT_ID:
+        raise ValueError(f'{CONTRACT} is not {CONTRACT_ID}')
+    return document
 
 
-def render() -> str:
-    from lib.agent_core.events import (
-        EVENT_CONTRACT_VERSION,
-        PUSH_FRAME_CONTRACT_VERSION,
-        PUSH_TRANSPORT_ENVELOPE,
-        all_event_specs,
-        all_push_frame_specs,
-    )
+def _keyed(items: list[dict], key: str) -> dict[str, dict]:
+    return {item[key]: item for item in items}
 
-    lines = [
-        '/* AUTO-GENERATED by scripts/gen_event_contract.py.',
-        ' * Canonical source: lib/agent_core/events.py (EventSpec.schema and',
-        ' * PushFrameSpec.schema).',
-        ' * DO NOT EDIT BY HAND.',
-        ' *',
-        ' * Field-level streaming-event contract. Each interface mirrors the',
-        ' * FieldSpec tuple the backend validates at emission (build_event',
-        ' * raises on an undeclared field under TOFU_EVENT_SCHEMA=strict), so',
-        ' * reading an undeclared field here is a typecheck error — the two',
-        ' * sides of the contract cannot drift in either direction. The push',
-        ' * frame section mirrors owner-scoped push-hub frames the same way',
-        ' * (build_push_frame is the backend gate).',
-        ' */',
-        '',
-        f'export const EVENT_CONTRACT_VERSION = {EVENT_CONTRACT_VERSION}'
-        ' as const;',
-        '',
-    ]
-    schema_count = 0
-    for spec in all_event_specs():
-        if spec.schema is None:
-            continue
-        schema_count += 1
-        name = _interface_name(spec.type)
-        lines.append(f'/** {_ts_doc(spec.purpose)} */')
-        lines.append(f'export interface {name} {{')
-        lines.append(f"  type: '{spec.type}';")
-        for field_spec in spec.schema:
-            description = spec.fields.get(field_spec.name, '')
-            if description:
-                lines.append(f'  /** {_ts_doc(description)} */')
-            optional = '' if field_spec.required else '?'
-            lines.append(
-                f'  {field_spec.name}{optional}:'
-                f' {_ts_type(field_spec.kind)};')
-        lines.append('}')
-        lines.append('')
-    union_members = ' |\n  '.join(
-        _interface_name(spec.type)
-        for spec in all_event_specs() if spec.schema is not None)
-    lines.append('/** Events with a field-level contract (the gated set). */')
-    lines.append('export type ContractedWireEvent =')
-    lines.append(f'  {union_members};' if union_members else '  never;')
-    lines.append('')
-    lines.append('/** Any wire event; un-migrated types stay permissive. */')
-    lines.append('export interface UnknownWireEvent {')
-    lines.append('  type: string;')
-    lines.append('  [field: string]: unknown;')
-    lines.append('}')
-    lines.append('')
 
-    lines.append(f'export const PUSH_FRAME_CONTRACT_VERSION ='
-                 f' {PUSH_FRAME_CONTRACT_VERSION} as const;')
-    lines.append('')
-    lines.append('/** PushHub routing envelope; execution identity never replaces the subscription key. */')
-    lines.append('export interface PushTransportEnvelope {')
-    for field_spec, description in PUSH_TRANSPORT_ENVELOPE:
-        lines.append(f'  /** {_ts_doc(description)} */')
-        optional = '' if field_spec.required else '?'
-        lines.append(f'  {field_spec.name}{optional}: {_ts_type(field_spec.kind)};')
-    lines.append('}')
-    lines.append('')
-    push_specs = [spec for spec in all_push_frame_specs()
-                  if spec.schema is not None]
-    for spec in push_specs:
-        name = _push_interface_name(spec.type)
-        lines.append(
-            f'/** {_ts_doc(spec.purpose)} (push channel'
-            f' `{spec.channel}`, task `{_ts_doc(spec.task)}`) */')
-        lines.append(f'export interface {name} {{')
-        lines.append(f"  type: '{spec.type}';")
-        for field_spec in spec.schema:
-            description = spec.fields.get(field_spec.name, '')
-            if description:
-                lines.append(f'  /** {_ts_doc(description)} */')
-            optional = '' if field_spec.required else '?'
-            lines.append(
-                f'  {field_spec.name}{optional}:'
-                f' {_ts_type(field_spec.kind)};')
-        lines.append('}')
-        lines.append('')
-    push_union = ' |\n  '.join(
-        _push_interface_name(spec.type) for spec in push_specs)
-    lines.append('/** Declared owner-scoped push-hub frames. */')
-    lines.append('export type ContractedPushFrame =')
-    lines.append(f'  {push_union};' if push_union else '  never;')
-    lines.append('')
-    type_literals = ',\n  '.join(f"'{spec.type}'" for spec in push_specs)
-    lines.append('/** Wire `type` tags of every declared push frame. */')
-    lines.append('export const CONTRACTED_PUSH_FRAME_TYPES = [')
-    lines.append(f'  {type_literals},' if type_literals else '')
-    lines.append(
-        "] as const satisfies readonly ContractedPushFrame['type'][];")
-    lines.append('')
-    return '\n'.join(lines)
+def registry_drift(contract: dict, registry: dict | None = None) -> list[str]:
+    """Human-readable differences; empty when registry == contract exactly."""
+    registry = registry_document() if registry is None else registry
+    body = {key: value for key, value in contract.items() if key != '$comment'}
+    if body == registry:
+        return []
+    problems: list[str] = []
+    for section, key in (('events', 'type'), ('phases', 'phase'),
+                         ('pushFrames', 'type')):
+        in_contract = _keyed(body.get(section, []), key)
+        in_code = _keyed(registry[section], key)
+        for name in sorted(in_code.keys() - in_contract.keys()):
+            problems.append(f'{section}: {name!r} is registered in lib/agent_core/events.py '
+                            'but missing from contracts/events_v1.json')
+        for name in sorted(in_contract.keys() - in_code.keys()):
+            problems.append(f'{section}: {name!r} is in contracts/events_v1.json but '
+                            'not registered in lib/agent_core/events.py')
+        for name in sorted(in_code.keys() & in_contract.keys()):
+            if in_code[name] != in_contract[name]:
+                problems.append(f'{section}: {name!r} differs:\n' + _diff(
+                    in_contract[name], in_code[name]))
+        if [item[key] for item in body.get(section, [])] != [item[key] for item in registry[section]] \
+                and not problems:
+            problems.append(f'{section}: order differs from the registry')
+    for key in registry:
+        if key not in ('events', 'phases', 'pushFrames') and body.get(key) != registry[key]:
+            problems.append(f'{key} differs:\n' + _diff(body.get(key), registry[key]))
+    for key in body.keys() - registry.keys():
+        problems.append(f'{key}: not represented by the registry')
+    return problems or ['contract and registry differ in key order']
+
+
+def _diff(contract_value, registry_value) -> str:
+    left = json.dumps(contract_value, indent=1, ensure_ascii=False).splitlines()
+    right = json.dumps(registry_value, indent=1, ensure_ascii=False).splitlines()
+    return '\n'.join(difflib.unified_diff(left, right, 'contract', 'registry', lineterm=''))
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--check', action='store_true',
-                        help='fail unless the committed artifact is fresh')
-    args = parser.parse_args()
-    content = render()
-    if args.check:
-        try:
-            with open(OUTPUT, encoding='utf-8') as handle:
-                current = handle.read()
-        except OSError:
-            current = None
-        if current != content:
-            print(f'event contract drift: {os.path.relpath(OUTPUT, ROOT)} is '
-                  'stale; run python3 scripts/gen_event_contract.py',
-                  file=sys.stderr)
-            return 1
-        print(f'event contract fresh: {os.path.relpath(OUTPUT, ROOT)}')
-        return 0
-    temporary = f'{OUTPUT}.publish-{os.getpid()}'
-    with open(temporary, 'w', encoding='utf-8') as handle:
-        handle.write(content)
-    os.replace(temporary, OUTPUT)
-    print(f'wrote {os.path.relpath(OUTPUT, ROOT)}')
+    argparse.ArgumentParser(description=__doc__.split('\n', 1)[0]).parse_args()
+    problems = registry_drift(load_contract())
+    if problems:
+        print('event contract drift between contracts/events_v1.json and '
+              'lib/agent_core/events.py:', file=sys.stderr)
+        for problem in problems:
+            print(f'  - {problem}', file=sys.stderr)
+        return 1
+    print('event registry matches contracts/events_v1.json')
     return 0
 
 

@@ -8,6 +8,7 @@ instead of calling an external embedding API, eliminating the ~11s embedding
 latency from the search pipeline.
 """
 
+import importlib
 import math
 import re
 import time
@@ -25,6 +26,7 @@ from tofu_search.search.authority import (
 )
 
 logger = get_logger(__name__)
+_native = importlib.import_module('tofu_search._native_kernels').native
 
 __all__ = ['rerank_by_bm25', 'rerank_by_scores', 'build_scoring_texts']
 
@@ -201,6 +203,42 @@ def rerank_by_scores(query: str, results: list[dict], top_k: int,
     return _rank_candidates(query, results, top_k, semantic_scores=scores)
 
 
+def _bm25_scores(query_terms: list[str], doc_texts: list[str]) -> list[float]:
+    """BM25 per document; terms are summed in the given order (bit-stable)."""
+    docs = [_tokenize(t) for t in doc_texts]
+    doc_lens = [len(d) for d in docs]
+    n = len(docs)
+    avg_dl = sum(doc_lens) / n if n > 0 else 1.0
+    terms = set(query_terms)
+    df = {term: sum(1 for doc in docs if term in doc) for term in query_terms}
+    scores = []
+    for doc, dl in zip(docs, doc_lens, strict=True):
+        score = 0.0
+        tf_map: dict[str, int] = {}
+        for t in doc:
+            if t in terms:
+                tf_map[t] = tf_map.get(t, 0) + 1
+        for term in query_terms:
+            tf = tf_map.get(term, 0)
+            if tf == 0:
+                continue
+            d = df[term]
+            # IDF: log((N - df + 0.5) / (df + 0.5) + 1)
+            idf = math.log((n - d + 0.5) / (d + 0.5) + 1.0)
+            numerator = tf * (BM25_K1 + 1)
+            denominator = tf + BM25_K1 * (1 - BM25_B + BM25_B * dl / avg_dl)
+            score += idf * numerator / denominator
+        scores.append(score)
+    return scores
+
+
+# The Python body above is the parity oracle; the native kernel replaces it
+# when the extension is installed. Priors, fusion and diversity stay below.
+PYTHON_KERNELS = {'_bm25_scores': _bm25_scores}
+if _native is not None:
+    _bm25_scores = _native.bm25_scores
+
+
 def _rank_candidates(query: str, results: list[dict], top_k: int, *,
                      semantic_scores: list[float] | None = None) -> list[dict]:
     """Rank body evidence with BM25; fuse native and local snippet ranks.
@@ -211,7 +249,7 @@ def _rank_candidates(query: str, results: list[dict], top_k: int, *,
     BM25 scores. Missing upstream ranks or any fetched body retain the original
     scoring policy. Equal fused scores prefer the stronger local lexical rank.
 
-    Pure Python, no external API calls — typically completes in <10ms.
+    No external API calls; lexical scoring is ``_bm25_scores``.
 
     Args:
         query: The user's search query.
@@ -237,41 +275,12 @@ def _rank_candidates(query: str, results: list[dict], top_k: int, *,
     fuse_snippet_ranks = (not any(result.get('full_content') for result in results)
                           and any(result.get('rrf_score') for result in results))
 
-    # Tokenize all documents
     doc_texts = [_build_doc_text(r, query) for r in results]
-    docs = [_tokenize(t) for t in doc_texts]
-    doc_lens = [len(d) for d in docs]
-    n = len(docs)
-    avg_dl = sum(doc_lens) / n if n > 0 else 1.0
+    bm25 = _bm25_scores(list(query_terms), doc_texts)
 
-    # Compute document frequency for each query term
-    df: dict[str, int] = {}
-    for term in query_terms:
-        df[term] = sum(1 for doc in docs if term in doc)
-
-    # Score each result with BM25
     scored = []
     native_eligible = set()
-    for i, (result, doc, dl) in enumerate(zip(results, docs, doc_lens, strict=True)):
-        score = 0.0
-        # Build term frequency map for query terms only
-        tf_map: dict[str, int] = {}
-        for t in doc:
-            if t in query_terms:
-                tf_map[t] = tf_map.get(t, 0) + 1
-
-        for term in query_terms:
-            tf = tf_map.get(term, 0)
-            if tf == 0:
-                continue
-            d = df.get(term, 0)
-            # IDF: log((N - df + 0.5) / (df + 0.5) + 1)
-            idf = math.log((n - d + 0.5) / (d + 0.5) + 1.0)
-            # BM25 term score
-            numerator = tf * (BM25_K1 + 1)
-            denominator = tf + BM25_K1 * (1 - BM25_B + BM25_B * dl / avg_dl)
-            score += idf * numerator / denominator
-
+    for i, (result, score) in enumerate(zip(results, bm25, strict=True)):
         if score > 0:
             native_eligible.add(i)
         if semantic_scores is not None:

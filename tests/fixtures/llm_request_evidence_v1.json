@@ -1,0 +1,18 @@
+{
+  "protocol": "responses",
+  "transport": "sse",
+  "verified": true,
+  "logical_input_items": 3,
+  "sent_input_items": 3,
+  "incremental": false,
+  "reused_connection": false,
+  "reused_idle_connection": false,
+  "full_reason": null,
+  "provider_input_tokens": 12,
+  "provider_cached_tokens": 0,
+  "frame_sha256": "c381c85f7c0d2c451f4154bf9233e4de5897e2d153b9c0fb4d72c9bb3ffdc4b5",
+  "frame_bytes": 87,
+  "frame_kind": "full",
+  "frame_reason": null,
+  "frame_content_encoding": ""
+}

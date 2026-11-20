@@ -30,3 +30,7 @@ Thumbs.db
 .tofu*
 # AI assistant evolution journal (per-developer, not source)
 JOURNAL.md
+
+# Native extension built in place for test runs (rust/, maturin)
+*.so
+rust/target/

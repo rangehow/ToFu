@@ -122,7 +122,7 @@
  * pills; 09-tool-cards.css): it stays one flex line whose subject alone
  * truncates, never the clamp's single text run that butts its parts
  * together. */
-.conversation-surface [data-action-summary] > .ptool-coord-header {
+.conversation-surface [data-action-summary] > :is(.ptool-coord-header, .ptool-text:has(> .ptool-coord-title)) {
   display: flex;
   flex: 1 1 auto;
   max-width: none;
@@ -288,12 +288,6 @@
   .conversation-surface .ptool-result-header[data-action-summary] > .ptool-text:has(> .ptool-artifact-header) > .ptool-error-reason {
     flex: 0 0 100%;
     order: 10;
-  }
-  /* The row aligns to its top edge, so a failure or warning pill (taller
-   * than the metadata line) would drop its middle below the action line. It
-   * keeps the metadata line's layout height and paints its edge outside. */
-  .conversation-surface .ptool-result-header[data-action-summary]:has(> .ptool-text > .ptool-artifact-header) > :is(.ptool-badge-err, .ptool-badge-reject, .ptool-badge-warn, .ptool-badge-skip, .ptool-badge-interrupted) {
-    margin-block: calc((var(--leading-title) * var(--conversation-font-size-meta) - var(--space-5) - 2 * var(--control-edge-inset)) / 2);
   }
 }
 

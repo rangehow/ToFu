@@ -58,6 +58,19 @@ def test_real_tex_error_never_publishes_a_successful_pdf(tmp_path):
     assert not any(row['name'] == 'document.pdf' for row in result.receipt['artifacts'])
 
 
+def test_real_overfull_table_is_a_successful_build_with_a_located_warning(tmp_path):
+    _require_tex()
+    snapshot = _snapshot(tmp_path, '\\documentclass{article}\\begin{document}\n'
+                         '\\begin{tabular}{p{5\\textwidth}}\na \\\\\n\\end{tabular}\n'
+                         '\\end{document}\n')
+    result = _compile(snapshot, tmp_path / 'build')
+    assert result.receipt['status'] == 'success', result.receipt
+    rows = [row for row in result.receipt['diagnostics'] if row['code'] == 'overfull_hbox']
+    assert len(rows) == 1 and rows[0]['severity'] == 'warning'
+    assert rows[0]['file'] == 'main.tex' and 'too wide' in rows[0]['message']
+    validate(result.receipt)
+
+
 def test_real_bibliography_is_built_and_location_uses_frozen_labels(tmp_path):
     _require_tex()
     root = tmp_path / 'source'

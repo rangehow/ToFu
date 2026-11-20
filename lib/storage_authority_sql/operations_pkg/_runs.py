@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from hashlib import sha256
 import time
 from typing import Any
 
@@ -32,6 +33,7 @@ from lib.orchestration.run_status import (
 from lib.swarm.persistence_contract import (
     SWARM_CHECKPOINT_MARKER_RESULT_FIELDS,
     SWARM_CHECKPOINT_MARKER_TEXT_CHARACTERS,
+    SWARM_CONTINUE_REBIND_MODE,
     SWARM_SESSION_STATUS_QUARANTINED_OWNERLESS,
     SWARM_SESSION_STATUS_RUNNING,
     SWARM_SESSION_STATUS_TERMINATED,
@@ -906,6 +908,12 @@ def _optional_text(
 
 
 def _swarm_session_save(session: Session, payload: Mapping[str, Any]) -> Any:
+    if payload.get('save_mode') == 'admit':
+        from ._swarm_admission import admit
+        return admit(session, payload)
+    if payload.get('save_mode') == SWARM_CONTINUE_REBIND_MODE:
+        from ._swarm_admission import rebind_continue
+        return rebind_continue(session, payload)
     swarm_key = _required_text(payload, "swarm_key", 512)
     specs = payload.get("specs")
     config = payload.get("config")
@@ -921,37 +929,137 @@ def _swarm_session_save(session: Session, payload: Mapping[str, Any]) -> Any:
         raise StorageError(
             "database_protocol_error", "Invalid swarm session status"
         )
-    session.lock_key("swarm.session", swarm_key)
-    session.execute(
-        "INSERT INTO swarm_sessions("
-        "swarm_key, conv_id, task_id, status, specs_json, config_json, "
-        "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
-        "ON CONFLICT(swarm_key) DO UPDATE SET "
-        "conv_id = excluded.conv_id, task_id = excluded.task_id, "
-        "status = excluded.status, specs_json = excluded.specs_json, "
-        "config_json = excluded.config_json, updated_at = excluded.updated_at",
-        (
-            swarm_key,
-            _optional_text(payload, "conv_id", scope="swarm"),
-            _optional_text(payload, "task_id", scope="swarm"),
-            status,
-            specs_json,
-            config_json,
-            now,
-            now,
-        ),
+    from ._swarm_teardown import (
+        _matches, _session_header, key_has_lifecycle, lifecycle_row, lock_run,
+        reserve_lifecycle, session_identity, update_lifecycle, validate_roster,
     )
-    return {"saved": True}
+
+    mode = payload.get('save_mode')
+    header = _session_header(session, swarm_key)
+    conversation = _optional_text(payload, 'conv_id', scope='swarm')
+    if mode is None:
+        run = _optional_text(payload, 'task_id', scope='swarm')
+        if key_has_lifecycle(session, swarm_key):
+            raise StorageError('database_conflict', 'Swarm key requires exact save mode')
+        if run:
+            lock_run(session, run)
+            if (lifecycle_row(session, run) or session.fetch_one(
+                    'SELECT 1 AS present FROM swarm_sessions WHERE task_id = ? '
+                    'AND swarm_key <> ? LIMIT 1', (run, swarm_key))):
+                raise StorageError('database_conflict', 'Swarm launch identity already consumed')
+        if header is not None and header['task_id']:
+            if header['task_id'] != run:
+                raise StorageError('database_conflict', 'Existing swarm session requires exact teardown')
+            # Exact teardown can adopt this header. Missing parent lineage
+            # is not permission to replace the accepted legacy snapshot.
+            if (conversation != (header['conv_id'] or '')
+                    or _json_text(_load(header['config_json'])) != config_json
+                    or _json_text(_load(header['specs_json'])) != specs_json):
+                raise StorageError('database_conflict', 'Legacy swarm save cannot replace accepted identity, parent or roster')
+        session.execute(
+            "INSERT INTO swarm_sessions("
+            "swarm_key, conv_id, task_id, status, specs_json, config_json, "
+            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(swarm_key) DO UPDATE SET "
+            "conv_id = excluded.conv_id, task_id = excluded.task_id, "
+            "status = excluded.status, specs_json = excluded.specs_json, "
+            "config_json = excluded.config_json, updated_at = excluded.updated_at",
+            (
+                swarm_key,
+                conversation,
+                run,
+                status,
+                specs_json,
+                config_json,
+                now,
+                now,
+            ),
+        )
+        return {"saved": True}
+
+    if mode not in ('launch', 'update', 'roster'):
+        raise StorageError('database_protocol_error', 'Unsupported swarm session save mode')
+    run = _required_text(payload, 'task_id', 4096)
+    identity = session_identity(swarm_key, run, conversation, config)
+    lock_run(session, run)
+    if mode == 'launch':
+        if header is not None:
+            raise StorageError('database_conflict', 'Existing swarm session requires exact update or teardown')
+        if session.fetch_one('SELECT 1 AS present FROM swarm_agents WHERE swarm_key = ? LIMIT 1',
+                             (swarm_key,)):
+            raise StorageError('database_conflict', 'Unreclaimed swarm agents prevent launch')
+        if session.fetch_one('SELECT 1 AS present FROM swarm_sessions WHERE task_id = ? LIMIT 1', (run,)):
+            raise StorageError('database_conflict', 'Swarm launch identity already consumed')
+        reserve_lifecycle(session, identity, config, specs)
+        session.execute(
+            'INSERT INTO swarm_sessions(swarm_key, conv_id, task_id, status, specs_json, config_json, '
+            'created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            (swarm_key, conversation, run, status, specs_json, config_json, now, now),
+        )
+        return {'saved': True}
+
+    receipt = lifecycle_row(session, run)
+    if (mode == 'roster' and receipt is None and _matches(header, identity)
+            and header['status'] == SWARM_SESSION_STATUS_RUNNING
+            and _json_text(config) == _json_text(_load(header['config_json']))):
+        if session.fetch_one('SELECT 1 AS present FROM swarm_sessions WHERE task_id = ? '
+                             'AND swarm_key <> ? LIMIT 1', (run, swarm_key)):
+            raise StorageError('database_conflict', 'Ambiguous legacy swarm run')
+        receipt = reserve_lifecycle(session, identity, config, _load(header['specs_json']))
+    if (not _matches(header, identity) or receipt is None or receipt['identity'] != identity
+            or receipt['disposition'] is not None):
+        raise StorageError('database_conflict', 'Swarm update requires its exact current session')
+    epoch = _integer(payload, 'checkpoint_writer_epoch', minimum=0, default=0)
+    if epoch != receipt.get('checkpoint_writer_epoch', 0):
+        raise StorageError('database_conflict', 'Swarm update requires its exact current swarm writer')
+    if _json_text(config) != _json_text(_load(header['config_json'])):
+        raise StorageError('database_conflict', 'Swarm update cannot replace accepted parent config')
+    revision = max(now, header['updated_at'] + 1)
+    if mode == 'roster':
+        if header['status'] != SWARM_SESSION_STATUS_RUNNING or receipt.get('activation_failed'):
+            raise StorageError('database_conflict', 'Swarm roster requires a running session')
+        roster = validate_roster(receipt['roster'])
+        for agent_id, spec in validate_roster(payload.get('roster_additions', specs)).items():
+            if agent_id in roster and _json_text(roster[agent_id]) != _json_text(spec):
+                raise StorageError('database_conflict', 'Swarm roster agent ID already exists')
+            roster.setdefault(agent_id, spec)
+        accepted = list(roster.values())
+        update_lifecycle(session, {**receipt, 'roster': accepted})
+        session.execute('UPDATE swarm_sessions SET specs_json = ?, updated_at = ? WHERE swarm_key = ?',
+                        (_json_text(accepted), revision, swarm_key))
+    else:
+        if _integer(payload, 'expected_updated_at', minimum=0) != header['updated_at']:
+            raise StorageError('database_conflict', 'Swarm session revision changed')
+        if _json_text(specs) != _json_text(receipt['roster']):
+            raise StorageError('database_conflict', 'Swarm update cannot replace accepted roster')
+        # Continue activation is deliberately not a generic status update.
+        if header['status'] == SWARM_SESSION_STATUS_TERMINATED:
+            status = header['status']
+        session.execute('UPDATE swarm_sessions SET status = ?, updated_at = ? WHERE swarm_key = ?',
+                        (status, revision, swarm_key))
+    return {'saved': True, 'updated_at': revision}
 
 
 def _swarm_session_terminate(session: Session, payload: Mapping[str, Any]) -> Any:
     swarm_key = _required_text(payload, "swarm_key", 512)
+    session.lock_key("swarm.session", swarm_key)
+    from ._swarm_teardown import key_has_lifecycle
+
+    row = session.fetch_one('SELECT task_id FROM swarm_sessions WHERE swarm_key = ?', (swarm_key,))
+    run = payload.get('run_id')
+    if run is None and key_has_lifecycle(session, swarm_key):
+        raise StorageError('database_conflict', 'Swarm termination requires its exact current run')
+    if row is None or (run is not None and (
+            row['task_id'] != _required_text(payload, 'run_id', 4096)
+            or not _checkpoint_writer_matches(session, payload, row['task_id']))):
+        return {'changed': False}
+    now = _integer(payload, 'now_ms', minimum=0)
     count = session.execute(
-        "UPDATE swarm_sessions SET status = ?, updated_at = ? "
+        "UPDATE swarm_sessions SET status = ?, updated_at = CASE WHEN updated_at >= ? THEN updated_at + 1 ELSE ? END "
         "WHERE swarm_key = ? AND status = ?",
         (
             SWARM_SESSION_STATUS_TERMINATED,
-            _integer(payload, "now_ms", minimum=0),
+            now, now,
             swarm_key,
             SWARM_SESSION_STATUS_RUNNING,
         ),
@@ -1007,6 +1115,18 @@ def _swarm_session_quarantine_ownerless(
 
 def _swarm_session_delete(session: Session, payload: Mapping[str, Any]) -> Any:
     swarm_key = _required_text(payload, "swarm_key", 512)
+    session.lock_key("swarm.session", swarm_key)
+    from ._swarm_teardown import guard_legacy_delete
+    guard_legacy_delete(session, swarm_key)
+    header = session.fetch_one('SELECT task_id FROM swarm_sessions WHERE swarm_key = ?', (swarm_key,))
+    if header is None:
+        return {'deleted': False}
+    if header['task_id']:
+        raise StorageError('database_conflict', 'Swarm key requires exact-run teardown')
+    return _swarm_session_delete_rows(session, swarm_key)
+
+
+def _swarm_session_delete_rows(session: Session, swarm_key: str) -> Any:
     session.execute(
         "DELETE FROM swarm_agent_checkpoint_markers WHERE swarm_key = ?", (swarm_key,))
     session.execute("DELETE FROM swarm_agents WHERE swarm_key = ?", (swarm_key,))
@@ -1016,8 +1136,49 @@ def _swarm_session_delete(session: Session, payload: Mapping[str, Any]) -> Any:
     return {"deleted": bool(count)}
 
 
+def _checkpoint_writer_epoch(session: Session, run: str) -> int | None:
+    from ._swarm_teardown import lifecycle_row
+
+    receipt = lifecycle_row(session, run) if run else None
+    if receipt is None:
+        return None  # Legacy rows have no managed writer or frozen cut.
+    epoch = receipt.get('checkpoint_writer_epoch', 0)
+    if type(epoch) is not int or epoch < 0:
+        raise StorageError('database_integrity', 'Invalid durable swarm checkpoint writer epoch')
+    return epoch
+
+
+def _checkpoint_writer_matches(session: Session, payload: Mapping[str, Any], run: str) -> bool:
+    epoch = _integer(payload, 'checkpoint_writer_epoch', minimum=0, default=0)
+    return epoch == (_checkpoint_writer_epoch(session, run) or 0)
+
+
+def _advance_swarm_checkpoint_revision(session: Session, swarm_key: str) -> None:
+    # A wall-clock timestamp is not a cut: two writes may share a millisecond,
+    # and the predecessor must not evade the rebind CAS by backdating one.
+    session.execute('UPDATE swarm_sessions SET updated_at = updated_at + 1 WHERE swarm_key = ? '
+                    'AND EXISTS (SELECT 1 FROM swarm_run_lifecycle WHERE swarm_key = ?)',
+                    (swarm_key, swarm_key))
+
+
+def _guard_swarm_checkpoint_run(session: Session, payload: Mapping[str, Any], swarm_key: str) -> None:
+    from ._swarm_teardown import key_has_lifecycle
+
+    session.lock_key('swarm.session', swarm_key)
+    if payload.get('run_id') is None and not key_has_lifecycle(session, swarm_key):
+        # Unconverted legacy host writers must never acquire a managed run.
+        return
+    run = _required_text(payload, 'run_id', 4096)
+    row = session.fetch_one('SELECT task_id, status FROM swarm_sessions WHERE swarm_key = ?', (swarm_key,))
+    if row is None or row['task_id'] != run or row['status'] not in SWARM_SESSION_WRITABLE_STATUSES:
+        raise StorageError('database_conflict', 'Checkpoint requires its exact current swarm run')
+    if not _checkpoint_writer_matches(session, payload, run):
+        raise StorageError('database_conflict', 'Checkpoint requires its exact current swarm writer')
+
+
 def _swarm_agent_save(session: Session, payload: Mapping[str, Any]) -> Any:
     swarm_key = _required_text(payload, "swarm_key", 512)
+    _guard_swarm_checkpoint_run(session, payload, swarm_key)
     agent_id = _required_text(payload, "agent_id", 512)
     messages_json = _swarm_json(payload.get("messages"), list, "messages")
     result = payload.get("result")
@@ -1081,6 +1242,7 @@ def _swarm_agent_save(session: Session, payload: Mapping[str, Any]) -> Any:
         "DELETE FROM swarm_agent_checkpoint_markers WHERE swarm_key = ? AND agent_id = ?",
         (swarm_key, agent_id),
     )
+    _advance_swarm_checkpoint_revision(session, swarm_key)
     # Echoing the id acknowledges it as the base of a later swarm.agent.append.
     return {"saved": True, "checkpoint_id": checkpoint_id} if checkpoint_id else {"saved": True}
 
@@ -1095,6 +1257,7 @@ def _swarm_agent_append(session: Session, payload: Mapping[str, Any]) -> Any:
     status, rounds and time are replaced and the compact marker retires.
     """
     swarm_key = _required_text(payload, "swarm_key", 512)
+    _guard_swarm_checkpoint_run(session, payload, swarm_key)
     agent_id = _required_text(payload, "agent_id", 512)
     base_checkpoint_id = _required_text(payload, "base_checkpoint_id", 512)
     checkpoint_id = _required_text(payload, "checkpoint_id", 512)
@@ -1143,6 +1306,7 @@ def _swarm_agent_append(session: Session, payload: Mapping[str, Any]) -> Any:
         "DELETE FROM swarm_agent_checkpoint_markers WHERE swarm_key = ? AND agent_id = ?",
         (swarm_key, agent_id),
     )
+    _advance_swarm_checkpoint_revision(session, swarm_key)
     return {"appended": True}
 
 
@@ -1168,6 +1332,7 @@ def _swarm_agent_checkpoint_mark(session: Session, payload: Mapping[str, Any]) -
     retires it. Without a full checkpoint there is nothing to mark.
     """
     swarm_key = _required_text(payload, "swarm_key", 512)
+    _guard_swarm_checkpoint_run(session, payload, swarm_key)
     agent_id = _required_text(payload, "agent_id", 512)
     marker = _swarm_checkpoint_marker(payload.get("result"))
     rounds_used = _integer(payload, "rounds_used", minimum=0, maximum=1_000_000)
@@ -1197,6 +1362,7 @@ def _swarm_agent_checkpoint_mark(session: Session, payload: Mapping[str, Any]) -
         "updated_at = excluded.updated_at",
         (swarm_key, agent_id, _json_text(marker), rounds_used, now),
     )
+    _advance_swarm_checkpoint_revision(session, swarm_key)
     return {"marked": True}
 
 
@@ -1223,12 +1389,24 @@ def _swarm_agents_acknowledge_results(session: Session, payload: Mapping[str, An
     session.lock_key("swarm.session", swarm_key)
     row = session.fetch_one("SELECT task_id FROM swarm_sessions WHERE swarm_key = ?",
                             (swarm_key,))
-    if row is None or row['task_id'] != task_id:
+    if (row is None or row['task_id'] != task_id
+            or not _checkpoint_writer_matches(session, payload, task_id)):
         return {"acknowledged": False, "changed": 0}
-    return {"acknowledged": True, **_swarm_agents_mark_delivered(session, payload)}
+    return {"acknowledged": True, **_swarm_agents_mark_delivered_rows(session, payload)}
 
 
 def _swarm_agents_mark_delivered(session: Session, payload: Mapping[str, Any]) -> Any:
+    from ._swarm_teardown import key_has_lifecycle
+
+    swarm_key, _ = _swarm_delivery_ids(payload)
+    session.lock_key('swarm.session', swarm_key)
+    if payload.get('task_id') is None and not key_has_lifecycle(session, swarm_key):
+        return _swarm_agents_mark_delivered_rows(session, payload)
+    result = _swarm_agents_acknowledge_results(session, payload)
+    return {"changed": result["changed"]}
+
+
+def _swarm_agents_mark_delivered_rows(session: Session, payload: Mapping[str, Any]) -> Any:
     swarm_key, agent_ids = _swarm_delivery_ids(payload)
     changed = 0
     for agent_id in agent_ids:
@@ -1237,6 +1415,8 @@ def _swarm_agents_mark_delivered(session: Session, payload: Mapping[str, Any]) -
             "WHERE swarm_key = ? AND agent_id = ?",
             (swarm_key, agent_id),
         )
+    if changed:
+        _advance_swarm_checkpoint_revision(session, swarm_key)
     return {"changed": changed}
 
 
@@ -1296,6 +1476,9 @@ def _swarm_session_get(session: Session, payload: Mapping[str, Any]) -> Any:
         raise StorageError(
             "database_protocol_error", "Invalid swarm include_agents flag"
         )
+    # Share the mutation lock so the receipt and (optional) agent rows
+    # belong to the same header even on PostgreSQL READ COMMITTED.
+    session.lock_key('swarm.session', swarm_key)
     item = session.fetch_one(
         "SELECT swarm_key, conv_id, task_id, status, specs_json, config_json, "
         "created_at, updated_at FROM swarm_sessions WHERE swarm_key = ?",
@@ -1319,6 +1502,9 @@ def _swarm_session_get(session: Session, payload: Mapping[str, Any]) -> Any:
         "created_at": int(item["created_at"] or 0),
         "updated_at": int(item["updated_at"] or 0),
     }
+    epoch = _checkpoint_writer_epoch(session, item['task_id'])
+    if epoch is not None:
+        detail['checkpoint_writer_epoch'] = epoch
     if include_agents:
         detail["agents"] = [
             _swarm_agent_row(agent)
@@ -1338,29 +1524,28 @@ def _swarm_agent_state_get(session: Session, payload: Mapping[str, Any]) -> Any:
     """
     swarm_key = _required_text(payload, "swarm_key", 512)
     agent_id = _required_text(payload, "agent_id", 512)
+    # PostgreSQL READ COMMITTED must not combine a prior header with a
+    # successor's agent. Fetch the compact state in one statement.
     item = session.fetch_one(
-        "SELECT swarm_key, conv_id, task_id, status, created_at, updated_at "
-        "FROM swarm_sessions WHERE swarm_key = ?",
-        (swarm_key,),
+        "SELECT s.swarm_key, s.conv_id, s.task_id, s.status AS session_status, "
+        "s.created_at, s.updated_at AS session_updated_at, a.agent_id, a.status, "
+        "a.rounds_used, a.delivered, a.updated_at, "
+        f"{_SWARM_MARKER_COLUMNS} FROM swarm_sessions AS s "
+        "LEFT JOIN swarm_agents AS a ON a.swarm_key = s.swarm_key AND a.agent_id = ? "
+        f"{_SWARM_MARKER_JOIN} WHERE s.swarm_key = ?", (agent_id, swarm_key),
     )
     if item is None:
         return None
-    agent = session.fetch_one(
-        "SELECT a.agent_id AS agent_id, a.status AS status, a.rounds_used AS rounds_used, "
-        "a.delivered AS delivered, a.updated_at AS updated_at, "
-        f"{_SWARM_MARKER_COLUMNS} FROM swarm_agents AS a {_SWARM_MARKER_JOIN} "
-        "WHERE a.swarm_key = ? AND a.agent_id = ?",
-        (swarm_key, agent_id),
-    )
+    agent = item if item['agent_id'] is not None else None
     _, rounds_used, updated_at = (_swarm_marked_state(agent) if agent is not None
                                   else ({}, 0, 0))
     return {
         "swarm_key": item["swarm_key"],
         "conv_id": item["conv_id"] or "",
         "task_id": item["task_id"] or "",
-        "status": item["status"] or "running",
+        "status": item["session_status"] or "running",
         "created_at": int(item["created_at"] or 0),
-        "updated_at": int(item["updated_at"] or 0),
+        "updated_at": int(item["session_updated_at"] or 0),
         "agent": None if agent is None else {
             "agent_id": agent["agent_id"],
             "status": agent["status"] or "pending",
@@ -1377,9 +1562,64 @@ _SWARM_AGENT_PAGE_BYTES = MAX_FRAME_BYTES - 4096 - 4096
 _SWARM_AGENT_FIELD_OVERHEAD_BYTES = 256
 
 
+def _swarm_page_selectors(payload: Mapping[str, Any], swarm_key: str,
+                          after: str) -> tuple[str, int, int, str | None] | None:
+    if not {'expected_task_id', 'expected_updated_at', 'snapshot_cut'}.intersection(payload):
+        return None
+    run = _required_text(payload, 'expected_task_id', 4096)
+    revision = _integer(payload, 'expected_updated_at', minimum=0, maximum=2**63 - 1)
+    owner = _integer(payload, 'user_id', minimum=1, maximum=2**63 - 1)
+    token = payload.get('snapshot_cut')
+    if (any('\0' in value for value in (swarm_key, run, after))
+        or (not after and 'snapshot_cut' in payload) or (after and (
+        not isinstance(token, str) or len(token) != 64
+        or any(ch not in '0123456789abcdef' for ch in token)
+    ))):
+        raise StorageError('database_protocol_error', 'Invalid swarm snapshot cut selectors')
+    return run, revision, owner, token
+
+
+def _swarm_snapshot_cut(session: Session, swarm_key: str, run: str, revision: int,
+                        owner: int, token: str | None) -> str:
+    changed = StorageError('database_conflict', 'Swarm checkpoint cut changed between pages')
+    header = session.fetch_one(
+        'SELECT conv_id, task_id, status, specs_json, config_json, created_at, updated_at '
+        'FROM swarm_sessions WHERE swarm_key = ?', (swarm_key,))
+    if header is None or header['task_id'] != run or header['updated_at'] != revision:
+        raise changed
+    config = _load(header['config_json'])
+    if not isinstance(config, dict) or type(config.get('user_id')) is not int or config['user_id'] != owner:
+        raise changed
+    # The caller holds the same session lock as all checkpoint writers.
+    # Read one body at a time instead of collecting potentially many pages.
+    digest = sha256(b'tofu.swarm.sql.snapshot-cut.v1')
+
+    def add(value):
+        encoded = orjson.dumps(value, option=orjson.OPT_SORT_KEYS)
+        digest.update(len(encoded).to_bytes(8, 'big'))
+        digest.update(encoded)
+
+    add([swarm_key, dict(header), _checkpoint_writer_epoch(session, run)])
+    for item in session.fetch_all('SELECT agent_id FROM swarm_agents WHERE swarm_key = ? ORDER BY agent_id',
+                                  (swarm_key,)):
+        row = session.fetch_one(
+            f'{_SWARM_AGENT_SELECT} WHERE a.swarm_key = ? AND a.agent_id = ?',
+            (swarm_key, item['agent_id']))
+        add(dict(row))
+    captured = digest.hexdigest()
+    if token is not None and token != captured:
+        raise changed
+    return captured
+
+
 def _swarm_agents_page(session: Session, payload: Mapping[str, Any]) -> Any:
     swarm_key = _required_text(payload, "swarm_key", 512)
     after = _optional_text(payload, "after_agent_id", maximum=512, scope="swarm")
+    # PostgreSQL passes the key as TEXT even to the advisory lock. Validate
+    # guarded selectors before touching it, then retain the lock for both reads.
+    selectors = _swarm_page_selectors(payload, swarm_key, after)
+    session.lock_key('swarm.session', swarm_key)
+    cut = _swarm_snapshot_cut(session, swarm_key, *selectors) if selectors is not None else None
     size = " + ".join(
         utf8_length_expression(session.backend, column)
         for column in ("agent_id", "role", "objective", "messages_json", "result_json")
@@ -1414,12 +1654,15 @@ def _swarm_agents_page(session: Session, payload: Mapping[str, Any]) -> Any:
             (swarm_key, after, count),
         )
     ] if count else []
-    return {
+    page = {
         "agents": agents,
         "next_after_agent_id": (
             agents[-1]["agent_id"] if count < len(remaining) else None
         ),
     }
+    if cut is not None:
+        page['snapshot_cut'] = cut
+    return page
 
 
 def _swarm_resumable_list(session: Session, _payload: Mapping[str, Any]) -> Any:

@@ -406,7 +406,7 @@ class TestSwarmStatusPersistenceFallback(unittest.TestCase):
     def test_running_persisted_row_without_memory_is_ambiguous(self):
         """Pre-rehydrate restart window: the row says 'running' but the
         process has nothing — NEVER a settle signal (keep probing)."""
-        self.p.save_session(self.key, conv_id=self.key, task_id='t-old',
+        self.p.save_session(self.key, conv_id=self.key, task_id='t-running',
                             specs=[{'id': 'p2', 'role': 'coder', 'objective': 'Y'}],
                             config={'user_id': _TEST_OWNER_USER_ID},
                             status='running')

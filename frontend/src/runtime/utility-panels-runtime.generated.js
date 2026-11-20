@@ -5,7 +5,7 @@ import { t } from '../i18n/index';
 import { escapeHtml } from '../html-safety';
 import { watchRestartPreparation } from '../features/settings/restart-preparation';
 import { dockRestartProgress, recordRestartDiagnostic, offerRestartReload } from '../features/settings/restart-progress-dock';
-import { projectRestartHealth, restartPhaseProgress, restartWaitNotice } from '../features/settings/restart-observation';
+import { projectRestartHealth, restartPhaseLabel, restartPhaseProgress, restartWaitNotice } from '../features/settings/restart-observation';
 
 const Api = runtimeScope.Api;
 if (!Api || typeof Api !== 'object') throw new Error('utility-panels runtime dependency is unavailable: Api');
@@ -1271,9 +1271,11 @@ function _paintRestartProgress(progress, totalElapsed) {
     }
   }
   if (phaseEl) {
+    const observedPhase = _restartObservedBoot && _restartObservedBoot.currentPhase;
     const label = _restartAcceptedAt === 0 && _restartPreparationSnapshot
       ? t('update.preparation.' + _restartPreparationSnapshot.phase)
-      : t('update.phase.' + progress.key);
+      : restartPhaseLabel(progress.key,
+        observedPhase && observedPhase.key === progress.key ? observedPhase.label : '');
     const secs = ' · ' + t('update.restartElapsed').replace(
       '%s', String(Math.round(totalElapsed)));
     phaseEl.textContent = label + secs;
@@ -1522,7 +1524,8 @@ function _restartFailBoot(boot) {
   const sub = document.getElementById('updRestartSub');
   if (title) title.textContent = t('boot.failedTitle');
   if (phase) phase.textContent = boot.failedPhase
-    ? t('update.phase.' + boot.failedPhase.key) : t('boot.failedTitle');
+    ? restartPhaseLabel(boot.failedPhase.key, boot.failedPhase.label, t)
+    : t('boot.failedTitle');
   if (sub) sub.textContent = t('boot.failedHint');
 }
 

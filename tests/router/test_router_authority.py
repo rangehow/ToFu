@@ -232,12 +232,25 @@ def test_router_projects_pages_bound_projects_with_passive_activity(authority, m
          'bindingRevision': binding['revision']},
         {'title': 'Shipped', 'message': 'Delivered and verified.', 'kind': 'delivery',
          'idempotency_key': 'shipped'})
+    from lib.error_envelope import make_envelope
+    from lib.turn_lifecycle import bind_task, create_turn_pair, record_task_event
+
+    pair = create_turn_pair(binding['conversationId'], command_id='failed-lead',
+                            input_projection={'content': 'Private input'}, config={}, user_id=owner)
+    attempt_id = pair['attempt']['attemptId']
+    bind_task(attempt_id, 'lead-task', user_id=owner)
+    error = make_envelope('upstream_error', detail='Private failure detail', source='test', retryable=False)
+    assert record_task_event({'_attemptId': attempt_id, 'id': 'lead-task', '_userId': owner,
+                              'status': 'error', 'finishReason': 'error', 'error': error},
+                             {'type': 'done', 'finishReason': 'error', 'error': error})
     page = router_projects(owner, {})
     assert page['next_cursor'] is None
     listed = {entry['project_path']: entry for entry in page['projects']}
     assert set(listed) == set(paths)
     alpha = listed[paths[0]]
     assert alpha['availability'] == 'available' and alpha['active_workers'] == 0
+    assert alpha['execution_health'] == {
+        'state': 'observed', 'turn_id': pair['turn']['turnId'], 'status': 'failed', 'authority_withdrawn': False}
     assert alpha['active_requests'] == 0 and alpha['workers_coverage'] == 'complete'
     assert alpha['last_report']['kind'] == 'delivery' and alpha['last_report']['unread'] is True
     assert listed[paths[1]]['last_report'] is None

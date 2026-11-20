@@ -108,6 +108,19 @@ def _drop_expanding_chat_mode(config: dict[str, Any]) -> None:
         config.pop('chatMode', None)
 
 
+def _owned_conversation_settings(conversation_id: str, user_id: int) -> dict[str, Any] | None:
+    snapshot = get_storage_client().query('conversation.get', {
+        'conv_id': conversation_id, 'user_id': user_id, 'derive_messages': False,
+    })
+    return None if snapshot is None else dict((snapshot.get('metadata') or {}).get('settings') or {})
+
+
+def swarm_continuation_available(conversation_id: str, *, user_id: int) -> bool:
+    """Read-only admission preflight; dispatch rechecks after the parent settles."""
+    settings = _owned_conversation_settings(conversation_id, user_id)
+    return settings is not None and _build_swarm_continuation_config(settings, {}, {}) is not None
+
+
 def scheduled_turn_model(conversation_id: str | None, *, user_id: int) -> str:
     """The model ``dispatch_scheduled_turn`` would run for this conversation now.
 
@@ -158,18 +171,10 @@ def dispatch_scheduled_turn(
     if not command_id:
         raise ValueError("A stable scheduler command id is required")
 
-    snapshot = get_storage_client().query(
-        "conversation.get",
-        {
-            "conv_id": conversation_id,
-            "user_id": owner_id,
-            "derive_messages": False,
-        },
-    )
-    if snapshot is None:
+    settings = _owned_conversation_settings(conversation_id, owner_id)
+    if settings is None:
         logger.error("%s Conversation %s not found", log_prefix, conversation_id)
         return ScheduledTurnDispatch("target_missing")
-    settings = dict((snapshot.get("metadata") or {}).get("settings") or {})
     if isinstance(tools_config, str):
         try:
             parsed_tools = json.loads(tools_config or "{}")

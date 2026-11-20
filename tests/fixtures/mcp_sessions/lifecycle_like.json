@@ -1,0 +1,47 @@
+{
+  "description": "MCP lifecycle parity session (packages/tofu-mcp/src/bridge/lifecycle.rs): a catalog that changes on request with tools/list_changed, calls slower than a short handshake budget, recorded JSON-RPC failure codes, and crashes.",
+  "serverInfo": {"name": "tofu-lifecycle", "version": "2.0.0"},
+  "catalogVersion": "life-1",
+  "listChanged": true,
+  "tools": [
+    {"name": "read_doc", "description": "Read a document (old).", "inputSchema": {"type": "object", "properties": {"doc": {"type": "string"}, "max_rows": {"type": "integer", "minimum": 1, "maximum": 5000, "default": 2000}}, "required": ["doc"]}, "annotations": {"readOnlyHint": true}},
+    {"name": "upgrade", "inputSchema": {"type": "object"}},
+    {"name": "slow", "inputSchema": {"type": "object"}},
+    {"name": "slower", "inputSchema": {"type": "object"}},
+    {"name": "past_handshake", "inputSchema": {"type": "object"}},
+    {"name": "crash", "inputSchema": {"type": "object"}},
+    {"name": "crash_read", "inputSchema": {"type": "object"}, "annotations": {"readOnlyHint": true}},
+    {"name": "crash_write", "inputSchema": {"type": "object"}},
+    {"name": "peer_timeout", "inputSchema": {"type": "object"}},
+    {"name": "peer_timeout_cn", "inputSchema": {"type": "object"}},
+    {"name": "peer_closed", "inputSchema": {"type": "object"}},
+    {"name": "peer_invalid", "inputSchema": {"type": "object"}},
+    {"name": "invalid_then_ok", "inputSchema": {"type": "object"}},
+    {"name": "watch", "inputSchema": {"type": "object", "properties": {"timeout_sec": {"type": "integer", "minimum": 30, "maximum": 900, "default": 180}}}}
+  ],
+  "tools_new": [
+    {"name": "read_doc", "description": "Read a document (new).", "inputSchema": {"type": "object", "properties": {"doc": {"type": "string"}}, "required": ["doc"]}, "annotations": {"readOnlyHint": true}},
+    {"name": "upgrade", "inputSchema": {"type": "object"}},
+    {"name": "write_doc", "inputSchema": {"type": "object", "properties": {"doc": {"type": "string"}}}}
+  ],
+  "calls": {
+    "read_doc": {"result": {"content": [{"type": "text", "text": "doc body"}]}},
+    "upgrade": {"list_changed": "tools_new", "result": {"content": [{"type": "text", "text": "upgraded"}]}},
+    "slow": {"sleep": 0.6, "result": {"content": [{"type": "text", "text": "slow-ok"}]}},
+    "slower": {"sleep": 1.6, "result": {"content": [{"type": "text", "text": "slower-ok"}]}},
+    "past_handshake": {"sleep": 2.5, "result": {"content": [{"type": "text", "text": "slow-ok"}]}},
+    "crash": {"exit": true},
+    "crash_read": {"exit_once": true, "result": {"content": [{"type": "text", "text": "read after restart"}]}},
+    "crash_write": {"exit_once": true, "result": {"content": [{"type": "text", "text": "write after restart"}]}},
+    "peer_timeout": {"error": {"code": -32001, "message": "Request 'tools/call' timed out"}},
+    "peer_timeout_cn": {"error": {"code": -32001, "message": "等待响应超时"}},
+    "peer_closed": {"error": {"code": -32000, "message": "Connection closed during timeout handling."}},
+    "peer_invalid": {"error": {"code": -32602, "message": "Invalid query: connection closed is not a supported filter."}},
+    "invalid_then_ok": [
+      {"error": {"code": -32602, "message": "Correct the timeout argument."}},
+      {"result": {"content": [{"type": "text", "text": "corrected response"}]}}
+    ],
+    "watch": {"error": {"code": -32001, "message": "Request 'tools/call' timed out"}},
+    "write_doc": {"result": {"content": [{"type": "text", "text": "written"}]}}
+  }
+}

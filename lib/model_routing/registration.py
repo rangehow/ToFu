@@ -116,7 +116,9 @@ def registration_missing_fields(model: dict) -> list[str]:
         if not isinstance(reasoning.get('can_disable'), bool):
             missing.append('inference_profile.reasoning.can_disable')
         # Empty ladder explicitly means a toggle/budget-only model.
-        if 'supported_efforts' not in reasoning:
+        if reasoning.get('effort_knowledge') == 'undocumented':
+            pass  # Explicit default-only contract, not an empty/no-control ladder.
+        elif 'supported_efforts' not in reasoning:
             missing.append('inference_profile.reasoning.supported_efforts (use [] for no effort control)')
         elif reasoning['supported_efforts'] and not reasoning.get('default_effort'):
             missing.append('inference_profile.reasoning.default_effort')

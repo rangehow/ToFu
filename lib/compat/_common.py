@@ -15,6 +15,8 @@ Pure functions, no Flask imports.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 from lib.ids import short_id  # noqa: F401 — re-exported for back-compat
 from lib.log import get_logger
 from lib.turn_verdict import (
@@ -40,6 +42,76 @@ def require_deliverable_terminal(
     it must never be normalized to ``stop`` / ``end_turn``.
     """
     return require_deliverable_task(task, terminal_event)
+
+
+class CompatModelAttributionUnknown(RuntimeError):
+    """A model switch happened but the paid ledger names no answering model."""
+
+    cause = 'model_attribution_unknown'
+
+
+def _answer_rows(task: dict, rounds) -> list[dict]:
+    """This task's adopted provider responses, in ledger (chronological) order.
+
+    Compaction calls, refused attempts, discarded resends and fee rows
+    transferred from child tasks are billed in the same ledger but never
+    author this task's delivered answer.
+    """
+    rows = []
+    for row in rounds if isinstance(rounds, (list, tuple)) else ():
+        if not isinstance(row, dict) or row.get('kind') or 'sourceRound' in row:
+            continue
+        if row.get('taskId') not in (None, task.get('id')):
+            continue
+        if row.get('responseAuthoring') is False:
+            continue
+        tag = str(row.get('tag') or '').upper()
+        if 'REFUSED' in tag or 'DISCARDED' in tag:
+            continue
+        if isinstance(row.get('model'), str) and row['model'].strip():
+            rows.append(row)
+    return rows
+
+
+def _attribution_unknowable(task: dict, terminal_event: dict, rounds) -> bool:
+    """No answer row: true when billed attempts or a model switch exist."""
+    if task.get('_fallback_model') or terminal_event.get('fallbackModel'):
+        return True
+    if any(isinstance(row, dict) and not row.get('kind')
+           for row in (rounds if isinstance(rounds, (list, tuple)) else ())):
+        return True
+    lock = task.get('events_lock')
+    with (lock if lock is not None else nullcontext()):
+        events = list(task.get('events') or ())
+    return any(isinstance(ev, dict) and ev.get('type') == 'model_fallback'
+               for ev in events)
+
+
+def responding_models(task: dict, requested_model: str,
+                      terminal_event: dict | None = None) -> tuple[str, list[str]]:
+    """Return ``(answering_model, served_models)`` for a delivered turn.
+
+    The paid ``apiRounds`` ledger records the logical model each adopted
+    provider response was dispatched to (primary, configured fallback, pool
+    rescue, post-loop synthesis). Its last answer row authored the delivered
+    answer; ``served_models`` lists every answering model in first-use order.
+    Without answer rows the requested model is the answer only when no other
+    attempt was billed and no model switch was observed (a provider that
+    reports no usage leaves no row); otherwise attribution is unknowable and
+    raises
+    :class:`CompatModelAttributionUnknown` instead of guessing.
+    """
+    event = terminal_event or {}
+    rounds = event.get('apiRounds') or task.get('apiRounds') or []
+    rows = _answer_rows(task, rounds)
+    if rows:
+        served = list(dict.fromkeys(row['model'].strip() for row in rows))
+        return rows[-1]['model'].strip(), served
+    if _attribution_unknowable(task, event, rounds):
+        raise CompatModelAttributionUnknown(
+            'A model switch occurred during this turn, but no paid response '
+            'record identifies the model that produced the answer.')
+    return requested_model, [requested_model]
 
 # ``short_id`` now lives in lib/ids.py (the single, dependency-free home shared
 # by billing / conversations / tasks / routes). Re-exported here so the compat

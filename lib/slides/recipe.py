@@ -665,6 +665,7 @@ def _run_outline(ctx: dict) -> dict:
     candidates: list[dict] = []
     rejected: list[str] = []
     candidate_attempts: list[dict] = []
+    candidate_exceptions: list[Exception] = []
     for lens_name, lens in lenses:
         usage: dict = {}
         prompt = base_prompt
@@ -729,12 +730,17 @@ def _run_outline(ctx: dict) -> dict:
                 'errors': [str(exc)[:400]],
             })
             rejected.append(f'{lens_name}: {exc}')
+            candidate_exceptions.append(exc)
             logger.warning('[Slides:outline] candidate %s failed: %s',
                            lens_name, exc)
     if not candidates:
         ctx['_outline_gate_feedback'] = rejected[:6]
+        # When no candidate was gate-rejected, every failure was an exception:
+        # keep the last as the cause so an endpoint outage stays attributable.
+        only_exceptions = len(candidate_exceptions) == len(candidate_attempts)
         raise ValueError('no outline candidate passed: '
-                         + '; '.join(rejected[:4]))
+                         + '; '.join(rejected[:4])) from (
+            candidate_exceptions[-1] if only_exceptions and candidate_exceptions else None)
 
     fallback_scores = [_outline_score(candidate) for candidate in candidates]
     winner = max(range(len(candidates)), key=lambda index: fallback_scores[index])

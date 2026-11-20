@@ -74,7 +74,10 @@ def blind_pairwise(judge: Callable[[list], tuple[int, str, list]],
     ``parse_critic_choice``'s triple. Labels never reveal which is new; the
     first presentation order comes from a content-bound coin and the second
     swaps it, so a position-biased judge produces a split, not a win. The
-    candidate is preferred only when it wins both presentations.
+    candidate is preferred only when it wins both presentations; one win
+    each is ``'no preference'``, reported with both orders' scores, their
+    position-balanced totals and ``position_bias`` (the judge picked the same
+    position both times).
     """
     first_candidate = _blind_label_order(seed)
     rounds = []
@@ -94,6 +97,13 @@ def blind_pairwise(judge: Callable[[list], tuple[int, str, list]],
         })
     wins = sum(1 for row in rounds if row['candidate_won'])
     verdict = ('candidate' if wins == 2 else
-               'baseline' if wins == 0 else 'split')
+               'baseline' if wins == 0 else 'no preference')
+
+    def total(side: str) -> int:
+        return sum(value for row in rounds for value in (row[side] or {}).values()
+                   if isinstance(value, int) and not isinstance(value, bool))
     return {'verdict': verdict, 'preferred': verdict == 'candidate',
+            'position_bias': rounds[0]['winner_position'] == rounds[1]['winner_position'],
+            'totals': {'candidate': total('candidate_scores'),
+                       'baseline': total('baseline_scores')},
             'rounds': rounds}

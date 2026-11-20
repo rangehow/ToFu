@@ -18,7 +18,6 @@
  * opening tab's lifecycle scope, the `Api.credentials` list and the runtime
  * `closeSettings` / `loadConversation` bindings.
  */
-import './channel-settings.css';
 import { featureRegistry } from '../../feature-registry';
 import { t } from '../../i18n';
 import type { LifecycleScope } from '../../lifecycle';
@@ -383,6 +382,16 @@ function attachmentList(item: OutboxItemView, copy: OutboxCopy, attachments: Att
   return list;
 }
 
+function outboxStateChip(item: OutboxItemView, copy: Pick<OutboxCopy, 'state'>): HTMLElement {
+  if (item.deliveryEvidence === 'acceptance_unverified') {
+    return chip(t('settings.channels.outbox.acceptanceUnverified'), 'idle');
+  }
+  if (item.deliveryEvidence === 'delivery_unconfirmed') {
+    return chip(t('settings.channels.outbox.deliveryUnconfirmed'), 'idle');
+  }
+  return chip(copy.state(item.state), OUTBOX_TONE[item.state]);
+}
+
 /** One channel's outbox: each item's state, thread, text and attachments, with its owner decisions. */
 export function outboxCard(items: OutboxItemView[], copy: OutboxCopy, view: CommandView,
                            decide: OutboxDecisions): HTMLElement {
@@ -396,7 +405,7 @@ export function outboxCard(items: OutboxItemView[], copy: OutboxCopy, view: Comm
     const row = element('div', 'channel-outbox-item');
     const head = element('div', 'channel-outbox-head');
     const meta = element('div', 'channel-outbox-meta');
-    meta.append(chip(copy.state(item.state), OUTBOX_TONE[item.state]),
+    meta.append(outboxStateChip(item, copy),
                 element('span', 'channel-outbox-thread', item.threadTitle || item.thread),
                 element('span', 'channel-key', item.thread));
     if (item.state === 'draft' && copy.code) {
@@ -431,7 +440,7 @@ export function outboxCard(items: OutboxItemView[], copy: OutboxCopy, view: Comm
 function auditItem(item: OutboxItemView, copy: AuditCopy): HTMLElement {
   const row = element('div', 'channel-audit-item');
   const meta = element('div', 'channel-outbox-meta');
-  meta.append(chip(copy.state(item.state), OUTBOX_TONE[item.state]),
+  meta.append(outboxStateChip(item, copy),
               element('span', 'channel-outbox-thread', item.threadTitle || item.thread),
               element('span', 'channel-key', item.thread),
               element('span', 'channel-audit-time', timeText(item.createdAtMs)));

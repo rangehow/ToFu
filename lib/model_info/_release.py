@@ -36,6 +36,9 @@ _RULES: tuple[tuple[str, str], ...] = (
     ('claude-sonnet-4-6', '2026-04'),
     ('claude-haiku-4-5', '2026-02'),
     # ── OpenAI ───────────────────────────────────────────────────
+    # https://developers.openai.com/api/docs/changelog (2026-11-17).
+    ('gpt-6-2-astra', '2026-11-17'),
+    ('gpt-6-2-sol', '2026-11-17'),
     # https://learn.chatgpt.com/docs/changelog (checked 2026-09-30).
     ('gpt-6-1-sol', '2026-09-29'),
     # Same changelog + deploymentsafety.openai.com index (checked 2026-10-28).

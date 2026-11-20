@@ -3,12 +3,10 @@
 Coordinates request admission, stream adoption, reactive recovery and model
 fallback through concrete owners; callers retain task, messages and ledger."""
 
-from contextlib import nullcontext
 
 from lib.llm import AbortedError
 from lib.llm.llm_error_format import format_llm_error_for_user
 from lib.llm.llm_errors import _ERR_BODY_LIMIT, ModelRefusalError
-from lib.llm_dispatch.credential_reservation import fallback_dispatch
 from lib.log import get_logger, task_log_tag
 from lib.tasks_pkg.event_delivery import EventDeliveryError, EventDeliveryRevoked
 
@@ -150,12 +148,16 @@ def _llm_call_with_fallback(
     accumulated_usage,
     api_rounds,
     on_tool_call_ready=None,
+    request_model_decision=None,
 ):
     """Dispatch one round, recover oversized input, and apply fallback policy.
 
     The supplied task, messages and billing ledger remain caller-owned. Local
     admission/durability failures and cancellation never become model failures.
     Results retain the loop's model/preset and typed settlement contract.
+    This is a non-idempotent dispatch, not a request-replay port: callers must
+    propagate local delivery failures to the Attempt owner, never re-enter it
+    to repair publication after a paid request.
     """
     tid = task_log_tag(task['id'])
     fallback_model = _retry._get_fallback_model(task)
@@ -173,23 +175,34 @@ def _llm_call_with_fallback(
     #    before that round's primary attempt; a repeated refusal falls back
     #    again for that round only (same _configured path as the first).
     from . import _switch
-    if not fallback_disabled:
-        # Capture BEFORE the stamp: the stamp swaps _fallback_from/_model, so
-        # reading _fallback_from afterwards would hand back the fallback.
-        primary_again = str(task.get('_fallback_from') or '').strip()
-        if primary_again and _switch.stamp_switch_back(task, round_num, messages):
-            model = primary_again
-            body = dict(body, model=model)
-            # The body's other model-bound fields (tools, images, budget,
-            # archive) were prepared for this same model: build_round_request
-            # applies the switch BEFORE building, so only the label differs.
+    request_model_decision = _switch.decide_request_model(
+        task, model, round_num, messages, request_model_decision)
+    model = request_model_decision.model
+    if body.get('model') != model:
+        body = dict(body, model=model)
 
-    # A round served on the fallback model is fallback traffic: it, its
-    # local recovery retries and its rescue never select an experiment-
-    # reserved credential (lib/llm_dispatch/credential_reservation.py).
-    with (fallback_dispatch() if _switch.serves_fallback(task, model)
-          else nullcontext()):
-        # ── Primary model call ──
+    decision_prepared = False
+    decision_committed = False
+    prepared_switch = None
+
+    def prepare_decision():
+        nonlocal decision_prepared, prepared_switch
+        if not decision_prepared:
+            prepared_switch = _switch.prepare_request_model(
+                task, request_model_decision, round_num, messages)
+            decision_prepared = True
+
+    def commit_decision():
+        nonlocal decision_committed
+        if not decision_committed:
+            _switch.commit_request_model(task, request_model_decision, prepared_switch)
+            decision_committed = True
+
+    body['_on_model_request_dispatching'] = prepare_decision
+    body['_on_model_request_dispatched'] = commit_decision
+
+    # ── Primary model call ──
+    try:
         try:
             result = _call_primary(
                 task,
@@ -203,229 +216,259 @@ def _llm_call_with_fallback(
                 api_rounds,
                 on_tool_call_ready,
             )
-            # A served primary round retires the sticky fallback reporting; the
-            # paid ledger and model_fallback_receipt still name every fallback round.
-            if task.get('_fallback_model') and task['_fallback_model'] != model:
-                _switch.clear_switch_stamps(task)
-            return result
+        except BaseException as primary:
+            if decision_committed:
+                try:
+                    _switch.publish_request_model(task, prepared_switch)
+                except BaseException as publication:
+                    if (not isinstance(primary, Exception)
+                            or isinstance(primary, (AbortedError, EventDeliveryError, EventDeliveryRevoked))):
+                        primary.add_note('Model-switch publication also failed: '
+                                         + type(publication).__name__)
+                    else:
+                        # A local publication failure cannot authorize another
+                        # provider attempt. Keep its original transport cause
+                        # and observed usage for billing/diagnosis.
+                        if (isinstance(publication, Exception)
+                                and not isinstance(publication, (AbortedError, EventDeliveryError, EventDeliveryRevoked))):
+                            failure = EventDeliveryError('Model-switch evidence publication failed')
+                            failure.add_note('Publication cause: ' + type(publication).__name__)
+                            publication = failure
+                        if getattr(publication, 'usage', None) is None:
+                            observed_usage = getattr(primary, 'usage', None)
+                            if observed_usage is not None:
+                                publication.usage = observed_usage
+                        raise publication from primary
+            raise
+        else:
+            if decision_committed:
+                _switch.publish_request_model(task, prepared_switch)
+        # A served primary round retires the sticky fallback reporting; the
+        # paid ledger and model_fallback_receipt still name every fallback round.
+        if task.get('_fallback_model') and (
+            task['_fallback_model'] != model
+            or task.get('_fallback_kind') == 'primary_retry'
+        ):
+            _switch.clear_switch_stamps(task)
+        return result
 
-        except Exception as e:
-            if isinstance(e, (EventDeliveryError, EventDeliveryRevoked)):
-                # Retain the original local durability cause; a route cannot repair it.
-                raise
-            _errors.raise_if_scope_denied(
-                task,
-                e,
-                model=model,
-                round_num=round_num,
-                accumulated_usage=accumulated_usage,
-                api_rounds=api_rounds,
-            )
-            # AbortedError must escape — never fallback/retry on user abort
+    except Exception as e:
+        if isinstance(e, (EventDeliveryError, EventDeliveryRevoked)):
+            # Retain the original local durability cause; a route cannot repair it.
+            raise
+        _errors.raise_if_scope_denied(
+            task,
+            e,
+            model=model,
+            round_num=round_num,
+            accumulated_usage=accumulated_usage,
+            api_rounds=api_rounds,
+        )
+        # AbortedError must escape — never fallback/retry on user abort
 
-            if isinstance(e, AbortedError):
-                logger.debug(
-                    '[%s] ✋ AbortedError at round %d — stopping immediately',
-                    tid,
-                    round_num,
-                )
-                raise
-
-            # Derived-payload failures are recoverable locally. Repeatedly compact
-            # within the small shared retry budget, preserving the latest typed
-            # error from each retry.
-            recovered, e, body = _recovery.recover_oversized_request(
-                task,
-                body,
-                model,
+        if isinstance(e, AbortedError):
+            logger.debug(
+                '[%s] ✋ AbortedError at round %d — stopping immediately',
+                tid,
                 round_num,
-                tool_list,
-                messages,
-                preset,
-                thinking_enabled,
-                accumulated_usage,
-                api_rounds,
-                on_tool_call_ready,
-                e,
             )
-            if recovered is not None:
-                return recovered
-            recovered, e, body = _recovery.recover_rejected_encrypted_state(
-                task,
-                body,
-                model,
-                round_num,
-                tool_list,
-                messages,
-                preset,
-                thinking_enabled,
-                accumulated_usage,
-                api_rounds,
-                on_tool_call_ready,
-                e,
-            )
-            if recovered is not None:
-                return recovered
+            raise
 
-            settled = _errors.settle_content_rejection(
+        # Derived-payload failures are recoverable locally. Repeatedly compact
+        # within the small shared retry budget, preserving the latest typed
+        # error from each retry.
+        recovered, e, body = _recovery.recover_oversized_request(
+            task,
+            body,
+            model,
+            round_num,
+            tool_list,
+            messages,
+            preset,
+            thinking_enabled,
+            accumulated_usage,
+            api_rounds,
+            on_tool_call_ready,
+            e,
+        )
+        if recovered is not None:
+            return recovered
+        recovered, e, body = _recovery.recover_rejected_encrypted_state(
+            task,
+            body,
+            model,
+            round_num,
+            tool_list,
+            messages,
+            preset,
+            thinking_enabled,
+            accumulated_usage,
+            api_rounds,
+            on_tool_call_ready,
+            e,
+        )
+        if recovered is not None:
+            return recovered
+
+        settled = _errors.settle_content_rejection(
+            task,
+            e,
+            model=model,
+            round_num=round_num,
+            preset=preset,
+            thinking_enabled=thinking_enabled,
+        )
+        if settled is not None:
+            return settled
+
+        original_model = model
+        err_str = str(e)[:_ERR_BODY_LIMIT]
+        if isinstance(e, ModelRefusalError):
+            logger.warning(
+                '[%s] conv=%s 🚫 MODEL REFUSAL at round %d (model=%s category=%s): %s',
+                tid,
+                task.get('convId', ''),
+                round_num + 1,
+                model,
+                e.category or 'none',
+                err_str,
+            )
+        else:
+            logger.error(
+                '[%s] conv=%s LLM call failed at round %d (model=%s): %s '
+                '(check M-TraceId in preceding debug logs for gateway coordination)',
+                tid,
+                task.get('convId', ''),
+                round_num + 1,
+                model,
+                err_str,
+                exc_info=True,
+            )
+
+        settled = _errors.settle_non_rotatable_primary_error(
+            task,
+            e,
+            model=model,
+            round_num=round_num,
+            tool_call_happened=tool_call_happened,
+            preset=preset,
+            thinking_enabled=thinking_enabled,
+        )
+        if settled is not None:
+            return settled
+
+        # A refusal is a content decision, not unavailability: without a
+        # distinct configured fallback it settles typed, never pool-rescued
+        # onto an arbitrary model.
+        if isinstance(e, ModelRefusalError) and (
+            not fallback_model or model == fallback_model
+        ):
+            if fallback_disabled:
+                _refusal_note = 'Model fallback is disabled for this request.'
+            elif not fallback_model:
+                _refusal_note = 'No fallback model is configured.'
+            else:
+                _refusal_note = f'{model} is already the configured fallback model.'
+            return _refusal._settle_model_refusal(
                 task,
                 e,
-                model=model,
-                round_num=round_num,
+                messages=messages,
+                fallback_note=_refusal_note,
                 preset=preset,
                 thinking_enabled=thinking_enabled,
+                round_num=round_num,
             )
-            if settled is not None:
-                return settled
 
-            original_model = model
-            err_str = str(e)[:_ERR_BODY_LIMIT]
-            if isinstance(e, ModelRefusalError):
-                logger.warning(
-                    '[%s] conv=%s 🚫 MODEL REFUSAL at round %d (model=%s category=%s): %s',
-                    tid,
-                    task.get('convId', ''),
-                    round_num + 1,
-                    model,
-                    e.category or 'none',
-                    err_str,
+        # If already on the fallback model, or no fallback configured —
+        # try the pool-wide last resort before giving up (owner directive
+        # 2026-08-03: an error surfaces ONLY when every key is unavailable).
+        # An explicit per-request opt-out (disableModelFallback) skips it.
+        if not fallback_model or model == fallback_model:
+            if not fallback_disabled:
+                _rescue = _pool._attempt_pool_rescue(
+                    task,
+                    body,
+                    round_num,
+                    max_tokens,
+                    tool_list,
+                    accumulated_usage,
+                    api_rounds,
+                    failed_models={model},
+                    original_model=original_model,
+                    cause_exc=e,
+                    preset=preset,
+                    thinking_enabled=thinking_enabled,
+                    on_tool_call_ready=on_tool_call_ready,
                 )
-            else:
-                logger.error(
-                    '[%s] conv=%s LLM call failed at round %d (model=%s): %s '
-                    '(check M-TraceId in preceding debug logs for gateway coordination)',
+                if _rescue is not None:
+                    return _rescue
+            if tool_call_happened:
+                _user_err = format_llm_error_for_user(
+                    e,
+                    model=model,
+                    context=(
+                        no_fallback_context
+                        if not fallback_model
+                        else 'on-fallback-model'
+                    ),
+                    source='llm-stream',
+                )
+                task['error'] = _user_err
+                logger.warning(
+                    '[%s] 🛑 Fallback model error with prior tool calls — giving up: %s',
                     tid,
-                    task.get('convId', ''),
-                    round_num + 1,
-                    model,
                     err_str,
                     exc_info=True,
                 )
-
-            settled = _errors.settle_non_rotatable_primary_error(
-                task,
-                e,
-                model=model,
-                round_num=round_num,
-                tool_call_happened=tool_call_happened,
-                preset=preset,
-                thinking_enabled=thinking_enabled,
-            )
-            if settled is not None:
-                return settled
-
-            # A refusal is a content decision, not unavailability: without a
-            # distinct configured fallback it settles typed, never pool-rescued
-            # onto an arbitrary model.
-            if isinstance(e, ModelRefusalError) and (
-                not fallback_model or model == fallback_model
-            ):
-                if fallback_disabled:
-                    _refusal_note = 'Model fallback is disabled for this request.'
-                elif not fallback_model:
-                    _refusal_note = 'No fallback model is configured.'
-                else:
-                    _refusal_note = f'{model} is already the configured fallback model.'
-                return _refusal._settle_model_refusal(
-                    task,
+                # ``content`` must be a string — the typed envelope is
+                # carried separately on task['error'] / done.error.  The
+                # assistant bubble shows the empty string; the frontend
+                # renders the error envelope as a typed error block.
+                return {
+                    'assistant_msg': {'role': 'assistant', 'content': ''},
+                    'finish_reason': 'error',
+                    'usage': None,
+                    'model': model,
+                    'preset': preset,
+                    'thinking_enabled': thinking_enabled,
+                    '_loop_action': 'break',
+                    '_loop_exit_reason': f'opus_error_with_tool_calls_round_{round_num}',
+                }
+            # No fallback / already on fallback and no prior tool calls —
+            # stash the typed envelope on the exception so the top-level
+            # FATAL handler in orchestrator can surface actionable text
+            # without losing the exception type (subclasses may have
+            # non-trivial __init__ signatures).
+            try:
+                e._user_message = format_llm_error_for_user(  # type: ignore[attr-defined]
                     e,
-                    messages=messages,
-                    fallback_note=_refusal_note,
-                    preset=preset,
-                    thinking_enabled=thinking_enabled,
-                    round_num=round_num,
+                    model=model,
+                    context=(
+                        no_fallback_context
+                        if not fallback_model
+                        else 'on-fallback-model'
+                    ),
+                    source='llm-stream',
                 )
+            except Exception as _attr_err:
+                logger.debug('[%s] Could not attach _user_message: %s', tid, _attr_err)
+            raise e
 
-            # If already on the fallback model, or no fallback configured —
-            # try the pool-wide last resort before giving up (owner directive
-            # 2026-08-03: an error surfaces ONLY when every key is unavailable).
-            # An explicit per-request opt-out (disableModelFallback) skips it.
-            if not fallback_model or model == fallback_model:
-                if not fallback_disabled:
-                    _rescue = _pool._attempt_pool_rescue(
-                        task,
-                        body,
-                        round_num,
-                        max_tokens,
-                        tool_list,
-                        accumulated_usage,
-                        api_rounds,
-                        failed_models={model},
-                        original_model=original_model,
-                        cause_exc=e,
-                        preset=preset,
-                        thinking_enabled=thinking_enabled,
-                        on_tool_call_ready=on_tool_call_ready,
-                    )
-                    if _rescue is not None:
-                        return _rescue
-                if tool_call_happened:
-                    _user_err = format_llm_error_for_user(
-                        e,
-                        model=model,
-                        context=(
-                            no_fallback_context
-                            if not fallback_model
-                            else 'on-fallback-model'
-                        ),
-                        source='llm-stream',
-                    )
-                    task['error'] = _user_err
-                    logger.warning(
-                        '[%s] 🛑 Fallback model error with prior tool calls — giving up: %s',
-                        tid,
-                        err_str,
-                        exc_info=True,
-                    )
-                    # ``content`` must be a string — the typed envelope is
-                    # carried separately on task['error'] / done.error.  The
-                    # assistant bubble shows the empty string; the frontend
-                    # renders the error envelope as a typed error block.
-                    return {
-                        'assistant_msg': {'role': 'assistant', 'content': ''},
-                        'finish_reason': 'error',
-                        'usage': None,
-                        'model': model,
-                        'preset': preset,
-                        'thinking_enabled': thinking_enabled,
-                        '_loop_action': 'break',
-                        '_loop_exit_reason': f'opus_error_with_tool_calls_round_{round_num}',
-                    }
-                # No fallback / already on fallback and no prior tool calls —
-                # stash the typed envelope on the exception so the top-level
-                # FATAL handler in orchestrator can surface actionable text
-                # without losing the exception type (subclasses may have
-                # non-trivial __init__ signatures).
-                try:
-                    e._user_message = format_llm_error_for_user(  # type: ignore[attr-defined]
-                        e,
-                        model=model,
-                        context=(
-                            no_fallback_context
-                            if not fallback_model
-                            else 'on-fallback-model'
-                        ),
-                        source='llm-stream',
-                    )
-                except Exception as _attr_err:
-                    logger.debug('[%s] Could not attach _user_message: %s', tid, _attr_err)
-                raise e
-
-            return _configured.call_configured_fallback(
-                task,
-                body,
-                model,
-                round_num,
-                max_tokens,
-                tool_call_happened,
-                tool_list,
-                messages,
-                preset,
-                thinking_enabled,
-                accumulated_usage,
-                api_rounds,
-                error=e,
-                fallback_model=fallback_model,
-                fallback_disabled=fallback_disabled,
-                on_tool_call_ready=on_tool_call_ready,
-            )
+        return _configured.call_configured_fallback(
+            task,
+            body,
+            model,
+            round_num,
+            max_tokens,
+            tool_call_happened,
+            tool_list,
+            messages,
+            preset,
+            thinking_enabled,
+            accumulated_usage,
+            api_rounds,
+            error=e,
+            fallback_model=fallback_model,
+            fallback_disabled=fallback_disabled,
+            on_tool_call_ready=on_tool_call_ready,
+        )

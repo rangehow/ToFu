@@ -166,3 +166,96 @@ def test_an_earlier_stop_never_fences_a_later_send(accepted):
     assert turns.get_attempt(identity, user_id=owner)['status'] == 'pending'
     assert factory().query('worker_job.get', {
         'task_id': 'conversation-attempt:' + identity, 'user_id': owner})['status'] == 'queued'
+
+
+@pytest.mark.parametrize('fault', ['before_commit', 'lost_ack', 'claimed', 'stopped'])
+def test_project_bind_refusal_keeps_exact_attempt_recoverable(accepted, monkeypatch, fault):
+    from lib.conversation_sync import command_service
+    from lib.project_dispatch import admission
+    from lib.project_dispatch.repository import ProjectDispatchError
+
+    turns, factory, owner, _, principal, _ = accepted
+    conversation = uuid.uuid4().hex
+    body = {'commandId': 'project-birth', 'input': 'approved work',
+            'conversation': {'allowCreate': True, 'title': 'Project birth'}}
+    service = command_service.ConversationTurnCommandService(
+        build_user_message=lambda *a: None, was_aborted_after=lambda *a: False)
+    binding = admission.TrustedDispatch({})
+    monkeypatch.setattr(admission.TrustedDispatch, 'capture', lambda *a: {})
+    monkeypatch.setattr(admission.TrustedDispatch, 'validated',
+                        lambda self: {'grant': {'createdAt': 0}, 'execution': None, 'request': {}})
+    named_attempts = []
+
+    def refuse(turn_id, attempt_id):
+        named_attempts.append((turn_id, attempt_id))
+        raise ProjectDispatchError('definitive bind refusal')
+
+    monkeypatch.setattr(admission.TrustedDispatch, 'continue_execution', lambda self, *a: refuse(*a))
+    monkeypatch.setattr(admission, 'continue_recovered_execution', lambda config, *a: refuse(*a))
+    writes = []
+
+    class FaultyClient:
+        def __init__(self, write=False):
+            self.client = factory(write=write)
+
+        def __getattr__(self, name):
+            return getattr(self.client, name)
+
+        def command(self, operation, payload, *args, **kwargs):
+            if operation == 'turn.event.record':
+                writes.append(operation)
+                # After the failing producer has read the Turn, but before
+                # its terminal publication reaches the actual authority.
+                attempt_id = named_attempts[-1][1]
+                if fault == 'claimed' and len(writes) == 1:
+                    assert turns.claim_attempt_start(attempt_id, user_id=owner)
+                if fault == 'stopped' and len(writes) == 1:
+                    turns.abort_attempt(attempt_id, user_id=owner, withdraw_dispatch=False)
+                if fault == 'before_commit' and len(writes) <= 2:
+                    raise StorageError('database_timeout', 'Terminal write timed out', True)
+                if fault == 'lost_ack' and len(writes) == 1:
+                    self.client.command(operation, payload, *args, **kwargs)
+                    raise StorageError('database_timeout', 'Terminal reply timed out', True)
+            return self.client.command(operation, payload, *args, **kwargs)
+
+    monkeypatch.setattr(turns, '_turn_client', FaultyClient)
+
+    def send():
+        return service.create_turn(conversation, owner, body, request_started_at=time.time(),
+                                   trusted_dispatch=binding, principal=principal).value
+
+    expected_error = StorageError if fault in ('before_commit', 'lost_ack') else ProjectDispatchError
+    with pytest.raises(expected_error):
+        send()
+    turn_id, attempt_id = named_attempts[0]
+    row = turns.get_attempt(attempt_id, user_id=owner)
+    if fault == 'claimed':
+        assert row['status'] == 'pending' and row['taskId'].startswith(f'@dispatching:{attempt_id}:')
+        assert service.recover_dispatchable_attempts(created_before_ms=1 << 62)['examined'] == 0
+        return  # The existing dispatch owner, not the bind refuser, owns that claim.
+    assert row['taskId'] == ''
+    assert row['status'] == {'before_commit': 'pending', 'lost_ack': 'failed',
+                             'stopped': 'interrupted'}[fault]
+    if fault == 'before_commit':
+        # Even a second timeout (in recovery) must leave the exact row visible
+        # for the next maintenance pass, rather than a synthetic start claim.
+        assert service.recover_dispatchable_attempts(created_before_ms=1 << 62) == {
+            'examined': 1, 'recovered': 0, 'settledFailed': 0}
+        assert turns.get_attempt(attempt_id, user_id=owner)['taskId'] == ''
+    scan = service.recover_dispatchable_attempts(created_before_ms=1 << 62)
+    recovered_failure = int(fault == 'before_commit')
+    assert scan == {'examined': recovered_failure, 'recovered': 0, 'settledFailed': recovered_failure}
+    replay = send()
+    assert replay['idempotentReplay'] and replay['attempt']['attemptId'] == attempt_id
+    assert replay['turn']['turnId'] == turn_id
+    assert replay['attempt']['status'] == ('interrupted' if fault == 'stopped' else 'failed')
+    if fault == 'stopped':
+        assert replay['turn']['settlement']['cause'] == 'user_abort'
+    else:
+        assert replay['turn']['settlement']['error']['kind'] == 'task_start_failed'
+    assert named_attempts == [(turn_id, attempt_id)] * (1 + 2 * recovered_failure)
+    events = turns.read_events(attempt_id, user_id=owner)
+    terminal = [event for event in events if event['type'] == 'terminal_settlement']
+    assert len(terminal) == 1 and '_requireUnboundAttempt' not in terminal[0]['payload']
+    assert factory().query('worker_job.get', {
+        'task_id': 'conversation-attempt:' + attempt_id, 'user_id': owner}) is None

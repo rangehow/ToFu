@@ -1,10 +1,13 @@
 /** Model-picker display contracts. Canonical routing DTOs remain generated; browser selection is injected, never owned here. */
 import type { FoldableModelEntry, ModelDisplayUnit } from '../../core/model-display-fold';
-export interface ProviderOption { provider_id: string; provider_name: string; offering_id?: string; brand?: string }
+import type { ReasoningControls } from '../../api/api-v1-model-routing.generated';
+type ChatAvailability = ReasoningControls['availability'];
+export interface ProviderOption { provider_id: string; provider_name: string; offering_id?: string; brand?: string; availability?: ChatAvailability }
 export interface PickerModel extends FoldableModelEntry {
   model_id: string; display_name?: string; creator_id?: string; creator_name?: string; provider_id?: string; provider_name?: string;
   offering_id?: string; brand?: string; routing_v2?: boolean; pending_identity?: boolean;
   capabilities?: readonly string[]; thinking_default?: boolean; provider_options?: ProviderOption[];
+  availability?: ChatAvailability;
 }
 export interface PickerSelection {
   modelId: string; preferredProviderId: string;

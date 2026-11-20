@@ -19,6 +19,7 @@ export type ModelRoutingInferenceProfile = {
 };
   "enabled_type"?: "enabled" | "adaptive";
   "effort_field"?: "effort" | "reasoning_effort";
+  "effort_knowledge"?: "undocumented";
   "supported_efforts"?: ReadonlyArray<string>;
   "default_effort"?: string;
   "disabled_effort"?: string;
@@ -48,6 +49,14 @@ export type ModelRoutingInferenceProfile = {
   [key: string]: "supported" | "unsupported" | "unknown";
 };
   "source"?: string;
+};
+
+export type ModelRoutingRevocationHistoryEntry = {
+  "credential_id": ModelRoutingIdentifier;
+  "creator_id": ModelRoutingIdentifier;
+  "model_id": ModelRoutingIdentifier;
+  "model_revoked": boolean;
+  "excluded_wire_model_ids": ModelRoutingIdentifierList;
 };
 
 export type ModelRoutingIdentifier = string;
@@ -178,6 +187,15 @@ export type ModelRoutingDesktopAdapter = {
 export type ModelRoutingCredentialAuthorization = {
   "connection_ids": ModelRoutingIdentifierList;
   "models": ReadonlyArray<ModelRoutingWireGrant>;
+  "codex_account_grants"?: {
+  [key: string]: ReadonlyArray<ModelRoutingCodexAccountWireGrant>;
+};
+};
+
+export type ModelRoutingCodexAccountWireGrant = {
+  "creator_id": "openai";
+  "model_id": ModelRoutingIdentifier;
+  "wire_model_id": ModelRoutingIdentifier;
 };
 
 export type ModelRoutingCredentialMetadata = {
@@ -256,6 +274,19 @@ export type ModelRoutingDocument = {
   "offerings": ReadonlyArray<ModelRoutingOffering>;
   "deployments": ReadonlyArray<ModelRoutingDeployment>;
   "migration"?: ModelRoutingMigrationMetadata;
+  "codex_seen_history"?: ReadonlyArray<{
+  "provider_access_id": string;
+  "credential_id": string;
+  "account_fingerprint": string;
+  "complete": boolean;
+  "wire_model_ids": ReadonlyArray<string>;
+  "pending_wire_model_ids": ReadonlyArray<string>;
+  "models": ReadonlyArray<{
+  "creator_id": string;
+  "model_id": string;
+}>;
+}>;
+  "revocation_history"?: ReadonlyArray<ModelRoutingRevocationHistoryEntry>;
 };
 
 export type Revision = number;
@@ -285,10 +316,13 @@ export type ReasoningControls = {
   "depths": ReadonlyArray<string>;
 };
 
-export type ModelRoutingPutRequest = {
+export type ModelRoutingPutRequest = ({
   "model_routing": ModelRoutingDocument;
   "expected_revision": Revision;
-};
+}) | ({
+  "codex_registration_enabled": boolean;
+  "expected_revision": Revision;
+});
 
 export type ProviderBundle = {
   "provider": ModelRoutingProvider;

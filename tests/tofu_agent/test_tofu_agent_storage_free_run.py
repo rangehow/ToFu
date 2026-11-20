@@ -16,7 +16,6 @@ boundary guard"). It needs no wheel build or uv cache, so it also runs where
 from __future__ import annotations
 
 from pathlib import Path
-import sysconfig
 
 import pytest
 
@@ -39,10 +38,15 @@ def test_storage_free_run_completes_a_tool_round_inside_the_wheel_boundary(tmp_p
     assert not unsatisfied_imports(run)
     manifest = WheelManifest.load(ROOT)
     checkout = ROOT.resolve()
-    # A CI checkout holds its environment in `.venv/`; installed dependencies
-    # there are not checkout modules.
-    installed = {Path(sysconfig.get_path(key)).resolve() for key in ('purelib', 'platlib')}
     assert not sorted(name for name, path in run.report['modules'].items()
                       if path and Path(path).resolve().is_relative_to(checkout)
-                      and not any(Path(path).resolve().is_relative_to(site) for site in installed)
                       and not manifest.ships_module(name))
+
+
+def test_storage_free_run_refuses_an_unavailable_credential_without_side_effect(tmp_path):
+    from tests.support.agent_wheel_run import assert_credential_refusal
+    top_level = {name.partition('.')[0] for name in manifest_modules()}
+    run = run_tofu_agent(tmp_path, application=ROOT, entry=console_entry(),
+                         top_level=top_level, boundary=True, credential_refusal=True)
+    assert_credential_refusal(run)
+    assert not unsatisfied_imports(run)

@@ -116,6 +116,43 @@ _FORBIDDEN_NAMES = {'urlopen'}
 _FORBIDDEN_PREFIXES = ('httpx.', 'http.client', 'urllib.request.')
 
 
+def _module_aliases(tree: ast.AST) -> dict[str, str]:
+    """Names bound by ``import <module> [as name]`` -> the imported module."""
+    return {alias.asname or alias.name: alias.name
+            for node in ast.walk(tree) if isinstance(node, ast.Import)
+            for alias in node.names}
+
+
+def _transport_offenders(source: str, filename: str = '<source>') -> list[str]:
+    tree = ast.parse(source, filename=filename)
+    # Only a name bound to the imported module is that module: a local such as
+    # a queue named ``requests`` calling ``.put``/``.get`` is not HTTP.
+    modules = _module_aliases(tree)
+    offenders = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+            module = modules.get(func.value.id)
+            if (module, func.attr) in _FORBIDDEN_ATTRS:
+                offenders.append(f'{func.value.id}.{func.attr} @ line {node.lineno}')
+        elif isinstance(func, ast.Name) and func.id in _FORBIDDEN_NAMES:
+            offenders.append(f'{func.id} @ line {node.lineno}')
+
+    for prefix in _FORBIDDEN_PREFIXES:
+        if prefix in source.replace(' ', ''):
+            offenders.append(f'{prefix} referenced')
+    return offenders
+
+
+def test_transport_check_resolves_the_imported_module():
+    assert _transport_offenders('import requests\nrequests.get(u)\n') == [
+        'requests.get @ line 2']
+    assert _transport_offenders('import requests as r\nr.post(u)\n') == ['r.post @ line 2']
+    assert _transport_offenders('requests = queue.SimpleQueue()\nrequests.put(x)\n') == []
+
+
 def _package_modules():
     for path in sorted(PKG_ROOT.rglob('*.py')):
         yield path, path.relative_to(PKG_ROOT).as_posix()
@@ -132,24 +169,7 @@ def test_http_calls_go_through_a_transport_seam(path, rel):
     if rel in _TRANSPORT_OWNERS:
         pytest.skip(f'{rel} is a declared transport owner')
 
-    source = path.read_text(encoding='utf-8')
-    tree = ast.parse(source, filename=str(path))
-
-    offenders = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
-            if (func.value.id, func.attr) in _FORBIDDEN_ATTRS:
-                offenders.append(f'{func.value.id}.{func.attr} @ line {node.lineno}')
-        elif isinstance(func, ast.Name) and func.id in _FORBIDDEN_NAMES:
-            offenders.append(f'{func.id} @ line {node.lineno}')
-
-    for prefix in _FORBIDDEN_PREFIXES:
-        if prefix in source.replace(' ', ''):
-            offenders.append(f'{prefix} referenced')
-
+    offenders = _transport_offenders(path.read_text(encoding='utf-8'), str(path))
     assert not offenders, (
         f'{rel} builds its own HTTP call ({offenders}). Route it through '
         'tofu_search.http_client (or vertical/base.py for verticals) so it '

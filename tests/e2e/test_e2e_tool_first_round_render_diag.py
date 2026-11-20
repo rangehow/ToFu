@@ -104,15 +104,10 @@ def _stub_perform_web_search(query, user_question='', freshness='', **kwargs):
 
 
 @pytest.fixture(scope='module', autouse=True)
-def _install_llm_stubs(flask_app):
+def _install_llm_stubs():
     import tofu_search
+    import lib.tasks_pkg.llm_fallback._call as llm_fb
     import lib.tasks_pkg.handlers.search._core as search_core
-    from lib.durable_worker.runtime import ensure_workers_started, stop_workers
-    from tests.support.model_routing import install_native_test_model_route
-
-    # Same seams as tests/e2e/test_e2e_smoke.py: a blank authority needs a
-    # callable route, and accepted chat Attempts run on the durable workers.
-    install_native_test_model_route(owner_user_id=1, capabilities=('text', 'thinking'))
 
     saved = {
         'llm_fb': _fallback_transport.stream_llm_response,
@@ -123,16 +118,12 @@ def _install_llm_stubs(flask_app):
     tofu_search.perform_web_search = _stub_perform_web_search
     search_core.perform_web_search = _stub_perform_web_search
     try:
-        ensure_workers_started(flask_app)
         yield
     finally:
-        try:
-            stop_workers(flask_app)
-        finally:
-            _fallback_transport.stream_llm_response = saved['llm_fb']
-            search_core.perform_web_search = saved['search_core']
-            if saved['tofu'] is not None:
-                tofu_search.perform_web_search = saved['tofu']
+        _fallback_transport.stream_llm_response = saved['llm_fb']
+        search_core.perform_web_search = saved['search_core']
+        if saved['tofu'] is not None:
+            tofu_search.perform_web_search = saved['tofu']
 
 
 _INSTRUMENT_JS = r"""

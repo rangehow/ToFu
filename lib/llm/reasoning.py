@@ -255,6 +255,11 @@ def resolve_reasoning_control(reasoning, mode, value=None, *, strict=True):
         if mode == 'off' and support == 'unsupported':
             return 'none', False, None, 'off'
         raise ReasoningContractError('unsupported_reasoning', 'destination reasoning support is not declared')
+    if reasoning.get('effort_knowledge') == 'undocumented':
+        if mode == 'exact':
+            raise ReasoningContractError('unsupported_effort', 'destination effort ladder is undocumented')
+        # Preserve ordinary degrade-and-record behavior without inventing a rung.
+        return fmt, False, None, 'default'
     cannot_disable = reasoning.get('can_disable') is not True
     if mode == 'off' and cannot_disable:
         # Degrade a request to disable reasoning into the smallest reasoning
@@ -431,6 +436,8 @@ def _compile(body, model, *, inference_profile, thinking_format):
             mode, effective, reason = 'default', 'default', 'disable_not_verified'
         fmt, enabled, resolved, mode = resolve_reasoning_control(
             r, mode, value, strict=bool(intent.get('strict', True)))
+        if requested != 'default' and mode == 'default' and r.get('effort_knowledge') == 'undocumented':
+            effective, reason = 'default', 'effort_undocumented_fell_back_to_default'
         if requested == 'off' and enabled and reason == 'matched':
             # resolve_reasoning_control degraded a disable request the
             # destination cannot honor into the smallest reasoning the model

@@ -77,10 +77,15 @@ def test_completed_signed_history_preserves_work_across_protocol_switch(monkeypa
 
 
 @pytest.mark.parametrize('status', ['running', 'failed', 'aborted', None])
-def test_unsettled_history_cannot_discard_its_signature(monkeypatch, status):
+def test_unsettled_history_keeps_work_not_foreign_responses_signatures(monkeypatch, status):
     messages = _history(monkeypatch, status)
+    original = deepcopy(messages)
     result = openai_body_to_responses_checked({'messages': messages}, profile='codex')
-    assert result.validation_issues == ('mandatory_continuity_unrepresentable',)
+    payload = result.require_payload()
+    assert result.permitted_conversion_losses['cross_protocol_reasoning_omitted'] == 1
+    assert any(item.get('output') == 'Exact result' for item in payload['input'])
+    assert 'opaque-signature' not in repr(payload)
+    assert messages == original
 
 
 def test_completed_native_thinking_is_optional_but_visible_text_survives(monkeypatch):

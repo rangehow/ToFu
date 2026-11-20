@@ -45,9 +45,11 @@ def test_slow_boot_stays_owned_then_reloads(frontend_visual_page):
     mount_restart(page)
     page.evaluate('restartServer()')
     payload.update(bootId='new', boot={'status':'running','phaseTotal':9,
-        'currentPhase':{'index':3,'key':'storage_authority_sql'}})
+        'currentPhase':{'index':3,'key':'storage_authority_sql',
+                        'label':'Storage sidecar configuration'}})
     page.evaluate('clockAdvance = 270000')
-    page.wait_for_function("document.getElementById('updRestartPhase').textContent.includes('storage_authority_sql')")
+    page.wait_for_function("document.getElementById('updRestartPhase').textContent.includes('Storage sidecar configuration')")
+    assert 'update.phase.' not in page.locator('#updRestartPhase').inner_text()
     page.wait_for_function("document.getElementById('updRestartSub').textContent === 'update.restartTimeout'")
     assert page.locator('#updateRestartNowBtn').is_disabled()
     assert page.locator('#updRestartCard').is_visible()
@@ -80,10 +82,13 @@ def test_failed_boot_retries_phase_without_another_restart(frontend_visual_page)
     mount_restart(page)
     page.evaluate('restartServer()')
     assert page.evaluate('restartPosts') == 0
-    payload['boot'] = {'status':'failed','failedPhase':{'index':3,'key':'storage_authority_sql'},
+    payload['boot'] = {'status':'failed',
+        'failedPhase':{'index':3,'key':'storage_authority_sql',
+                       'label':'Storage sidecar configuration'},
         'error':'injected storage failure'}
     page.wait_for_function("document.getElementById('updRestartTitle').textContent === 'boot.failedTitle'")
     assert 'injected storage failure' in page.locator('#updRestartCard').inner_text()
+    assert 'Storage sidecar configuration' in page.locator('#updRestartPhase').inner_text()
     page.evaluate('restartServer()')
     assert retries == ['POST']
     assert page.evaluate('restartPosts') == 0

@@ -84,6 +84,14 @@ local proof grants neither a root invoice nor quiescence. Priced actor compositi
 `checkpoint_fee_payer_origins`; older closed configure schemas refuse before effects. Missing payer
 evidence is never inferred. Root checkpoint executor/descendant semantics remain unchanged.
 
+New priced rows also record `usage_receipt_id` in the host fee checkpoint and
+publish it as `usageReceiptId` in the Turn. It identifies the original native
+execution row independently of the editable presentation round and of task IDs
+remapped by conversation cloning. Restore preserves absence on legacy rows.
+No wallet or invoice logic consumes this field. The checkpoint schema is closed:
+coordinate the runtime, application, and authority versions before writing
+these rows; an older reader may reject a checkpoint carrying the new field.
+
 One process-lifetime schema validator preserves every ownership, shape and arithmetic check.
 Seven alternating samples for 2/32/256 rounds measured capture at 13.850→0.367 / 16.965→3.208 /
 38.421→24.836 ms. Six-character payer IDs added 56/896/7,168 JSON bytes under existing snapshot/frame

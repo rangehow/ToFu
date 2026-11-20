@@ -7,6 +7,69 @@ other's implementation details.
 
 from __future__ import annotations
 
+import hashlib
+import json
+from typing import Literal, NotRequired, TypedDict
+
+
+SWARM_DELETE_EXACT_OPERATION = 'swarm.session.delete_exact'
+SWARM_LIFECYCLE_GET_OPERATION = 'swarm.session.lifecycle.get'
+SWARM_CONTINUE_REBIND_MODE = 'continue_rebind'
+SwarmSessionSaveMode = Literal['launch', 'update', 'roster', 'admit', 'continue_rebind']
+SwarmDisposition = Literal['ordinary_retirement', 'stop', 'replacement']
+SWARM_DISPOSITION_PRIORITY: dict[SwarmDisposition, int] = {
+    'ordinary_retirement': 0, 'stop': 1, 'replacement': 1,
+}
+SWARM_MAILBOX_DISPOSITION_FIELD = 'runDisposition'
+
+
+class SwarmRunIdentity(TypedDict):
+    swarm_key: str
+    run_id: str
+    owner_id: int
+    tenant_id: str
+    conversation_id: str
+    project_path: str
+
+
+class SwarmContinueRebindRequest(SwarmRunIdentity):
+    save_mode: Literal['continue_rebind']
+    expected_updated_at: int
+    turn_id: str
+    attempt_id: str
+    caller_task_id: str
+    config: dict
+    activation_failed: NotRequired[Literal[True]]
+
+
+class SwarmContinueRebindResult(TypedDict):
+    rebound: Literal[True]
+    checkpoint_writer_epoch: int
+
+
+class SwarmContinueActivationFailureResult(TypedDict):
+    failed_activation_recorded: Literal[True]
+
+
+class SwarmDeleteExactRequest(SwarmRunIdentity):
+    disposition: SwarmDisposition
+
+
+class SwarmDeleteExactResult(TypedDict):
+    deleted: bool
+    mailboxes_changed: int
+
+
+def swarm_mailbox_key(owner: int, tenant: str, conversation: str, run: str, agent: str) -> str:
+    return hashlib.sha256(json.dumps([owner, tenant, conversation, run, agent],
+                                     separators=(',', ':')).encode()).hexdigest()
+
+
+def swarm_run_result_key(owner: int, run: str, agent: str) -> str:
+    def digest(value: str) -> str:
+        return hashlib.sha256(value.encode('utf-8')).hexdigest()
+    return f'{owner}:{digest(run)}:{digest(agent)}'
+
 
 SWARM_SESSION_STATUS_RUNNING = "running"
 SWARM_SESSION_STATUS_TERMINATED = "terminated"
@@ -63,6 +126,14 @@ SWARM_RUN_RESULT_FIELDS = (
     "total_tokens",
     "cost_usd",
 )
+
+
+def swarm_archive_result(result: dict, *, rounds_used: int | None = None) -> dict:
+    """Project checkpoint evidence identically for archival and verification."""
+    value = {name: result[name] for name in SWARM_RUN_RESULT_FIELDS if name in result}
+    if rounds_used is not None and (rounds_used or 'rounds_used' in value):
+        value['rounds_used'] = rounds_used
+    return value
 
 
 __all__ = [

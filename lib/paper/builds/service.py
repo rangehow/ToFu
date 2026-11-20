@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -17,7 +18,7 @@ from .contract import validate
 from .errors import BuildError, check_cancelled
 from .location import build_location, needle_to_line  # noqa: F401 — public pure helper
 from .runtime import PreviewBuildScheduler, get_scheduler
-from .sources import contained_path, resolve_main, snapshot_sources
+from .sources import contained_path, read_source, resolve_main, snapshot_sources
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,103 @@ class HostDocument:
 
 def _identity(parts: dict) -> str:
     return hashlib.sha256(json.dumps(parts, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+_STYLE_REFERENCE = re.compile(
+    r'\\(?:documentclass|usepackage|RequirePackage)\s*(?:\[[^\]]*\])?\s*\{([^{}]+)\}')
+_INCLUDE = re.compile(r'\\(?:input|include|subfile)\s*\{([^{}]+)\}')
+
+
+def _style_stems(root: Path, main: Path) -> set[str]:
+    """Template/style stems named by the main source and its included files.
+
+    LaTeX accepts a comma-separated package list, so each brace group is split
+    before matching. Traversal stays inside the authorized root and is bounded
+    by the set of already-read files.
+    """
+    pending, seen, stems = [main], set(), set()
+    while pending:
+        path = pending.pop()
+        if path in seen:
+            continue
+        seen.add(path)
+        text = read_source(root, path, limit=4 * 1024 * 1024).decode('utf-8', errors='replace')
+        text = re.sub(r'(?<!\\)%[^\n]*', '', text)
+        for group in _STYLE_REFERENCE.findall(text):
+            for name in group.split(','):
+                stem = Path(name.strip()).name
+                stems.add(stem.removesuffix('.sty').removesuffix('.cls'))
+        for name in _INCLUDE.findall(text):
+            if '\\' in name or '#' in name:
+                continue
+            relative = name if Path(name).suffix else name + '.tex'
+            for directory in (main.parent, path.parent):
+                try:
+                    pending.append(contained_path(root, directory / relative))
+                except BuildError:
+                    continue
+                break
+    return stems
+
+
+def _template_years(root: Path, main: Path) -> dict[int, str]:
+    """Pinned template years the source loads, mapped to their conference name.
+
+    A style name can be shared across editions (``acl.sty`` belongs to the
+    rolling ARR edition, ACL 2027 and superseded EMNLP 2026). Multiple distinct
+    years mean the name cannot pin one year, so the caller must not invent an
+    expected one.
+    """
+    from lib.longform.documents import venue_registry
+    stems = _style_stems(root, main)
+    years = {}
+    for row in venue_registry.editions():
+        style, year = row.get('main_style_file'), row.get('year')
+        if not style or not isinstance(year, int):
+            continue
+        if Path(style).stem in stems:
+            years.setdefault(int(year), row.get('conference') or str(year))
+    return years
+
+
+def _enforce_venue_year(document: HostDocument, payload: dict) -> None:
+    """Refuse a preview that asserts a year other than its template's year.
+
+    The submission path never substitutes another year's template; the ordinary
+    preview applies the same equality rule before any build is scheduled. The
+    field is optional: an older document without ``venue_year`` asserts no year
+    and previews under that documented default. A shared style name that spans
+    several pinned years is not checked because it cannot name one expected year.
+    """
+    received = payload.get('venue_year')
+    if received is None:
+        return
+    years = _template_years(document.project_root,
+                           document.project_root / document.main_file)
+    if len(years) != 1:
+        return
+    expected, conference = next(iter(years.items()))
+    if int(received) == expected:
+        return
+    raise BuildError(
+        'venue_year',
+        f'This document uses the {conference} template (expected year {expected}); '
+        f'venue_year {received} was requested (expected {expected}, '
+        f'received {received}). Another year\'s template is never used silently.')
+
+
+def _require_local_venue_year(payload: dict, source: str) -> None:
+    """Refuse a year assertion on a source whose template cannot be read.
+
+    Overleaf projects and remote desktop roots hold their sources outside this
+    host, so the preview cannot compare the asserted year with the template.
+    Accepting the field there would silently ignore it.
+    """
+    if payload.get('venue_year') is not None:
+        raise BuildError(
+            'venue_year',
+            f'venue_year cannot be checked for {source}: its template is not readable '
+            'here. Remove venue_year or preview a local project.')
 
 
 def owned_settings(conversation_id: str, owner_user_id: int) -> dict:
@@ -160,6 +258,7 @@ def start_preview(payload: dict, *, owner_user_id: int,
     settings = owned_settings(payload['conv_id'], owner_user_id)
     scheduler = scheduler or get_scheduler()
     if payload['source'] == 'overleaf':
+        _require_local_venue_year(payload, 'an Overleaf preview')
         from .overleaf import bind_overleaf_document, overleaf_execution
         document = bind_overleaf_document(payload, owner_user_id=owner_user_id, settings=settings)
         return _start_bound(document, payload, overleaf_execution,
@@ -183,11 +282,13 @@ def start_preview(payload: dict, *, owner_user_id: int,
                 raise BuildError('project_root', 'Choose an unambiguous project root')
             selected = matches[0]
     if selected.startswith('remote:'):
+        _require_local_venue_year(payload, 'a desktop preview')
         from .desktop import bind_desktop_document, desktop_execution
         document = bind_desktop_document(payload, owner_user_id=owner_user_id, root_reference=selected)
         execution = desktop_execution
     else:
         document = bind_host_document(payload, owner_user_id=owner_user_id, settings=settings)
+        _enforce_venue_year(document, payload)
         execution = host_execution
     return _start_bound(document, payload, execution, scheduler, owner_user_id)
 

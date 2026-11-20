@@ -16,7 +16,8 @@ def build_workloads(inputs: WorkloadInputs, ports: WorkloadPorts, search_word: s
     turn_append_setup, turn_append_op = records.make_turn_append('main')
     return [
         ('record_put_burst', None, records.record_put_op, inputs.scale['writes']),
-        ('record_get_points', records.record_put_setup, records.record_get_op, inputs.scale['reads']),
+        ('record_get_points', records.record_put_setup, records.record_get_op, inputs.scale['reads'],
+         records.record_get_runner),
         ('conversation_create_burst', None, records.conv_create_op, inputs.scale['writes']),
         ('sidebar_list_page', records.conv_seed_setup('sb'), records.conv_list_op,
          inputs.scale['reads']),

@@ -728,3 +728,10 @@ tail are defined. Per-result field names would break the `key.field` format.
 Mapping the API-form boundary into wire space needs a per-round index map the
 detector does not keep. Raw-byte `<bytes>` culprits still name a merged turn
 by its first result: they hash top-level message fields only.
+
+
+When a fallback Turn publishes portable history under its original ingress
+policy, consumed text-only tail context stays in its original position. An
+explicit portable policy migration rebuilds composer context for the new
+destination. Provider-bound reasoning remains excluded from fallback
+publication.

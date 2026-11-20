@@ -78,12 +78,16 @@ def _watchdog_owner(task) -> int | None:
         return None
 
 
-def _watchdog_aware_dispatch_stream(task, *args, **kwargs):
-    """``dispatch_stream`` for ``task``; a Watchdog Turn's picks step off throttled AppIds."""
+def _watchdog_aware_dispatch_stream(task, *args, **kwargs) -> ProviderStreamResult:
+    """Apply saved-conversation and Watchdog admission policy to a task stream."""
     from lib.llm_dispatch.quota_watch import avoid_throttled_appids
+    from lib.tasks_pkg.conversation_delivery import conversation_delivery_available
 
-    with avoid_throttled_appids(_watchdog_owner(task)):
-        return dispatch_stream(*args, **kwargs)
+    watchdog = _watchdog_owner(task)
+    if watchdog is None and conversation_delivery_available(task):
+        kwargs['keep_model_on_app_minute_limit'] = True
+    with avoid_throttled_appids(watchdog):
+        return ensure_provider_stream_result(dispatch_stream(*args, **kwargs))
 
 
 def _opaque_reasoning_replay_tokens(
@@ -1121,8 +1125,7 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None,
             span_id=f'{_model_request_span}:wire:{_provider_dispatch_ordinal}',
         )
         try:
-            result = ensure_provider_stream_result(
-                _watchdog_aware_dispatch_stream(task, *args, **kwargs))
+            result = _watchdog_aware_dispatch_stream(task, *args, **kwargs)
             if isinstance(result.usage, dict):
                 result.usage['request_span_id'] = _model_request_span
                 result.usage['request_dispatch_seq'] = _provider_dispatch_ordinal

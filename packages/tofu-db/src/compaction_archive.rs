@@ -146,6 +146,8 @@ fn index_key(
         );
         encoded.extend_from_slice(archive_scope.as_bytes());
     }
+    // Public list/prune tie order: UTF-8 byte length, then unsigned bytes.
+    // The SQL authority uses the same tuple without changing this key format.
     encoded.extend_from_slice(&created_at_ms.to_be_bytes());
     encoded.extend_from_slice(
         &u16::try_from(archive_id.len())
@@ -833,6 +835,67 @@ pub(crate) fn list(
         ));
     }
     Ok(response)
+}
+
+/// Detached resume inputs from the caller's candidate-fenced transaction.
+pub(crate) fn resume_selection_inputs(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    conversation_id: &str,
+) -> io::Result<Value> {
+    let metadata: Value = serde_json::from_slice(&list(
+        database,
+        transaction,
+        &ListRequest {
+            conversation_id: conversation_id.to_owned(),
+            archive_scope: String::new(),
+            limit: 9,
+        },
+    )?)
+    .map_err(|_| invalid_data("archive list cannot be decoded"))?;
+    let rows = metadata["archives"]
+        .as_array()
+        .expect("list yields an array");
+    if rows.len() > 8 {
+        return Ok(Value::Null);
+    }
+    let mut items = Vec::new();
+    let mut remaining = MAX_LEGACY_DOCUMENT_BYTES - 2; // Array delimiters.
+    for archive in rows.iter().rev() {
+        if archive["resultStatus"].as_str() != Some("completed") {
+            continue;
+        }
+        let Some(bytes) = get(
+            database,
+            transaction,
+            &GetRequest {
+                conversation_id: conversation_id.to_owned(),
+                archive_id: archive["id"]
+                    .as_str()
+                    .expect("metadata has an id")
+                    .to_owned(),
+                archive_scope: String::new(),
+                include_messages: false,
+                include_post_messages: true,
+            },
+        )?
+        else {
+            return Ok(Value::Null);
+        };
+        let Some(left) = remaining.checked_sub(bytes.len() + usize::from(!items.is_empty())) else {
+            return Ok(Value::Null);
+        };
+        remaining = left;
+        items.push(
+            serde_json::from_slice(&bytes)
+                .map_err(|_| invalid_data("archive record cannot be decoded"))?,
+        );
+    }
+    Ok(if items.is_empty() && !rows.is_empty() {
+        Value::Null
+    } else {
+        Value::Array(items)
+    })
 }
 
 pub(crate) fn get(

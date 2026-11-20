@@ -48,7 +48,10 @@ function fixture(overrides: Partial<TurnRuntimeOptions> = {}) {
   const sources: Source[] = [];
   const settings = vi.fn();
   const metadata = vi.fn();
-  const api = { snapshot: vi.fn(async () => snapshot(1)) };
+  const api = {
+    snapshot: vi.fn(async () => snapshot(1)),
+    abortAttempt: vi.fn<ConversationSyncApi['abortAttempt']>(async () => ({ ok: true })),
+  };
   const runtime = createConversationTurnRuntime({ api: api as unknown as ConversationSyncApi,
     isActive: () => true, renderState: () => true, applySettings: settings,
     applySnapshotMetadata: metadata, onProtocolError: vi.fn(), eventSourceFactory: request => {
@@ -353,8 +356,7 @@ describe('conversation binding ownership and teardown', () => {
         deferTerminalRelease: release => releases.push(release) });
       const conversation: RuntimeConversation = f.conversation;
       const store = await f.runtime.hydrateConversation(conversation);
-      conversation._finishingStream = true;
-      conversation._finishingAttemptId = 'attempt';
+      f.runtime.stopActiveAttempts(conversation);
       store.dispatch({ type: 'command_response', response: {
         conversationRevision: 2, turn: turn(2, 'completed'),
       } });
@@ -369,6 +371,139 @@ describe('conversation binding ownership and teardown', () => {
       expect(updateSendButton).not.toHaveBeenCalled();
     },
   );
+
+  it.each(['running', 'queue-bound'] as const)(
+    'keeps an acknowledged %s Stop pending until canonical state renders', async kind => {
+      const releases: Array<() => void> = [];
+      const order: string[] = [];
+      const onStopUnconfirmed = vi.fn();
+      const f = fixture({ onStopUnconfirmed,
+        renderState: (_conversation, state) => { order.push(`render:${state.conversationRevision}`); return true; },
+        updateSendButton: () => { order.push(`stopping:${f.runtime.attemptStopState(f.conversation)}`); },
+        deferTerminalRelease: release => releases.push(release),
+      });
+      if (kind === 'queue-bound') {
+        f.api.snapshot.mockResolvedValue({ ...snapshot(1),
+          turns: [{ ...turn(1, 'running'), status: 'pending' }],
+          attempts: [{ ...snapshot(1).attempts[0]!, status: 'pending' }],
+        });
+        f.api.abortAttempt.mockResolvedValue({ ok: true, status: 'cancelled', cancelled: true,
+          deletedTurnIds: ['answer'] });
+      }
+      const store = await f.runtime.hydrateConversation(f.conversation);
+      f.runtime.stopActiveAttempts(f.conversation);
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(onStopUnconfirmed).not.toHaveBeenCalled();
+      expect(f.runtime.attemptStopState(f.conversation)).toBe('refresh');
+      expect(store.getState().turnsById.answer?.status).toBe(kind === 'running' ? 'running' : 'pending');
+      expect(f.api.abortAttempt).toHaveBeenCalledTimes(1);
+
+      store.dispatch({ type: 'command_response', response: kind === 'running'
+        ? { conversationRevision: 2, turn: turn(2, 'completed') }
+        : { conversationRevision: 2, deletedTurnIds: ['answer'] } });
+      expect(f.runtime.attemptStopState(f.conversation)).toBe('stopping');
+      expect(releases).toHaveLength(1);
+      order.length = 0;
+      releases.shift()!();
+      expect(order).toEqual(['render:2', 'stopping:null']);
+    },
+  );
+
+  it('refreshes accepted Stop status after a failed read, without issuing another abort', async () => {
+    const onProtocolError = vi.fn();
+    const onStopUnconfirmed = vi.fn();
+    const f = fixture({ onProtocolError, onStopUnconfirmed });
+    const store = await f.runtime.hydrateConversation(f.conversation);
+    f.api.snapshot.mockRejectedValueOnce(new Error('Synthetic sync 500'));
+    f.runtime.stopActiveAttempts(f.conversation);
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(f.runtime.attemptStopState(f.conversation)).toBe('refresh');
+    expect(store.getState().turnsById.answer?.status).toBe('running');
+    expect(onProtocolError).toHaveBeenCalled();
+
+    f.api.snapshot.mockResolvedValueOnce(snapshot(2));
+    f.runtime.stopActiveAttempts(f.conversation);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.getState().turnsById.answer?.status).toBe('completed');
+    expect(f.runtime.attemptStopState(f.conversation)).toBeNull();
+    expect(f.api.abortAttempt).toHaveBeenCalledTimes(1);
+    expect(onStopUnconfirmed).not.toHaveBeenCalled();
+  });
+
+  it('permits a same-attempt retry after uncertainty and fences the older result', async () => {
+    const onStopUnconfirmed = vi.fn();
+    const f = fixture({ onStopUnconfirmed });
+    await f.runtime.hydrateConversation(f.conversation);
+    let rejectFirst!: (error: Error) => void;
+    f.api.abortAttempt.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectFirst = reject; }));
+    f.runtime.stopActiveAttempts(f.conversation);
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(onStopUnconfirmed).toHaveBeenCalledTimes(1);
+    expect(f.runtime.attemptStopState(f.conversation)).toBeNull();
+
+    f.runtime.stopActiveAttempts(f.conversation);
+    rejectFirst(new Error('Late failure from the first POST'));
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(f.api.abortAttempt.mock.calls.map(([id]) => id)).toEqual(['attempt', 'attempt']);
+    expect(f.runtime.attemptStopState(f.conversation)).toBe('refresh');
+    expect(onStopUnconfirmed).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let the failed request deadline clear a same-attempt retry', async () => {
+    const onStopUnconfirmed = vi.fn();
+    const f = fixture({ onStopUnconfirmed });
+    await f.runtime.hydrateConversation(f.conversation);
+    f.api.abortAttempt.mockRejectedValueOnce(new Error('Synthetic abort 500'));
+    f.runtime.stopActiveAttempts(f.conversation);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(f.runtime.attemptStopState(f.conversation)).toBeNull();
+    expect(onStopUnconfirmed).toHaveBeenCalledTimes(1);
+
+    f.api.abortAttempt.mockImplementationOnce(() => new Promise(() => {}));
+    f.runtime.stopActiveAttempts(f.conversation);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(f.runtime.attemptStopState(f.conversation)).toBe('stopping');
+    expect(onStopUnconfirmed).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(f.runtime.attemptStopState(f.conversation)).toBeNull();
+    expect(onStopUnconfirmed).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops only still-live unowned attempts when new work arrives or an ACK fails', async () => {
+    const onStopUnconfirmed = vi.fn();
+    const f = fixture({ onStopUnconfirmed });
+    const store = await f.runtime.hydrateConversation(f.conversation);
+    f.runtime.stopActiveAttempts(f.conversation);
+    await Promise.resolve();
+    const other = { ...turn(2, 'running', 'other'), currentAttemptId: 'other-attempt' };
+    store.dispatch({ type: 'command_response', response: { conversationRevision: 2, turn: other } });
+    expect(f.runtime.attemptStopState(f.conversation)).toBeNull();
+    f.api.abortAttempt.mockResolvedValueOnce({ ok: true, status: 'cancelled', cancelled: false });
+    f.runtime.stopActiveAttempts(f.conversation);
+    await Promise.resolve();
+    expect(onStopUnconfirmed).toHaveBeenCalledTimes(1);
+    expect(f.runtime.attemptStopState(f.conversation)).toBeNull();
+    f.runtime.stopActiveAttempts(f.conversation);
+    expect(f.api.abortAttempt.mock.calls.map(([id]) => id)).toEqual(['attempt', 'other-attempt', 'other-attempt']);
+    expect(f.runtime.attemptStopState(f.conversation)).toBe('stopping');
+  });
+
+  it('does not warn when ordered deletion beats a missing HTTP response', async () => {
+    const onStopUnconfirmed = vi.fn();
+    const releases: Array<() => void> = [];
+    const f = fixture({ onStopUnconfirmed, deferTerminalRelease: release => releases.push(release) });
+    const store = await f.runtime.hydrateConversation(f.conversation);
+    f.api.abortAttempt.mockImplementationOnce(() => new Promise(() => {}));
+    f.runtime.stopActiveAttempts(f.conversation);
+    f.sources[0].emit('turn.deleted', { syncSeq: 2, occurredAt: 2,
+      payload: { conversationRevision: 2, deletedTurnIds: ['answer'] } }, 'cursor-2');
+    expect(store.getState().turnsById.answer).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(onStopUnconfirmed).not.toHaveBeenCalled();
+    expect(f.runtime.attemptStopState(f.conversation)).toBe('stopping');
+    releases.shift()!();
+    expect(f.runtime.attemptStopState(f.conversation)).toBeNull();
+  });
 
   it('does not report an old live attempt as newly settled after reopening', async () => {
     const onTurnSettled = vi.fn();

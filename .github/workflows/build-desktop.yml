@@ -48,9 +48,13 @@ on:
         description: 'Version override (e.g. 0.10.0-beta1). Leave empty to read from VERSION file.'
         required: false
         type: string
+      verify_macos_only:
+        description: 'Build and verify both macOS candidates; never create a tag or release.'
+        type: boolean
+        default: true
 
 permissions:
-  contents: write   # needed for creating releases
+  contents: read
 
 # ── Only one release run per branch at a time ──
 #
@@ -307,19 +311,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        with:
-          enable-cache: true
-      # The contract generators npm runs import the locked Python tree
-      # (jsonschema, PyYAML, playwright for the bundle canary), the same
-      # environment ci.yml's frontend lane uses.
       - name: Install frontend contract and browser-canary dependencies
         run: |
           set -euo pipefail
-          uv sync --frozen --extra test
-          echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
-          .venv/bin/python -m playwright install --with-deps chromium
+          python -m pip install 'PyYAML>=6,<7' 'playwright>=1.56,<2'
+          python -m playwright install --with-deps chromium
       - name: Build and verify the Vite graph once
         run: |
           set -euo pipefail
@@ -348,7 +344,7 @@ jobs:
     name: Windows Installer
     runs-on: windows-latest
     needs: [version, frontend-dist]
-    if: needs.version.outputs.should_release == 'true'
+    if: needs.version.outputs.should_release == 'true' && inputs.verify_macos_only != true
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -773,7 +769,50 @@ jobs:
             exit 1
           }
 
+      - name: Load Developer ID Application signing identity
+        shell: bash
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$MACOS_CERT_P12" || -z "$MACOS_CERT_PASSWORD" ]]; then
+            echo '::error::Developer ID signing requires MACOS_CERT_P12 and MACOS_CERT_PASSWORD.'
+            exit 1
+          fi
+          umask 077
+          work="$(mktemp -d "${RUNNER_TEMP}/tofu-sign.XXXXXXXX")"
+          keychain="$work/release.keychain-db"
+          echo "TOFU_MACOS_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+          cert="$work/cert.p12"
+          trap 'rm -f "$cert"' EXIT
+          printf '%s' "$MACOS_CERT_P12" | base64 -D > "$cert"
+          keychain_password="$(openssl rand -hex 32)"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$cert" -k "$keychain" -f pkcs12 -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" >/dev/null
+          # PyInstaller uses codesign without a keychain flag. Keep the existing
+          # search list (and its Apple intermediate certificates) available.
+          existing="$(security list-keychains -d user)"
+          keychains=("$keychain")
+          while IFS= read -r line; do
+            if [[ "$line" =~ \"([^\"]+)\" ]]; then keychains+=("${BASH_REMATCH[1]}"); fi
+          done <<< "$existing"
+          security list-keychains -d user -s "${keychains[@]}"
+          identities="$(security find-identity -v -p codesigning "$keychain")"
+          identity="$(awk '/"Developer ID Application: / {print $2}' <<< "$identities")"
+          if [[ ! "$identity" =~ ^[A-Fa-f0-9]{40}$ ]]; then
+            echo '::error::MACOS_CERT_P12 must contain exactly one valid Developer ID Application identity.'
+            exit 1
+          fi
+          echo "TOFU_MACOS_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+
       - name: Build with PyInstaller
+        env:
+          PYINSTALLER_STRICT_BUNDLE_CODESIGN_ERROR: '1'
+          TOFU_MACOS_APP_VERSION: ${{ needs.version.outputs.version }}
         run: pyinstaller tofu.spec
 
       - name: Smoke test the built macOS binary
@@ -799,49 +838,19 @@ jobs:
             exit 1
           }
 
-      # ── Code signing / notarization (INERT until secrets are provided) ──
-      # macOS Gatekeeper blocks unsigned apps ("Tofu is damaged / cannot be
-      # opened"). To sign + notarize, add these repo secrets and uncomment the
-      # step below (it runs on the app in dist/Tofu.app BEFORE the DMG is made):
-      #   MACOS_CERT_P12        base64 of a "Developer ID Application" .p12
-      #   MACOS_CERT_PASSWORD   the .p12 export password
-      #   MACOS_NOTARY_APPLE_ID / MACOS_NOTARY_TEAM_ID / MACOS_NOTARY_PASSWORD
-      # - name: Sign & notarize app
-      #   env:
-      #     MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
-      #     MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
-      #     MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
-      #     MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
-      #     MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
-      #   run: |
-      #     # security create-keychain + import the .p12, then:
-      #     #   codesign --deep --force --options runtime \
-      #     #     --sign "Developer ID Application: <NAME> (<TEAM_ID>)" dist/Tofu.app
-      #     #   xcrun notarytool submit dist/Tofu.app --wait \
-      #     #     --apple-id "$MACOS_NOTARY_APPLE_ID" --team-id "$MACOS_NOTARY_TEAM_ID" \
-      #     #     --password "$MACOS_NOTARY_PASSWORD"
-      #     #   xcrun stapler staple dist/Tofu.app
-      #     echo "signing configured"
-
       - name: Create DMG
         shell: bash
         env:
           APP_VERSION: ${{ needs.version.outputs.version }}
           ARCH: ${{ matrix.arch }}
         run: |
-          # No `set -e` here on purpose: the create-dmg invocation below is
-          # deliberately paired with a `|| { ... }` zip fallback, and the whole
-          # point is that its failure is HANDLED rather than fatal.
-          #
-          # The window art is a GENERATED input (gen_desktop_icons.py), so a
-          # missing file means the icon step broke — that is a build error,
-          # not a create-dmg failure, and must fail loudly here rather than
-          # fall through to the zip fallback with an unbranded window.
+          set -euo pipefail
+          # A ZIP cannot substitute for the required signed and stapled DMG.
           test -f static/icons/installer/dmg-background.png || {
             echo "::error::static/icons/installer/dmg-background.png not generated — gen_desktop_icons.py failed."
             exit 1
           }
-          brew install create-dmg || true
+          command -v create-dmg >/dev/null || brew install create-dmg
           create-dmg \
             --volname "Tofu" \
             --volicon "static/icons/tofu.icns" \
@@ -853,28 +862,70 @@ jobs:
             --app-drop-link 450 190 \
             --hide-extension "Tofu.app" \
             "Tofu-${APP_VERSION}-macos-${ARCH}.dmg" \
-            "dist/Tofu.app/" \
-          || {
-            # Fallback: plain zip if create-dmg fails
-            cd dist && zip -r "../Tofu-${APP_VERSION}-macos-${ARCH}.zip" Tofu.app/
-          }
+            "dist/Tofu.app/"
 
-      - name: Upload macOS DMG
+      - name: Sign, notarize and staple the final DMG
+        shell: bash
+        env:
+          APP_VERSION: ${{ needs.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+          MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+          MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$MACOS_NOTARY_APPLE_ID" || -z "$MACOS_NOTARY_PASSWORD" || ! "$MACOS_NOTARY_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]; then
+            echo '::error::Notarization requires MACOS_NOTARY_APPLE_ID, MACOS_NOTARY_TEAM_ID and MACOS_NOTARY_PASSWORD.'
+            exit 1
+          fi
+          dmg="Tofu-${APP_VERSION}-macos-${ARCH}.dmg"
+          codesign --timestamp --keychain "$TOFU_MACOS_KEYCHAIN" --sign "$TOFU_MACOS_SIGN_IDENTITY" "$dmg"
+          report="$(mktemp)"
+          trap 'rm -f "$report"' EXIT
+          if ! xcrun notarytool submit "$dmg" --wait --output-format json \
+              --apple-id "$MACOS_NOTARY_APPLE_ID" --team-id "$MACOS_NOTARY_TEAM_ID" \
+              --password "$MACOS_NOTARY_PASSWORD" > "$report"; then
+            cat "$report"
+            exit 1
+          fi
+          cat "$report"
+          if [[ "$(plutil -extract status raw -o - "$report")" != Accepted ]]; then
+            echo '::error::Apple did not accept notarization. Inspect the submission log by ID.'
+            exit 1
+          fi
+          xcrun stapler staple "$dmg"
+
+      - name: Verify final macOS installer and record its SHA-256
+        shell: bash
+        env:
+          APP_VERSION: ${{ needs.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+          MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          dmg="Tofu-${APP_VERSION}-macos-${ARCH}.dmg"
+          bash scripts/verify_macos_dmg.sh "$dmg" "$ARCH" "$APP_VERSION" "$MACOS_NOTARY_TEAM_ID"
+          shasum -a 256 "$dmg" > "${dmg}.verified.sha256"
+
+      - name: Upload native-verified macOS DMG
         uses: actions/upload-artifact@v4
         with:
           name: macos-dmg-${{ matrix.arch }}
-          path: Tofu-*.dmg
-          if-no-files-found: warn
+          path: |
+            Tofu-${{ needs.version.outputs.version }}-macos-${{ matrix.arch }}.dmg
+            Tofu-${{ needs.version.outputs.version }}-macos-${{ matrix.arch }}.dmg.verified.sha256
+          if-no-files-found: error
           retention-days: 30
 
-      - name: Upload macOS ZIP (fallback)
+      - name: Delete the temporary signing keychain
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-zip-${{ matrix.arch }}
-          path: Tofu-*.zip
-          if-no-files-found: ignore
-          retention-days: 30
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${TOFU_MACOS_KEYCHAIN:-}" ]]; then
+            if [[ -f "$TOFU_MACOS_KEYCHAIN" ]]; then security delete-keychain "$TOFU_MACOS_KEYCHAIN"; fi
+            rmdir "$(dirname "$TOFU_MACOS_KEYCHAIN")"
+          fi
 
   # ── Linux ────────────────────────────────────────────────────
   build-linux:
@@ -889,7 +940,7 @@ jobs:
           - runner: ubuntu-22.04-arm
             arch: aarch64
     needs: [version, frontend-dist]
-    if: needs.version.outputs.should_release == 'true'
+    if: needs.version.outputs.should_release == 'true' && inputs.verify_macos_only != true
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -1019,7 +1070,7 @@ jobs:
   tofudb-prebuilt:
     name: Prebuilt TofuDB (${{ matrix.target }})
     needs: version
-    if: needs.version.outputs.should_release == 'true'
+    if: needs.version.outputs.should_release == 'true' && inputs.verify_macos_only != true
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 35
     strategy:
@@ -1062,7 +1113,7 @@ jobs:
   python-wheels:
     name: Python wheels (${{ matrix.runner }})
     needs: version
-    if: needs.version.outputs.should_release == 'true'
+    if: needs.version.outputs.should_release == 'true' && inputs.verify_macos_only != true
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 35
     strategy:
@@ -1095,8 +1146,10 @@ jobs:
   release:
     name: Create Release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     needs: [version, frontend-dist, build-windows, build-macos, build-linux, python-wheels, tofudb-prebuilt]
-    if: needs.version.outputs.should_release == 'true'
+    if: needs.version.outputs.should_release == 'true' && inputs.verify_macos_only != true
     steps:
       - uses: actions/checkout@v4
 
@@ -1109,19 +1162,34 @@ jobs:
       - name: List artifacts
         run: find release-assets -type f | head -20
 
+      - name: Check native-verified macOS bytes
+        shell: bash
+        env:
+          VER: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd release-assets
+          shopt -s nullglob globstar
+          images=(**/*.dmg)
+          if [[ ${#images[@]} != 2 ]]; then
+            echo '::error::Expected exactly the two native-verified macOS DMGs.'
+            exit 1
+          fi
+          for arch in arm64 x86_64; do
+            dmg="Tofu-${VER}-macos-${arch}.dmg"
+            if ! shasum -a 256 "$dmg" | cmp - "${dmg}.verified.sha256"; then
+              echo "::error::DMG is absent or does not match the native verification receipt: ${dmg}"
+              exit 1
+            fi
+          done
+
       - name: Assert all platform assets present
         shell: bash
         run: |
           set -euo pipefail
-          # Completeness gate: refuse to publish a partial release. Because the
-          # macOS matrix is fail-fast:false and DMG upload is
-          # if-no-files-found:warn (and create-dmg falls back to a .zip on
-          # failure), a broken Intel leg could otherwise let a release ship with
-          # ONLY the arm64 DMG — and make_latest would pin that half-built set as
-          # Latest, silently reintroducing the "Intel Macs can't install" bug.
-          # So we assert every required per-platform / per-arch asset exists;
-          # missing any one fails the whole release ("all four platforms, or a
-          # loud failure — never a silent partial Latest").
+          # Completeness gate: every required platform/arch must be present.
+          # Native macOS trust was checked separately above; a size floor or
+          # signed checksum alone does not establish Developer ID trust.
           #
           # The required-asset list is NOT inlined here. scripts/release_assets.py
           # owns it, and the `version` job's gate calls the same script to judge
@@ -1245,21 +1313,21 @@ jobs:
       # published tag without an explicit human `--force` (moving one breaks
       # every downstream pin). The same four verdicts apply — absent -> let the
       # action create it; same commit -> nothing to do; different commit ->
-      # move only if the tag is provably an orphan; otherwise keep.
+      # move only for a provable orphan/partial release; otherwise stop.
       #
       # The authorisation to move is NOT "should_release is true". That would
       # be wrong: `workflow_dispatch` sets should_release=true WITHOUT probing
       # (it is the deliberate re-release escape hatch), so a manual re-run on a
       # shipped version reaches this step, and force-moving there would rewrite
       # a published tag. So this step re-probes the Release API itself and only
-      # moves a tag that has NO release behind it. A tag nobody has released
-      # has no downstream pin to break; a tag with a release is left alone and
-      # the action updates that release in place.
+      # moves a tag if it is an orphan or its asset set is provably partial.
+      # A complete release tag is preserved; don't attach another commit's
+      # binaries to it.
       #
       # Failure direction is the opposite of the version gate's, on purpose:
       # that gate fails open toward BUILDING because a redundant build is
       # cheap, whereas moving a published tag is destructive and hard to undo.
-      # So an unreadable probe here declines to move and says so loudly.
+      # An unreadable probe refuses promotion as well as declining to move.
       - name: Retarget an orphan tag to the commit that was built
         shell: bash
         env:
@@ -1270,9 +1338,9 @@ jobs:
           tag="v${VER}"
 
           # Peeled ref first: an annotated tag's own object is not the commit.
-          remote_sha="$(git ls-remote --tags origin "refs/tags/${tag}^{}" 2>/dev/null | awk '{print $1}' | head -n1 || true)"
+          remote_sha="$(git ls-remote --tags origin "refs/tags/${tag}^{}" | awk 'NR == 1 {print $1}')"
           if [ -z "$remote_sha" ]; then
-            remote_sha="$(git ls-remote --tags origin "refs/tags/${tag}" 2>/dev/null | awk '{print $1}' | head -n1 || true)"
+            remote_sha="$(git ls-remote --tags origin "refs/tags/${tag}" | awk 'NR == 1 {print $1}')"
           fi
 
           if [ -z "$remote_sha" ]; then
@@ -1290,6 +1358,7 @@ jobs:
           # a published release (leave the tag alone) or a partial one this run
           # is repairing (the tag must follow the new commit).
           body="$(mktemp)"
+          trap 'rm -f "$body"' EXIT
           code="$(curl -sS -o "$body" -w '%{http_code}' \
                     -H "Authorization: Bearer ${GH_TOKEN}" \
                     -H "Accept: application/vnd.github+json" \
@@ -1329,12 +1398,15 @@ jobs:
               git push --force origin "${GITHUB_SHA}:refs/tags/${tag}"
               echo "Moved ${tag} -> ${GITHUB_SHA}."
             elif [ "$assets_rc" -eq 0 ]; then
-              echo "::notice::${tag} already has a COMPLETE Release — leaving the published tag where it is; the existing release will be updated in place."
+              echo "::error::${tag} has a complete release for a different commit. Refusing to replace it; use a new VERSION."
+              exit 1
             else
-              echo "::warning::${tag} has a Release but its asset list could not be read, so it cannot be shown to be incomplete. NOT moving a possibly-published tag. The release may be cut from ${remote_sha} instead of ${GITHUB_SHA} — verify the Source code archives before announcing it."
+              echo "::error::Cannot verify ${tag}'s asset list. Refusing to publish binaries under a different source tag."
+              exit 1
             fi
           else
-            echo "::warning::Could not confirm whether ${tag} has a Release (HTTP ${code:-<none>}). NOT moving a possibly-published tag. The release may be cut from ${remote_sha} instead of ${GITHUB_SHA} — verify the Source code archives before announcing it."
+            echo "::error::Cannot verify ${tag}'s release (HTTP ${code:-<none>}). Refusing to publish binaries under a different source tag."
+            exit 1
           fi
 
       - name: Create GitHub Release
@@ -1372,12 +1444,10 @@ jobs:
             | macOS (Intel) | `Tofu-${{ needs.version.outputs.version }}-macos-x86_64.dmg` | |
             | Linux (x64 / ARM64) | `Tofu-${{ needs.version.outputs.version }}-linux-{x86_64,aarch64}.tar.gz` | Portable archive; run `install.sh` inside for desktop integration |
 
-            ## First-run notes — binaries are unsigned
+            ## Installer trust
 
-            The installers are not code-signed yet. If the OS blocks first launch:
-
-            - **Windows**: SmartScreen shows "Windows protected your PC" — choose **More info → Run anyway**.
-            - **macOS**: Gatekeeper may block the app — **right-click → Open**, or run `xattr -cr /Applications/Tofu.app` if "damaged" appears.
+            The macOS disk images are Developer ID signed, Apple notarized and stapled. Windows installers are not Authenticode signed.
+            If macOS rejects an installer, do not override Gatekeeper. Verify the download against `SHA256SUMS` and report the exact filename and message if it still fails.
           files: |
             release-assets/**/*.exe
             release-assets/**/*.dmg

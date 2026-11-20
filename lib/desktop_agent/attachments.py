@@ -115,7 +115,7 @@ def _redeem_via_browser(link, body: dict, log, stop=None):
 
 def join(text: str, *, node_id: str, name: str = '', timeout: float = 8.0,
          log=lambda _msg: None, via_browser: bool = True, stop=None,
-         kind: str = 'computer') -> dict:
+         kind: str = 'computer', publish=None) -> dict:
     """Join a server from one pasted input; returns the saved attachment.
 
     A pairing code is one-shot: a route that answered ``invalid_code`` was
@@ -123,7 +123,8 @@ def join(text: str, *, node_id: str, name: str = '', timeout: float = 8.0,
     The new node waits for the Home owner's confirmation; the attachment
     keeps the fingerprint both ends show. A host that replaced an earlier
     node (renamed, container recreated) names it, so the Home shows a
-    re-pair of a known device.
+    re-pair of a known device. ``publish`` lets the link owner serialize saving
+    the attachment and installing its worker with concurrent joins and leaves.
     """
     from lib.desktop_agent.config import clear_predecessor, node_identity, save_attachment
     identity = node_identity()
@@ -165,7 +166,10 @@ def join(text: str, *, node_id: str, name: str = '', timeout: float = 8.0,
         record['fingerprint'] = fingerprint(node_id, str(paired.get('id') or ''))
         if paired.get('fingerprint') and paired['fingerprint'] != record['fingerprint']:
             raise JoinError('fingerprint_mismatch')
-    save_attachment(record)
+    if publish is None:
+        record = save_attachment(record, renew_route=True)
+    else:
+        record = publish(record)
     if previous and not isinstance(parsed, LegacyConnectLine):
         clear_predecessor()
     if record.get('fingerprint'):

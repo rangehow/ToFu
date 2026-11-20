@@ -209,12 +209,12 @@ def test_worker_error_requests_a_recovery_pass_and_idle_ticks_skip_the_scan(
     monkeypatch.setattr(delivery, 'resume_pending_workspace_deliveries',
                         lambda *, retained=False, lanes=False: passes.append(retained) or False)
     claims = iter([False, StorageError('database_unavailable', 'transient', retryable=True)])
-    def process_ready_once():
+    def dispatch_ready_rows():
         outcome = next(claims, False)
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
-    monkeypatch.setattr(ic, 'process_ready_once', process_ready_once)
+    monkeypatch.setattr(ic, '_dispatch_ready_rows', dispatch_ready_rows)
     monkeypatch.setattr(ic, '_peek_ready', lambda: {'id': 1})
     autorun = iter([True] * 5)
     monkeypatch.setattr(ic, '_autorun_enabled', lambda: next(autorun, False))

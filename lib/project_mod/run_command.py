@@ -433,7 +433,8 @@ def _timeout_scan_wrapper_args(timeout_binary):
 
 
 def _get_cmd_env(cwd=None, credential_env=None, strip_credential_vars=None,
-                 owner_user_id=None, project_root=None, venv_start=None, project_path=None):
+                 owner_user_id=None, project_root=None, venv_start=None, project_path=None,
+                 task=None):
     """Build a credential-scoped child environment for one command.
 
     Persistent CLI paths/caches share the MCP launch contract. The nearest
@@ -527,8 +528,9 @@ def _get_cmd_env(cwd=None, credential_env=None, strip_credential_vars=None,
     # Build from the explicit project anchor, so a subdirectory cwd keeps
     # the same Python packages. Never search above this authorized boundary.
     from lib.tools.process_environment import (
-        apply_tool_paths, tool_cache_root, validate_environment,
+        apply_tool_paths, bind_runtime_base, tool_cache_root, validate_environment,
     )
+    bind_runtime_base(env)
     root = os.path.realpath(project_root or cwd) if (project_root or cwd) else None
 
     # Managed chat output can live beneath the source checkout's data directory.
@@ -563,7 +565,12 @@ def _get_cmd_env(cwd=None, credential_env=None, strip_credential_vars=None,
         from lib.tools.tool_cache_retention import command_uv_cache
         env.setdefault('UV_CACHE_DIR', command_uv_cache(cache_root))
     apply_tool_paths(env, cache_root=cache_root)
-    if root:
+    # The project's declared persistent toolchains (tofu.toolchains.json); a
+    # malformed declaration raises, which refuses the command with its reason.
+    from lib.project_mod.toolchains import apply_project_toolchains
+    apply_project_toolchains(env, root)
+    from lib.tasks_pkg.conversation_delivery import storage_free_runtime
+    if root and not storage_free_runtime(task or {}):
         from lib.project_mod.task_spares import checkout_scratch
         scratch = checkout_scratch(root)
         if scratch is not None:
@@ -1507,7 +1514,7 @@ def _run_command_tool(base, command, *, timeout, stdin_callback, task, on_chunk,
         from lib.project_mod.git_command_scope import leading_cd_directory
         from lib.mcp.queue_policy import canonical_project_path
         child_env = _get_cmd_env(
-            base, credential_env, strip_credential_vars,
+            base, credential_env, strip_credential_vars, task=task,
             owner_user_id=(task or {}).get('_userId'),
             project_root=environment_root,
             project_path=canonical_project_path(task or {}),
@@ -2108,7 +2115,7 @@ def _run_command_simple(command, full_command, timeout, base, task=None, on_chun
     try:
         command_environment = without_automatic_git_maintenance(validate_environment(
             child_env if child_env is not None else _get_cmd_env(
-                base, credential_env, strip_credential_vars,
+                base, credential_env, strip_credential_vars, task=task,
                 owner_user_id=(task or {}).get('_userId'))))
         proc = subprocess.Popen(
             work_process_argv(process_argv if process_argv is not None
@@ -2354,8 +2361,10 @@ def _run_command_simple(command, full_command, timeout, base, task=None, on_chun
 
     logger.info('run_command done: exit=%d, stdout=%dch, stderr=%dch',
                 proc.returncode, len(stdout), len(stderr))
+    from lib.project_mod.toolchains import missing_toolchain_notices
     return _format_run_output(command, stdout, stderr, proc.returncode,
-                              notices=group_notices)
+                              notices=group_notices + missing_toolchain_notices(
+                                  command_environment, proc.returncode))
 
 
 def _signal_namespace_child(proc):
@@ -2843,7 +2852,7 @@ def _run_command_interactive(command, full_command, timeout, base, stdin_callbac
     try:
         command_environment = without_automatic_git_maintenance(validate_environment(
             child_env if child_env is not None else _get_cmd_env(
-                base, credential_env, strip_credential_vars,
+                base, credential_env, strip_credential_vars, task=task,
                 owner_user_id=(task or {}).get('_userId'))))
         proc = subprocess.Popen(
             work_process_argv(get_command_shell_args(full_command)),
@@ -3163,5 +3172,7 @@ def _run_command_interactive(command, full_command, timeout, base, stdin_callbac
     exit_code = proc.returncode if not timed_out else -1
     logger.info('run_command done (interactive): exit=%d, stdout=%dch, stderr=%dch',
                 exit_code, len(stdout), len(stderr))
+    from lib.project_mod.toolchains import missing_toolchain_notices
     return _format_run_output(command, stdout, stderr, exit_code, timed_out=timed_out,
-                              notices=group_notices)
+                              notices=group_notices + missing_toolchain_notices(
+                                  command_environment, exit_code))

@@ -40,6 +40,7 @@ import hashlib
 import json
 import time
 
+from lib.cost import responses_input_usage_evidence
 from lib.llm.responses_outbound._message_phase import capture_phase_messages
 from lib.llm.responses_replay import capture_replay_order
 from lib.llm.responses_outbound._reasoning import (
@@ -99,7 +100,7 @@ def _retained(item, *, reasoning_replay: bool) -> bool:
                  or not item.get('encrypted_content')))
 
 
-def _usage_to_openai(usage: dict) -> dict:
+def _usage_to_openai(usage: object) -> dict:
     """Responses usage → OpenAI Chat Completions usage spelling."""
     if not isinstance(usage, dict) or not usage:
         return {}
@@ -219,6 +220,9 @@ class ResponsesSSETranslator:
         self._response_item_positions: dict[tuple, int] = {}
         self.response_id = ''
         self.response_output: list[dict] = []
+        # Off-chunk evidence: the shared translator's canonical usage stays
+        # unchanged for compatibility accounting and native parity.
+        self.responses_input_usage: dict | None = None
         self.unknown_event_types: set[str] = set()
         self.unknown_item_types: set[str] = set()
         # Readable reasoning has independent item/channel/part prefix proofs;
@@ -226,6 +230,10 @@ class ResponsesSSETranslator:
         self._reasoning = ReasoningSummaryReconciler(
             max_output_index=_MAX_RESPONSE_OUTPUT_INDEX,
             max_item_id_chars=_MAX_RESPONSE_ITEM_ID_CHARS)
+
+    def _terminal_usage(self, response: dict) -> dict:
+        self.responses_input_usage = responses_input_usage_evidence(response)
+        return _usage_to_openai(response.get('usage'))
 
     @staticmethod
     def _protocol_error(message: str) -> list[dict]:
@@ -815,7 +823,7 @@ class ResponsesSSETranslator:
                     self._reasoning.terminal(response_output)))
             except ReasoningSummaryError as error:
                 return self._protocol_error(str(error))
-            usage = _usage_to_openai(resp.get('usage') or {})
+            usage = self._terminal_usage(resp)
             if _program_needs_followup(response_output):
                 # OpenAI may deliver the final assistant message in the next
                 # response after program_output. The orchestrator recognizes
@@ -864,7 +872,7 @@ class ResponsesSSETranslator:
                         self._reasoning.terminal(response_output)))
                 except ReasoningSummaryError as error:
                     return self._protocol_error(str(error))
-                usage = _usage_to_openai(resp.get('usage') or {})
+                usage = self._terminal_usage(resp)
                 if _program_needs_followup(response_output):
                     usage['_program_pending'] = True
                 out.append(self._chunk(finish_reason=finish,

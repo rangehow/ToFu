@@ -54,23 +54,27 @@ class _Clock:
     the first dispatch's cold imports and synchronous key-stats fsyncs could
     outlast a 0.5s 429 cooldown before the first pick, flipping hold/no-hold
     outcomes. Other threads keep real time and sleeps so a background loop
-    can neither spin nor move this clock.
+    can neither spin nor move this clock; a worker the test runs its own work
+    on (the async relay picks slots on its loop's executor) adopts it.
     """
 
     def __init__(self):
         self.now = time.time()
         self.sleeps = []
-        self._thread = threading.get_ident()
+        self._threads = {threading.get_ident()}
         self._real_time = time.time
         self._real_sleep = time.sleep
 
+    def adopt_current_thread(self):
+        self._threads.add(threading.get_ident())
+
     def time(self):
-        if threading.get_ident() != self._thread:
+        if threading.get_ident() not in self._threads:
             return self._real_time()
         return self.now
 
     def sleep(self, seconds, *args, **kwargs):
-        if threading.get_ident() != self._thread:
+        if threading.get_ident() not in self._threads:
             return self._real_sleep(seconds)
         self.sleeps.append(seconds)
         self.now += max(0.0, float(seconds))
@@ -217,12 +221,18 @@ class TestWarmKeyHold:
         monkeypatch.setattr(
             'lib.llm.astream.async_stream_chat', fake_stream)
 
-        conv_affinity.set_conv_affinity('conv-async-hold')
-        try:
-            result = asyncio.run(api.async_dispatch_stream(
+        async def relay():
+            from concurrent.futures import ThreadPoolExecutor
+            asyncio.get_running_loop().set_default_executor(
+                ThreadPoolExecutor(initializer=clock.adopt_current_thread))
+            return await api.async_dispatch_stream(
                 [{'role': 'user', 'content': 'hi'}],
                 prefer_model=_MODEL, strict_model=True, max_retries=2,
-            ))
+            )
+
+        conv_affinity.set_conv_affinity('conv-async-hold')
+        try:
+            result = asyncio.run(relay())
         finally:
             conv_affinity.clear_conv_affinity()
 

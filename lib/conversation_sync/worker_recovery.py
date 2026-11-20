@@ -79,8 +79,8 @@ def isolated_worktree(attempt):
     return workspace if workspace != os.path.realpath(os.path.expanduser(root)) else None
 
 
-def classify_cut_calls(turn, attempt):
-    """The interrupted Attempt's calls a restart cut off, each with its effect class.
+def classify_cut_calls(turn, attempt) -> tuple[list[dict], bool]:
+    """Return the classified cut calls and whether their frontier was readable.
 
     A call that is not read-only commits its ``entered`` intent before its
     handler runs (docs/contracts/TOOL_EFFECT_RECOVERY.md), so a call without
@@ -89,30 +89,50 @@ def classify_cut_calls(turn, attempt):
     declared effect (``lib.tools.restart_effect_class``): ``read_only``,
     ``idempotent`` and ``verifiable`` calls resume from the checkpoint by
     themselves (``decision: resume``); an ``unknown`` one waits for its owner
-    (``decision: needs_decision``).
+    (``decision: needs_decision``). An unreadable row cannot prove safety,
+    but does not erase the evidence in other rows.
     """
     from lib.tool_results.tool_round_replay import model_tool_content
     from lib.tools.restart_effect_class import SAFE_CLASSES, cut_call_effect_class
     projection = turn.get('projection') if isinstance(turn, Mapping) else None
     rounds = projection.get('toolRounds') if isinstance(projection, Mapping) else None
-    worktree, found = None, []
-    for row in rounds if isinstance(rounds, list) else ():
-        effect = row.get('executionEffect') if isinstance(row, Mapping) else None
-        if (not isinstance(effect, Mapping) or effect.get('state') not in _UNCONFIRMED_EFFECT_STATES
-                or model_tool_content(row)
-                or (row.get('attemptId') or attempt['attemptId']) != attempt['attemptId']):
+    if not isinstance(rounds, list):
+        return [], False
+    worktree, found, complete = None, [], True
+    attempt_id = attempt['attemptId']
+    for row in rounds:
+        if not isinstance(row, Mapping) or not isinstance(row.get('attemptId', ''), str):
+            complete = False
             continue
-        if worktree is None and effect.get('recovery') == 'reconcile':
+        if (row.get('attemptId') or attempt_id) != attempt_id or 'executionEffect' not in row:
+            continue
+        effect = row['executionEffect']
+        state = effect.get('state') if isinstance(effect, Mapping) else None
+        if state in ('returned', 'not_started'):
+            continue
+        if not isinstance(state, str) or state not in _UNCONFIRMED_EFFECT_STATES:
+            complete = False
+            continue
+        recovery = effect.get('recovery')
+        blocks = row.get('toolModelContent', [])
+        if (recovery not in ('read_only', 'idempotent', 'reconcile')
+                or not isinstance(blocks, list) or any(not isinstance(block, Mapping) for block in blocks)):
+            complete = False
+            continue
+        if model_tool_content(row):
+            continue
+        tool_name, call_id, operation_id = row.get('toolName'), row.get('toolCallId'), effect.get('operationId')
+        if not all(isinstance(value, str) and value for value in (tool_name, call_id, operation_id)):
+            complete = False
+            continue
+        if worktree is None and recovery == 'reconcile':
             worktree = isolated_worktree(attempt) or ''
         effect_class = cut_call_effect_class(
-            str(row.get('toolName') or ''), row.get('toolArgs'),
-            declared=str(effect.get('recovery') or 'reconcile'), worktree=worktree or None)
-        found.append({'toolName': str(row.get('toolName') or ''),
-                      'toolCallId': str(row.get('toolCallId') or ''),
-                      'operationId': str(effect.get('operationId') or ''),
+            tool_name, row.get('toolArgs'), declared=recovery, worktree=worktree or None)
+        found.append({'toolName': tool_name, 'toolCallId': call_id, 'operationId': operation_id,
                       'effectClass': effect_class,
                       'decision': 'resume' if effect_class in SAFE_CLASSES else 'needs_decision'})
-    return found
+    return found, complete
 
 
 def has_exit_receipt(attempt, metadata):
@@ -324,6 +344,60 @@ def _paused_resume_error():
                     'retryPolicy': {'mode': 'manual', 'automatic': False}})
 
 
+def _recovery_error(task, *, preparation_exited, ended_unjoined, lease_lost,
+                    fenced_debt, classified_calls, classification_complete):
+    """Build the Turn verdict without treating missing classification as safe."""
+    from lib.error_envelope import make_envelope
+    retry_policy = {'mode': 'manual', 'automatic': False}
+    code = 'worker_effect_outcome_unknown'
+    if preparation_exited and isinstance(task.get('_conversationPreparationError'), dict):
+        # Preserve the observed startup cause. It does not prove that
+        # earlier preparation/translation had no external effects.
+        error = dict(task['_conversationPreparationError'], retryable=False, code=code,
+                     retryPolicy=retry_policy)
+        error.pop('cutCallsClassifiedSafe', None)
+        error['hint'] = str(error.get('hint') or '') + (
+            '\nInspect saved preparation/provider receipts before retrying / '
+            '重试前请核对已保存的准备阶段与服务商回执')
+        return error
+    unknown_effects = [
+        {key: item[key] for key in ('toolName', 'toolCallId', 'operationId')}
+        for item in classified_calls or () if item['decision'] == 'needs_decision']
+    if unknown_effects:
+        names = ', '.join(f"{item['toolName']} {item['toolCallId']}" for item in unknown_effects)
+        message = ('A restart or storage outage cut off calls whose side effect is unknown: '
+                   + names + ' / 重启或存储中断切断了副作用未知的调用：' + names if ended_unjoined else
+                   'Execution ended with calls whose side effect is unknown: '
+                   + names + ' / 执行结束时有副作用未知的调用：' + names)
+        return make_envelope('internal', context='conversation-worker-recovery',
+            source='conversation-worker', retryable=False, message=message,
+            hint=('Check what each call changed (inspect_tool_effect, or the target it '
+                  'writes) before continuing; Continue does not repeat it automatically / '
+                  '继续前请先核对这些调用的实际效果；继续不会自动重做它们'),
+            extensions={'code': code, 'unknownEffects': unknown_effects,
+                        'cutCalls': classified_calls, 'retryPolicy': retry_policy})
+    if classification_complete and ended_unjoined:
+        # As for graceful quiesce, a safe interruption resumes from its checkpoint.
+        return None
+    extensions = {'code': code, 'retryPolicy': retry_policy}
+    if classification_complete:
+        # An exact joined executor's cut calls were all safe (possibly none).
+        # This is evidence for a new authorized wake, not replay permission or
+        # confirmation of the failed Attempt's accounting or external outcome.
+        extensions['cutCallsClassifiedSafe'] = True
+    return make_envelope('storage_fence' if lease_lost else 'internal',
+        context='conversation-worker-recovery',
+        source='conversation-worker', retryable=False,
+        message=("Execution's worker lease ended before its result was saved; "
+                 'external outcome is unknown / 执行租约在结果保存前已结束，外部效果尚未确认'
+                 if lease_lost else
+                 'Execution ended with an unknown external outcome / 执行已结束，外部效果尚未确认'),
+        detail=(f"Unsaved terminal result: status={task.get('status')} "
+                f"finishReason={task.get('finishReason')}" if fenced_debt else ''),
+        hint='Inspect saved tool and provider receipts before continuing / 请先核对已保存的工具与服务回执',
+        extensions=extensions)
+
+
 def recover_exited_attempt(context, attempt, turn, *, task=None):
     """Converge an exited worker without invoking any model, tool or preparer."""
     from lib.process_owner import owner_state, process_owner
@@ -365,7 +439,6 @@ def recover_exited_attempt(context, attempt, turn, *, task=None):
                       and metadata.get('turnId') == attempt['turnId'])
     cut_calls = None
     if attempt['status'] in ('pending', 'running'):
-        from lib.error_envelope import make_envelope
         # Stopping the service ends every claim it ran: that is a restart, not
         # a lost lease. Otherwise the original claim's authority ended, or its
         # replacement fenced the result the carrier had not yet saved.
@@ -387,53 +460,21 @@ def recover_exited_attempt(context, attempt, turn, *, task=None):
         # restart, never declared unknown wholesale.
         stopped_after_exit = (ended_unjoined and not lease_lost
                               and context.cancellation_requested)
-        cut_calls = classify_cut_calls(turn, attempt) if ended_unjoined else None
-        unknown_effects = None if cut_calls is None else [
-            {key: item[key] for key in ('toolName', 'toolCallId', 'operationId')}
-            for item in cut_calls if item['decision'] == 'needs_decision']
+        joined_failure = (joined and not preparation_exited and not context.cancellation_requested
+                          and turn.get('currentAttemptId') == attempt['attemptId'])
+        # A joined executor really ran, rather than just unwinding startup.
+        # Its recorded frontier must be readable before marking it safe.
+        classified_calls, classification_complete = (
+            classify_cut_calls(turn, attempt) if ended_unjoined or joined_failure else ([], False))
+        cut_calls = classified_calls if ended_unjoined else None
         if cut_calls:
             # The decision record: which cut calls resume by themselves, which wait.
             logger.info('[WorkerRecovery] attempt=%s restart cut calls: %s', attempt['attemptId'],
                         ', '.join(f"{item['toolName']} {item['toolCallId']} {item['effectClass']}"
                                   f"->{item['decision']}" for item in cut_calls))
-        error = make_envelope('storage_fence' if lease_lost else 'internal',
-            context='conversation-worker-recovery',
-            source='conversation-worker', retryable=False,
-            message=("Execution's worker lease ended before its result was saved; "
-                     'external outcome is unknown / 执行租约在结果保存前已结束，外部效果尚未确认'
-                     if lease_lost else
-                     'Execution ended with an unknown external outcome / 执行已结束，外部效果尚未确认'),
-            detail=(f"Unsaved terminal result: status={task.get('status')} "
-                    f"finishReason={task.get('finishReason')}" if fenced_debt else ''),
-            hint='Inspect saved tool and provider receipts before continuing / 请先核对已保存的工具与服务回执',
-            extensions={'code': 'worker_effect_outcome_unknown',
-                        'retryPolicy': {'mode': 'manual', 'automatic': False}})
-        if preparation_exited and isinstance(task.get('_conversationPreparationError'), dict):
-            # Preserve the observed startup cause. It does not prove that
-            # earlier preparation/translation had no external effects.
-            error = dict(task['_conversationPreparationError'],
-                         retryable=False, code='worker_effect_outcome_unknown',
-                         retryPolicy={'mode': 'manual', 'automatic': False})
-            error['hint'] = str(error.get('hint') or '') + (
-                '\nInspect saved preparation/provider receipts before retrying / '
-                '重试前请核对已保存的准备阶段与服务商回执')
-        elif unknown_effects:
-            names = ', '.join(f"{item['toolName']} {item['toolCallId']}" for item in unknown_effects)
-            error = make_envelope('internal', context='conversation-worker-recovery',
-                source='conversation-worker', retryable=False,
-                message=('A restart or storage outage cut off calls whose side effect is unknown: '
-                         + names + ' / 重启或存储中断切断了副作用未知的调用：' + names),
-                hint=('Check what each call changed (inspect_tool_effect, or the target it '
-                      'writes) before continuing; Continue does not repeat it automatically / '
-                      '继续前请先核对这些调用的实际效果；继续不会自动重做它们'),
-                extensions={'code': 'worker_effect_outcome_unknown', 'unknownEffects': unknown_effects,
-                            'cutCalls': cut_calls,
-                            'retryPolicy': {'mode': 'manual', 'automatic': False}})
-        elif unknown_effects is not None:
-            # Every call was answered, never entered, or cut off with a read-only,
-            # idempotent or verifiable effect: the graceful shutdown quiesce settles
-            # exactly this, and it resumes from its checkpoint by itself.
-            error = None
+        error = _recovery_error(task, preparation_exited=preparation_exited,
+            ended_unjoined=ended_unjoined, lease_lost=lease_lost, fenced_debt=fenced_debt,
+            classified_calls=classified_calls, classification_complete=classification_complete)
         carrier = dict(turn.get('projection') or {})
         carrier.update(id=context.claim.task_id, convId=attempt['conversationId'],
             _attemptId=attempt['attemptId'], _turnId=attempt['turnId'],
@@ -467,6 +508,13 @@ def recover_exited_attempt(context, attempt, turn, *, task=None):
             if not stopping and error is None:
                 error = _paused_resume_error()
                 carrier['error'] = error
+        else:
+            # No executor finalizer will salvage what was steered into this
+            # Turn, and no resume continues it: queue or bounce it now. A
+            # restart interruption keeps its steers for the resumed Attempt.
+            from lib.tasks_pkg.committed_steers import requeue_orphaned_steers
+            carrier['_userSteerInjects'] = requeue_orphaned_steers(
+                carrier, carrier.get('_userSteerInjects') or ())
         turns.record_task_event(carrier, {'type': event_type, **({'error': error} if error else {})})
         attempt = turns.get_attempt(attempt['attemptId'], user_id=context.principal.owner_user_id,
                                     include_execution_config=True)

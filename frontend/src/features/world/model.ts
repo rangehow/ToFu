@@ -5,8 +5,9 @@
  * `busy`, i.e. the task registry's running set) or an assignment that is queued, waiting or blocked. Every
  * other team member is routine and only counted (`routine`).
  * Emphasis follows owner attention (attention.ts): a decision only for a real open owner question, an
- * exception only for an overdue commitment, a lead's unread blocked report or an open Watchdog incident
- * (on the Watchdog); a desk document only for an unread lead report (a deliverable when its kind is
+ * exception only for an overdue commitment or a lead's unread blocked report. An open Watchdog signal is the
+ * Watchdog's own work queue, not an owner item: it never flags the Watchdog (the Watchdog asks the owner,
+ * a decision, when a fault needs him); a desk document only for an unread lead report (a deliverable when its kind is
  * delivery) or a Worker result that really arrived.
  * Pure. Entry points: projectOffice, personName, deskDocuments. Dependencies: wire types, the shared
  * assignment status, the office game's character resolver. */
@@ -74,8 +75,6 @@ export interface TeamInput {
   held?: ReadonlySet<string>;
   /** Conversations with a running attempt from the office busy facts; absent: the team rows' `busy`. */
   busy?: ReadonlySet<string>;
-  /** Open Watchdog incidents (office alarm facts); only the Watchdog's team carries them. */
-  alarms?: number;
 }
 export interface PersonLabels { router: string; watchdog: string; lead(team: string): string }
 
@@ -255,7 +254,6 @@ export function projectOffice(now: number, inputs: ReadonlyArray<TeamInput>, lab
   for (const input of inputs) {
     const lead = people.get(input.leadId);
     if (lead && input.reports?.unread && input.reports.latest?.kind === 'blocked') lead.emphasis = 'exception';
-    if (lead && input.kind === 'watchdog' && input.alarms) lead.emphasis = 'exception';
   }
   for (const item of attention.decisions) {
     const asker = item.source.conversationId ? people.get(item.source.conversationId) : null;

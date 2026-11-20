@@ -5,7 +5,8 @@
    alone truncates (its full text is the header's title tooltip), and outcome
    pills stay whole. A hairline, not a dot, parts title
    and subject: summaries already use " · " between their own facts. */
-.ptool-coord-header {
+.ptool-coord-header,
+.ptool-text:has(> .ptool-coord-title) {
   display: flex;
   flex-wrap: nowrap;
   align-items: center;

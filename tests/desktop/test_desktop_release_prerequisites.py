@@ -5,7 +5,6 @@ import ast
 import json
 from pathlib import Path
 import re
-import tomllib
 
 import pytest
 import yaml
@@ -50,6 +49,7 @@ def test_opensource_export_keeps_frontend_release_commands():
     keep = ast.literal_eval(assignment.value)
     missing = sorted(_frontend_script_paths() - keep)
     assert not missing, f'Public export strips frontend build prerequisites: {missing}'
+    assert 'scripts/verify_macos_dmg.sh' in keep
 
 
 def test_frontend_release_provisions_contract_parser_and_browser_canary():
@@ -62,13 +62,8 @@ def test_frontend_release_provisions_contract_parser_and_browser_canary():
     assert any(str(step.get('uses', '')).startswith('actions/setup-python@')
                for step in prerequisites)
     commands = '\n'.join(step.get('run', '') for step in prerequisites)
-    # The contract generators and the canary run in the locked environment:
-    # PyYAML is a core dependency and Playwright comes from the test extra.
-    assert re.search(r'uv sync --frozen --extra test\b', commands)
-    project = tomllib.loads((ROOT / 'pyproject.toml').read_text(encoding='utf-8'))['project']
-    assert any(re.match(r'PyYAML\b', spec) for spec in project['dependencies'])
-    assert any(re.match(r'playwright\b', spec)
-               for spec in project['optional-dependencies']['test'])
+    assert re.search(r'pip install[^\n]*PyYAML', commands)
+    assert re.search(r'pip install[^\n]*playwright', commands)
     assert 'python -m playwright install --with-deps chromium' in commands
 
 
@@ -95,6 +90,36 @@ def test_macos_full_smoke_precedes_packaging_and_cannot_be_skipped():
     assert not smoke.get('if')
     assert './dist/Tofu.app/Contents/MacOS/Tofu' in smoke['run']
     assert smoke['timeout-minutes'] <= 2
+
+
+def test_macos_release_requires_native_verification_and_checks_the_same_bytes():
+    workflow = yaml.safe_load((ROOT / '.github/workflows/build-desktop.yml').read_text())
+    jobs = workflow['jobs']
+    steps = jobs['build-macos']['steps']
+    package = next(i for i, step in enumerate(steps) if step.get('name') == 'Create DMG')
+    notarize = next(i for i, step in enumerate(steps) if 'notarytool submit' in step.get('run', ''))
+    verify = next(i for i, step in enumerate(steps) if 'scripts/verify_macos_dmg.sh' in step.get('run', ''))
+    uploads = [i for i, step in enumerate(steps) if 'actions/upload-artifact@' in step.get('uses', '')]
+    assert package < notarize < verify
+    assert uploads and all(i > verify for i in uploads)
+    for i in [notarize, verify, *uploads]:
+        assert not steps[i].get('continue-on-error') and not steps[i].get('if')
+    assert 'if-no-files-found' in steps[uploads[0]]['with']
+    assert steps[uploads[0]]['with']['if-no-files-found'] == 'error'
+    assert '.verified.sha256' in steps[uploads[0]]['with']['path']
+    release = jobs['release']
+    assert 'build-macos' in release['needs']
+    assert "inputs.verify_macos_only != true" in release['if']
+    triggers = workflow.get('on', workflow.get(True))  # PyYAML YAML 1.1 parses 'on' as bool.
+    assert triggers['workflow_dispatch']['inputs']['verify_macos_only']['default'] is True
+    assert jobs['release']['permissions']['contents'] == 'write'
+    assert workflow['permissions']['contents'] == 'read'
+    assert all('xattr -cr' not in str(step) for step in release['steps'])
+    handoff = next(i for i, step in enumerate(release['steps'])
+                   if step.get('name') == 'Check native-verified macOS bytes')
+    sign = next(i for i, step in enumerate(release['steps'])
+                if step.get('name') == 'Sign SHA256SUMS with the release key')
+    assert handoff < sign and not release['steps'][handoff].get('if')
 
 
 def test_frozen_bundle_can_load_the_package_owned_model_contract(tmp_path):

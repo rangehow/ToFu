@@ -115,6 +115,11 @@ pub(crate) fn is_refusal_kind(kind: io::ErrorKind) -> bool {
     kind == io::ErrorKind::OutOfMemory
 }
 
+/// Test a deterministic domain bound without publishing refusal metrics.
+pub(crate) fn is_domain_bound(error: &io::Error) -> bool {
+    is_refusal(error) && classify(error) == Reason::DomainBound
+}
+
 fn classify(error: &io::Error) -> Reason {
     match error.get_ref() {
         Some(inner) => match inner.downcast_ref::<Refusal>() {

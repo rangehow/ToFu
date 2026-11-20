@@ -24,6 +24,18 @@ identities; writers continue to emit v2. Historical l0 evidence does not need
 a storage rewrite to appear in snapshots or replay. Unknown versions, extra
 fields, and invalid evidence values remain contract violations.
 
+## Coordinator Worker observations
+
+A completed Coordinator Turn can carry `settlement.coordinatorWorkerObservations`:
+receipts keyed by Worker assignment ID recording the exact attempt, result
+revision and delivery status returned by its poll (`null` means no delivery
+status). The [Coordinator recovery policy](../PROJECT_COORDINATION.md) compares
+these receipts to current Worker evidence before suppressing a redundant wake.
+Snapshot, history, point reads and replay preserve the same evidence. The field
+is optional for Turns without these observations; receipt entries and settlement
+remain closed to undeclared fields. Public append-settled commands cannot mint
+this server-owned evidence.
+
 ## Committed file changes
 
 Committed file projections retain `changeId` and `rootPath` from the project
@@ -195,6 +207,41 @@ restart invalidates every current subscription; scoped hints retain owner and
 conversation identity. Streams subscribe before their first replay. An unchanged
 watch cursor needs no replay query: quiet stream heartbeats report the last
 delivered cursor, while reconnect and invalidation resume canonical replay.
+
+The offline specification `tests/chaos/test_client_transcript_continuation.py`
+opens and closes a client read stream before a benign local fixture tool runs,
+then reconnects with `Last-Event-ID` after settlement. Applying retained patches
+must reproduce the canonical snapshot with one ordered tool occurrence and one
+final answer; the fixture's independent append count and provider request history
+must remain unchanged by the reads. One parametrized test exercises Anthropic
+Messages, Chat Completions and Responses through the same public-v4/disposable
+SQLite composition and assertions. This does not certify server successor recovery,
+browser rendering, real provider behavior, or extension acknowledgements.
+
+The test-only [`ScriptedProvider`](../../tests/chaos/fake_provider.py) and
+[route installer](../../tests/chaos/client.py) accept an explicit protocol while
+preserving Anthropic as their default. Chat/Responses support is deliberately
+limited to ordinary streaming text, tool and held pre-tool steps; the existing
+Anthropic fault matrix is not cross-transport evidence. The held Chat/Responses
+connection writes an SSE comment, not a premature completion, before release.
+Their ordinary wire encoder is extracted from and shared with the
+[CLI fixture](../../tests/tofu_agent/test_headless_protocol_file_parity.py), not a
+second agent or sync harness. Request observations retain deep-copied wire bodies
+and protocol-normalized tool outputs. The initial subscription must not change the
+held request history; after settlement exactly two model calls (hold, final text)
+must remain unchanged by reconnect, alongside the independent one-line append and
+canonical ordered projection replay. All endpoints and identities are synthetic
+and local; production adapters, deterministic selection and release gates are
+unchanged.
+
+This fixture requires `npm run build:frontend` in its executing checkout before
+running `.venv/bin/python3 -m pytest -q tests/chaos/test_client_transcript_continuation.py`.
+The named-file `landing_verification record` entrypoint executes a private committed
+checkout rather than that built checkout; its current dependency bridge does not
+carry the ignored frontend graph. A missing-graph setup error from that entrypoint
+is not a passing reconnect receipt. Keep direct built-checkout evidence separate
+from recorder results; neither a successful source build nor an empty selection
+substitutes for executing this fixture.
 
 The stream confirms a quiet subscription with an immediate heartbeat. Later
 heartbeat deadlines advance only after a delivered frame; redundant broker wake
@@ -415,6 +462,86 @@ The response carries `deletedTurnIds` (always empty for a resume);
 authoritative acknowledgement, never on click, and an older response cannot
 resurrect it.
 
+The internal `turn.resume.plan.read` query checks the owner-scoped current
+Attempt and exact Turn projection revision in one authority snapshot. It takes
+`user_id`, `conversation_id`, `turn_id`, `attempt_id`, and `projection_revision`.
+A refusal contains only `status` (`stale_source` or `source_unavailable`). On
+success `source_pinned` is accompanied by the exact IDs, projection revision,
+and actual settled `sourceStatus`; no projection or accepted config is returned.
+This is the source-consistency part of planning, not a replay snapshot or an
+eligibility check. It grants no execution rights. An older authority that
+cannot answer the query leaves source evidence unavailable.
+
+End-to-end preview still requires effect-free request preparation with pinned
+history, policy, route/subscription, window, tool and archive witnesses. A
+settled source snapshot or previously converted request does not supply them.
+The final prompt admission owner can classify already-frozen complete prompt
+counts, route windows and resolved output reservations using the same ceiling
+arithmetic as live admission. The plan-only input accepts no task or effect
+ports. Missing inputs yield `unknown`; `fits` applies only to the supplied
+candidate, and `needs_compaction` does not imply that compaction is possible.
+The classifier does not acquire or authenticate witnesses or build prompts.
+
+`read_cold_resume_candidate` reconstructs a text-only main-lane Continue
+candidate from a single complete cold `turn.context.read` response. PostgreSQL
+uses a read-only repeatable-read transaction for the proof and row hydration;
+a writer committing between statements cannot mix prior-Turn generations.
+The response independently matches the source pin and supplies its history
+proof. Paged history, nested model media, earlier interrupted or causally
+incomplete Turns, and restart-pause targets are refused. The planner shares
+normal Turn projection and Continue's retained occurrence selection. The
+storage authority requires the exact expected history digest and source pin before returning
+`continuePlan`, the canonical anchor and normalized projection from that
+snapshot. The read shares the write command's settlement, anchor and later-tail
+closure checks; it does not reserve eligibility or replace revalidation at
+acceptance. An older authority without the witness fails closed.
+This is an incomplete cold planner, not a Continue preflight. By default the
+cold read does not look up continuation or archive records. Its null
+continuation is not proof of absence. Opting in with `continue_plan.selection`
+keeps the ordinary cold result unchanged and may add versioned
+`continueSelectionInputs`. Those inputs come from the same owner-scoped read
+as the fenced plan, not from a second archive query. The input envelope has
+exact fields; an omitted field cannot stand in for explicit null. Checkpoint
+absence requires `checkpoint_missing`, zero coverage and explicit null;
+archive absence requires an explicit empty list. The continuation uses
+the ordinary v2 prefix/terminal check. The archive owner captures a complete
+root-scope candidate list only within the normal eight-candidate bound and
+the retained-view byte budget; a capped or unusable listing is not empty.
+An optional archive bound leaves the cold plan intact and supplies null archive
+evidence. Archive list and prune use creation time, then UTF-8 ID byte length,
+then unsigned ID bytes (the existing native index order); resume selection
+walks the list in reverse. SQLite derives those bytes from the text explicitly,
+independent of the database file's encoding.
+
+With a detached comparison configuration, the planner uses the normal replay
+and archive-selection owners on those text-only records. It reports `selected`,
+`verified_absent`, or `indeterminate`. Only an empty, actually checked slot
+or scope proves absence. Missing proof, legacy continuation, unverified media,
+policy mismatch, and a capped scan stay indeterminate. A corrupt persisted
+optional record invalidates only its own evidence (`archives: null` or
+`invalid_checkpoint`), not the cold plan or the independent witness. SQL read
+and operational errors still propagate; ordinary reads retain their integrity
+errors. Stored creation time, round, token and message counts, and payload size
+must decode as nonnegative integers, not coerced text or fractional values.
+Each observation binds
+the owner, conversation, Turn, Attempt, projection revision, history digest
+and canonical resume anchor. Archive content identity hashes the archive ID,
+receipt and ordered post-messages, not display or storage encoding metadata.
+Updating post-messages without changing the receipt therefore changes the
+witness; changing only the stored byte size does not. Detached validation
+neither performs activity lookups nor publishes task-startup metrics. The cold message bytes do
+not change. Policy, tools, route/subscription, window and serving readiness
+remain `unknown`; none of this private planning material is a dispatch input.
+
+A complete planning view should evaluate the same source, operation, anchor
+and later-history eligibility rules as acceptance against one consistent view,
+not add a flag to the attempt-creation command. That view must not contain a successor identity, `_resumeSource`
+receipt, dispatch grant, or checkpoint takeover capability. Request preparation
+would have to consume read-only revision-bound witnesses from the respective
+owners, refusing stale or unavailable evidence before invoking any effectful
+port. A real resume would still require normal acceptance and revalidation;
+no planning result may replace either. Running acceptance under rollback is
+not a preview: executor effects are outside the storage transaction.
 
 ### Unconfirmed-usage forward recovery
 

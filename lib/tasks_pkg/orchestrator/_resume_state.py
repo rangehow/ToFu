@@ -102,11 +102,11 @@ def _json_safe_copy(
         encoded = json.dumps(
             value, ensure_ascii=False, sort_keys=True,
             separators=(',', ':'), allow_nan=False,
-        )
+        ).encode('utf-8')
     except (TypeError, ValueError, OverflowError) as exc:
         raise _protocol_error(
             field, 'must contain only finite JSON values') from exc
-    if max_bytes is not None and len(encoded.encode('utf-8')) > max_bytes:
+    if max_bytes is not None and len(encoded) > max_bytes:
         raise _protocol_error(
             field,
             f'exceeds {max_bytes} serialized UTF-8 bytes',
@@ -119,13 +119,21 @@ def _strict_todo_state(value: Any) -> dict[str, Any]:
     field = 'checkpointTodoState'
     if not isinstance(value, Mapping):
         raise _protocol_error(field, 'must be an object')
-    raw = _json_safe_copy(
-        dict(value), field, max_bytes=TODO_MAX_STATE_BYTES)
+    board_projection = value.get('version') == TODO_STATE_VERSION and 'boardRef' in value
+    raw = _json_safe_copy(dict(value), field, max_bytes=None if board_projection else TODO_MAX_STATE_BYTES)
 
     version = raw.get('version')
     if type(version) is not int or version not in (2, TODO_STATE_VERSION):
         raise _protocol_error(field, 'version must equal 2 or 3')
     if version == TODO_STATE_VERSION:
+        if board_projection:
+            try:
+                restored = public_todo_state(raw)
+            except (KeyError, ValueError) as exc:
+                raise _protocol_error(field, str(exc)) from exc
+            if restored != raw:
+                raise _protocol_error(field, 'board projection must already be a canonical snapshot')
+            return restored
         if set(raw) != {'version', 'todos', 'update_count', 'explanation'}:
             raise _protocol_error(field, 'v3 requires only version, todos, update_count, explanation')
         if type(raw['update_count']) is not int or raw['update_count'] < 0:
@@ -466,6 +474,8 @@ def restore_resume_view(
     stays the authority that proves the view (witnesses, media); without a
     valid checkpoint the canonical replay in ``apply_resume_state`` applies.
     """
+    from lib.tasks_pkg.failure_attribution import record_active_round
+    record_active_round(task, prepared_state.next_model_round)
     if (cfg.get('_turnOperation') not in _RESUME_OPERATIONS
             and 'checkpointToolRounds' not in cfg and not prepared_state.checkpoint_messages):
         return False

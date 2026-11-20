@@ -404,7 +404,67 @@ class TestUnrepresentableRoutes:
         assert clock.sleeps == []
         assert all(_untouched(slot) for slot in blocked)
 
-    def test_strict_pick_surfaces_the_conversion_error(self, clock, monkeypatch):
+    def test_strict_pick_keeps_responses_route_for_portable_messages_work(
+            self, clock, monkeypatch):
+        """A pinned Model need not change routes merely for foreign thinking.
+        The real Responses converter carries task/tool work without a forged
+        Claude signature; truly unrepresentable state still skips routes in
+        the other strict-pick tests.
+        """
+        from lib.llm.openai_outbound import openai_body_to_chat
+        from lib.llm.responses_outbound import openai_body_to_responses
+        thinking = {'type': 'thinking', 'thinking': 'plan', 'signature': 'sig-1'}
+        call = {'id': 'toolu_1', 'type': 'function',
+                'function': {'name': 'run', 'arguments': '{}'}}
+        active_claude_round = {
+            'role': 'assistant', 'content': '', 'tool_calls': [call],
+            'reasoning_content': 'plan', 'thinking_signature': 'sig-1',
+            '_anthropic_content_blocks': [thinking, {
+                'type': 'tool_use', 'id': 'toolu_1', 'name': 'run',
+                'input': {}}],
+        }
+        messages = [{'role': 'user', 'content': 'go'}, active_claude_round,
+                    {'role': 'tool', 'tool_call_id': 'toolu_1', 'content': 'ok'}]
+        blocked = _plain_slot('k0', 'pinned', self._RESPONSES)
+        carrier = _plain_slot('k1', 'pinned', _OTHER)
+        other_model = _plain_slot('k2', 'other-model', 'https://third.example/v1')
+        _install(monkeypatch, blocked, carrier, other_model)
+        # Remove score jitter so the Responses route is deterministically first.
+        monkeypatch.setattr('lib.llm_dispatch.slot.random.uniform',
+                            lambda low, high: 1.0)
+        sent = []
+
+        attempted = []
+
+        def _stream(body, **kwargs):
+            attempted.append(kwargs.get('base_url'))
+            convert = (openai_body_to_responses
+                       if kwargs.get('base_url') == self._RESPONSES
+                       else openai_body_to_chat)
+            sent.append((kwargs.get('base_url'), convert(body)))
+            return _OK
+
+        monkeypatch.setattr('lib.llm.stream_chat', _stream)
+
+        msg, _finish, _usage = api.dispatch_stream(
+            {'model': 'pinned', 'messages': messages}, prefer_model='pinned',
+            strict_model=True, log_prefix='[T]')
+
+        assert msg == 'ok'
+        assert attempted == [self._RESPONSES]
+        assert [url for url, _wire in sent] == [self._RESPONSES]
+        wire, _reverse = sent[0][1]
+        assert wire['_conversion_report']['cross_protocol_reasoning_omitted'] == 2
+        assert [item['type'] for item in wire['input']] == [
+            'message', 'function_call', 'function_call_output']
+        assert wire['input'][-1]['output'] == 'ok'
+        assert 'sig-1' not in repr(wire['input'])
+        assert active_claude_round['thinking_signature'] == 'sig-1'
+        assert clock.sleeps == []
+        assert _untouched(blocked)
+
+    def test_strict_pick_never_leaves_its_model_for_a_carrier(
+            self, clock, monkeypatch):
         self._install_routes(monkeypatch)
         calls = self._transport(monkeypatch, {self._RESPONSES})
 
@@ -425,3 +485,45 @@ class TestUnrepresentableRoutes:
 
         assert sorted(url for _key, url in calls) == sorted(
             [self._RESPONSES, _OTHER])
+
+    def test_earlier_terminal_cause_survives_route_exhaustion(
+            self, clock, monkeypatch, caplog):
+        """Exhaustion keeps an earlier provider cause, not the conversion.
+
+        A genuine 401 on route A is the actionable terminal cause. Route B
+        refuses the same pinned model's request locally because its protocol
+        cannot carry it; that refusal excludes only its route and must stay
+        observable without displacing the 401 surfaced at exhaustion.
+        """
+        from lib.llm.llm_errors import PermissionError_
+        route_a, route_b = self._RESPONSES, _OTHER
+        _install(monkeypatch,
+                 _plain_slot('kA', 'pinned', route_a),
+                 _plain_slot('kB', 'pinned', route_b))
+        monkeypatch.setattr('lib.llm_dispatch.slot.random.uniform',
+                            lambda low, high: 1.0)
+        rejected = PermissionError_('401 invalid appid', status_code=401)
+        calls = []
+
+        def _stream(body, **kwargs):
+            url = kwargs.get('base_url') or ''
+            calls.append(url)
+            if url == route_a:
+                raise rejected
+            raise ProtocolConversionError(
+                'mandatory_continuity_unrepresentable')
+
+        monkeypatch.setattr('lib.llm.stream_chat', _stream)
+
+        with caplog.at_level('INFO', logger='lib.llm_dispatch.api'):
+            with pytest.raises(PermissionError_) as caught:
+                api.dispatch_stream(
+                    _MESSAGES, prefer_model='pinned', strict_model=True,
+                    log_prefix='[T]')
+
+        assert caught.value is rejected
+        assert calls == [route_a, route_b]
+        refusals = [record.getMessage() for record in caplog.records
+                    if 'cannot represent this request' in record.getMessage()]
+        assert len(refusals) == 1
+        assert '[D:kB:pinned]' in refusals[0]

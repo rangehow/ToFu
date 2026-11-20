@@ -41,7 +41,7 @@ def _continuation_header(row: dict) -> dict:
     projection = row.get('projection') or {}
     result = {key: row[key] for key in (
         'turnId', 'laneId', 'ordinal', 'status', 'actor', 'kind', 'parentTurnId',
-        'settlement') if key in row}
+        'currentAttemptId', 'settlement') if key in row}
     result['projection'] = {key: projection[key] for key in (
         'origin', '_initiator', '_swarmAutoContinueCommandId', '_swarmFailureRecovery', 'error')
         if key in projection}
@@ -160,12 +160,12 @@ def restart_source_attempt(sess: dict, *, user_id: int, receipt: dict | None = N
             and receipt.get('cause') == 'user_abort'
             and source.get('status') in ('interrupted', 'cancelled')):
         return source
-    if sess.get('status') != 'running':
-        return None
-    if source.get('status') == 'interrupted' and receipt.get('cause') in _RESTART_REASONS:
-        return source
     failed = parent.get('_swarmRecoveryFailedAttempt') or {}
-    if (source.get('status') == 'failed' and receipt.get('cause')
+    if not failed and sess.get('status') == 'running' and (
+            source.get('status') == 'interrupted' and receipt.get('cause') in _RESTART_REASONS):
+        return source
+    if ((allow_manual_stop or sess.get('status') == 'running')
+            and source.get('status') == 'failed' and receipt.get('cause')
             and failed == {'attemptId': parent['_swarmParentAttemptId'], 'taskId': task_id}):
         # Only this exact server-recorded failed activation may retry. It did
         # not authorize crossing an intervening Stop/regenerate/supersession.

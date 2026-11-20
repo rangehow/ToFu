@@ -123,9 +123,11 @@ def _read(path: str):
         return None, 'is missing'
     except OSError as error:
         return None, f'is unreadable: {type(error).__name__}: {error.strerror or error} (a link is never followed)'
+    # fdopen refuses a directory with IsADirectoryError, so decide the kind first.
+    if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        os.close(descriptor)
+        return None, 'is not a regular file'
     with os.fdopen(descriptor, 'rb') as stream:
-        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
-            return None, 'is not a regular file'
         raw = stream.read(BYTE_LIMIT + 1)
     if len(raw) > BYTE_LIMIT:
         return None, f'is larger than {BYTE_LIMIT} bytes'

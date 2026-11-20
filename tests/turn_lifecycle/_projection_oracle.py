@@ -256,18 +256,78 @@ def _task_projection(
     # the footer fell back to a client-side batch lookup whose async landing
     # was diffed away by the surface footer compare (2026-08-29,
     # mtd9ci53zq3xfm: no hover cost breakdown after reload).
-    if projection.get('usage'):
+    projection.pop('cost', None)
+    if projection.get('usage') or projection.get('apiRounds'):
         try:
             _fallback_model = str(
                 projection.get('model') or task.get('model') or '')
             _fallback_provider = task.get('provider_id') or None
+            rounds = projection.get('apiRounds') or []
+            has_stamp = any(isinstance(r, dict) and 'cost' in r for r in rounds)
+            parts = ('inputCostCny', 'outputCostCny', 'cacheReadCostCny', 'cacheWriteCostCny')
+            stamped = [r for r in rounds if isinstance(r, dict) and isinstance(r.get('cost'), dict)
+                       and all(k in r['cost'] for k in parts) and 'pricingSource' in r['cost']]
+            from lib.cost import split_input_tokens
+            # Independent display oracle: price each explicit identity once;
+            # a quote-only record needs no raw usage payload.
+            unique = {}
+            conflicts = set()
+            anonymous = []
+            for row in stamped:
+                receipt = row.get('usageReceiptId')
+                if not receipt:
+                    anonymous.append(row)
+                    continue
+                charge = tuple(row['cost'][k] for k in parts)
+                if receipt in unique and unique[receipt][0] != charge:
+                    conflicts.add(receipt)
+                unique.setdefault(receipt, (charge, row))
+            stamped = anonymous + [row for key, (_, row) in unique.items() if key not in conflicts]
             _settled_cost = compute_api_rounds_cost(
-                projection.get('apiRounds'),
+                stamped if has_stamp else rounds,
                 fallback_model_id=_fallback_model,
                 fallback_provider_id=_fallback_provider,
-                use_frozen_costs=task.get('_nativeFrozenCostProjection') is True,
+                use_frozen_costs=bool(stamped) or task.get('_nativeFrozenCostProjection') is True,
             )
-            if _settled_cost is None and task.get('_nativeFrozenCostProjection') is not True:
+            if _settled_cost and stamped:
+                _settled_cost.update(cacheSavingsUsd=0.0, cacheSavingsCny=0.0)
+                snapshot = _settled_cost['pricingSnapshot']
+                snapshot['models'] = sorted({r['cost'].get('pricingSnapshot', {}).get('model')
+                                             or r.get('model') or _fallback_model for r in stamped} - {''})
+                snapshot['providers'] = sorted({r['cost'].get('pricingSnapshot', {}).get('provider')
+                                                or r.get('provider_id') or r.get('providerId')
+                                                or _fallback_provider for r in stamped} - {None, ''})
+                for key, aliases in (
+                        ('inputTokens', ('prompt_tokens', 'input_tokens')),
+                        ('totalInputTokens', ('prompt_tokens', 'input_tokens')),
+                        ('outputTokens', ('completion_tokens', 'output_tokens'))):
+                    for row in rounds:
+                        if row in stamped or not isinstance(row, dict):
+                            continue
+                        if row.get('usageReceiptId') in unique:
+                            continue
+                        usage = row.get('usage') or {}
+                        if key == 'inputTokens':
+                            # A total-only prompt does not witness uncached input.
+                            value = (usage.get('input_tokens', 0) if 'prompt_tokens' not in usage
+                                     else 0)
+                        elif key == 'totalInputTokens':
+                            value = split_input_tokens(usage)[1]
+                        else:
+                            value = next((usage[k] for k in aliases if k in usage), 0)
+                        _settled_cost[key] += value
+                has_incomplete = any(isinstance(r, dict) and r.get('usageReceiptId') not in unique
+                                     and r not in stamped for r in rounds)
+                if has_incomplete:
+                    aggregate = projection.get('usage') or {}
+                    _settled_cost['totalInputTokens'] = max(_settled_cost['totalInputTokens'],
+                                                          split_input_tokens(aggregate)[1])
+                    _settled_cost['outputTokens'] = max(_settled_cost['outputTokens'],
+                        aggregate.get('completion_tokens', aggregate.get('output_tokens', 0)))
+                if (any(r.get('pricingEvidence') for r in stamped) or conflicts
+                        or (has_incomplete and unique)):
+                    snapshot['partial'] = True
+            if not rounds and _settled_cost is None and task.get('_nativeFrozenCostProjection') is not True:
                 _settled_cost = compute_cost(
                     projection['usage'],
                     model_id=_fallback_model,
@@ -623,7 +683,7 @@ def compute_api_rounds_cost(
         if not isinstance(round_entry, dict):
             continue
         usage = round_entry.get('usage')
-        if not isinstance(usage, dict) or not usage:
+        if not use_frozen_costs and (not isinstance(usage, dict) or not usage):
             continue
         model = str(round_entry.get('model') or fallback_model_id or '')
         provider = (round_entry.get('provider_id')

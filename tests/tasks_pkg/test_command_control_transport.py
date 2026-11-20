@@ -40,6 +40,11 @@ def test_control_round_trip_checks_incarnation_owner_and_exact_call():
     {'method': 'swarm_abort', 'taskId': ''}, {'method': 'swarm_agent_stop'},
     {'method': 'swarm_agent_stop', 'params': {'agent_id': ''}},
     {'method': 'swarm_status', 'taskId': ''}, {'method': 'swarm_status', 'params': {'agent_id': 'a'}},
+    {'method': 'retained_source_fingerprint'},
+    {'method': 'manual_detect'},
+    {'method': 'manual_detect', 'params': {'conversation_id': 'c', 'turn_id': 't',
+        'attempt_id': 'a', 'schedule_id': 's', 'principal': {}}},
+    {'method': 'retained_source_fingerprint', 'taskId': '', 'params': {'path': '/not-allowed'}},
     {'method': 'background_activity'},  # An owner method names no task.
     {'method': 'background_activity', 'taskId': '', 'params': {'agent_id': 'a'}},
     {'method': 'task_view', 'params': {'agent_id': 'a'}}, {'method': 'task_abort', 'taskId': ''},
@@ -115,6 +120,12 @@ def test_listener_shutdown_joins_entered_callback_and_closes_admission():
     # An owner view is never "no such task", and each list holds rows.
     ('background_activity', '', None), ('background_activity', '', {'swarms': []}),
     ('background_activity', '', {'swarms': [1], 'backgroundCommands': []}),
+    ('retained_source_fingerprint', '', None),
+    ('retained_source_fingerprint', '', {'sourceSha256': 'a' * 63, 'sourceFiles': 1}),
+    ('retained_source_fingerprint', '', {'sourceSha256': 'A' * 64, 'sourceFiles': 1}),
+    ('retained_source_fingerprint', '', {'sourceSha256': 'a' * 64, 'sourceFiles': True}),
+    ('retained_source_fingerprint', '', {'sourceSha256': 'a' * 64, 'sourceFiles': -1}),
+    ('retained_source_fingerprint', '', {'sourceSha256': 'a' * 64, 'sourceFiles': 1, 'path': '/private'}),
     # Process metrics are never "no such task"; every series is complete and typed.
     ('storage_rpc_metrics', '', None), ('storage_rpc_metrics', '', {'swarms': []}),
     ('storage_rpc_metrics', '', {'histograms': [{'labels': {}, 'buckets': [1.0], 'counts': [1]}]}),
@@ -308,3 +319,34 @@ def test_mcp_reconcile_round_trips_its_scheduling_verdict():
             await server.close()
     assert asyncio.run(run()) == {'scheduled': True}
     assert calls == [('mcp_reconcile', '', 41, {'server': 'chaos', 'action': 'tools'})]
+
+
+def test_manual_detect_joins_past_short_control_ack_budget(monkeypatch):
+    from lib.tasks_pkg import command_control_transport as transport
+
+    monkeypatch.setattr(transport, 'ACKNOWLEDGEMENT_SECONDS', 0.2)
+    entered, release = threading.Event(), threading.Event()
+
+    def apply(method, task_id, *, user_id, deadline_unix_ms, **params):
+        assert (method, task_id, user_id) == ('manual_detect', 'original', 41)
+        assert deadline_unix_ms / 1000 - time.time() > transport.ACKNOWLEDGEMENT_SECONDS
+        entered.set()
+        assert release.wait(5)
+        return {'success': True, 'result': 'settled'}
+
+    async def journey():
+        server = transport.CommandControlServer('primary', apply)
+        endpoint = await server.start()
+        result = asyncio.create_task(asyncio.to_thread(transport.call, endpoint, 'manual_detect',
+            'original', user_id=41, params={'conversation_id': 'c', 'turn_id': 't',
+                                            'attempt_id': 'a', 'schedule_id': 's'}))
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(asyncio.shield(result), transport.ACKNOWLEDGEMENT_SECONDS)
+        finally:
+            release.set()
+            await server.close()
+        assert await result == {'success': True, 'result': 'settled'}
+
+    asyncio.run(journey())

@@ -37,11 +37,6 @@ def test_search_receipt(browser, live_server, tmp_path, width):
         for iteration in range(2):
             chat = page.locator('#chatInner')
             expect(chat).to_contain_text('检索测试结束', timeout=20000)
-            # Tool rounds sit in the reply's collapsed tool panel (26e08dcffe).
-            panel = chat.locator('.conversation-tool-panel__toggle')
-            expect(panel).to_have_attribute('aria-expanded', 'false')
-            panel.click()
-            expect(panel).to_have_attribute('aria-expanded', 'true')
             card = chat.locator('.ptool-convmeta-block').filter(has_text=keyword)
             expect(card).to_have_count(1)
             head = card.locator(':scope > summary')

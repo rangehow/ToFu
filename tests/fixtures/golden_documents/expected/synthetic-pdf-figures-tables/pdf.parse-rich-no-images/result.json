@@ -1,0 +1,18 @@
+{
+ "extractor": "pymupdf4llm",
+ "images": [],
+ "isScanned": false,
+ "limits": {
+  "maxImageWidth": 1024,
+  "maxImages": 0,
+  "maxPages": 0,
+  "maxTextChars": 0
+ },
+ "method": "pymupdf4llm",
+ "processedPages": 7,
+ "text": "Figure 1: selected source diagram\n\n\n\n---\n\nFigure 2: selected source diagram\n\n\n\n---\n\nFigure 3: selected source diagram\n\n\n\n---\n\nTable 1. Measured results\n\n|cell 0:0|cell 0:1|cell 0:2|\n|---|---|---|\n|cell 1:0|cell 1:1|cell 1:2|\n|cell 2:0|cell 2:1|cell 2:2|\n|cell 3:0|cell 3:1|cell 3:2|\n\n\n\n---\n\n|cell 0:0|cell 0:1|cell 0:2|\n|---|---|---|\n|cell 1:0|cell 1:1|cell 1:2|\n|cell 2:0|cell 2:1|cell 2:2|\n|cell 3:0|cell 3:1|cell 3:2|\n\nTable 1. Measured results\n\n\n\n---\n\nOrdinary page without a caption\n\n|cell 0:0|cell 0:1|cell 0:2|\n|---|---|---|\n|cell 1:0|cell 1:1|cell 1:2|\n|cell 2:0|cell 2:1|cell 2:2|\n|cell 3:0|cell 3:1|cell 3:2|\n\n\n\n---\n\nFigure 4: figure-only page with a gradient\n\n",
+ "textLength": 671,
+ "totalPages": 7,
+ "truncated": false,
+ "warnings": []
+}

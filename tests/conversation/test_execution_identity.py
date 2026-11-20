@@ -27,6 +27,32 @@ def _accepted():
     return config
 
 
+def test_execution_identity_import_does_not_require_storage():
+    import subprocess
+    import sys
+
+    probe = '''
+import importlib.abc
+import sys
+class NoStorage(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == 'lib.storage' or fullname.startswith('lib.storage.'):
+            raise ModuleNotFoundError('storage unavailable in standalone runtime')
+sys.meta_path.insert(0, NoStorage())
+from lib.conversation_sync.execution_identity import public_execution_fields, WORKER_EXECUTION_CONFIG_KEY
+assert public_execution_fields({WORKER_EXECUTION_CONFIG_KEY: {}, 'model': 'fixture'}) == {'model': 'fixture'}
+'''
+    result = subprocess.run([sys.executable, '-c', probe], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+
+
+def test_worker_witness_key_matches_storage_contract_projection():
+    from lib.conversation_sync.execution_identity import WORKER_EXECUTION_CONFIG_KEY
+    from lib.storage.generated_worker_job_contract import WORKER_EXECUTION_CONFIG_KEY as storage_key
+
+    assert WORKER_EXECUTION_CONFIG_KEY == storage_key
+
+
 def test_identity_roundtrip_retains_subject_not_request_api_scopes():
     config = _accepted()
     principal, attended = restore_execution_identity(json.loads(json.dumps(config)))
@@ -100,6 +126,16 @@ def test_envelope_version_attendance_and_unknown_fields_fail_closed(field, value
         restore_execution_identity(config)
 
 
+@pytest.mark.parametrize('capabilities', [None, {}, 'schedule_manage.run.provider_probe_daily',
+    ['schedule_manage.run'], [True],
+    ['schedule_manage.run.provider_probe_daily'] * 2])
+def test_present_malformed_capabilities_fail_closed(capabilities):
+    config = _accepted()
+    config[KEY]['capabilities'] = capabilities
+    with pytest.raises(PermissionError, match='conversation capabilities'):
+        restore_execution_identity(config)
+
+
 def test_legacy_absence_requires_explicit_user_owner_and_rejects_nonhuman_markers():
     config = {'_turnOwnerUserId': 7, '_turnPrincipalTenantId': 'synthetic-tenant'}
     principal, attended = restore_execution_identity(config)
@@ -147,8 +183,9 @@ def test_command_acceptance_stamps_authentication_not_config_actor_or_projection
         else:
             service.execute_plan('conv-test', 'turn-test', 7, body,
                                  request_started_at=1, principal=_principal())
-    config = captured[0]
-    config['_turnOwnerUserId'] = 7
+    from lib.conversation_sync.execution_identity import bind_accepted_capabilities
+    config = bind_accepted_capabilities(captured[0], 'conv-test', 'turn-test', 'attempt-test')
+    config.update(_turnOwnerUserId=7, _turnId='turn-test', _attemptId='attempt-test')
     principal, attended = restore_execution_identity(config)
     assert principal.subject_id == 'synthetic-credential'
     assert principal.tenant_id == 'synthetic-tenant'

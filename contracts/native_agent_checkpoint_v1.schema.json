@@ -416,6 +416,10 @@
                   }
                 }
               },
+              "usage_receipt_id": {
+                "type": "string",
+                "pattern": "^native:[0-9a-f]{64}$"
+              },
               "public_round": {
                 "type": "integer",
                 "minimum": 1,
@@ -452,6 +456,10 @@
               "task_id": {
                 "type": "string",
                 "minLength": 1
+              },
+              "usage_receipt_id": {
+                "type": "string",
+                "pattern": "^native:[0-9a-f]{64}$"
               },
               "source_round": {
                 "type": "integer",

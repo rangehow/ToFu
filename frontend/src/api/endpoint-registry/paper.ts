@@ -106,6 +106,12 @@ export function createPaperEndpoints(ports: EndpointPorts) {
               { method: 'GET', query: { task_id: taskId, cursor }, parse: 'response', onError: 'null' }),
     translateAbort: (taskId: string)              => post(`/api/v4/paper/translate/abort/${encodeURIComponent(taskId)}`, {}, { onError: 'null' }),
     translateCache: (paperHash: string, lang: string)     => post('/api/v4/paper/translate/cache', { paper_hash: paperHash, lang }, { onError: 'null' }),
+    // Full-document PDF translation: one owner-scoped stored PDF through
+    // lib.paper.builds.pdf_translation.translate_pdf. The status read decides
+    // whether the entry may act; the POST returns the translated PDF bytes.
+    pdfTranslateStatus: ()                => get('/api/v4/paper/translate/pdf/status', { onError: 'null' }),
+    pdfTranslate: (body: JsonObject)            => request<Response | null>('/api/v4/paper/translate/pdf',
+            { method: 'POST', json: body, parse: 'response', timeout: 0 }),
     // URL builder for the report-export endpoint (md/html/pdf). Returned
     // URL is a full link so the caller can use window.open() / anchor.href.
     exportUrl: (paperHash: string, lang: string, format: string) =>

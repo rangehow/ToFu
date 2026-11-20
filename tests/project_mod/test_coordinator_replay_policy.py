@@ -350,6 +350,111 @@ def test_real_policy_change_still_forces_a_full_rebuild(run, monkeypatch, tmp_pa
             assert status == 'policy_changed' and expected <= set(drift), (status, drift)
 
 
+def configure_conversation(monkeypatch, **settings):
+    """The owner's current settings of the Coordinator conversation (its composer choice)."""
+    from lib.conversations import session_model
+    current = {**SETTINGS, **settings}
+    monkeypatch.setattr(session_model, '_conversation_settings',
+                        lambda conversation_id, owner: deepcopy(current))
+
+
+def test_next_coordinator_wake_uses_the_saved_picker_route(run, monkeypatch):
+    from lib.project_dispatch.admission import restore_dispatch_identity
+    r = run
+    human = human_turn(r, monkeypatch)
+    changed_ref = {'creator_id': 'openai', 'model_id': 'gpt-6.2-sol'}
+    configure_conversation(monkeypatch, model='gpt-6.2-sol', modelRef=changed_ref,
+                           preferredProviderId='oauth_codex', preset='gpt-6.2-sol')
+    resumed = continuation(r, monkeypatch)
+    grant = controls(r)[-1]
+    assert grant['request']['model'] == human['model'] == MODEL
+    assert resumed['model'] == resumed['preset'] == 'gpt-6.2-sol'
+    assert resumed['modelRef'] == changed_ref
+    assert resumed['preferredProviderId'] == 'oauth_codex'
+    assert resumed['routing'] == {'preferred_provider_id': 'oauth_codex'}
+    assert 'provider_id' not in resumed and 'providerId' not in resumed
+    assert resumed['tools'] == human['tools']
+    restore_dispatch_identity(resumed)
+
+    # A later picker change must not invalidate an already accepted wake.
+    execution = grant['execution']
+    r.attempts[execution['attemptId']]['config'] = deepcopy(resumed)
+    configure_conversation(monkeypatch, model='some-other-model', modelRef=None)
+    restore_dispatch_identity(resumed)
+    with pytest.raises(PermissionError, match='differs from its accepted grant'):
+        restore_dispatch_identity({**resumed, 'model': 'unowned-model'})
+
+
+def test_session_override_precedes_saved_picker_without_reusing_its_route(run, monkeypatch):
+    r = run
+    human_turn(r, monkeypatch)
+    configure_conversation(monkeypatch, modelOverride='model-assigned-by-owner',
+                           preferredProviderId='provider-for-picker')
+    resumed = continuation(r, monkeypatch)
+    assert resumed['model'] == 'model-assigned-by-owner'
+    assert not any(key in resumed for key in ('modelRef', 'preferredProviderId', 'routing', 'preset'))
+
+
+def restart_resume(r, monkeypatch, accepted):
+    """Resume the interrupted dispatch Turn in place as restart_resume does after a boot.
+
+    ``create_attempt`` re-admits a dispatch Turn through ``TrustedDispatch.capture``
+    with the interrupted attempt's public accepted config.
+    """
+    from lib.project_dispatch import admission
+    row = controls(r)[-1]
+    trusted = admission.TrustedDispatch(r.c.repo.admission(row['id']))
+    public = {name: deepcopy(value) for name, value in accepted.items() if not name.startswith('_')}
+    resumed = trusted.capture(public, 7, trusted.principal, 'coordinator')
+    return ingress(monkeypatch, resumed, turn_id=row['execution']['turnId'],
+                   attempt_id='resumed-' + row['execution']['attemptId'])
+
+
+@pytest.mark.parametrize('issued_depth', [None, 'high'])
+def test_dispatch_turns_inherit_the_conversations_configured_effort(
+        run, monkeypatch, tmp_path, issued_depth):
+    """Incident 2026-11-18, conv coordinator-4950501b927a581b666a974cb9ce21b5.
+
+    Continuations of requests delegated on 11-16/11-17 (composer depth unset) ran
+    with no effort (attempts 116a1630 after the restart, d170c284), while the
+    conversation was configured ``thinkingDepth=medium`` and its owner Turns,
+    project-message wakes (ac641a95) and continuations of the 11-18 request
+    (40582ace) ran medium: the grant froze the issuing attempt's effort. Every
+    alternation logged ``restore=portable drift=thinkingDepth,thinkingEnabled``
+    and ``CACHE CONTROLS CHANGED effort``, reading 23,290 of a 296,430-token prefix.
+    """
+    from lib.project_dispatch.admission import restore_dispatch_identity
+    r = run
+    human_turn(r, monkeypatch, thinkingDepth=issued_depth)  # the old request
+    configure_conversation(monkeypatch, thinkingDepth='medium')
+    owner = human_turn(r, monkeypatch, thinkingDepth='medium')
+    human_turn(r, monkeypatch, thinkingDepth=issued_depth)  # its grant keeps the old effort
+    resumed = continuation(r, monkeypatch)
+    assert controls(r)[-1]['request']['delegation']['policy']['config'].get('thinkingDepth') == issued_depth
+    after_restart = restart_resume(r, monkeypatch, resumed)
+    for config in (resumed, after_restart):
+        assert (config['thinkingDepth'], config['thinkingEnabled']) == ('medium', True)
+        # Effort is the conversation's model view, not grant authority.
+        restore_dispatch_identity(config)
+    replay = Replay(tmp_path, monkeypatch)
+    assert replay.request(owner)[0] == 'checkpoint_missing'
+    for config in (resumed, owner, after_restart):
+        assert replay.request(config) == ('restored', [])
+
+
+def test_project_message_wake_runs_with_the_conversations_configured_effort(run, monkeypatch):
+    """A lead's project-message wake is a scheduled Turn built from the conversation settings."""
+    wake = forwarded_request_config(run, monkeypatch, {**SETTINGS, 'thinkingDepth': 'medium'})
+    assert (wake['thinkingDepth'], wake['thinkingEnabled']) == ('medium', True)
+
+
+def test_unconfigured_conversation_keeps_the_grants_effort(run, monkeypatch):
+    r = run
+    human_turn(r, monkeypatch, thinkingDepth='high')
+    configure_conversation(monkeypatch, thinkingDepth=None)
+    assert continuation(r, monkeypatch)['thinkingDepth'] == 'high'
+
+
 def test_coordinator_inert_program_setting_keeps_the_prefix(run, monkeypatch, tmp_path):
     """The Coordinator never runs programs; this toggle cannot change its tools."""
     r = run

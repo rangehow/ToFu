@@ -1,0 +1,25 @@
+[package]
+name = "tofu-storage-client"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Application-side storage.v2 client: the Rust counterpart of lib/storage/v2_client.py"
+publish = false
+
+# Standalone like packages/tofu-db and packages/tofu-core-rs: own lock and build.
+[workspace]
+
+[dependencies]
+# Framing, message types and the Hello token derivation come from the engine
+# crate itself; the checkpoint runtime feature is not needed by a client.
+tofu-db = { path = "../tofu-db", default-features = false }
+serde_json = { version = "=1.0.151", features = ["preserve_order", "float_roundtrip"] }
+uuid = { version = "1", features = ["v4"] }
+libc = "0.2"
+# Fernet (credential vault) verification and decryption for write-time redaction.
+aes = "0.8"
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+# Keyed fingerprints: the redaction index keeps no plaintext.
+blake3 = "1"

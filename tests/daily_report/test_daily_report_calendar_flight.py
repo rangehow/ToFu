@@ -21,6 +21,7 @@ from lib.daily_report import conversations, cost, storage
 
 pytestmark = pytest.mark.unit
 OWNER_USER_ID = 41
+_REAL_MONTHLY_COSTS = cost._get_monthly_costs
 YEAR, MONTH = 2026, 11
 
 
@@ -64,6 +65,7 @@ def computation(monkeypatch, tmp_path):
         monkeypatch.setattr(owner, '_activity_counts_for_range',
                             scan.activity_counts, raising=False)
     cost._calendar_cache.clear()
+    monkeypatch.setattr(cost, '_live_day_cache', cost.TTLCache(ttl=0))
     yield scan
     scan.release.set()
     cost._calendar_cache.clear()
@@ -150,6 +152,22 @@ def test_invalidation_during_a_computation_starts_a_fresh_one(computation):
     assert cached['cost_days'] == after['cost_days']
 
 
+def test_overview_preserves_current_free_usage(computation, monkeypatch):
+    from lib.daily_report import calendar_overview as calendar
+
+    conversations = {'free': {'name': 'Free', 'cost': 0, 'tokens': 17}}
+    summary = {'date': '2026-11-03', 'total_cny': 0}
+    monkeypatch.setattr(cost, '_get_monthly_costs', lambda *args, **kwargs: {
+        2: {'cost': 0, 'conversations': {}},
+        3: {'cost': 0, 'conversations': conversations, 'token_costs': summary},
+    })
+
+    result = asyncio.run(calendar.month_overview(YEAR, MONTH, owner_user_id=OWNER_USER_ID))
+
+    assert result['cost_days'] == {3: {'cost': 0, 'conversations': conversations}}
+    assert result['today_token_costs'] == summary
+
+
 def test_failed_cost_scan_settles_every_caller(computation, monkeypatch):
     from lib.daily_report import calendar_overview as calendar
 
@@ -217,3 +235,60 @@ def test_concurrent_calendar_gets_run_one_computation(computation, monkeypatch):
         '3': {'cost': 1.0,
               'conversations': {'c': {'name': 'C', 'cost': 1.0, 'tokens': 7}}}}
     assert bodies[0]['conv_days'] == {'3': 1}
+
+
+def test_overview_preserves_partial_unpriced_days(computation, monkeypatch):
+    from lib.daily_report import calendar_overview as calendar
+
+    day = {'cost': 0, 'partial': True, 'conversations': {
+        'unknown': {'name': 'Unknown price', 'cost': 0, 'tokens': 139, 'unallocated_tokens': 139},
+    }}
+    monkeypatch.setattr(cost, '_get_monthly_costs', lambda *args, **kwargs: {2: day})
+    result = asyncio.run(calendar.month_overview(YEAR, MONTH, owner_user_id=OWNER_USER_ID))
+    assert result['cost_days'] == {2: day}
+
+
+def test_today_scan_cap_remains_partial_through_calendar(computation, monkeypatch):
+    import datetime as dt
+    from lib.conversations.repository import ConversationTurnUsage
+    from lib.cost import compute_cost
+    from lib.daily_report import calendar_overview as calendar
+
+    now = dt.datetime.now()
+    stamp = int(now.timestamp() * 1000)
+    usage = {'prompt_tokens': 125000}
+    quote = compute_cost(usage, pricing_override={'input': 10, 'output': 0, 'currency': 'CNY'})
+    row = {'index': 0, 'timestamp': stamp, 'usage': usage,
+           'apiRounds': [{'usageReceiptId': 'scan-cap', 'cost': quote}]}
+    projection = ConversationTurnUsage({'id': 'cap', 'created_at': stamp}, 1, '', [row])
+    monkeypatch.setattr(cost, '_get_monthly_costs', _REAL_MONTHLY_COSTS)
+    monkeypatch.setattr(cost, '_load_cached_day_costs', lambda *a, **kw: {})
+    monkeypatch.setattr(cost, '_persist_day_cost', lambda *a, **kw: None)
+    monkeypatch.setattr(conversations, '_activity_counts_for_range', lambda *a, **kw: {})
+    monkeypatch.setattr('lib.conversations.repository.scan_conversation_turn_usage', lambda **kw: (0, iter(())))
+    monkeypatch.setattr('lib.conversations.usage_snapshot.reconcile_day_usage', lambda **kw:
+                        SimpleNamespace(candidate_count=kw['limit'], projections=(projection,)))
+    result = asyncio.run(calendar.month_overview(now.year, now.month, owner_user_id=OWNER_USER_ID))
+    assert result['today_token_costs']['partial']
+    assert result['cost_days'][now.day]['cost'] == 1.25
+    assert result['cost_days'][now.day]['partial']
+
+
+def test_month_overview_revalidates_at_local_midnight(computation, monkeypatch):
+    import datetime as dt
+    from lib.daily_report import calendar_overview as calendar
+
+    class LocalDate(dt.date):
+        @classmethod
+        def today(cls):
+            return date
+
+    date = LocalDate(YEAR, MONTH, 3)
+    monkeypatch.setattr(calendar, '_dt', SimpleNamespace(
+        date=LocalDate, datetime=dt.datetime, time=dt.time))
+    computation.release.set()
+    first = asyncio.run(calendar.month_overview(YEAR, MONTH, owner_user_id=OWNER_USER_ID))
+    date += dt.timedelta(days=1)
+    second = asyncio.run(calendar.month_overview(YEAR, MONTH, owner_user_id=OWNER_USER_ID))
+    assert first['cost_days'][3]['cost'] == 1
+    assert second['cost_days'][3]['cost'] == 2

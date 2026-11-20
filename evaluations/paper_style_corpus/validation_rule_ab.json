@@ -1,0 +1,73 @@
+{
+ "writer_model": "gpt-5.6-terra",
+ "judge_model": "gpt-5.5",
+ "units": [
+  "C6b934f47",
+  "C01f0d47f",
+  "C3b3382ed",
+  "C0010e4e0",
+  "C0044ae0f",
+  "Cc337d34b",
+  "C378ad35c",
+  "Ca1b674ad",
+  "Cda92f2c1",
+  "C86b8b685",
+  "C00532305",
+  "C25162d90",
+  "C40b24fd4",
+  "C318a4506",
+  "C3241e0a8",
+  "Ccea9591c"
+ ],
+ "criterion": "a testable candidate ships only if the revision with it is preferred in both presentation orders on more held-out units than the baseline revision",
+ "rules": {
+  "paper.style.abstract-number": {
+   "n_units": 16,
+   "rule_preferred_both_orders": 7,
+   "baseline_preferred_both_orders": 4,
+   "split": 5,
+   "units_with_invented_numbers": 1,
+   "keep": true
+  },
+  "paper.style.abstract-verbs": {
+   "n_units": 16,
+   "rule_preferred_both_orders": 4,
+   "baseline_preferred_both_orders": 3,
+   "split": 9,
+   "units_with_invented_numbers": 0,
+   "keep": true
+  },
+  "paper.style.contributions-prose": {
+   "n_units": 16,
+   "rule_preferred_both_orders": 6,
+   "baseline_preferred_both_orders": 4,
+   "split": 6,
+   "units_with_invented_numbers": 0,
+   "keep": true
+  },
+  "paper.style.intro-quantified": {
+   "n_units": 16,
+   "rule_preferred_both_orders": 4,
+   "baseline_preferred_both_orders": 2,
+   "split": 10,
+   "units_with_invented_numbers": 1,
+   "keep": true
+  },
+  "paper.style.intro-findings-first-person": {
+   "n_units": 16,
+   "rule_preferred_both_orders": 5,
+   "baseline_preferred_both_orders": 2,
+   "split": 9,
+   "units_with_invented_numbers": 1,
+   "keep": true
+  },
+  "paper.style.intro-verbs": {
+   "n_units": 16,
+   "rule_preferred_both_orders": 5,
+   "baseline_preferred_both_orders": 5,
+   "split": 6,
+   "units_with_invented_numbers": 0,
+   "keep": false
+  }
+ }
+}

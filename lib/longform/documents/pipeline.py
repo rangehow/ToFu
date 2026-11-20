@@ -25,6 +25,7 @@ and the judge are different models, checked at intake.
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import re
@@ -36,7 +37,7 @@ from lib.log import get_logger
 from lib.production.stages import Stage
 from lib.production.workflows import AgentToolWorkflow, WorkflowNode, run_workflow
 
-from .rules import (lint_text, numbers_in, reported_numbers, rules_for, stated_numbers,
+from .rules import (lint_text, numbers_in, outline_guidance, reported_numbers, rules_for, stated_numbers,
                     strip_latex_arguments)
 from .types import document_type
 
@@ -65,6 +66,32 @@ _PIPELINE_VOCABULARY = ('dossier', 'project lead', 'experiment request',
 _BRIEF_FIELDS = ('type', 'title', 'audience', 'goal', 'voice', 'lang',
                  'judge_model', 'output_dir')
 _PAPER_FIELDS = ('venue', 'project_lead', 'topic')
+#: Every other field the pipeline reads. A field outside the schema is
+#: refused at intake instead of being ignored silently (a pilot brief's
+#: ``role`` was once dropped that way).
+_BRIEF_OPTIONAL = ('writer_model', 'page_limit', 'previous_pdf', 'template_dir',
+                   'main_template', 'engine', 'variant', 'novelty_queries', 'authors',
+                   'draft', 'role', 'source', 'venue_year', 'paper_type', 'track',
+                   'template_draft_on', 'commitment_venue')
+#: Role -> the venue stage whose page limit applies (``venues.STAGES``).
+#: ``revise`` (default): targeted revision of the existing draft.
+#: ``final``: the draft is finished; copy edits only, and render repair may
+#: only fix references, floats and layout, never reword prose.
+#: ``rebuttal``: a revision during the discussion period (ICLR allows 10 pages).
+#: ``camera_ready``: the accepted paper; copy edits as ``final``, under the
+#: venue's camera-ready limit and option (NeurIPS ``final``).
+_ROLE_STAGE = {'revise': 'submission', 'final': 'submission',
+               'rebuttal': 'rebuttal', 'camera_ready': 'camera_ready'}
+_ROLES = tuple(_ROLE_STAGE)
+_COPY_EDIT_ROLES = ('final', 'camera_ready')
+#: Words a reference may add next to a ``\\ref``/``\\cref`` ("see Figure 3").
+_REFERENCE_WORDS = frozenset((
+    'see', 'figure', 'figures', 'fig', 'figs', 'table', 'tables', 'tab', 'section',
+    'sections', 'sec', 'appendix', 'appendices', 'app', 'eq', 'equation', 'equations',
+    'algorithm', 'alg'))
+_REF_RE = re.compile(r'\\(?:ref|eqref|autoref|cref|Cref|vref|pageref|nameref|cpageref|'
+                     r'Cpageref|labelcref)\*?\{([^}]*)\}')
+_CITE_RE = re.compile(r'\\cite[a-z]*\*?(?:\[[^\]]*\])*\{([^}]*)\}')
 
 
 # ── seams ───────────────────────────────────────────────────────────────────
@@ -82,9 +109,31 @@ def _academic_search(query: str) -> tuple[list, list]:
     return rows, discovery.status_snapshot()
 
 
-def _fetch_kit(venue: str, destination: Path) -> dict:
+def _fetch_kit(edition_id: str, destination: Path) -> dict:
     from .venues import fetch_official_kit
-    return fetch_official_kit(venue, destination)
+    return fetch_official_kit(edition_id, destination)
+
+
+def _check_freshness(edition_id: str) -> dict:
+    from . import venue_registry
+    return venue_registry.check_freshness(venue_registry.edition(edition_id))
+
+
+def _conformance(ctx: dict, build: Path, main: str) -> dict:
+    from . import venue_registry
+    from .conformance import check_paper
+    kit = _art(ctx, 'intake')['kit']
+    authors = str(ctx['brief'].get('authors') or '')
+    return check_paper(build, main, venue_registry.edition(kit['edition']),
+                       stage=kit['stage'], track=kit.get('track') or '',
+                       paper_type=kit.get('paper_type'),
+                       identities=[name.strip() for name in re.split(r',| and ', authors)],
+                       page_limit=_page_limit(ctx),
+                       submission_ready=bool(kit.get('submission_ready')),
+                       draft_label=kit.get('draft_label') or '',
+                       keep=Path(ctx['workdir']) / 'conformance',
+                       portfolio_policy=ctx.get('portfolio_policy'),
+                       commitment_venue=ctx['brief'].get('commitment_venue'))
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
@@ -123,7 +172,15 @@ def _chat(ctx: dict, role: str, messages: list, label: str) -> str:
     """One model call. The brief names the model per role; a writer the brief
     leaves unnamed goes to the documented routing default. The model the
     provider reports is recorded per call, and a run never continues on a
-    different model than the one requested or on the judge as writer."""
+    different model than the one requested or on the judge as writer. A
+    request over the model endpoint's body cap is refused before it is sent."""
+    from lib.http_transport import body_policy
+    size = len(json.dumps(messages, ensure_ascii=False).encode('utf-8'))
+    if size > body_policy.DEFAULT_BODY_CAP:
+        raise RuntimeError(
+            f'{label}: the request is {size} bytes, over the model endpoint\'s '
+            f'{body_policy.DEFAULT_BODY_CAP}-byte body cap; it was not sent. Cite narrower '
+            'spans (dossier source.lines, or facts that state the numbers they use)')
     model = ctx['brief'].get(f'{role}_model') or ''
     content, usage = _llm_chat(
         messages, max_tokens=None, temperature=0, prefer_model=model or None,
@@ -209,6 +266,73 @@ def _source_text(paper_dir: Path, fact: dict) -> str:
         if (paper_dir / rel).is_file() and (paper_dir / rel).suffix in _TEXT_SOURCE_SUFFIXES)
 
 
+def _cited_lines(fact: dict, rel: str) -> tuple[int, int] | None:
+    """``source.lines`` for ``rel``: ``"a-b"``, ``[a, b]`` or ``{path: ...}``."""
+    lines = (fact.get('source') or {}).get('lines')
+    if isinstance(lines, dict):
+        lines = lines.get(rel)
+    if isinstance(lines, str):
+        match = re.fullmatch(r'\s*(\d+)\s*(?:-\s*(\d+))?\s*', lines)
+        lines = [int(match.group(1)), int(match.group(2) or match.group(1))] if match else None
+    if isinstance(lines, list) and len(lines) == 2 and all(isinstance(n, int) for n in lines):
+        return lines[0], lines[1]
+    return None
+
+
+def _json_leaves(value, path: str = ''):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield from _json_leaves(item, f'{path}.{key}' if path else str(key))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from _json_leaves(item, f'{path}[{index}]')
+    else:
+        yield path, value
+
+
+def _source_excerpt(paper_dir: Path, fact: dict) -> str:
+    """The cited span of each source file, never the whole file.
+
+    The span is ``source.lines`` when given; otherwise the lines (JSON: the
+    leaves, with their key paths) holding the numbers the fact states, its
+    reported decimals and percentages first. A CSV/TSV keeps its header.
+    """
+    text = fact.get('text', '')
+    wanted = reported_numbers(text) or stated_numbers(text)
+    parts = []
+    for rel in _source_paths(fact):
+        path = paper_dir / rel
+        if not path.is_file() or path.suffix not in _TEXT_SOURCE_SUFFIXES:
+            continue
+        content = path.read_text(encoding='utf-8', errors='replace')
+        lines = content.splitlines()
+        span = _cited_lines(fact, rel)
+        rows = []
+        if span:
+            rows = [f'L{n}: {line}' for n, line in enumerate(lines, 1) if span[0] <= n <= span[1]]
+        elif path.suffix in ('.json', '.jsonl'):
+            documents = [(0, content)] if path.suffix == '.json' else list(enumerate(lines, 1))
+            for line_no, document in documents:
+                try:
+                    parsed = json.loads(document) if document.strip() else None
+                except ValueError:
+                    rows += [f'L{line_no}: {document}'] if numbers_in(document) & wanted else []
+                    continue
+                prefix = f'L{line_no} ' if line_no else ''
+                rows += [f'{prefix}{key} = {json.dumps(value, ensure_ascii=False)}'
+                         for key, value in _json_leaves(parsed)
+                         if not isinstance(value, (dict, list))
+                         and numbers_in(json.dumps(value)) & wanted]
+        else:
+            rows = [f'L{n}: {line}' for n, line in enumerate(lines, 1)
+                    if numbers_in(line) & wanted
+                    or (n == 1 and path.suffix in ('.csv', '.tsv'))]
+        parts.append(f'{rel}:\n' + '\n'.join(rows) if rows else
+                     f'{rel}: no cited span (the fact states no number found in this file '
+                     'and names no source.lines)')
+    return '\n'.join(parts)
+
+
 def _owner_directives(owner_user_id) -> dict:
     """Active owner-stated My Context items, read-only (never migrated here)."""
     if owner_user_id is None:
@@ -222,8 +346,6 @@ def _owner_directives(owner_user_id) -> dict:
         doc = json.loads(path.read_text(encoding='utf-8'))
         items = profile_items(list(doc.get('items') or []), identity=False)
     except Exception as exc:
-        logger.debug('My Context of owner %s unreadable for the documents pipeline: %s',
-                     owner_user_id, exc, exc_info=True)
         return {'items': [], 'reason': f'My Context unreadable: {type(exc).__name__}'}
     lines = []
     for item in items:
@@ -242,6 +364,20 @@ def _page_limit(ctx: dict) -> int:
 
 def _draft_mode(ctx: dict) -> bool:
     return bool(ctx['brief'].get('draft'))
+
+
+def _final(ctx: dict) -> bool:
+    return ctx['brief'].get('role') in _COPY_EDIT_ROLES
+
+
+def _venue_terms(brief: dict) -> dict:
+    """The venue's page limit and track option for the brief's paper type,
+    track and role; ValueError names an unpublished choice."""
+    from .venues import venue_terms
+    return venue_terms(str(brief.get('venue') or ''), year=brief.get('venue_year'),
+                       paper_type=brief.get('paper_type'), track=brief.get('track'),
+                       stage=_ROLE_STAGE.get(brief.get('role') or 'revise', 'submission'),
+                       draft_on=brief.get('template_draft_on'))
 
 
 def _snapshot_draft(ctx: dict, kit: dict) -> dict:
@@ -270,7 +406,16 @@ def _run_intake(ctx: dict) -> dict:
     if kit_dir.exists():
         shutil.rmtree(kit_dir)
     if doc_type.needs_venue:
-        kit = _fetch_kit(str(brief.get('venue') or ''), kit_dir)
+        # No pinned official template for this venue/year/track/stage, or an
+        # official archive that changed since pinning: refused at the gate,
+        # never replaced by another year's kit.
+        try:
+            terms = _venue_terms(brief)
+            kit = _fetch_kit(terms['edition'], kit_dir)
+            kit.update(terms)
+            kit['freshness'] = _check_freshness(terms['edition'])
+        except ValueError as exc:
+            kit = {'refused': str(exc), 'files': {}}
     else:
         source = paper_dir / str(brief.get('template_dir') or '')
         kit_dir.mkdir(parents=True)
@@ -282,14 +427,23 @@ def _run_intake(ctx: dict) -> dict:
         kit = {'source_url': str(source), 'files': files,
                'engine': brief.get('engine') or 'xelatex',
                'fetched_at': time.time(), 'preamble': '', 'bibstyle': ''}
+    from .portfolio_policy import assess
+    portfolio = assess(ctx.get('portfolio_policy'), str(brief.get('venue') or ''),
+                       commitment_venue=brief.get('commitment_venue'),
+                       paper_type=brief.get('paper_type'))
+    if doc_type.needs_venue and not portfolio['submission_ready']:
+        kit['submission_ready'] = False
     directives = _owner_directives(ctx.get('owner_user_id'))
     draft = _snapshot_draft(ctx, kit) if brief.get('draft') else None
     artifact = {'brief': brief, 'kit': kit, 'owner_directives': directives,
+                'portfolio': portfolio,
                 'rules': [rule.id for rule in rules_for(doc_type.name)],
                 'run_started': ctx['run_started'], 'draft': draft}
     md = ['# Intake', '', f'- type: {brief.get("type")}',
-          f'- template: {kit.get("source_url")} @ {kit.get("upstream_commit", "")} '
-          f'(page limit {kit.get("page_limit")}, {kit.get("anonymity", "")})',
+          f'- template: {kit.get("refused") or ""}{kit.get("conference", "")} '
+          f'{kit.get("source_url")} sha256 {kit.get("archive_sha256", "")} '
+          f'(page limit {kit.get("page_limit")}, {kit.get("anonymity", "")})'
+          + (f' **{kit["draft_label"]}**' if kit.get('draft_label') else ''),
           f'- writer: {brief.get("writer_model") or "routing default"}; judge: '
           f'{brief.get("judge_model")}',
           f'- existing draft: {draft["main"]} ({len(draft["files"])} files; outdated template '
@@ -333,21 +487,84 @@ def _gate_intake(ctx: dict, art: dict) -> list:
         if not brief.get('previous_pdf') or not previous.is_file():
             errors.append(f'previous version {brief.get("previous_pdf")!r} not found; '
                           'the blind A/B needs it')
+    if doc_type.needs_venue and kit.get('refused'):
+        return errors + [f'paper brief field {field!r} is missing' for field in _PAPER_FIELDS
+                         if not brief.get(field)] + [f'paper.official-template: '
+                                                     f'{kit["refused"]}']
     if doc_type.needs_venue:
         errors += [f'paper brief field {field!r} is missing'
                    for field in _PAPER_FIELDS if not brief.get(field)]
+        errors += (art.get('portfolio') or {}).get('failures') or []
+        errors += _freshness_errors(kit)
+        if kit.get('draft_label') and brief.get('role') in _COPY_EDIT_ROLES:
+            errors.append(f'paper.official-template: role={brief.get("role")} finishes a '
+                          f'paper for submission, but {kit.get("draft_label")}')
         if not kit.get('archive_sha256') or not kit.get('source_url'):
             errors.append('paper.official-template: kit provenance lacks the '
                           'official archive URL or its hash')
         if float(kit.get('fetched_at') or 0) < float(art['run_started']):
             errors.append('paper.official-template: the kit was not fetched in this run')
+        try:
+            _venue_terms(brief)
+        except ValueError as exc:
+            errors.append(str(exc))
     elif not kit.get('files'):
         errors.append('template_dir holds no template files')
     if not doc_type.needs_venue and not brief.get('main_template'):
         errors.append('brief field \'main_template\' (with a %%BODY%% marker) is missing')
     if doc_type.name == 'resume' and brief.get('variant') not in ('one-page', 'multi-page'):
         errors.append('resume brief variant must be one-page or multi-page')
+    return errors + _brief_schema_errors(ctx, brief, kit, draft)
+
+
+def _brief_schema_errors(ctx: dict, brief: dict, kit: dict, draft: dict | None) -> list:
+    errors = []
+    unknown = sorted(set(brief) - set(_BRIEF_FIELDS) - set(_PAPER_FIELDS) - set(_BRIEF_OPTIONAL))
+    if unknown:
+        errors.append(f'brief fields {unknown} are not part of the brief schema '
+                      '(docs/DOCUMENT_PIPELINE.md, "Brief fields") and would be ignored; '
+                      'remove them or use a documented field')
+    role = brief.get('role', 'revise')
+    if role not in _ROLES:
+        errors.append(f'brief role {role!r} must be one of {list(_ROLES)}')
+    if role in _COPY_EDIT_ROLES and not draft:
+        errors.append(f'role={role} copy-edits an existing draft; name it with draft.main '
+                      '(or --draft)')
+    source = brief.get('source')
+    if source:
+        paper_dir = Path(ctx['paper_dir'])
+        if not draft:
+            errors.append('brief source names the draft under revision; set draft.main too')
+        elif (paper_dir / str(source)).resolve() != (paper_dir / draft['main']).resolve():
+            errors.append(f'brief source {source!r} is not the draft main file '
+                          f'{draft["main"]!r} of this paper directory')
     return errors
+
+
+def _freshness_errors(kit: dict) -> list:
+    """The venue's live pages must still say what the pinned edition records."""
+    report = kit.get('freshness') or {}
+    if report.get('verdict') == 'current':
+        return []
+    if not report:
+        return ['paper.template-freshness: the pinned edition was not re-checked against '
+                'the venue\'s pages']
+    archive, head = report.get('archive') or {}, report.get('upstream_head') or {}
+    changes = [f'archive sha256 now {archive["now"]}'] if archive.get('changed') else []
+    changes += [f'{row["rule"]}: quoted text no longer on {row["url"]}'
+                for row in report.get('rules') or [] if row.get('present') is False]
+    changes += [f'a newer edition page answers: {row["url"]}'
+                for row in report.get('newer') or [] if row.get('answers')]
+    if head.get('changed'):
+        changes.append(f'upstream branch moved to {head["now"]}')
+    errors = [f'{row["rule"]}: {row["url"]}: {row["error"]}'
+              for row in report.get('rules') or [] if row.get('error')]
+    errors += [item for item in (archive.get('error'), head.get('error')) if item]
+    what = ('the venue changed its template or rules since pinning: ' + '; '.join(changes)
+            if report.get('verdict') == 'changed' else
+            'could not verify the pinned edition is current: ' + '; '.join(errors))
+    return [f'paper.template-freshness: {report.get("conference")}: {what}. Re-pin by '
+            'docs/DOCUMENT_PIPELINE.md, "Updating a venue template".']
 
 
 # ── dossier ─────────────────────────────────────────────────────────────────
@@ -472,7 +689,7 @@ def _evidence_material(ctx: dict, refs: list) -> list[dict]:
             fact = facts[ref]
             material.append({'ref': ref, 'kind': fact.get('kind'),
                              'text': fact.get('text'),
-                             'source_content': _source_text(paper_dir, fact)})
+                             'source_excerpt': _source_excerpt(paper_dir, fact)})
         else:
             material.append({'ref': ref, 'kind': 'unresolved'})
     return material
@@ -485,6 +702,26 @@ def _draft_text(ctx: dict) -> str:
         draft = _art(ctx, 'intake')['draft']
         ctx['_draft_text'] = ed.expand(Path(ctx['workdir']) / 'source', draft['main'])
     return ctx['_draft_text']
+
+
+def _reading(ctx: dict, text: str) -> str:
+    """What a reader sees: the existing draft's own macros (number tables such
+    as ``\\nm{key}``) expanded. Edits still address the raw sources."""
+    if not _draft_mode(ctx):
+        return text
+    if '_draft_macros' not in ctx:
+        from . import existing_draft as ed
+        ctx['_draft_macros'] = ed.macros(_draft_text(ctx))
+    from . import existing_draft as ed
+    return ed.expand_macros(text, ctx['_draft_macros'])
+
+
+def _draft_reading(ctx: dict) -> str:
+    """The draft's document body as a reader sees it (the preamble holds only
+    package loads and macro definitions, e.g. a 3,000-entry number table)."""
+    text = _draft_text(ctx)
+    start = text.find('\\begin{document}')
+    return _reading(ctx, text[start:] if start >= 0 else text)
 
 
 def _normalized(text: str) -> str:
@@ -504,7 +741,7 @@ def _draft_claim_rows(ctx: dict) -> list[dict]:
         'or none. For weak or none, state the experiment that would settle it. '
         'Reply ONLY JSON: [{"quote":"...","section":"...","evidence":["label"],'
         '"strength":"...","rationale":"...","needed_experiment":"..."}].\n\nDraft:\n'
-        + _draft_text(ctx) + _feedback(ctx, 'evidence'))
+        + _draft_reading(ctx) + _feedback(ctx, 'evidence'))
     reply = _json_reply(_chat(ctx, 'judge', [{'role': 'user', 'content': prompt}],
                               'evidence-draft'))
     rows = []
@@ -602,13 +839,14 @@ def _gate_evidence(ctx: dict, art: dict) -> list:
             errors.append(f'claim {row["claim_id"]} cites no evidence but is rated '
                           f'{row["strength"]}')
     if _draft_mode(ctx):
-        draft = _normalized(strip_latex_arguments(_draft_text(ctx)))
+        views = [_normalized(strip_latex_arguments(text)) for text in
+                 (_reading(ctx, _draft_text(ctx)), _draft_text(ctx))]
         draft_rows = [row for row in art['rows'] if row.get('source') == 'draft']
         if not draft_rows:
             errors.append('no claim was extracted from the existing draft')
         for row in draft_rows:
             quote = _normalized(strip_latex_arguments(row['claim']))
-            if not quote or quote not in draft:
+            if not quote or not any(quote in view for view in views):
                 errors.append(f'claim {row["claim_id"]} is not a verbatim quote of the draft: '
                               f'{row["claim"][:120]!r}')
     requested = {req['claim_id'] for req in art['requests']}
@@ -764,7 +1002,9 @@ def _writer_context(ctx: dict) -> str:
         f'Document type: {doc_type.name}. Title: {brief["title"]}.',
         f'Audience: {brief["audience"]}. Goal: {brief["goal"]}. Voice: {brief["voice"]}. '
         f'Language: {brief["lang"]}. Page limit: {_page_limit(ctx)} body pages.',
-        'Rules (all mandatory):\n' + '\n'.join(f'- [{rule.id}] {rule.text}' for rule in rules),
+        'Rules (all mandatory):\n' + '\n'.join(
+            f'- [{rule.id}] {rule.text}' for rule in rules if rule.kind != 'checklist'),
+        outline_guidance(doc_type.name),
         'Write only claims whose evidence_strength is strong or moderate as results; '
         'never state a weak or unsupported claim.',
         'Write for the venue reader: never mention these instructions, the facts list, '
@@ -774,6 +1014,7 @@ def _writer_context(ctx: dict) -> str:
         'must come from here' + (' or from the existing draft' if _draft_mode(ctx) else '')
         + '):\n' + json.dumps(facts, ensure_ascii=False),
     ]
+    parts = [part for part in parts if part]
     if directives:
         parts.append('Owner directives:\n' + '\n'.join(f'- {line}' for line in directives))
     figures = _art(ctx, 'dossier')['figures']
@@ -811,8 +1052,8 @@ def _run_outline_existing(ctx: dict) -> dict:
     prompt = ('You read an existing paper draft. For each section, state the ONE takeaway '
               'a reader must leave with, in one sentence. Reply ONLY JSON: '
               '{"sections":[{"id":"...","takeaway":"..."}]}. Section ids: '
-              + ', '.join(row['id'] for row in rows) + '\n\nDraft:\n' + _draft_text(ctx)
-              + _feedback(ctx, 'outline'))
+              + ', '.join(row['id'] for row in rows) + '\n\nDraft:\n'
+              + _draft_reading(ctx) + _feedback(ctx, 'outline'))
     reply = _json_reply(_chat(ctx, 'writer', [{'role': 'user', 'content': prompt}], 'outline'))
     takeaways = {row.get('id'): row.get('takeaway') for row in reply.get('sections') or []}
     sections = [{'id': row['id'], 'title': row['title'],
@@ -906,20 +1147,52 @@ def _gate_outline(ctx: dict, art: dict) -> list:
 
 # ── draft ───────────────────────────────────────────────────────────────────
 
-def _section_check(ctx: dict, section_id: str, text: str) -> list[str]:
-    """Deterministic draft gate for one section (lint, numbers, refs, cites)."""
-    rules = rules_for(ctx['doc_type'].name)
-    errors = lint_text(rules, section_id, text)
-    allowed = set()
-    for fact in _usable_facts(ctx):
-        allowed |= numbers_in(fact.get('text', ''))
+def _provenance_sources(ctx: dict) -> dict:
+    """What a number or citation in the output may trace to: the draft, the
+    usable dossier facts with the result files they cite, figure captions and
+    the bibliography. Unconfirmed facts await the owner and source nothing."""
+    paper_dir = Path(ctx['paper_dir'])
+    sources = {}
     if _draft_mode(ctx):
         # The owner's draft is evidence for its own results; nothing beyond it.
-        allowed |= numbers_in(_draft_text(ctx))
-    invented = sorted(reported_numbers(text) - allowed)
+        sources.update({f'draft:{rel}': text
+                        for rel, text in ((ctx['artifacts'].get('draft') or {}).get('files')
+                                          or {}).items()})
+        sources['draft (expanded)'] = _draft_text(ctx)
+    for fact in _usable_facts(ctx):
+        sources[f'dossier fact {fact.get("id")}'] = str(fact.get('text') or '')
+        for rel in _source_paths(fact):
+            path = paper_dir / rel
+            if path.is_file() and path.suffix in _TEXT_SOURCE_SUFFIXES:
+                sources[rel] = path.read_text(encoding='utf-8', errors='replace')
+    for figure in _art(ctx, 'dossier')['figures']:
+        sources[f'figure {figure.get("label")}'] = str(figure.get('caption') or '')
+    sources['bibliography'] = (_art(ctx, 'dossier')['bib'] + '\n'
+                               + ((ctx['artifacts'].get('novelty') or {}).get('bib') or ''))
+    return sources
+
+
+def _provenance_pool(ctx: dict):
+    """The run's source pool (cached per run; its inputs are fixed after novelty)."""
+    from .provenance import SourcePool
+    key = (_draft_mode(ctx), bool(ctx['artifacts'].get('novelty')))
+    if ctx.get('_provenance_pool_key') != key:
+        ctx['_provenance_pool'] = SourcePool(_provenance_sources(ctx), _bib_keys(ctx))
+        ctx['_provenance_pool_key'] = key
+    return ctx['_provenance_pool']
+
+
+def _section_check(ctx: dict, section_id: str, text: str) -> list[str]:
+    """Deterministic draft gate for one section (lint, numbers, refs, cites)."""
+    from .provenance import check
+    rules = rules_for(ctx['doc_type'].name)
+    errors = lint_text(rules, section_id, text)
+    found = check({section_id: text}, _provenance_pool(ctx))['unsourced']
+    invented = [row['value'] for row in found if row['kind'] == 'number']
     if invented:
-        errors.append(f'draft.no-invented-numbers: section {section_id!r} reports '
-                      f'{invented}, which no usable fact states')
+        errors.append(f'draft.no-invented-numbers: section {section_id!r} states '
+                      f'{invented}, which neither the draft, a usable fact, its result '
+                      'file nor the bibliography states')
     keys = set(_bib_keys(ctx))
     cited = {key.strip() for group in re.findall(r'\\cite[a-z]*\*?(?:\[[^\]]*\])*\{([^}]*)\}', text)
              for key in group.split(',') if key.strip()}
@@ -941,16 +1214,27 @@ def _section_check(ctx: dict, section_id: str, text: str) -> list[str]:
     return errors
 
 
-def _reference_check(ctx: dict, sections: dict) -> list[str]:
+def _refs(text: str) -> set[str]:
+    """Labels referenced in ``text``; a cleveref list ``\\cref{a,b}`` names each."""
+    return {label.strip() for group in _REF_RE.findall(text or '')
+            for label in group.split(',') if label.strip()}
+
+
+def _defined_labels(ctx: dict, sections: dict) -> set[str]:
     defined = {f'sec:{sid}' for sid in sections}
     defined |= {figure['label'] for figure in _art(ctx, 'dossier')['figures']}
     if _draft_mode(ctx):
         defined |= set(re.findall(r'\\label\{([^}]*)\}', _draft_text(ctx)))
     for text in sections.values():
         defined |= set(re.findall(r'\\label\{([^}]*)\}', text))
+    return defined
+
+
+def _reference_check(ctx: dict, sections: dict) -> list[str]:
+    defined = _defined_labels(ctx, sections)
     errors = []
     for sid, text in sections.items():
-        refs = set(re.findall(r'\\(?:ref|eqref|autoref|cref|Cref)\{([^}]*)\}', text))
+        refs = _refs(text)
         if refs - defined:
             errors.append(f'section {sid!r} references undefined labels {sorted(refs - defined)}')
     return errors
@@ -962,7 +1246,8 @@ def _packages(ctx: dict) -> str:
         preamble = _draft_text(ctx).split('\\begin{document}', 1)[0]
     elif ctx['doc_type'].needs_venue:
         from .venues import frame_main_tex
-        preamble = frame_main_tex(ctx['brief']['venue'], _art(ctx, 'intake')['kit'],
+        kit = _art(ctx, 'intake')['kit']
+        preamble = frame_main_tex(kit.get('family') or ctx['brief']['venue'], kit,
                                   title='', authors='', abstract='', body='', bibfile='')
     else:
         preamble = ''
@@ -1055,7 +1340,8 @@ def _submission_text(ctx: dict, sections: dict) -> str:
         return ''.join(f'[Figure \\ref{{{label}}} is placed here: {figures[label]["caption"]}]\n'
                        for label in (rows.get(sid) or {}).get('figures') or [] if label in figures)
     return f'Title: {ctx["brief"]["title"]}\n\n' + '\n\n'.join(
-        f'### [{sid}] {(rows.get(sid) or {}).get("title", sid)}\n{floats(sid)}{text}'
+        f'### [{sid}] {(rows.get(sid) or {}).get("title", sid)}\n{floats(sid)}'
+        f'{_reading(ctx, text)}'
         for sid, text in sections.items())
 
 
@@ -1096,15 +1382,44 @@ def _gate_critique(ctx: dict, art: dict) -> list:
 def _judge_pair(ctx: dict, label: str):
     from lib.production.critic import critic_prompt, parse_critic_choice
     doc_type = ctx['doc_type']
-    instruction = (doc_type.reviewer + ' Two anonymous versions of the same '
-                   f'{doc_type.name} follow. Select the stronger one. Judge: '
+    brief = ctx['brief']
+    # Style-blind: a judge told the registry rules rewards rule-following
+    # itself (21-4-1 vs 13-3-10 style-blind on 26 drafts,
+    # docs/PAPER_STYLE_EVIDENCE.md), so it sees only the task, the venue's
+    # requirements and the two documents. Writer, reviewer and lints keep
+    # the rules; a rule earns its place by winning this judge's A/B.
+    venue = ''
+    if doc_type.needs_venue:
+        venue = (f' Venue: {brief.get("venue")}'
+                 + ''.join(f', {key} {brief[key]}' for key in ('paper_type', 'track', 'role')
+                           if brief.get(key))
+                 + (f', at most {_page_limit(ctx)} body pages' if _page_limit(ctx) else '')
+                 + '.')
+    instruction = (doc_type.reviewer + f' Task: {brief.get("title")}. Audience: '
+                   f'{brief.get("audience")}. Goal: {brief.get("goal")}.' + venue
+                   + f' Two anonymous versions of the same {doc_type.name} follow. Select '
+                   'the stronger one. Judge: '
                    + '; '.join(f'{name} ({meaning})' for name, meaning in doc_type.rubric)
-                   + '. Penalize hedging, unsupported claims and padding.')
+                   + '.')
     keys = tuple(name for name, _meaning in doc_type.rubric)
 
     def judge(pair):
-        prompt = critic_prompt(instruction, keys, pair, digest_chars=None)
-        content = _chat(ctx, 'judge', [{'role': 'user', 'content': prompt}], label)
+        # A candidate given as rendered images (a table or figure before and
+        # after restyling) is judged by this same judge: its digest names the
+        # images, which follow the prompt in candidate order.
+        images = [list(candidate.get('images') or []) for candidate in pair]
+        digests = [{**{k: v for k, v in candidate.items() if k != 'images'},
+                    **({'images': f'{len(paths)} rendered image(s), shown below as '
+                                  f'Candidate {i}'} if paths else {})}
+                   for i, (candidate, paths) in enumerate(zip(pair, images), 1)]
+        prompt = critic_prompt(instruction, keys, digests, digest_chars=None)
+        message = prompt
+        if any(images):
+            message = [{'type': 'text', 'text': prompt}]
+            for i, paths in enumerate(images, 1):
+                message.append({'type': 'text', 'text': f'Candidate {i}:'})
+                message += [_image_part(Path(path)) for path in paths]
+        content = _chat(ctx, 'judge', [{'role': 'user', 'content': message}], label)
         winner, reason, scores = parse_critic_choice(
             content, 2, label=label, default_reason='judge preferred this version')
         # The rubric scores are the judgement; the separate "winner" field has
@@ -1117,11 +1432,21 @@ def _judge_pair(ctx: dict, label: str):
     return judge
 
 
+def _image_part(path: Path) -> dict:
+    import base64
+    mime = 'image/jpeg' if path.suffix.lower() in ('.jpg', '.jpeg') else 'image/png'
+    data = base64.b64encode(path.read_bytes()).decode('ascii')
+    return {'type': 'image_url', 'image_url': {'url': f'data:{mime};base64,{data}'}}
+
+
 def _edit_prompt(ctx: dict, sid: str, text: str, problems: list[str]) -> str:
+    final = (' The paper is final (role=final): make copy edits only (typos, grammar, '
+             'punctuation); never reword a claim or change a number, a citation or a '
+             'reference.' if _final(ctx) else '')
     return (_writer_context(ctx) + '\n\nYou revise an EXISTING paper by targeted edits; never '
             'rewrite it from scratch, never add a result, number or citation the draft does '
             'not already contain, never delete a result the evidence supports, and never '
-            'touch figures. Section "' + sid + '":\n<latex>\n'
+            'touch figures.' + final + ' Section "' + sid + '":\n<latex>\n'
             + text + '\n</latex>\n\nProblems to fix:\n'
             + '\n'.join(f'- {item}' for item in problems)
             + '\n\nReply ONLY JSON: [{"old":"exact text copied from the section",'
@@ -1136,18 +1461,56 @@ def _supported_numbers(ctx: dict) -> set[str]:
             for number in stated_numbers(strip_latex_arguments(row.get('claim') or ''))}
 
 
-def _apply_checked_edits(ctx: dict, files: dict, proposals: list[tuple[str, dict]]):
-    """Apply edits whose new text passes the draft gate; return (files, applied, rejected)."""
+def _prose_words(ctx: dict, text: str) -> list[str]:
+    """The words a reader reads, without markup or reference words."""
+    # A command's or environment's optional argument (float placement [!t],
+    # line-break skips \\[2pt]) is markup; brackets in running text are not.
+    text = re.sub(r'(\\(?:[A-Za-z@]+\*?(?:\{[^{}]*\})?|\\))\s*\[[^\]]*\]', r'\1',
+                  _reading(ctx, text))
+    prose = strip_latex_arguments(text)
+    prose = re.sub(r'\\[^A-Za-z@]', '', re.sub(r'\\[A-Za-z@]+\*?', ' ', prose))
+    return [word for word in re.findall(r'[^\W_]+', prose.casefold())
+            if word not in _REFERENCE_WORDS]
+
+
+def _sentence_count(ctx: dict, text: str) -> int:
+    return len(re.findall(r'[.!?](?=\s|$)', strip_latex_arguments(_reading(ctx, text))))
+
+
+def _anchors(ctx: dict, text: str) -> tuple:
+    """Numbers, citations and references: what a copy edit never changes."""
+    return (sorted(re.findall(r'\d+(?:\.\d+)?', strip_latex_arguments(_reading(ctx, text)))),
+            sorted(key.strip() for group in _CITE_RE.findall(text) for key in group.split(',')),
+            sorted(_refs(text)))
+
+
+def _apply_checked_edits(ctx: dict, files: dict, proposals: list[tuple[str, dict]], *,
+                         copy_edit: bool = False):
+    """Apply edits whose new text passes the draft gate; return (files, applied, rejected).
+
+    ``copy_edit`` (revising a role=final draft) also refuses any change to a
+    number, citation or reference."""
     from . import existing_draft as ed
     accepted, rejected = [], []
     kept = _supported_numbers(ctx)
+    defined = _defined_labels(ctx, {})
     for sid, edit in proposals:
-        problems = _section_check(ctx, sid, str(edit.get('new') or ''))
-        dropped = sorted((stated_numbers(strip_latex_arguments(str(edit.get('old') or ''))) & kept)
-                         - stated_numbers(strip_latex_arguments(str(edit.get('new') or ''))))
+        old, new = str(edit.get('old') or ''), str(edit.get('new') or '')
+        problems = _section_check(ctx, sid, new)
+        dropped = sorted((stated_numbers(strip_latex_arguments(_reading(ctx, old))) & kept)
+                         - stated_numbers(strip_latex_arguments(_reading(ctx, new))))
         if dropped:
             problems.append(f'draft.keep-supported-results: the edit drops supported result '
                             f'numbers {dropped}; rephrase around them instead')
+        undefined = sorted(_refs(new) - defined
+                           - set(re.findall(r'\\label\{([^}]*)\}', new)))
+        if undefined:
+            problems.append(f'the edit references undefined labels {undefined}')
+        if copy_edit and _anchors(ctx, old) != _anchors(ctx, new):
+            problems.append('role=final: a copy edit never changes a number, a citation '
+                            'or a reference')
+        if copy_edit and _sentence_count(ctx, old) != _sentence_count(ctx, new):
+            problems.append('role=final: a copy edit never adds or removes a sentence')
         if problems:
             rejected.append({**edit, 'section': sid, 'reason': '; '.join(problems)})
         else:
@@ -1175,7 +1538,10 @@ def _run_revise_existing(ctx: dict) -> dict:
     draft = _art(ctx, 'draft')
     review = _art(ctx, 'critique')['review']
     problems: dict[str, list[str]] = {}
-    for row in review.get('findings') or []:
+    # A final draft takes copy edits only: the reviewer's findings would
+    # reword claims, so they are reported, not applied.
+    deferred = list(review.get('findings') or []) if _final(ctx) else []
+    for row in [] if _final(ctx) else review.get('findings') or []:
         problems.setdefault(row.get('section'), []).append(
             f'{row.get("issue")} → fix: {row.get("fix")}')
     for sid, rows in (draft.get('lint') or {}).items():
@@ -1188,10 +1554,15 @@ def _run_revise_existing(ctx: dict) -> dict:
             ctx, sid, draft['sections'][sid], items)}], f'revise:{sid}'))
         proposals += [(sid, edit) for edit in (reply if isinstance(reply, list) else [])
                       if isinstance(edit, dict)]
-    files, applied, rejected = _apply_checked_edits(ctx, draft['files'], proposals)
+    files, applied, rejected = _apply_checked_edits(ctx, draft['files'], proposals,
+                                                    copy_edit=_final(ctx))
     sections = _expanded_sections(ctx, files) if applied else dict(draft['sections'])
-    comparison, adopted = None, False
-    if applied and not _reference_check(ctx, sections):
+    comparison, adopted, dropped = None, False, None
+    reference_errors = _reference_check(ctx, sections) if applied else []
+    if reference_errors:
+        dropped = {'count': len(applied), 'reason': 'reference check',
+                   'errors': reference_errors}
+    elif applied:
         comparison = blind_pairwise(
             _judge_pair(ctx, 'revise-ab'), {'text': _submission_text(ctx, sections)},
             {'text': _submission_text(ctx, draft['sections'])}, seed=_digest(sections))
@@ -1202,7 +1573,8 @@ def _run_revise_existing(ctx: dict) -> dict:
     remaining = {sid: found for sid, text in final_sections.items()
                  for found in [lint_text(rules, sid, text)] if found}
     artifact = {'existing': True, 'applied_edits': applied, 'rejected_edits': rejected,
-                'comparison': comparison, 'adopted': adopted,
+                'comparison': comparison, 'adopted': adopted, 'dropped': dropped,
+                'deferred_findings': deferred,
                 'changed_sections': sorted({edit['section'] for edit in applied}),
                 'sections': final_sections,
                 'files': {rel: text for rel, text in final_files.items()
@@ -1211,13 +1583,30 @@ def _run_revise_existing(ctx: dict) -> dict:
                 'remaining_lint': remaining}
     md = ['# Targeted revision of the existing draft', '',
           f'Edits applied: {len(applied)}; refused: {len(rejected)}',
-          f'Blind adoption check: {comparison["verdict"] if comparison else "not needed"}'
-          f' → {"revision adopted" if adopted else "draft kept"}', '',
-          f'Remaining rule findings: {remaining or "none"}', '', '## Refused edits', '']
+          _adoption_line(comparison, adopted, dropped, len(applied)), '',
+          f'Remaining rule findings: {remaining or "none"}', '']
+    if _final(ctx):
+        md += [f'Reviewer findings not applied (role=final): {len(deferred)}', '']
+        md += [f'- [{row.get("section")}] {row.get("issue")} → {row.get("fix")}'
+               for row in deferred] + ([''] if deferred else [])
+    md += ['## Refused edits', '']
     md += [f'- [{row.get("section")}] {row.get("reason")}: {str(row.get("old"))[:120]!r}'
            for row in rejected] or ['- none']
     md += ['', '## Patch', '', '```diff', artifact['patch'], '```']
     return _persist(ctx, 'revise', artifact, markdown='\n'.join(md) + '\n')
+
+
+def _adoption_line(comparison, adopted: bool, dropped, changes: int) -> str:
+    """The revision's outcome as it happened; a dropped patch is never 'not needed'."""
+    if dropped:
+        return (f'Blind adoption check: skipped — {dropped["count"]} edits dropped: '
+                f'{dropped["reason"]} ({"; ".join(dropped["errors"])}) → draft kept')
+    if comparison is None:
+        return 'Blind adoption check: not needed (no edit survived the gates) → draft kept'
+    totals = comparison.get('totals') or {}
+    return (f'Blind adoption check: {comparison["verdict"]} (rubric totals over both orders: '
+            f'revision {totals.get("candidate")}, draft {totals.get("baseline")}) → '
+            + ('revision adopted' if adopted else f'draft kept; {changes} edits not adopted'))
 
 
 def _run_revise(ctx: dict) -> dict:
@@ -1252,9 +1641,12 @@ def _run_revise(ctx: dict) -> dict:
             continue
         revised[sid] = candidate
     changed = sorted(sid for sid in revised if revised[sid] != draft[sid])
-    comparison = None
-    adopted = False
-    if changed and not _reference_check(ctx, revised):
+    comparison, adopted, dropped = None, False, None
+    reference_errors = _reference_check(ctx, revised) if changed else []
+    if reference_errors:
+        dropped = {'count': len(changed), 'reason': 'reference check',
+                   'errors': reference_errors}
+    elif changed:
         comparison = blind_pairwise(
             _judge_pair(ctx, 'revise-ab'),
             {'text': _submission_text(ctx, revised)},
@@ -1263,11 +1655,11 @@ def _run_revise(ctx: dict) -> dict:
         adopted = comparison['preferred']
     final = revised if adopted else draft
     artifact = {'changed_sections': changed, 'rejected_rewrites': rejected,
-                'comparison': comparison, 'adopted': adopted, 'sections': final}
+                'comparison': comparison, 'adopted': adopted, 'dropped': dropped,
+                'sections': final}
     md = ['# Targeted revision', '', f'Rewritten sections: {changed or "none"}',
           f'Rewrites refused by the lint gate: {rejected or "none"}',
-          f'Blind adoption check: {comparison["verdict"] if comparison else "not needed"}'
-          f' → {"revision adopted" if adopted else "draft kept"}']
+          _adoption_line(comparison, adopted, dropped, len(changed))]
     return _persist(ctx, 'revise', artifact, markdown='\n'.join(md) + '\n')
 
 
@@ -1373,19 +1765,34 @@ def _materialize_existing(ctx: dict, build: Path, files: dict) -> str:
 def _repair_edits(ctx: dict, files: dict, failures: list[str], packages: str):
     """Render repair for an existing draft: targeted edits, each gate-checked."""
     sections = _expanded_sections(ctx, files)
+    how = ('The paper is final (role=final): fix only references, floats and layout (add '
+           'a \\cref to an unreferenced float, float placement, table width, breaks in long '
+           'tokens); never reword prose and never cut text to fit.' if _final(ctx) else
+           'Fix every failure with minimal targeted edits (tighten prose, break long '
+           'tokens, resize tables); never remove a result or a figure.')
     prompt = (_writer_context(ctx) + '\n\nThe compiled paper failed render QA:\n'
               + '\n'.join(f'- {item}' for item in failures)
               + f'\nBody page limit: {_page_limit(ctx)}. Packages loaded: {packages}.\n\n'
               'Paper (expanded):\n' + '\n\n'.join(
                   f'### [{sid}]\n{text}' for sid, text in sections.items())
-              + '\n\nFix every failure with minimal targeted edits (tighten prose, break long '
-              'tokens, resize tables); never remove a result or a figure. Reply ONLY JSON: '
+              + '\n\n' + how + ' Reply ONLY JSON: '
               '[{"section":"<id>","old":"exact text","new":"replacement"}].')
     reply = _json_reply(_chat(ctx, 'writer', [{'role': 'user', 'content': prompt}],
                               'render-repair'))
     proposals = [(str(edit.get('section') or 'render-repair'), edit)
                  for edit in (reply if isinstance(reply, list) else []) if isinstance(edit, dict)]
-    return _apply_checked_edits(ctx, files, proposals)
+    rewrites = []
+    if _final(ctx):
+        layout = [(sid, edit) for sid, edit in proposals
+                  if _prose_words(ctx, str(edit.get('old') or ''))
+                  == _prose_words(ctx, str(edit.get('new') or ''))]
+        rewrites = [{**edit, 'section': sid,
+                     'reason': 'role=final: render repair may only fix references, floats '
+                               'and layout; this edit rewords prose'}
+                    for sid, edit in proposals if (sid, edit) not in layout]
+        proposals = layout
+    files, applied, refused = _apply_checked_edits(ctx, files, proposals)
+    return files, applied, rewrites + refused
 
 
 def _baseline_pdf(ctx: dict) -> str:
@@ -1416,6 +1823,10 @@ def _run_render(ctx: dict) -> dict:
     repaired by targeted edits."""
     from .render import assemble, compile_and_check
     kit, kit_dir, bib = _render_inputs(ctx)
+    if ctx['doc_type'].needs_venue:
+        fresh_errors = _freshness_errors({**kit, 'freshness': _check_freshness(kit['edition'])})
+        if fresh_errors:
+            return _persist(ctx, 'render', {'failures': fresh_errors})
     packages = _packages(ctx)
     build = Path(ctx['workdir']) / 'build'
     existing = _draft_mode(ctx)
@@ -1462,8 +1873,22 @@ def _run_render(ctx: dict) -> dict:
             break
         repaired_total += [sid for sid in repaired if sid not in repaired_total]
     repaired = repaired_total
+    conformance = None
+    if ctx['doc_type'].needs_venue:
+        # The delivered PDF's template proof: an independent scratch build of
+        # the final tree, checked against the pinned edition.
+        conformance = _conformance(ctx, build, main_name)
+        # Deliver the exact PDF the conformance probe inspected, not an
+        # earlier separately compiled PDF that has no such proof.
+        if conformance.get('passed') and conformance.get('pdf'):
+            report.update({key: conformance[key] for key in
+                           ('pdf', 'pdf_sha256', 'pages', 'body_pages')})
+        report = {**report, 'failures': list(report.get('failures') or [])
+                  + [f'paper.template-conformance: {item}'
+                     for item in conformance['failures']]}
     artifact = {**report, 'repaired_sections': repaired, 'build': str(build),
-                'main': main_name, 'baseline_pdf': _baseline_pdf(ctx)}
+                'main': main_name, 'baseline_pdf': _baseline_pdf(ctx),
+                'conformance': conformance}
     if existing:
         artifact.update({'files': {rel: text for rel, text in doc.items()
                                    if text != original.get(rel)},
@@ -1478,6 +1903,11 @@ def _run_render(ctx: dict) -> dict:
           f'- undefined refs/cites: {report.get("undefined") or "none"}',
           f'- repaired sections: {repaired or "none"}', '', '## Failures', '']
     md += [f'- {item}' for item in report.get('failures') or []] or ['- none']
+    if existing:
+        refused = [row for log in repair_log for row in log['refused']]
+        md += ['', f'## Refused repair edits ({len(refused)})', '']
+        md += [f'- [{row.get("section")}] {row.get("reason")}: {str(row.get("old"))[:160]!r}'
+               f' → {str(row.get("new"))[:160]!r}' for row in refused] or ['- none']
     return _persist(ctx, 'render', artifact, markdown='\n'.join(md) + '\n')
 
 
@@ -1499,15 +1929,26 @@ def _run_blind(ctx: dict) -> dict:
     baseline_pdf = Path(_art(ctx, 'render')['baseline_pdf'] or '')
     if not baseline_pdf.is_file():
         raise RuntimeError(f'previous version PDF {str(baseline_pdf)!r} is unavailable')
-    candidate = {'pages': pdf_pages(candidate_pdf), 'text': _body_text(pdf_text(candidate_pdf))}
-    baseline = {'pages': pdf_pages(baseline_pdf), 'text': _body_text(pdf_text(baseline_pdf))}
+    texts = [pdf_text(candidate_pdf), pdf_text(baseline_pdf)]
+    bodies = [_body_text(text) for text in texts]
+    # Text extraction finds the References heading only in some layouts; a
+    # version judged without its appendix against one judged with it loses on
+    # completeness alone, so both are cut or neither.
+    cut = all(body != text for body, text in zip(bodies, texts))
+    texts = bodies if cut else texts
+    candidate = {'pages': pdf_pages(candidate_pdf), 'text': texts[0]}
+    baseline = {'pages': pdf_pages(baseline_pdf), 'text': texts[1]}
     result = blind_pairwise(_judge_pair(ctx, 'blind-ab'), candidate, baseline,
                             seed=_art(ctx, 'render')['pdf_sha256'])
     artifact = {**result, 'judge_model': ctx['brief']['judge_model'],
+                'extent': 'bodies before the references' if cut else 'whole documents',
                 'candidate_pdf_sha256': _art(ctx, 'render')['pdf_sha256'],
                 'baseline_pdf': str(baseline_pdf)}
     md = ['# Blind A/B against the previous version', '',
-          f'Judge: {ctx["brief"]["judge_model"]}; verdict: **{result["verdict"]}**', '',
+          f'Judge: {ctx["brief"]["judge_model"]}; verdict: **{result["verdict"]}**'
+          + (f' ({_blind_explanation(result)})' if not result['preferred'] else ''), '',
+          f'Rubric totals over both orders: new {result["totals"]["candidate"]}, previous '
+          f'{result["totals"]["baseline"]}', '',
           '| order | new version at | winner | new scores | previous scores | reason |',
           '|---|---|---|---|---|---|']
     md += [f'| {i} | {row["candidate_position"]} | {row["winner_position"]} | '
@@ -1516,11 +1957,23 @@ def _run_blind(ctx: dict) -> dict:
     return _persist(ctx, 'blind', artifact, markdown='\n'.join(md) + '\n')
 
 
+def _blind_explanation(result: dict) -> str:
+    if result['verdict'] != 'no preference':
+        return 'the judge preferred the previous version in both orders'
+    if result.get('position_bias'):
+        return (f'position bias: the judge picked position '
+                f'{result["rounds"][0]["winner_position"]} in both orders')
+    return 'each version won one order'
+
+
 def _gate_blind(ctx: dict, art: dict) -> list:
     if art['preferred']:
         return []
-    return [f'paper.blind-ab: the blind judge did not prefer the new version in both '
-            f'orders (verdict {art["verdict"]}); it is not delivered']
+    scores = '; '.join(f'order {i} (new at position {row["candidate_position"]}): new '
+                       f'{row["candidate_scores"]}, previous {row["baseline_scores"]}'
+                       for i, row in enumerate(art['rounds'], 1))
+    return [f'paper.blind-ab: {art["verdict"]} ({_blind_explanation(art)}); the new version '
+            f'is delivered only when preferred in both orders. Scores: {scores}']
 
 
 # ── deliver ─────────────────────────────────────────────────────────────────
@@ -1529,13 +1982,102 @@ def _slug(text: str) -> str:
     return re.sub(r'[^A-Za-z0-9]+', '-', text).strip('-')[:80] or 'document'
 
 
+def _delivered_text(ctx: dict) -> dict:
+    """``{name: text}`` the pipeline wrote: the changed files of an existing
+    draft (the rest is the owner's own text), or every written section."""
+    render = _art(ctx, 'render')
+    if _draft_mode(ctx):
+        return dict(render.get('files') or {})
+    return dict(render.get('sections') or _art(ctx, 'revise')['sections'])
+
+
+def _provenance_markdown(report: dict) -> str:
+    from .provenance import describe
+    md = ['# Provenance gate', '',
+          f'Checked {report["checked"]["numbers"]} numbers and '
+          f'{report["checked"]["citations"]} citations in the delivered text.', '',
+          f'## Unsourced ({len(report["unsourced"])}): delivery refused if any', '']
+    md += [f'- {describe(row)}' for row in report['unsourced']] or ['- none']
+    md += ['', f'## Rounded or rescaled from a source value ({len(report["rounded"])})', '']
+    md += [f'- {row["value"]} at {row["location"]}: {row["how"]} from '
+           f'{row["source_value"]} ({row["source"]})' for row in report['rounded']] or ['- none']
+    return '\n'.join(md) + '\n'
+
+
+def audit_provenance(workdir: str, paper_dir: str) -> dict:
+    """Run the provenance gate over every text a past run produced, from its
+    artifacts alone: each applied revise and render-repair edit (adopted or
+    not), and the revised and rendered text. ``paper_dir`` holds the dossier's
+    result files. Read-only."""
+    from .provenance import check
+    folder = Path(workdir) / 'artifacts'
+    artifacts = {name: json.loads((folder / f'{index:02d}-{name}.json').read_text(encoding='utf-8'))
+                 for index, name in enumerate(STAGE_NAMES, 1)
+                 if (folder / f'{index:02d}-{name}.json').is_file()}
+    brief = artifacts['intake']['brief']
+    ctx = {'paper_dir': str(paper_dir), 'workdir': str(workdir), 'brief': brief,
+           'doc_type': document_type(brief['type']), 'artifacts': artifacts}
+    if _draft_mode(ctx) and not (Path(workdir) / 'source').is_dir():
+        ctx['_draft_text'] = '\n'.join(((artifacts.get('draft') or {}).get('files') or {}).values())
+    outputs = {}
+    if _draft_mode(ctx):
+        for stage, edits in (('revise', (artifacts.get('revise') or {}).get('applied_edits')),
+                             ('render', [row for log in (artifacts.get('render') or {})
+                                         .get('repair_edits') or [] for row in log['applied']])):
+            for index, edit in enumerate(edits or [], 1):
+                outputs[f'{stage} edit {index} [{edit.get("section")}]'] = str(edit.get('new') or '')
+        for stage in ('revise', 'render'):
+            for rel, text in ((artifacts.get(stage) or {}).get('files') or {}).items():
+                outputs[f'{stage} file {rel}'] = text
+    else:
+        for stage in ('draft', 'revise', 'render'):
+            for sid, text in ((artifacts.get(stage) or {}).get('sections') or {}).items():
+                outputs[f'{stage} section {sid}'] = text
+    report = check(outputs, _provenance_pool(ctx)) if outputs else {
+        'unsourced': [], 'rounded': [], 'checked': {'numbers': 0, 'citations': 0}}
+    return {'workdir': str(workdir), 'stages': sorted(artifacts), 'outputs': sorted(outputs),
+            **report}
+
+
+def _delivery_pdf_errors(ctx: dict, pdf: Path, data: bytes | None = None) -> list:
+    if not pdf.is_file():
+        return ['delivered PDF is missing']
+    digest = hashlib.sha256(pdf.read_bytes() if data is None else data).hexdigest()
+    render = _art(ctx, 'render')
+    if digest != render['pdf_sha256']:
+        return ['delivered PDF differs from the render-QA PDF']
+    conformance = render.get('conformance')
+    required = getattr(ctx.get('doc_type'), 'needs_venue', False) or conformance is not None
+    inspected_hash = (conformance or {}).get('pdf_sha256')
+    if required and not inspected_hash:
+        return ['template-conformance PDF hash is missing']
+    if inspected_hash and digest != inspected_hash:
+        return ['delivered PDF differs from the template-conformance PDF']
+    return []
+
+
 def _run_deliver(ctx: dict) -> dict:
+    from .provenance import check
     brief = ctx['brief']
+    # Hard gate: nothing is written to the output directory while any number
+    # or citation in the delivered text traces to no source.
+    provenance = check(_delivered_text(ctx), _provenance_pool(ctx))
+    if provenance['unsourced']:
+        return _persist(ctx, 'deliver', {'refused': True, 'provenance': provenance},
+                        markdown=_provenance_markdown(provenance))
+    render = _art(ctx, 'render')
+    candidate = Path(render['pdf'])
+    payload = candidate.read_bytes() if candidate.is_file() else None
+    failures = _delivery_pdf_errors(ctx, candidate, payload)
+    if failures:
+        return _persist(ctx, 'deliver', {'refused': True, 'failures': failures,
+                                         'provenance': provenance},
+                        markdown='# Delivery refused\n\n' + '\n'.join(failures))
     out = Path(ctx['paper_dir']) / brief['output_dir']
     out.mkdir(parents=True, exist_ok=True)
-    render = _art(ctx, 'render')
     pdf_target = out / f'{_slug(brief["title"])}.pdf'
-    shutil.copy2(render['pdf'], pdf_target)
+    # Publish the same in-memory bytes whose hashes were checked above.
+    pdf_target.write_bytes(payload)
     source = out / 'source'
     if source.exists():
         shutil.rmtree(source)
@@ -1564,9 +2106,15 @@ def _run_deliver(ctx: dict) -> dict:
         'pdf': pdf_target.name,
         'pdf_sha256': hashlib.sha256(pdf_target.read_bytes()).hexdigest(),
         'template': {key: _art(ctx, 'intake')['kit'].get(key)
-                     for key in ('landing_page', 'source_url', 'upstream_commit',
-                                 'archive_sha256', 'kit', 'year', 'page_limit',
-                                 'page_limit_source', 'anonymity')},
+                     for key in ('edition', 'target_edition', 'conference', 'landing_page',
+                                 'source_url', 'upstream_commit', 'archive_sha256',
+                                 'pinned_archive_sha256', 'pinned_on', 'kit', 'year',
+                                 'page_limit', 'page_limit_source', 'anonymity',
+                                 'submission_ready', 'draft_label')},
+        'conformance': {key: (render.get('conformance') or {}).get(key)
+                        for key in ('edition', 'stage', 'passed', 'submission_ready',
+                                    'draft_label', 'rows', 'portfolio', 'limitations',
+                                    'policy_conflicts', 'pdf_sha256', 'manual_review')},
         'mode': 'revised existing draft' if draft else 'written from the dossier',
         'replaced_template_files': (draft or {}).get('stale_template_files', []),
         'models_by_call': json.loads((Path(ctx['workdir']) / 'artifacts' / 'models.json')
@@ -1580,21 +2128,24 @@ def _run_deliver(ctx: dict) -> dict:
         'render': {key: render.get(key) for key in ('pages', 'body_pages', 'page_limit')},
         'experiment_requests': len((ctx['artifacts'].get('evidence') or {}).get('requests') or []),
         'awaiting_owner': _art(ctx, 'dossier')['awaiting_owner'],
+        'provenance': {'checked': provenance['checked'], 'unsourced': [],
+                       'rounded': provenance['rounded']},
         'delivered_at': time.time(),
     }
     (out / 'manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2),
                                        encoding='utf-8')
-    artifact = {'output_dir': str(out), 'pdf': str(pdf_target), 'manifest': manifest}
-    return _persist(ctx, 'deliver', artifact)
+    artifact = {'output_dir': str(out), 'pdf': str(pdf_target), 'manifest': manifest,
+                'provenance': provenance}
+    return _persist(ctx, 'deliver', artifact, markdown=_provenance_markdown(provenance))
 
 
 def _gate_deliver(ctx: dict, art: dict) -> list:
-    pdf = Path(art['pdf'])
-    if not pdf.is_file():
-        return ['delivered PDF is missing']
-    if hashlib.sha256(pdf.read_bytes()).hexdigest() != _art(ctx, 'render')['pdf_sha256']:
-        return ['delivered PDF differs from the render-QA PDF']
-    return []
+    from .provenance import describe
+    if art.get('failures'):
+        return list(art['failures'])
+    if art['provenance']['unsourced']:
+        return [describe(row) for row in art['provenance']['unsourced']]
+    return _delivery_pdf_errors(ctx, Path(art['pdf']))
 
 
 # ── graph ───────────────────────────────────────────────────────────────────
@@ -1627,25 +2178,70 @@ def _workflow(name: str, stage_names: tuple, versions: dict) -> AgentToolWorkflo
                   # a blind verdict is never re-rolled until it comes out a win.
                   retry=(_MODEL_STAGE_RETRY if execution == 'model'
                          and stage_name not in ('render', 'blind') else 0),
-                  resumable=stage_name != 'intake',
+                  resumable=stage_name not in ('intake', 'render', 'deliver'),
                   checkpoint_version=versions.get(stage_name, '')),
             execution, {'type': 'object'}))
     return AgentToolWorkflow('documents.' + name, '1', tuple(nodes))
 
 
+def _file_digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _dossier_inputs(paper_dir: Path) -> dict:
+    """``{path: sha256}`` of dossier.json and every file it names (sources,
+    figures, bibliography): the dossier stage's inputs."""
+    files = {}
+
+    def add(path: Path) -> None:
+        if path.is_file():
+            files[str(path)] = _file_digest(path)
+    dossier = paper_dir / DOSSIER_FILE
+    add(dossier)
+    try:
+        raw = json.loads(dossier.read_text(encoding='utf-8')) if dossier.is_file() else {}
+    except ValueError:
+        raw = {}   # the dossier stage reports the malformed file itself
+    add(paper_dir / str(raw.get('bib') or 'references.bib'))
+    for fact in raw.get('facts') or []:
+        for rel in _source_paths(fact):
+            add(paper_dir / rel)
+    for figure in raw.get('figures') or []:
+        if figure.get('file'):
+            add(paper_dir / str(figure['file']))
+    return files
+
+
+def _implementation_digest() -> dict:
+    """The code and data that decide what a stage produces: a changed prompt,
+    gate or calibration reruns the stages instead of reusing stale artifacts."""
+    package = Path(__file__).parent
+    paths = sorted([*package.glob('*.py'), *package.glob('*.json'),
+                    *package.glob('calibration/*.json'),
+                    package.parents[1] / 'production' / 'critic.py'])
+    return {str(path.relative_to(package.parents[1])): _file_digest(path)
+            for path in paths if path.is_file()}
+
+
 def _input_version(ctx: dict) -> str:
+    """Checkpoint version of the stages after intake: every input they read."""
     intake = _art(ctx, 'intake')
     kit = intake['kit']
     return _digest({
         'brief': intake['brief'], 'owner_directives': intake['owner_directives'],
-        'rules': intake['rules'],
+        'portfolio_policy': ctx.get('portfolio_policy'),
+        'rules': [dataclasses.asdict(rule) for rule in rules_for(ctx['doc_type'].name)],
         'kit': {key: kit.get(key) for key in ('upstream_commit', 'archive_sha256', 'files')},
+        'draft': intake.get('draft'),
+        'dossier_inputs': _dossier_inputs(Path(ctx['paper_dir'])),
+        'implementation': _implementation_digest(),
     })
 
 
 def run_document_pipeline(paper_dir: str, workdir: str, *, owner_user_id=None,
                           emit=None, abort_event=None,
-                          brief_overrides: dict | None = None) -> dict:
+                          brief_overrides: dict | None = None,
+                          portfolio_policy: str | None = None) -> dict:
     """Run every stage for the document in ``paper_dir``; return all artifacts.
 
     Raises ``StageFailed`` naming the stage whose gate refused; every artifact
@@ -1656,6 +2252,7 @@ def run_document_pipeline(paper_dir: str, workdir: str, *, owner_user_id=None,
     abort_check = (lambda: bool(abort_event is not None and abort_event.is_set()))
     ctx = {'paper_dir': str(Path(paper_dir).resolve()), 'workdir': str(work.resolve()),
            'owner_user_id': owner_user_id, 'run_started': time.time(),
+           'portfolio_policy': portfolio_policy,
            'abort_check': abort_check, 'brief_overrides': dict(brief_overrides or {})}
     run_workflow(_workflow('intake', ('intake',), {}), ctx,
                  state_path=str(work / 'state' / 'intake.json'),

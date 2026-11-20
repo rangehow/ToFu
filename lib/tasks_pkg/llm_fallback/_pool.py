@@ -6,7 +6,6 @@ receipts; does not decide whether the primary failure authorizes rescue."""
 from lib import log
 from lib.agent_core.events import EventType, Phase, build_event, build_phase
 from lib.llm import AbortedError
-from lib.llm_dispatch.credential_reservation import fallback_dispatch
 from lib.log import get_logger, task_log_tag
 from lib.tasks_pkg.event_delivery import EventDeliveryError, EventDeliveryRevoked
 from lib.tasks_pkg.manager import _events as task_events
@@ -16,7 +15,6 @@ from . import _errors, _refusal, _retry, _transport, _usage
 logger = get_logger(__name__)
 
 
-@fallback_dispatch()
 def _attempt_pool_rescue(
     task,
     body,
@@ -38,8 +36,6 @@ def _attempt_pool_rescue(
     The caller owns rotation policy. A failed capability probe cannot suppress
     dispatch; the existing dispatch retry budget owns the attempt. Successful
     rescue preserves original-primary attribution and records the serving model.
-    Rescue is fallback traffic: it never selects an experiment-reserved
-    credential (docs/NETWORK.md).
     """
     tid = task_log_tag(task['id'])
     failed_models = {m for m in (failed_models or set()) if m}

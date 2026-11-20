@@ -88,16 +88,19 @@ def board():
 
 
 def task(title, status='in_progress', **extra):
-    return {'title': title, 'status': status, **extra}
+    row = {'title': title, 'status': status, **extra}
+    if status == 'pending' and 'blocker' not in row:
+        row['blocker'] = {'kind': 'next_action', 'action': 'Start: ' + title}
+    return row
 
 
-def test_unowned_projection_includes_dropped_open_outcomes(board):
-    from lib.conversations.coordinator_continuation import unowned_outcomes
+def test_ownership_projection_retains_unlinked_dropped_open_outcomes(board):
+    from lib.conversations.coordinator_continuation import _outcome_ownership
     board.publish(task('Paper B: the missing gate verdict'), task('Paper A: diagnose the result'))
     board.publish(task('Paper A: diagnose the result'))
     dropped = board.read(group='dropped')['tasks']
     assert [entry['title'] for entry in dropped] == ['Paper B: the missing gate verdict']
-    assert unowned_outcomes([], [], dropped)['dropped'] == dropped
+    assert _outcome_ownership([], {}, dropped, set())['dropped'] == dropped
 
 
 def test_a_task_dropped_from_a_later_board_stays_in_the_history(board):
@@ -163,6 +166,161 @@ def test_identity_rule_is_title_first_then_one_for_one_in_place():
     renamed = {'revision': 6, 'tasks': [task('Old name'), task('Renamed')]}
     clash = plan_transition({'revision': 5, 'tasks': [task('Renamed')]}, [title_key('Old name')], renamed)
     assert clash[1] == title_key('Old name') and clash[0] not in (title_key('Old name'), title_key('Renamed'))
+
+
+def test_repeating_history_preparation_is_side_effect_free(board):
+    from lib.conversations.coordinator_task_history import prepare_board_history
+
+    b = board
+    initial = b.publish(task('Planned'))
+    previous = initial['board']
+    next_board = {**previous, 'revision': previous['revision'] + 1,
+                  'updatedAt': previous['updatedAt'] + 1,
+                  'tasks': [task('Planned'), task('New'), task('Other')]}
+    args = (b.scope, previous, initial['taskKeys'], next_board)
+    prepared = prepare_board_history(*args, client=b.store)
+    assert prepare_board_history(*args, client=b.store) == prepared
+    assert len(prepared[0]) == 3 and len(prepared[1]) == 2
+    assert sum(namespace == NAMESPACE for namespace, _ in b.store.rows) == 1
+
+
+@pytest.mark.parametrize('returning', [False, True])
+def test_head_cas_conflict_does_not_duplicate_staged_task_history(board, monkeypatch, returning):
+    b = board
+    planned, new = task('Planned'), task('New')
+    if returning:
+        original = b.publish(planned, new)['taskKeys'][1]
+    b.publish(planned)
+    command = b.store.command
+    attempted = []
+
+    def conflict_once(operation, payload, command_id):
+        if command_id.startswith('coordinator-progress-cas:'):
+            attempted.append(payload['value']['taskKeys'])
+            if len(attempted) == 1:
+                raise StorageError('database_conflict', 'head refused after staging history')
+        return command(operation, payload, command_id)
+
+    monkeypatch.setattr(b.store, 'command', conflict_once)
+    result = b.publish(planned, new)
+    assert len(attempted) == 2 and attempted[0] == attempted[1] == result['taskKeys']
+    if returning:
+        assert result['taskKeys'][1] == original
+    page = b.read()
+    assert len(page['tasks']) == 2 and page['counts']['dropped'] == 0
+
+
+def test_competing_head_advance_preserves_the_restored_identity(board, monkeypatch):
+    b = board
+    planned, returning = task('Planned'), task('Return')
+    _, original = b.publish(planned, returning)['taskKeys']
+    b.publish(planned)
+    command = b.store.command
+    raced = False
+
+    def advance_before_cas(operation, payload, command_id):
+        nonlocal raced
+        if command_id.startswith('coordinator-progress-cas:') and not raced:
+            raced = True
+            b.publish(task('Planned', progress='Competing note'))
+        return command(operation, payload, command_id)
+
+    monkeypatch.setattr(b.store, 'command', advance_before_cas)
+    result = b.publish(planned, returning)
+    assert result['board']['revision'] == 4 and result['taskKeys'][1] == original
+    assert b.read()['counts']['dropped'] == 0
+
+
+def test_exhausted_head_conflicts_never_publish_candidate_history(board, monkeypatch):
+    b = board
+    planned = task('Planned')
+    b.publish(planned)
+    command = b.store.command
+
+    def refuse_head(operation, payload, command_id):
+        if command_id.startswith('coordinator-progress-cas:'):
+            raise StorageError('database_conflict', 'head refused')
+        return command(operation, payload, command_id)
+
+    monkeypatch.setattr(b.store, 'command', refuse_head)
+    with pytest.raises(StorageError, match='changed concurrently'):
+        b.publish(planned, task('Never published'))
+    assert [entry['title'] for entry in b.read()['tasks']] == ['Planned']
+    assert [entry['title'] for entry in b.history().tasks('coordinator')] == ['Planned']
+
+
+def test_committed_head_recovers_unindexed_history_before_the_next_replacement(board, monkeypatch):
+    b = board
+    planned, returning = task('Planned'), task('Return')
+    _, original = b.publish(planned, returning)['taskKeys']
+    command = b.store.command
+
+    def refuse_index(operation, payload, command_id):
+        if payload['namespace'] == NAMESPACE:
+            raise StorageError('database_unavailable', 'temporary index outage')
+        return command(operation, payload, command_id)
+
+    monkeypatch.setattr(b.store, 'command', refuse_index)
+    b.publish(planned)
+    assert [(entry['key'], entry['title']) for entry in b.read(group='dropped')['tasks']] == [(original, 'Return')]
+    assert [entry['key'] for entry in b.history().tasks('coordinator') if entry['dropped']] == [original]
+    with pytest.raises(StorageError, match='index outage'):
+        b.publish(task('Planned', progress='Must not replace recovery evidence'))
+    monkeypatch.setattr(b.store, 'command', command)
+    assert b.publish(planned, returning)['taskKeys'][1] == original
+    assert not b.read(group='dropped')['tasks']
+
+
+def test_history_tasks_rechecks_head_when_the_index_advances_during_read(board, monkeypatch):
+    b = board
+    b.publish(task('Original'))
+    query = b.store.query
+    raced = False
+
+    def advance_during_list(operation, payload, **kwargs):
+        nonlocal raced
+        if operation == 'record.list' and payload['namespace'] == NAMESPACE and not raced:
+            raced = True
+            b.publish(task('Renamed'))
+        return query(operation, payload, **kwargs)
+
+    monkeypatch.setattr(b.store, 'query', advance_during_list)
+    entries = b.history().tasks('coordinator')
+    assert raced and [(item['title'], item['onBoard']) for item in entries] == [('Renamed', True)]
+
+
+def test_renamed_then_dropped_task_restores_its_current_title_key(board):
+    b = board
+    original, = b.publish(task('Original'))['taskKeys']
+    b.publish(task('Renamed'))
+    b.publish()
+    assert b.publish(task('Renamed'))['taskKeys'] == [original]
+    assert b.read()['counts']['dropped'] == 0
+
+
+def test_a_former_title_alone_cannot_restore_the_renamed_task(board):
+    b = board
+    original, = b.publish(task('Original'))['taskKeys']
+    assert b.publish(task('Renamed'))['taskKeys'] == [original]
+    b.publish()
+    restored, = b.publish(task('Original'))['taskKeys']
+    assert restored != original
+    assert [(entry['key'], entry['title']) for entry in b.read(group='dropped')['tasks']] == [
+        (original, 'Renamed')]
+
+
+def test_ambiguous_same_title_history_uses_a_fresh_key_on_return(board):
+    from lib.conversations.coordinator_task_history import fold_boards
+
+    b = board
+    repeated = task('Same title')
+    published = [b.publish(repeated, repeated), b.publish(), b.publish(repeated)]
+    former = published[0]['taskKeys']
+    restored, = published[-1]['taskKeys']
+    assert len(set(former)) == 2 and restored not in former
+    assert {item['key'] for item in b.read(group='dropped')['tasks']} == set(former)
+    folded, keys = fold_boards(b.scope, [item['board'] for item in published])
+    assert keys == [restored] and set(folded) == {*former, restored}
 
 
 def test_a_returning_title_continues_its_task(board):
@@ -436,3 +594,28 @@ def test_a_task_translation_follows_its_texts_and_language(board):
     b.publish(task('Pack'), task('Fix restart', progress='Fixed'))
     b.publish(task('Pack'))
     assert b.by_title(b.read())['Fix restart']['translation']['texts'] == [{'source': 'Fix restart', 'text': '再起動'}]
+
+
+def test_history_keeps_and_searches_the_recorded_reason_not_the_previous_wait(board):
+    title = 'Test the alternate installer'
+    board.publish(task(title, 'pending', reason='Wait for the signed build.'), task('Keep running'))
+    assert board.read(query='signed build')['tasks'][0]['reason'] == 'Wait for the signed build.'
+    board.publish(task(title, 'cancelled', progress='Had a test plan.', reason='Superseded by the universal installer.'),
+                  task('Keep running'))
+    board.publish(task('Keep running'))
+    assert not board.read(query='signed build')['tasks']
+    [entry] = board.read(query='universal installer')['tasks']
+    assert not entry['onBoard'] and not entry['dropped']
+    assert entry['status'] == 'cancelled' and entry['reason'] == 'Superseded by the universal installer.'
+    assert entry['progress'] == 'Had a test plan.'
+
+
+def test_archiving_an_open_row_does_not_adopt_a_staged_cancellation(board):
+    title = 'Repair the installer'
+    board.publish(task(title, 'pending'), task('Other work'))
+    from lib.conversations.coordinator_task_history import NAMESPACE, scope_prefix, title_key
+    record = board.store.rows[(NAMESPACE, scope_prefix(board.scope) + title_key(title))]['value']
+    record['status'] = 'cancelled'  # A candidate history record ahead of the committed board.
+    board.publish(task('Other work'))
+    [entry] = board.read(group='dropped')['tasks']
+    assert entry['title'] == title and entry['status'] == 'pending' and 'reason' not in entry

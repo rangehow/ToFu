@@ -114,7 +114,9 @@ def film_workflow(task: dict) -> AgentToolWorkflow:
         ('concat', _run_concat, 'deterministic',
          _object(video_path=_PATH), _files_gate('video_path')),
         ('subtitles', _run_subtitles, 'deterministic',
-         _object(video_path=_PATH, srt_path=_PATH, burn_in=_BOOL),
+         _object(video_path=_PATH, srt_path=_PATH, burn_in=_BOOL,
+                 safe_box_checked=_COUNT,
+                 subtitle_vertical_inconclusive=_RECORDS),
          _files_gate('video_path', 'srt_path')),
         ('mux', _run_mux, 'deterministic',
          _object(candidate_path=_PATH), _files_gate('candidate_path')),
@@ -814,6 +816,8 @@ def _run_subtitles(ctx: dict) -> dict:
         phases.insert(phases.index('mux') if 'mux' in phases
                       else len(phases), 'burn_in')
     video_final = silent_final
+    safe_box_checked = 0
+    vertical_inconclusive: list = []
     if burn_in_eff:
         engine._phase_started(task, phases, 'burn_in')
         burned = os.path.join(workdir, 'final_burned.mp4')
@@ -824,11 +828,16 @@ def _run_subtitles(ctx: dict) -> dict:
                 abort_event=task.get('abort_event'))
         if not br.get('ok'):
             raise RuntimeError('burn-in failed: ' + br.get('detail', ''))
+        safe_box_checked = int(br.get('safe_box_checked') or 0)
+        vertical_inconclusive = list(
+            br.get('subtitle_vertical_inconclusive') or [])
         video_final = burned
-        engine._emit(task, build_phase(Phase.BURN_IN,
-                                duration_s=br.get('duration'),
-                                auto=bool(degraded_narration)))
-    return {'video_path': video_final, 'srt_path': sidecar, 'burn_in': burn_in_eff}
+        engine._emit(task, build_phase(
+            Phase.BURN_IN, duration_s=br.get('duration'),
+            auto=bool(degraded_narration)))
+    return {'video_path': video_final, 'srt_path': sidecar,
+            'burn_in': burn_in_eff, 'safe_box_checked': safe_box_checked,
+            'subtitle_vertical_inconclusive': vertical_inconclusive}
 
 
 def _run_mux(ctx: dict) -> dict:
@@ -894,8 +903,9 @@ def _run_verify(ctx: dict) -> dict:
     authoring = composition['authoring']
     authored = composition['authored']
     degraded_narration = narration_artifact['degraded']
-    sidecar = ctx['artifacts']['subtitles']['srt_path']
-    burn_in_eff = ctx['artifacts']['subtitles']['burn_in']
+    subtitles = ctx['artifacts']['subtitles']
+    sidecar = subtitles['srt_path']
+    burn_in_eff = subtitles['burn_in']
     media = inspect_candidate(final_path, probe_video=mv.probe_video)
     probe = media['probe']
     try:
@@ -923,6 +933,9 @@ def _run_verify(ctx: dict) -> dict:
         'narrated': narration,
         'burn_in': burn_in_eff,
         'burn_in_auto': bool(degraded_narration),
+        'safe_box_checked': subtitles.get('safe_box_checked', 0),
+        'subtitle_vertical_inconclusive': subtitles.get(
+            'subtitle_vertical_inconclusive', []),
         'workdir': workdir,
         'mode': 'engine',
         'creative_mode': task.get('creative_mode') or 'standard',

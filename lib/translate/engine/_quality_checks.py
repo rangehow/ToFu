@@ -7,7 +7,7 @@ dispatch, retries, cache mutation or lifecycle ownership lives here.
 import re
 import unicodedata
 
-from ._split import _ends_midsentence
+from ._split import _ends_in_open_link, _ends_midsentence
 
 # MiniMax and similar cheap translators wrap *their own* reasoning in
 # <think>...</think>. Source documents also *mention* those tags (API
@@ -39,7 +39,7 @@ def _strip_model_thinking(text):
 
 
 def _translation_truncation_verdict(text, clen, finish, target_is_chinese,
-                                    model):
+                                    model, source_text=''):
     """Return ``(is_truncated, reason)`` for one non-empty candidate."""
     is_truncated = False
     reason = ''
@@ -61,6 +61,13 @@ def _translation_truncation_verdict(text, clen, finish, target_is_chinese,
     if finish == 'length':
         is_truncated = True
         reason = f'finish_reason=length, model={model}'
+    elif _ends_in_open_link(text) and not _ends_in_open_link(source_text):
+        # Structural, length-independent: the output stopped between a Markdown
+        # link/image opener and its closer, so the tail renders as a bare '['.
+        # Ratio floors miss this whenever Chinese density lands just above them.
+        is_truncated = True
+        reason = (f'ends inside an unclosed Markdown link '
+                  f'(tail={text.rstrip()[-16:]!r}), model={model}')
     elif clen > 500 and len(text) < clen * short_floor:
         is_truncated = True
         reason = (f'output too short ({len(text)}/{clen} = {len(text)/clen*100:.0f}%, '
@@ -217,7 +224,8 @@ def translation_candidate_verdict(text, source_text, *, clen, target,
                                   overgeneration_verdict):
     """Classify non-empty text in policy order; stop at the first rejection."""
     rejected, reason = _translation_truncation_verdict(
-        text, clen, finish, target_is_chinese, model)
+        text, clen, finish, target_is_chinese, model,
+        source_text=source_text)
     if rejected:
         return 'truncated', reason
     rejected, reason = _translation_noop_verdict(text, source_text, target, model)

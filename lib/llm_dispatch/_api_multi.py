@@ -67,7 +67,8 @@ def dispatch_fastest(messages, *, max_tokens=4096, temperature=0,
             if tools:
                 _extra['tools'] = tools
 
-            content, usage = chat(
+            from lib.oauth.account_dispatch import call_in_account_scope
+            content, usage = call_in_account_scope(slot, chat,
                 model=slot.model, messages=messages,
                 knowledge_model=getattr(slot, 'logical_model', '') or slot.model,
                 max_tokens=max_tokens, temperature=temperature,
@@ -85,6 +86,8 @@ def dispatch_fastest(messages, *, max_tokens=4096, temperature=0,
                 responses_feature_profile=(
                     getattr(slot, 'responses_profile', '') or 'compatible'),
                 oauth=slot.oauth or '',
+                **({'codex_account_fingerprints': slot.codex_account_fingerprints}
+                   if getattr(slot, 'codex_account_fingerprints', ()) else {}),
                 adapter=slot.adapter or None,
                 owner_user_id=owner_user_id,
             )
@@ -173,6 +176,7 @@ def dispatch_fastest(messages, *, max_tokens=4096, temperature=0,
                                                   or winner.model),
                                 'key_tail': (winner.api_key or '')[-4:],
                                 'provider_id': winner.provider_id,
+                                **winner.subscription_attribution(),
                                 'protocol': winner.protocol or 'openai',
                                 'responses_profile': (
                                     winner.responses_profile or ''),

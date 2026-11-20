@@ -8,11 +8,11 @@
  * own switch. Entry point: openAddDeviceWizard. Dependencies: the devices store, ui kit, i18n.
  */
 import { t } from '../../i18n';
-import { createButton, createChoice, createDialog, createField, createSpinner, toast } from '../../ui';
+import { createAlert, createButton, createChoice, createDialog, createField, createSpinner, toast } from '../../ui';
 import { clockTime, el } from './dom';
-import { defaultKindLabel, routeLabel } from './labels';
+import { defaultKindLabel, routeLabel, tierLongLabel } from './labels';
 import type { DevicesSnapshot, DevicesStore } from './live';
-import { PRESETS, type DeviceRow, type PresetName } from './model';
+import { PRESETS, TIERS, type DeviceRow, type PresetName } from './model';
 import type { PairCode } from './client';
 
 type Kind = 'computer' | 'server' | 'browser' | 'phone' | 'home';
@@ -70,7 +70,8 @@ export function openAddDeviceWizard(store: DevicesStore, ports: WizardPorts, con
   let nodeId = confirmNodeId || '';
   let confirmedWithoutReview = false;
   let busy = false;
-  let preset: PresetName = 'read';
+  let preset: PresetName | null = 'read';
+  let presetError: string | null = null;
   let makeDefault = false;
   let name = '';
 
@@ -242,8 +243,9 @@ export function openAddDeviceWizard(store: DevicesStore, ports: WizardPorts, con
         } catch (error) {
           toast(t('devicesPage.error.save', { message: errorText(error) }), { variant: 'error' });
         } finally {
-          busy = false;
           await store.refresh();
+          busy = false;
+          render();
         }
       } });
     const reject = createButton({ label: t('devicesPage.wizard.reject'), variant: 'secondary', disabled: busy,
@@ -275,8 +277,32 @@ export function openAddDeviceWizard(store: DevicesStore, ports: WizardPorts, con
     const input = field.control as HTMLInputElement;
     input.addEventListener('input', () => { name = input.value; });
     panel.append(field.el);
-    const permissionsServed = snapshot.sources?.permissions.state === 'ok';
-    if (permissionsServed) {
+    const source = snapshot.sources?.permissions;
+    const permissions = row?.permissions;
+    const canSetCeiling = source?.state === 'ok' && !!permissions && permissions.node_id === row?.nodeId
+      && Number.isSafeInteger(permissions.rev) && permissions.rev >= 0 && permissions.rev === source.value.rev
+      && !snapshot.staleSources.includes('permissions');
+    const ceilingReview = row?.nodeId ? snapshot.ceilingReviews.get(row.nodeId) : undefined;
+    if (presetError) {
+      panel.append(createAlert({ variant: 'error', title: t('devicesPage.error.save', { message: presetError }) }).el);
+      if (canSetCeiling) {
+        const allowed = TIERS.filter(tier => permissions.home[tier]).map(tierLongLabel).join(' · ');
+        panel.append(el('p', 'devices-muted', `${t('devicesPage.wizard.preset')}: ${allowed}`));
+      }
+    }
+    if (!canSetCeiling) {
+      const unsupported = source?.state === 'absent';
+      panel.append(createAlert({ variant: 'warning', title: t(unsupported
+        ? 'devicesPage.wizard.permissionsUnsupported' : 'devicesPage.wizard.permissionsUnreadable') }).el);
+      if (!unsupported) {
+        panel.append(createButton({ label: t('devicesPage.retry'), variant: 'secondary', size: 'sm', disabled: busy,
+          onClick: async () => {
+            busy = true; render();
+            try { await store.refresh(); } finally { busy = false; render(); }
+          } }));
+      }
+    }
+    if (source?.state === 'ok') {
       const group = el('fieldset', 'devices-wizard__presets');
       group.append(el('legend', '', t('devicesPage.wizard.preset')));
       const presets: Array<[PresetName, string]> = [
@@ -286,12 +312,15 @@ export function openAddDeviceWizard(store: DevicesStore, ports: WizardPorts, con
       ];
       for (const [value, label] of presets) {
         group.append(createChoice({ type: 'radio', name: 'devicesWizardPreset', value, label, checked: preset === value,
-          onChange: checked => { if (checked) preset = value; } }).el);
+          disabled: busy || !canSetCeiling || !!ceilingReview?.reading,
+          onChange: checked => {
+            if (!checked) return;
+            preset = value;
+            render();
+          } }).el);
       }
       group.append(el('p', 'devices-muted', t('devicesPage.wizard.presetHint')));
       panel.append(group);
-    } else {
-      panel.append(el('p', 'devices-muted', t('devicesPage.absent.permissions')));
     }
     const defaultKind = row?.kind === 'server' ? 'server' : 'computer';
     if (snapshot.sources?.defaults.state === 'ok') {
@@ -299,18 +328,30 @@ export function openAddDeviceWizard(store: DevicesStore, ports: WizardPorts, con
         label: t('devicesPage.wizard.makeDefault', { kind: defaultKindLabel(defaultKind) }),
         onChange: checked => { makeDefault = checked; } }).el);
     }
-    const done = createButton({ label: t('devicesPage.wizard.done'), variant: 'primary', disabled: busy || !row,
+    const done = createButton({ label: t('devicesPage.wizard.done'), variant: 'primary',
+      disabled: busy || !canSetCeiling || !!ceilingReview?.reading || (!!presetError && !preset),
       onClick: async () => {
-        if (!row?.nodeId) return;
+        if (busy || !row?.nodeId || !canSetCeiling || ceilingReview?.reading || (presetError && !preset)) return;
         const id = row.nodeId;
         busy = true; render();
         try {
           const trimmed = name.trim();
-          if (trimmed && trimmed !== row.name) await store.client.rename(id, trimmed);
-          if (permissionsServed) {
-            const { read: _read, ...tiers } = PRESETS[preset];
-            await store.client.setCeiling(id, tiers);
+          if (preset) {
+            try {
+              const selected = PRESETS[preset];
+              // Done submits the entire editable preset, including reductions. A queued
+              // predecessor may change tiers that already matched at render time.
+              const intent = Object.fromEntries(TIERS.filter(tier => tier !== 'read').map(tier => [tier, selected[tier]]));
+              await store.setCeiling(id, intent, permissions.rev, ceilingReview);
+              preset = null;
+              presetError = null;
+            } catch (error) {
+              preset = null;
+              presetError = errorText(error);
+              throw error;
+            }
           }
+          if (trimmed && trimmed !== row.name) await store.client.rename(id, trimmed);
           if (makeDefault) await store.client.setDefault(defaultKind, id);
           toast(t('devicesPage.wizard.added', { name: trimmed || row.name }), { variant: 'success' });
           dialog.close();

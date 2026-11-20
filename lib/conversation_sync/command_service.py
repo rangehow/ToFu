@@ -20,6 +20,7 @@ from lib.agent_core.execution_clock import ExecutionClock
 
 from lib.conversation_sync.execution_identity import (
     capture_execution_identity, public_execution_fields, restore_execution_identity,
+    restore_manual_detect_admission,
 )
 from lib.conversation_sync.settings_policy import public_conversation_defaults
 from lib.error_envelope import BadRequest, make_envelope, task_start_failure_cause
@@ -82,15 +83,30 @@ def _lane_busy(error: BaseException) -> bool:
     return isinstance(error, LifecycleConflict) and error.code == "lane_busy"
 
 
-def _bind_accepted_dispatch(result, trusted_dispatch):
-    """A replay acknowledges its attempt without rolling a newer grant back."""
-    if trusted_dispatch is None:
+def _bind_accepted_dispatch(result, user_id, *, trusted_dispatch=None, recovered_config=None):
+    """Bind the exact accepted attempt before it can leave the recovery index."""
+    if not result.get('_needsStart') or (
+            trusted_dispatch is None and recovered_config is None):
         return
     turn, attempt = result['turn'], result['attempt']
     if (result.get('idempotentReplay')
             and turn.get('currentAttemptId') != attempt['attemptId']):
         return
-    trusted_dispatch.continue_execution(turn['turnId'], attempt['attemptId'])
+    from lib.project_dispatch.repository import ProjectDispatchError, transient_dispatch_failure
+    try:
+        if recovered_config is not None:
+            from lib.project_dispatch.admission import continue_recovered_execution
+            continue_recovered_execution(recovered_config, turn['turnId'], attempt['attemptId'])
+        else:
+            trusted_dispatch.continue_execution(turn['turnId'], attempt['attemptId'])
+    except (ProjectDispatchError, PermissionError) as error:
+        # An uncertain bind may have committed; replay the accepted command or
+        # let its index entry retry. A definitive refusal is a terminal event,
+        # not an executor start: never hide it behind a dispatch claim.
+        if not transient_dispatch_failure(error):
+            fail_start(attempt['attemptId'], attempt_start_error_envelope(error),
+                       user_id=user_id, only_if_unbound=True)
+        raise
 
 
 def _owes_input_translation(
@@ -437,7 +453,7 @@ def executor_start_error_envelope(exc, config):
 
 def _capture_task_principal_tenant(config,user_id,principal):
     """Stamp accepted identity; public config can never supply this field."""
-    return capture_execution_identity(config, user_id, principal)
+    return capture_execution_identity(config, user_id, principal, issue_capabilities=True)
 
 
 def restore_accepted_attempt_config(turn, attempt, *, user_id, accepted_config=None):
@@ -474,6 +490,11 @@ def restore_accepted_attempt_config(turn, attempt, *, user_id, accepted_config=N
         "_turnOwnerUserId": user_id,
         "excludeLast": True,
     })
+    principal, _ = restore_execution_identity(config)
+    binding = restore_manual_detect_admission(config, principal, turn.get('conversationId'))
+    if binding is not None and (attempt.get('conversationId'), attempt.get('turnId'),
+                                attempt.get('attemptId')) != binding:
+        raise PermissionError('Detect command references a different accepted attempt')
     # Every conversation turn — ordinary chat, Goal Mode, Flow and their
     # resumes alike — keeps going when a provider receipt is missing:
     # the account records the paid lower bound, keeps the receipt
@@ -494,7 +515,6 @@ def restore_accepted_attempt_config(turn, attempt, *, user_id, accepted_config=N
     if (operation in _RESUME_FILE_CARRY_OPERATIONS
             and "checkpointModifiedFileList" not in config):
         config.update(_journal_resume_file_fields(turn, config))
-    restore_execution_identity(config)
     return config
 
 
@@ -761,6 +781,16 @@ class ConversationTurnCommandService:
             output_actor, output_kind = (
                 interaction_mode_generated_turn_identity(config)
             )
+        expected_conversation_revision = None
+        if trusted_dispatch is not None:
+            assignment = trusted_dispatch.validated()
+            wake = assignment['request'].get('coordinatorWake') or {}
+            if assignment['execution'] is None and wake.get('reason') == 'results':
+                from lib.project_dispatch.admission import repository_for
+                from lib.project_dispatch.continuation import results_wake_observed
+                expected_conversation_revision = get_conversation_revision(conversation_id, user_id=user_id)
+                if results_wake_observed(repository_for(trusted_dispatch.binding), assignment):
+                    raise LifecycleConflict('coordinator_results_observed', 'A later Turn saw the results')
         try:
             with measure_task_startup('turn_persist', identity=command_identity,
                                       deferral=_lane_busy) as bind_identity:
@@ -781,6 +811,7 @@ class ConversationTurnCommandService:
                         data.get("requireParentIsLaneTail", False)
                     ),
                     expected_parent_projection_revision=trusted_usage_recovery_revision,
+                    expected_conversation_revision=expected_conversation_revision,
                     require_parent_not_stopped=bool(
                         data.get("requireParentNotStopped", False)
                     ),
@@ -802,7 +833,6 @@ class ConversationTurnCommandService:
                     'turn_id': result['turn']['turnId'],
                     'attempt_id': result['attempt']['attemptId'],
                 }
-                _bind_accepted_dispatch(result, trusted_dispatch)
                 bind_identity(turn_identity)
         except LifecycleConflict as exc:
             if (exc.code != "lane_busy" or trusted_dispatch is not None
@@ -838,12 +868,7 @@ class ConversationTurnCommandService:
             self._retain_accepted_attachments(input_projection, user_id)
             return CommandOutcome(delivered)
 
-        if trusted_dispatch is not None:
-            try:
-                trusted_dispatch.bind_execution(result['turn']['turnId'], result['attempt']['attemptId'])
-            except Exception as error:
-                self._fail_attempt_start(result['attempt'], user_id, attempt_start_error_envelope(error))
-                raise
+        _bind_accepted_dispatch(result, user_id, trusted_dispatch=trusted_dispatch)
         self._retain_accepted_attachments(input_projection, user_id)
         attempt_identity = {**command_identity, **turn_identity}
         with measure_task_startup('executor_start', identity=attempt_identity):
@@ -949,6 +974,9 @@ class ConversationTurnCommandService:
             created_before_ms=created_before_ms,
             limit=limit,
         )
+        from lib.project_dispatch.repository import ProjectDispatchError, transient_dispatch_failure
+        from lib.storage.errors import StorageError, is_transient_storage_error
+
         recovered = 0
         settled_failed = 0
         for row in rows:
@@ -981,13 +1009,30 @@ class ConversationTurnCommandService:
                 "attempt": dict(attempt),
             }
             try:
+                if self._was_aborted_after(turn['conversationId'], user_id, abort_after_ts):
+                    abort_attempt(attempt['attemptId'], user_id=user_id, withdraw_dispatch=False)
+                    continue
+                _bind_accepted_dispatch(accepted, user_id, recovered_config=runtime_config)
+            except (PermissionError, ProjectDispatchError) as error:
+                if not transient_dispatch_failure(error):
+                    current = get_attempt(attempt['attemptId'], user_id=user_id)
+                    settled_failed += int(current['status'] == 'failed')
+                continue
+            except StorageError as error:
+                # The original bind verdict may be the context of a distinct
+                # settlement storage failure. Only the latter decides retry.
+                if not is_transient_storage_error(error):
+                    raise
+                # An unacknowledged terminal or cancellation write may have
+                # committed; otherwise the same attempt stays indexed.
+                continue
+            try:
                 self._start_accepted_attempt(
                     accepted,
                     user_id,
                     runtime_config,
                     {},
                     abort_after_ts=abort_after_ts,
-                    recovered=True,
                 )
             except AttemptStartFailure:
                 # The application service already settled this attempt with a
@@ -1261,7 +1306,7 @@ class ConversationTurnCommandService:
             discard_later_turn_ids=discard_later_turn_ids,
             user_id=user_id,
         )
-        _bind_accepted_dispatch(result, trusted_dispatch)
+        _bind_accepted_dispatch(result, user_id, trusted_dispatch=trusted_dispatch)
         try:
             self._start_accepted_attempt(
                 result,
@@ -1716,7 +1761,6 @@ class ConversationTurnCommandService:
         *,
         abort_after_ts: float | None,
         execution_clock: ExecutionClock | None = None,
-        recovered: bool = False,
     ) -> None:
         if not result.get("_needsStart"):
             return
@@ -1745,7 +1789,6 @@ class ConversationTurnCommandService:
                 request_data,
                 abort_after_ts=abort_after_ts,
                 execution_clock=execution_clock,
-                recovered=recovered,
             )
 
     def _start_accepted_attempt_serialized(
@@ -1757,7 +1800,6 @@ class ConversationTurnCommandService:
         *,
         abort_after_ts: float | None,
         execution_clock: ExecutionClock | None = None,
-        recovered: bool = False,
     ) -> None:
         """Claim, bind, and launch while this process holds the attempt's dispatch lock."""
         turn = result["turn"]
@@ -1790,11 +1832,6 @@ class ConversationTurnCommandService:
 
         try:
             config = restore_accepted_attempt_config(turn, attempt, user_id=user_id)
-            if recovered:
-                # Recovery may win the claim before a project delegation binds
-                # this attempt; it holds no delegation authority in memory.
-                from lib.project_dispatch.admission import continue_recovered_execution
-                continue_recovered_execution(config, turn["turnId"], attempt["attemptId"])
             task_id, error_response = self._start_task(
                 turn["conversationId"],
                 config,
@@ -2333,6 +2370,18 @@ def _resume_checkpoint_note_fields(
     return {"checkpointInjectedNotes": notes} if notes else {}
 
 
+def continue_retained_config(turn: Mapping[str, Any]) -> dict[str, Any]:
+    """Project the retained Continue checkpoint from an already-read Turn.
+
+    This is the same projection-only derivation used in executor restoration.
+    It neither admits a resume nor rebuilds accepted state, consults a journal,
+    or selects prior working context. For restart pauses, executor restoration
+    applies the worktree-dependent cut policy first; read-only callers that
+    cannot witness that policy must decline those turns.
+    """
+    return _resume_executor_config("continue", turn.get("projection") or {})
+
+
 def _resume_executor_config(
     operation: str,
     projection: Mapping[str, Any],
@@ -2392,4 +2441,5 @@ __all__ = [
     "CommandOutcome",
     "ConversationTurnCommandService",
     "attempt_start_error_envelope",
+    "continue_retained_config",
 ]

@@ -1519,7 +1519,7 @@ fn type_entry_batch(
     event_types: &[String],
     after_sequence: Option<u64>,
     limit: usize,
-    mut observed_scan_rows: Option<&mut Vec<usize>>,
+    mut observed: Option<(&mut Vec<usize>, &mut usize)>,
 ) -> io::Result<Vec<(String, IndexEntry)>> {
     let mut cursors = Vec::with_capacity(event_types.len());
     for event_type in event_types {
@@ -1530,31 +1530,40 @@ fn type_entry_batch(
             event_type,
             after_sequence,
         )?;
+        let prefix_len = type_index_prefix(task_id, event_type)?.len();
         let mut entries = VecDeque::new();
         while entries.len() < limit {
             let batch = (limit - entries.len()).min(METADATA_SCAN_PAGE_ROWS);
             let rows = database.entity_scan(transaction, &start, &end, batch)?;
-            if let Some(scan_rows) = observed_scan_rows.as_deref_mut() {
+            if let Some((scan_rows, _)) = observed.as_mut() {
                 scan_rows.push(rows.len());
             }
             let short = rows.len() < batch;
-            for (_, raw) in rows {
-                let entry = IndexEntry::decode(&raw)?;
-                entries.push_back(entry);
-                start = type_index_key(
-                    transaction.tenant_id(),
-                    transaction.owner_user_id(),
-                    task_id,
-                    event_type,
-                    entry
-                        .application_sequence
-                        .checked_add(1)
-                        .ok_or_else(|| invalid_input("event cursor is exhausted"))?,
-                )?;
+            for (key, raw) in rows {
+                // Only selected values are evidence for this page. Merge by
+                // the ordered key and leave prefetched values undecoded.
+                let sequence = key
+                    .key_bytes()
+                    .get(prefix_len..)
+                    .and_then(|suffix| <[u8; 8]>::try_from(suffix).ok())
+                    .map(u64::from_be_bytes)
+                    .ok_or_else(|| invalid_data("invalid typed event sequence key"))?;
+                entries.push_back((sequence, raw));
             }
-            if short {
+            if short || entries.len() == limit {
                 break;
             }
+            let sequence = entries.back().unwrap().0;
+            if sequence == u64::MAX {
+                break;
+            }
+            start = type_index_key(
+                transaction.tenant_id(),
+                transaction.owner_user_id(),
+                task_id,
+                event_type,
+                sequence + 1,
+            )?;
         }
         cursors.push((event_type.clone(), entries));
     }
@@ -1564,7 +1573,7 @@ fn type_entry_batch(
         .filter_map(|(index, (_, entries))| {
             entries
                 .front()
-                .map(|entry| Reverse((entry.application_sequence, index)))
+                .map(|(sequence, _)| Reverse((*sequence, index)))
         })
         .collect();
     let mut selected = Vec::with_capacity(limit);
@@ -1573,12 +1582,19 @@ fn type_entry_batch(
             break;
         };
         let (event_type, entries) = &mut cursors[index];
-        let entry = entries
+        let (sequence, raw) = entries
             .pop_front()
             .ok_or_else(|| invalid_data("event type cursor disappeared"))?;
+        if let Some((_, decoded)) = observed.as_mut() {
+            **decoded += 1;
+        }
+        let entry = IndexEntry::decode(&raw)?;
+        if entry.application_sequence != sequence {
+            return Err(invalid_data("typed event sequence witness mismatch"));
+        }
         selected.push((event_type.clone(), entry));
-        if let Some(next) = entries.front() {
-            ready.push(Reverse((next.application_sequence, index)));
+        if let Some((next, _)) = entries.front() {
+            ready.push(Reverse((*next, index)));
         }
     }
     Ok(selected)
@@ -1623,7 +1639,7 @@ fn filtered_entries_with_scan_log(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
     request: &ListRequest,
-    observed_scan_rows: Option<&mut Vec<usize>>,
+    observed: Option<(&mut Vec<usize>, &mut usize)>,
 ) -> io::Result<Vec<(String, IndexEntry)>> {
     let tenant = transaction.tenant_id();
     let owner = transaction.owner_user_id();
@@ -1654,7 +1670,7 @@ fn filtered_entries_with_scan_log(
         &event_types.into_iter().collect::<Vec<_>>(),
         request.after_sequence,
         request.limit,
-        observed_scan_rows,
+        observed,
     )
 }
 
@@ -2095,6 +2111,115 @@ mod tests {
     use super::*;
 
     #[test]
+    fn filtered_list_validates_selected_rows_not_prefetched_values() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        let mut tx = database.begin(7, 11).unwrap();
+        let task = "skewed";
+        for (sequence, kind) in [
+            (1, "round_start"),
+            (2, "round_start"),
+            (3, "round_start"),
+            (10, "round_usage"),
+            (11, "round_usage"),
+        ] {
+            append(
+                &database,
+                &mut tx,
+                &AppendRequest {
+                    task_id: task.into(),
+                    application_sequence: sequence,
+                    event_type: kind.into(),
+                    payload_json: serde_json::to_vec(&json!({"type": kind, "round": sequence}))
+                        .unwrap(),
+                    created_at_ms: sequence as i64,
+                },
+            )
+            .unwrap();
+        }
+        database.commit(tx).unwrap();
+        let mut tx = database.begin(7, 11).unwrap();
+        let mut request = ListRequest {
+            task_id: task.into(),
+            after_sequence: None,
+            limit: 2,
+            types: vec!["round_start".into(), "round_usage".into()],
+            type_prefixes: vec![],
+            payload_types: Some(vec!["round_usage".into()]),
+            inspector_projection: false,
+        };
+        let project = |tx: &mut AuthorityTransaction, request: &ListRequest| {
+            list(&database, tx, request)
+                .map(|bytes| serde_json::from_slice::<Value>(&bytes).unwrap())
+        };
+        let first = project(&mut tx, &request).unwrap();
+        assert_eq!(
+            first,
+            json!([
+                {"sequence": 1, "created_at_ms": 1, "event": {"type": "round_start"}},
+                {"sequence": 2, "created_at_ms": 2, "event": {"type": "round_start"}},
+            ])
+        );
+        let bad_key = type_index_key(7, 11, task, "round_usage", 11).unwrap();
+        let original = database
+            .entity_scan(
+                &mut tx,
+                &bad_key,
+                &type_index_range(7, 11, task, "round_usage", None)
+                    .unwrap()
+                    .1,
+                1,
+            )
+            .unwrap()[0]
+            .1
+            .clone();
+        database
+            .entity_put(&mut tx, bad_key.clone(), vec![0])
+            .unwrap();
+        let mut scans = Vec::new();
+        let mut decoded = 0;
+        let selected = filtered_entries_with_scan_log(
+            &database,
+            &mut tx,
+            &request,
+            Some((&mut scans, &mut decoded)),
+        )
+        .unwrap();
+        assert_eq!(scans, [2, 2]);
+        assert_eq!(selected.len(), 2);
+        assert_eq!(
+            decoded, 2,
+            "four rows scanned; only selected values decoded"
+        );
+        assert_eq!(project(&mut tx, &request).unwrap(), first);
+        request.types.clear();
+        request.type_prefixes.push("round_".into());
+        assert_eq!(project(&mut tx, &request).unwrap(), first);
+        request.after_sequence = Some(2);
+        assert_eq!(
+            project(&mut tx, &request).unwrap(),
+            json!([
+                {"sequence": 3, "created_at_ms": 3, "event": {"type": "round_start"}},
+                {"sequence": 10, "created_at_ms": 10, "event": {"type": "round_usage", "round": 10}},
+            ])
+        );
+        request.after_sequence = Some(10);
+        assert_eq!(
+            project(&mut tx, &request).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        let mut wrong_sequence = IndexEntry::decode(&original).unwrap();
+        wrong_sequence.application_sequence = 12;
+        database
+            .entity_put(&mut tx, bad_key, wrong_sequence.encode())
+            .unwrap();
+        assert_eq!(
+            project(&mut tx, &request).unwrap_err().to_string(),
+            "typed event sequence witness mismatch"
+        );
+    }
+
+    #[test]
     fn filtered_list_scans_each_type_once_instead_of_probing_per_returned_row() {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
@@ -2162,6 +2287,7 @@ mod tests {
             "the reference retains the original one-row scan shape"
         );
         let mut scans = Vec::new();
+        let mut decoded = 0;
         let batch = filtered_entries_with_scan_log(
             &database,
             &mut reads,
@@ -2174,11 +2300,12 @@ mod tests {
                 payload_types: None,
                 inspector_projection: false,
             },
-            Some(&mut scans),
+            Some((&mut scans, &mut decoded)),
         )
         .unwrap();
         assert_eq!(batch, reference);
         assert_eq!(scans, vec![6, 6], "one range scan per event type");
+        assert_eq!(decoded, 12);
     }
 }
 

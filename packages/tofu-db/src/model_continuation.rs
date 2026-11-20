@@ -714,6 +714,23 @@ impl Request {
     }
 }
 
+/// Observe the ordinary owner-scoped slot without conflating unusable and missing.
+pub(crate) fn observe(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    conversation_id: &str,
+    lane_id: &str,
+) -> io::Result<(bool, Option<Vec<u8>>)> {
+    if !crate::conversation_header::active_exists(database, transaction, conversation_id)? {
+        return Ok((false, None));
+    }
+    let key = continuation_key(transaction, conversation_id, lane_id)?;
+    let Some((_, projection)) = read_record(database, transaction, &key)? else {
+        return Ok((false, None));
+    };
+    Ok((true, encode_projection(&Value::Object(projection))))
+}
+
 pub(crate) fn execute(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
@@ -723,16 +740,7 @@ pub(crate) fn execute(
         Request::Get {
             conversation_id,
             lane_id,
-        } => {
-            if !crate::conversation_header::active_exists(database, transaction, conversation_id)? {
-                return Ok(None);
-            }
-            let key = continuation_key(transaction, conversation_id, lane_id)?;
-            let Some((_, projection)) = read_record(database, transaction, &key)? else {
-                return Ok(None);
-            };
-            Ok(encode_projection(&Value::Object(projection)))
-        }
+        } => observe(database, transaction, conversation_id, lane_id).map(|(_, bytes)| bytes),
         Request::Put {
             conversation_id,
             lane_id,

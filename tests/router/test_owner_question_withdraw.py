@@ -155,14 +155,38 @@ def test_another_conversations_question_is_refused_and_untouched():
     assert store.rows == before and not turns.updates
 
 
-def test_an_answered_question_is_refused_and_the_answer_is_recorded():
+@pytest.mark.parametrize('evidence', [
+    {'answeredAt': 5},
+    {'answeredAt': 5, 'answeredOrdinal': 9},
+    {'answeredAt': 5, 'defaultAcceptedAt': 5, 'defaultAcceptedBy': OWNER},
+])
+def test_index_settlement_refusal_does_not_claim_an_owner_decision_or_change_effects(evidence):
+    store, turns = Store(), Turns()
+    _record(store, 'hg_one', blocking=False, **evidence)
+    turns.add('turn-hg_one', [_card('hg_one', status='done', guidanceBlocking=False)])
+    before = deepcopy(store.rows), deepcopy(turns.turns)
+    with pytest.raises(QuestionNotWithdrawable) as refused:
+        withdraw_question(OWNER, LEAD, 'hg_one', reason='moot', client=store, **_reads(turns))
+    assert str(refused.value) == (
+        'hg_one is already answered in the question index; '
+        'index status alone is not evidence of an explicit owner choice or approval')
+    assert (store.rows, turns.turns) == before and not turns.updates
+
+
+@pytest.mark.parametrize('evidence', [{'guidanceResponse': 'papers first'}, {'guidanceSuperseded': True}])
+def test_an_answered_question_is_refused_and_the_answer_is_recorded(evidence):
     store, turns = Store(), Turns()
     _record(store, 'hg_one')
-    turns.add('turn-hg_one', [_card('hg_one', status='completed', guidanceResponse='papers first')])
-    with pytest.raises(QuestionNotWithdrawable, match='already answered'):
+    turns.add('turn-hg_one', [_card('hg_one', status='completed', **evidence)])
+    with pytest.raises(QuestionNotWithdrawable, match='already answered on its card') as refused:
         withdraw_question(OWNER, LEAD, 'hg_one', reason='settled', client=store, **_reads(turns))
     value = store.rows[(NAMESPACE, f'{OWNER}:{LEAD}:hg_one')]['value']
     assert value['answeredAt'] > 0 and 'withdrawnAt' not in value and not turns.updates
+    assert str(refused.value) == (
+        'hg_one is already answered on its card (response or supersession); '
+        'inspect the card for decision evidence')
+    assert turns.turns['turn-hg_one']['projection']['toolRounds'][0] == _card(
+        'hg_one', status='completed', **evidence)
 
 
 def test_a_reason_is_required():
@@ -185,6 +209,21 @@ def test_the_card_of_the_callers_own_running_turn_is_marked_on_its_live_round():
     _, card = withdraw_question(OWNER, LEAD, 'hg_two', reason='settled', client=store, **_reads(turns))
     assert card == 'unmarked' and not turns.updates, "another attempt's running Turn is its own writer's"
     assert open_questions(OWNER, client=store, turn_get=turns.get) == []
+
+
+def test_a_settled_live_round_is_replaced_copy_on_write_when_marked_withdrawn():
+    """A checkpointed live round is a SettledDict; the mark replaces it instead of editing it."""
+    from lib.conversation_sync.settled_rows import is_settled, settle
+    store, turns = Store(), Turns()
+    _record(store, 'hg_one', blocking=False)
+    turns.add('turn-hg_one', [_card('hg_one', status='done', guidanceBlocking=False)], status='running')
+    settled = settle({'guidanceId': 'hg_one', 'guidanceBlocking': False, 'status': 'done'})
+    live = [{'guidanceId': 'hg_other'}, settled]
+    _, card = withdraw_question(OWNER, LEAD, 'hg_one', reason='settled', live_rounds=live,
+                                client=store, **_reads(turns))
+    assert card == 'live' and not turns.updates
+    assert live[1]['guidanceWithdrawn']['reason'] == 'settled' and live[1]['status'] == 'done'
+    assert not is_settled(live[1]) and 'guidanceWithdrawn' not in settled
 
 
 def test_a_late_chat_answer_to_a_withdrawn_nonblocking_question_is_still_recorded():

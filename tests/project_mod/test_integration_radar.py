@@ -16,7 +16,7 @@ from lib.project_mod import integration_radar as radar
 
 pytestmark = pytest.mark.unit
 
-_AUDIT_SYNTHETIC_REPO_PATHS = {'lib/shared.py', 'lib/other.py', 'lib/third.py', 'lib/new.py', 'lib/x.py', 'lib/once.py'}
+_AUDIT_SYNTHETIC_REPO_PATHS = {'lib/shared.py', 'lib/other.py', 'lib/third.py', 'lib/new.py', 'lib/x.py'}
 
 
 def git(cwd, *args) -> str:
@@ -419,3 +419,38 @@ def test_a_retired_record_takes_its_markers_with_it(repo):
 
     assert not record.exists()
     assert os.listdir(marker_dir) == []
+
+
+def test_a_slow_record_write_never_blocks_another_conversation(repo, monkeypatch):
+    """One record's volume-bound rewrite must not hold another record's signal.
+
+    Terminal settlement waits for a task's own write signals; a process-wide
+    record lock made every conversation wait behind whichever one was writing.
+    """
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    left_root, right_root = worktree(repo, 'feature-a'), worktree(repo, 'feature-b')
+    write(left_root, 'lib/shared.py', 'VALUE = 2\n')
+    write(right_root, 'lib/other.py', 'OTHER = 2\n')
+    left, right = task('conv-a', 'Fix wakes'), task('conv-b', 'Queue view')
+    writing = threading.Event()
+    release = threading.Event()
+    original = radar._write_json
+
+    def paused_write(path, value):
+        if isinstance(value, dict) and value.get('conversation') == 'conv-a':
+            writing.set()
+            assert release.wait(timeout=10)
+        original(path, value)
+
+    monkeypatch.setattr(radar, '_write_json', paused_write)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        slow = pool.submit(radar.note_writes, left, str(left_root), ['lib/shared.py'])
+        assert writing.wait(timeout=5)
+        other = pool.submit(radar.note_writes, right, str(right_root), ['lib/other.py'])
+        try:
+            assert other.result(timeout=5) == []
+        finally:
+            release.set()
+        assert slow.result(timeout=10) == []

@@ -2,21 +2,29 @@
  *
  * The Home column is this Home's ceiling (PUT /api/v4/devices/{id}/ceiling); the Device column is what the
  * device itself allows and is read-only here; Effective is their intersection as the Home reports it. A
- * switch is disabled while its write is in flight and returns to the Home's value if the write fails. The
+ * switch is disabled while its edit is queued or in flight; replacements are serialized by the store. The
  * drawer follows the live store, so a node going offline or a change from another tab shows at once.
  * Entry point: openDeviceDrawer. Dependencies: the devices store, ui kit, i18n.
  */
 import { t } from '../../i18n';
-import { createButton, createChoice, createDialog, createDrawer, createField, toast } from '../../ui';
+import { createAlert, createButton, createChoice, createDialog, createDrawer, createField, toast } from '../../ui';
 import { el, fullTime } from './dom';
 import { ageLabel, defaultKindLabel, routeLabel, tierLongLabel } from './labels';
 import type { DevicesSnapshot, DevicesStore } from './live';
-import { DEFAULT_KINDS, TIERS, type DefaultKind, type DeviceRow, type Tiers } from './model';
+import { DEFAULT_KINDS, TIERS, type DefaultKind, type DeviceRow, type WireBrowserClient } from './model';
 import { statusCell } from './page';
 
 export interface DrawerPorts {
   ensureRelay(): void;
+  openBrowserAccess?(): Promise<void> | void;
   now?(): number;
+}
+
+function currentBrowser(snapshot: DevicesSnapshot, clientId: string | null): WireBrowserClient | undefined {
+  if (!clientId || snapshot.disconnected || snapshot.staleSources.includes('browsers')
+    || snapshot.sources?.browsers.state !== 'ok') return undefined;
+  const matches = snapshot.sources.browsers.value.filter(client => client.client_id === clientId);
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 function errorText(error: unknown): string {
@@ -38,22 +46,36 @@ export function openDeviceDrawer(store: DevicesStore, key: string, ports: Drawer
   const body = el('div', 'devices-drawer');
   const pending = new Set<string>();
   let renaming = false;
+  let removalError: string | null = null;
   let lastRow: DeviceRow | null = null;
+  let removalConfirmation: ReturnType<typeof createDialog> | undefined;
   const drawer = createDrawer({ title: '', body, closeLabel: t('devicesPage.drawer.close') });
   drawer.el.classList.add('devices-drawer-shell');
   const titleNode = drawer.el.querySelector('.ui-dialog__title');
+  titleNode?.classList.add('devices-drawer__title');
 
   const write = async (id: string, action: () => Promise<unknown>, done?: string) => {
     pending.add(id);
     render(store.snapshot());
     try {
       await action();
-      if (done) toast(done, { variant: 'success' });
+      if (done && drawer.el.open) toast(done, { variant: 'success' });
+      return true;
     } catch (error) {
-      toast(t('devicesPage.error.save', { message: errorText(error) }), { variant: 'error' });
+      if (drawer.el.open) {
+        const message = t('devicesPage.error.save', { message: errorText(error) });
+        if (id === 'remove') removalError = message;
+        else toast(message, { variant: 'error' });
+      }
+      return false;
     } finally {
+      // Ceiling saves reconcile themselves; other mutations refresh the fleet read model.
+      if (!id.startsWith('ceiling:')) {
+        const refreshed = store.refresh();
+        if (id === 'default' || id === 'rename') await refreshed;
+      }
       pending.delete(id);
-      await store.refresh();
+      if (drawer.el.open) render(store.snapshot());
     }
   };
 
@@ -77,11 +99,7 @@ export function openDeviceDrawer(store: DevicesStore, key: string, ports: Drawer
       queueMicrotask(() => input.focus());
       return wrap;
     }
-    const lead = el('div', 'devices-drawer__lead ui-row');
-    const dot = el('span', `devices-dot devices-dot--${store.snapshot().disconnected ? 'stale' : row.state}`);
-    dot.setAttribute('aria-hidden', 'true');
-    lead.append(dot, statusCell(row, now(), store.snapshot().disconnected));
-    wrap.append(lead);
+    wrap.append(statusCell(row, now(), store.snapshot().disconnected));
     const actions = el('div', 'ui-row devices-drawer__actions');
     if (row.nodeId && (row.kind === 'computer' || row.kind === 'server')) {
       actions.append(createButton({ label: t('devicesPage.drawer.rename'), variant: 'secondary', size: 'sm',
@@ -128,9 +146,10 @@ export function openDeviceDrawer(store: DevicesStore, key: string, ports: Drawer
     return section;
   };
 
-  const capabilities = (row: DeviceRow) => {
+  const capabilities = (row: DeviceRow, snapshot: DevicesSnapshot) => {
     const section = el('section', 'devices-drawer__section');
-    section.append(el('h3', '', t('devicesPage.drawer.caps')));
+    section.append(el('h3', '', t(row.kind === 'browser'
+      ? 'devicesPage.drawer.colCapability' : 'devicesPage.drawer.caps')));
     if (row.kind === 'self') {
       section.append(el('p', 'devices-muted', t('devicesPage.drawer.selfBody')));
       return section;
@@ -138,10 +157,57 @@ export function openDeviceDrawer(store: DevicesStore, key: string, ports: Drawer
     if (row.kind === 'browser') {
       section.append(el('p', '', t('devicesPage.drawer.browserBody')));
       section.append(el('p', 'devices-muted', row.capabilities.join(' · ')));
+      const browser = currentBrowser(snapshot, row.nodeId);
+      const label = browser ? `${row.name} · ${browser.client_id} · ${browser.profile || '—'}` : row.name;
+      section.append(el('p', 'devices-note', `${t('welcome.browser')}: ${label}`));
+      section.append(createButton({ label: t('settings.browserConnection'), variant: 'secondary', size: 'sm',
+        disabled: !browser || !ports.openBrowserAccess,
+        onClick: async () => {
+          const selected = currentBrowser(store.snapshot(), row.nodeId);
+          if (!drawer.el.open || !browser || !selected || selected.profile !== browser.profile) {
+            if (drawer.el.open) toast(t('settings.browserStatusUnavailable'), { variant: 'error' });
+            return;
+          }
+          if (!ports.openBrowserAccess) return;
+          drawer.close();
+          try {
+            await ports.openBrowserAccess();
+            const current = currentBrowser(store.snapshot(), row.nodeId);
+            toast(`${t('welcome.browser')}: ${label}\n${current && current.profile === browser.profile
+              ? t('devicesPage.drawer.browserBody') : t('settings.browserStatusUnavailable')}`, { variant: 'info' });
+          } catch {
+            toast(t('uiNav.jumpUnavailable'), { variant: 'error' });
+          }
+        } }));
       return section;
     }
     const permissions = row.permissions;
     const nodeId = row.nodeId;
+    const review = nodeId ? snapshot.ceilingReviews.get(nodeId) : undefined;
+    const stale = snapshot.staleSources.includes('permissions');
+    if (nodeId && review) {
+      const alert = createAlert({ variant: 'error', title: t('devicesPage.error.save', { message: review.message }) }).el;
+      section.append(alert);
+      const actions = el('div', 'ui-row ui-row--wrap');
+      const changes = TIERS.flatMap(tier => {
+        if (tier === 'read' || review.unsent[tier] === undefined || review.unsent[tier] === permissions?.home[tier]) return [];
+        const state = t(review.unsent[tier] ? 'devicesPage.drawer.effOn' : 'devicesPage.drawer.effHomeOff');
+        return [el('li', '', `${tierLongLabel(tier)}: ${state}`)];
+      });
+      if (changes.length && permissions) {
+        const list = el('ul');
+        list.append(...changes);
+        section.append(list);
+        actions.append(createButton({ label: t('devicesPage.wizard.confirm'), variant: 'primary', size: 'sm',
+          disabled: stale || !!review.reading || pending.has('ceiling:review'),
+          onClick: () => void write('ceiling:review', () => store.confirmCeilingReview(nodeId, review, permissions.rev)) }));
+      }
+      if (stale) actions.append(createButton({ label: t('boot.retry'), variant: 'secondary', size: 'sm',
+        onClick: () => void store.refresh() }));
+      actions.append(createButton({ label: t('devicesPage.cancel'), variant: 'ghost', size: 'sm',
+        disabled: !!review.reading, onClick: () => store.discardCeilingReview(nodeId, review) }));
+      section.append(actions);
+    }
     const table = el('table', 'ui-table devices-caps');
     const head = el('tr');
     for (const label of [t('devicesPage.drawer.colCapability'), t('devicesPage.drawer.colHome'),
@@ -165,17 +231,12 @@ export function openDeviceDrawer(store: DevicesStore, key: string, ports: Drawer
         const floor = el('span', 'ui-badge ui-badge--info devices-chip', t('devicesPage.drawer.always'));
         floor.title = t('devicesPage.drawer.readFloor');
         homeCell.append(floor);
-      } else if (permissions && nodeId) {
+      } else if (tier !== 'read' && permissions && nodeId) {
         const id = `ceiling:${tier}`;
         const choice = createChoice({
           type: 'switch', label: t('devicesPage.drawer.homeSwitch', { capability: tierLongLabel(tier) }),
-          checked: homeOn, disabled: pending.has(id) || row.state === 'pending',
-          onChange: checked => {
-            const next: Partial<Tiers> = {};
-            for (const key of TIERS) if (key !== 'read') next[key] = permissions.home[key];
-            next[tier] = checked;
-            void write(id, () => store.client.setCeiling(nodeId, next));
-          },
+          checked: homeOn, disabled: pending.has(id) || row.state === 'pending' || stale || !!review || !Number.isSafeInteger(permissions.rev),
+          onChange: checked => void write(id, () => store.setCeilingTier(nodeId, tier, checked, permissions.rev)),
         });
         choice.el.classList.add('devices-switch');
         homeCell.append(choice.el);
@@ -240,15 +301,21 @@ export function openDeviceDrawer(store: DevicesStore, key: string, ports: Drawer
     const nodeId = row.nodeId;
     return createButton({ label: t('devicesPage.drawer.remove'), variant: 'danger', size: 'sm', disabled: pending.has('remove'),
       onClick: async () => {
-        const answer = await createDialog({
+        if (removalConfirmation) return;
+        const confirmation = createDialog({
           title: t('devicesPage.drawer.removeTitle', { name: row.name }),
           body: t('devicesPage.drawer.removeBody'),
           actions: [{ id: 'cancel', label: t('devicesPage.cancel') },
             { id: 'remove', label: t('devicesPage.drawer.remove'), variant: 'danger' }],
-        }).open();
-        if (answer !== 'remove') return;
-        await write('remove', () => store.client.remove(nodeId), t('devicesPage.drawer.removed', { name: row.name }));
-        drawer.close();
+        });
+        removalConfirmation = confirmation;
+        const answer = await confirmation.open();
+        removalConfirmation = undefined;
+        if (answer !== 'remove' || !drawer.el.open || pending.has('remove')) return;
+        removalError = null;
+        const removed = await write('remove', () => store.client.remove(nodeId),
+          t('devicesPage.drawer.removed', { name: row.name }));
+        if (removed && drawer.el.open) drawer.close();
       } });
   };
 
@@ -260,14 +327,17 @@ export function openDeviceDrawer(store: DevicesStore, key: string, ports: Drawer
   const render = (snapshot: DevicesSnapshot) => {
     const row = snapshot.fleet?.rows.find(candidate => candidate.key === key) || null;
     const focusLabel = (document.activeElement as HTMLElement | null)?.closest('label')?.textContent || '';
+    const removalAlert = removalError ? createAlert({ variant: 'error', title: removalError }).el : null;
+    const title = row?.name ?? lastRow?.name ?? t('devicesPage.title');
+    if (titleNode) titleNode.textContent = title;
+    drawer.el.setAttribute('aria-label', title);
     if (!row) {
-      if (titleNode) titleNode.textContent = lastRow?.name || t('devicesPage.title');
       body.replaceChildren(el('p', 'devices-muted', snapshot.fleet ? t('devicesPage.drawer.gone') : t('devicesPage.loading')));
+      if (removalAlert) body.prepend(removalAlert);
       return;
     }
     lastRow = row;
-    if (titleNode) titleNode.textContent = row.name;
-    body.replaceChildren(...[header(row), health(row), capabilities(row), folders(row), routing(row, snapshot),
+    body.replaceChildren(...[header(row), removalAlert, health(row), capabilities(row, snapshot), folders(row), routing(row, snapshot),
       removal(row)].filter((node): node is HTMLElement => !!node));
     if (focusLabel) {
       const match = [...body.querySelectorAll('label')].find(label => label.textContent === focusLabel);
@@ -286,6 +356,9 @@ export function openDeviceDrawer(store: DevicesStore, key: string, ports: Drawer
     drawer.el.remove();
     onClosed?.();
   });
-  return () => drawer.close();
+  return () => {
+    removalConfirmation?.close();
+    drawer.close();
+  };
 }
 

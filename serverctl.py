@@ -40,6 +40,7 @@ from supervisor_protocol import (
     supervisor_source_fingerprint,
 )
 from tofu_dotenv import parse_env_boolean, read_dotenv_values
+from serverctl_pkg.readiness_liveness import READINESS_PROBE_DEADLINE_SECONDS
 from serverctl_pkg.restart_budget import (
     FRONTEND_BUILD_SECONDS, FRONTEND_LOCK_WAIT_SECONDS,
     LIFECYCLE_REQUEST_SECONDS, NATIVE_CHILD_SECONDS,
@@ -825,7 +826,10 @@ def ensure_manager(timeout: float = 8.0) -> dict:
 def _remote_status(*, probe: bool = False) -> dict | None:
     query = urllib.parse.urlencode({'projectPath': PROJECT, 'probe': '1' if probe else '0'})
     try:
-        status = _request('/status?' + query, timeout=2.0)
+        # A live probe (probe=1) waits up to one readiness deadline outside
+        # the manager's lifecycle lock; 2 s is the status read itself.
+        status = _request('/status?' + query,
+                          timeout=(READINESS_PROBE_DEADLINE_SECONDS if probe else 0.0) + 2.0)
     except ManagerUnavailable:
         return None
     if probe and status.get('running') and 'ready' not in status:
@@ -838,7 +842,6 @@ def _remote_status(*, probe: bool = False) -> dict | None:
                 port,
                 status.get('pid'),
                 preferred_scheme=str(status.get('scheme') or '').lower(),
-                timeout=1.0,
             )
             status = {
                 **status,
@@ -933,7 +936,6 @@ def _probe_local_worker(port: int, expected_pid: int | None, *,
         port,
         expected_pid,
         preferred_scheme=preferred_scheme,
-        timeout=1.0,
     )
 
 

@@ -5,6 +5,7 @@ this module owns native waits, the physical chat call and response metadata.
 """
 
 from .factory import get_dispatcher
+from copy import deepcopy
 import time
 from lib.log import get_logger
 from lib.secret_envelope import secret_hint
@@ -219,6 +220,7 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
             if isinstance(error, AbortedError):
                 logger.debug('%s User aborted during contention admission', tag)
             raise
+        attempt_started_ns = _unix_time_ns()
         t0 = time.time()
         slot_settled = False
 
@@ -252,11 +254,12 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
                 logical_model, route_key=route_limit_key,
                 declared_limit=int(getattr(slot, 'max_output_tokens', 0) or 0),
                 wire_model=slot.model if slot.model != logical_model else '')
+            from lib.oauth.account_dispatch import call_in_account_scope
             content, usage = _paced_call(state, timed_call_with_fields, 'provider_call', {
                 'model': slot.model,
                 'provider_id': getattr(slot, 'routing_provider_id', '') or slot.provider_id,
                 'protocol': slot.protocol or 'openai',
-            }, chat,
+            }, call_in_account_scope, slot, chat,
                 context_window=slot_context_window(slot),
                 model=slot.model, messages=messages,
                 knowledge_model=logical_model,
@@ -280,6 +283,8 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
                 responses_feature_profile=(
                     getattr(slot, 'responses_profile', '') or 'compatible'),
                 oauth=slot.oauth or '',
+                **({'codex_account_fingerprints': slot.codex_account_fingerprints}
+                   if getattr(slot, 'codex_account_fingerprints', ()) else {}),
                 adapter=slot.adapter or None,
                 owner_user_id=owner_user_id, abort_check=abort_check,
                 **({'model_budget_admit': model_budget_admit} if model_budget_admit is not None else {}),
@@ -313,7 +318,10 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
                     'key_hint': secret_hint(slot.api_key or '')[:64],
                     'provider_id': (getattr(slot, 'routing_provider_id', '')
                                     or slot.provider_id),
+                    **slot.subscription_attribution(),
                     'route_snapshot': route_trace.snapshot(),
+                    **({'offering_actual_pricing': deepcopy(slot.route_actual_pricing)}
+                       if getattr(slot, 'route_actual_pricing', None) is not None else {}),
                     'protocol': slot.protocol or 'openai',
                     'responses_profile': getattr(
                         slot, 'responses_profile', '') or '',
@@ -322,6 +330,7 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
                     # timing.  Record response completion as a conservative
                     # first-output bound so formal TTFT never favors Tofu.
                     'ttft_ms': round(latency, 3),
+                    'attempt_started_at_unix_ns': attempt_started_ns,
                     'stream_started_at_unix_ns': (
                         completed_at_unix_ns - round(latency * 1_000_000)),
                     'first_content_at_unix_ns': completed_at_unix_ns,

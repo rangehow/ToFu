@@ -1,5 +1,6 @@
 """Offline specifications for nonblocking Codex client-version preflight."""
 
+from lib.oauth.codex import CodexAccessTokenSnapshot
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 import json
@@ -381,10 +382,8 @@ def test_subscription_preflight_returns_identity_headers_while_registry_is_block
     if cached:
         _cached(state)
     expected = STALE if cached else CODEX_CLIENT_VERSION
-    with mock.patch('lib.oauth.codex.codex_get_valid_token',
-                    return_value='synthetic-access') as token, \
-         mock.patch('lib.oauth.token_store.load_token',
-                    return_value={'account_id': 'synthetic-account'}), \
+    with mock.patch('lib.oauth.codex.codex_get_valid_token_snapshot',
+                    return_value=CodexAccessTokenSnapshot('synthetic-access', 'synthetic-account')) as token, \
          _blocked_fetch(state) as (entered, release):
         for _ in range(10):
             key, headers, _ = outbound.resolve_oauth_request(

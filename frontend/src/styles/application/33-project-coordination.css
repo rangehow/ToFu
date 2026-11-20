@@ -1,0 +1,340 @@
+/* Project workspace layout; controls and modal behavior belong to the UI kit. */
+.coordination-workspace {
+  width: min(72rem, calc(100vw - var(--space-6)));
+  max-width: calc(100vw - var(--space-6));
+}
+.coordination-workspace p,
+.coordination-workspace h2,
+.coordination-workspace h3 { margin: var(--space-0); }
+.coordination-workspace h2 { font-size: var(--font-size-lg); }
+.coordination-workspace h3 { font-size: var(--font-size-md); }
+.coordination-workspace .ui-dialog__body { overflow-y: auto; }
+.coordination-workspace-body { min-height: 0; }
+.coordination-workspace-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.coordination-workspace-path { overflow-wrap: anywhere; min-width: 0; }
+.coordination-entry { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4); border-block: 1px solid var(--border); }
+.coordination-entry-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.coordination-entry > p { color: var(--text-secondary); font-size: var(--font-size-sm); }
+.coordination-overview { min-height: 0; }
+.coordination-work-filters { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.coordination-work-filters [aria-pressed="true"] { border-color: var(--accent); }
+.coordination-workspace .coordination-work-rows { max-height: none; overflow: visible; }
+.coordination-workspace .coordination-work-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; padding-block: var(--space-4); }
+.coordination-workspace .coordination-work-body { gap: var(--space-2); }
+.coordination-workspace .coordination-work-body strong { font-size: var(--font-size-md); font-weight: var(--weight-medium); line-height: var(--leading-title); }
+.coordination-workspace .coordination-work-digest { -webkit-line-clamp: 3; line-height: var(--leading-body); }
+.coordination-workspace .coordination-work-status { text-transform: uppercase; letter-spacing: var(--space-0); font-weight: var(--weight-medium); }
+.coordination-workspace .coordination-work-row[data-status="completed"] .coordination-work-status { color: var(--success-text); }
+.coordination-workspace .coordination-work-details { grid-column: 1 / -1; min-width: 0; }
+.coordination-work-details > summary { color: var(--text-secondary); font-size: var(--font-size-sm); cursor: pointer; }
+.coordination-work-facts { display: flex; flex-direction: column; gap: var(--space-2); padding-block-start: var(--space-3); }
+.coordination-work-facts small { display: block; }
+.coordination-work-result { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-primary); font-size: var(--font-size-sm); line-height: var(--leading-body); }
+.coordination-authorization,
+.coordination-usage,
+.coordination-connections { border-block-start: 1px solid var(--border); padding-block: var(--space-3); }
+.coordination-authorization > summary,
+.coordination-usage > summary,
+.coordination-connections > summary { cursor: pointer; font-weight: var(--weight-medium); }
+.coordination-authorization > :not(summary),
+.coordination-usage > :not(summary),
+.coordination-connections > :not(summary) { margin-block-start: var(--space-4); }
+.coordination-authorization > summary:focus-visible,
+.coordination-usage > summary:focus-visible,
+.coordination-connections > summary:focus-visible,
+.coordination-work-details > summary:focus-visible { outline: var(--control-edge-inset) solid var(--accent); box-shadow: var(--focus-ring); }
+.coordination-history { margin-block-start: var(--space-2); }
+@media (max-width: 480px) {
+  .coordination-workspace .coordination-work-row { grid-template-columns: minmax(0, 1fr); }
+  .coordination-workspace .coordination-work-actions { justify-content: flex-start; }
+  .coordination-entry { padding-inline: var(--space-0); }
+}
+.coordination-workspace small { color: var(--text-secondary); }
+.coordination-workspace article,
+.coordination-entry { overflow-wrap: anywhere; min-width: 0; }
+.coordination-entry { border-inline-start: var(--space-1) solid var(--accent); }
+.coordination-work-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr)); }
+@media (max-width: 480px) {
+  .coordination-workspace { width: calc(100vw - var(--space-2)); max-width: calc(100vw - var(--space-2)); }
+}
+
+/* Conversation-first project chrome; ordinary chat retains its canvas. */
+
+.coordination-conversation-column { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+#projectCoordinatorEntry { flex-shrink: 0; }
+/* The sidebar entry is a compact project hub card: identity mark, role name and
+ * a one-line work tally, so it reads as navigation instead of a stray label. */
+.coordination-leader {
+  display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2);
+  padding: var(--space-2); margin: var(--space-2) var(--space-2) var(--space-1);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-primary); color: var(--text-primary);
+  transition: border-color var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard);
+}
+/* Only a card that navigates is a button: a pending or unbound project row is not. */
+.coordination-leader[role="button"] { cursor: pointer; }
+.coordination-leader[role="button"][aria-busy="true"] { cursor: progress; }
+.coordination-leader[role="button"]:hover,
+.coordination-leader[role="button"]:focus-visible {
+  border-color: var(--accent); background: var(--bg-hover); outline: none;
+}
+.coordination-leader[role="button"][aria-current="page"] {
+  border-color: var(--accent); background: var(--accent-subtle);
+}
+.coordination-leader-mark {
+  display: inline-flex; align-items: center; justify-content: center;
+  inline-size: var(--space-6); block-size: var(--space-6); flex-shrink: 0;
+  border-radius: var(--radius-xs); background: var(--accent-subtle); color: var(--accent);
+}
+.coordination-leader-mark svg { inline-size: var(--space-4); block-size: var(--space-4); display: block; }
+.coordination-leader-body { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.coordination-leader-label {
+  font-weight: var(--weight-semibold); line-height: var(--leading-tight);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.coordination-leader-meta {
+  color: var(--text-tertiary); font-size: var(--font-size-xs); line-height: var(--leading-tight);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.coordination-leader-go { color: var(--text-tertiary); flex-shrink: 0; font-size: var(--font-size-lg); line-height: 1; }
+.coordination-leader-actions {
+  flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1);
+}
+.coordination-leader-actions small { color: var(--text-secondary); }
+
+
+.coordinator-conversations-host { flex-shrink: 0; margin: var(--space-0) var(--space-2) var(--space-2); }
+.coordinator-conversations { display: flex; flex-direction: column; min-height: 0; }
+.coordinator-conversations[hidden] { display: none; }
+.coordinator-conversations-toggle {
+  display: flex; width: 100%; min-width: 0; align-items: center; gap: var(--space-2);
+  padding: var(--space-2) var(--space-3); color: var(--text-secondary);
+  border: var(--control-edge-inset) solid transparent; border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm); font-weight: var(--weight-medium);
+}
+.coordinator-conversations-toggle:hover { background: var(--bg-hover); color: var(--text-primary); }
+.coordinator-conversations-toggle:focus-visible { outline: var(--control-edge-inset) solid var(--accent); outline-offset: var(--control-edge-inset); }
+/* The date groups' down chevron, turned to point right while collapsed. */
+.coordinator-conversations-chevron { flex-shrink: 0; color: var(--text-tertiary); transform: rotate(-90deg); transition: transform var(--motion-fast) var(--ease-standard); }
+.coordinator-conversations-toggle.is-expanded .coordinator-conversations-chevron { transform: none; }
+.coordinator-conversations-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: start; }
+.coordinator-conversations-count { color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.coordinator-conversations-live { color: var(--accent); font-size: var(--font-size-xs); white-space: nowrap; }
+.coordinator-conversations-live:empty { display: none; }
+.coordinator-conversations-body {
+  max-height: 40vh; overflow-y: auto; overscroll-behavior: contain;
+  margin-inline-start: var(--space-3); padding-inline-start: var(--space-2);
+  border-inline-start: var(--control-edge-inset) solid var(--border);
+}
+.coordinator-conversations-body .conv-item { padding: var(--space-2); gap: var(--space-2); font-size: var(--font-size-sm); }
+.coordinator-conversations-body .conv-date { display: flex; align-items: center; gap: var(--space-2); }
+.coordinator-conversations-time { color: var(--text-tertiary); font-size: var(--font-size-xs); white-space: nowrap; }
+.coordinator-conversations-status { color: var(--text-tertiary); font-size: var(--font-size-xs); }
+.coordinator-conversations-status.is-running { color: var(--accent); }
+.coordinator-conversations-status.is-failed { color: var(--error-text); }
+@media (max-width: 480px) {
+  .coordinator-conversations-body { max-height: 36vh; margin-inline-start: var(--space-2); padding-inline-start: var(--space-1); }
+  .coordinator-conversations-toggle { padding-inline: var(--space-2); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .coordinator-conversations-chevron { transition: none; }
+}
+
+
+#presenceStrip:has(.coordinator-progress) { padding: var(--space-2) var(--space-4); }
+/* A worker conversation's strip holds the way back to its coordinator; inset
+ * it from the pane corner instead of printing it flush under the topbar. */
+#presenceStrip:has(> .ui-btn) { padding: var(--space-2) var(--space-6) var(--space-0); }
+/* A failed coordinator read: one quiet status row with its retry. */
+.coordination-read-error {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2);
+  margin: var(--space-1) var(--space-2); padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm); background: var(--warning-bg); color: var(--warning-text);
+  font-size: var(--font-size-sm);
+}
+.coordination-read-error small { color: inherit; font-size: inherit; }
+
+/* Graph workspace: geometry uses the same --space-4 cells as the projection.
+ * Container queries select wires and node positions together, including split panes. */
+.coordination-task-graph { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; max-width: 100%; color: var(--text-primary); }
+.coordination-task-graph h3, .coordination-task-graph p { margin: var(--space-0); }
+.coordination-task-graph h3 { font-size: var(--font-size-md); }
+.coordination-task-graph small { color: var(--text-secondary); font-size: var(--font-size-sm); }
+.coordination-canvas { container: coordination-canvas / inline-size; min-width: 0; }
+.coordination-canvas-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); margin-block: var(--space-2); }
+.coordination-zoom-label { color: var(--text-secondary); font-size: var(--font-size-xs); font-variant-numeric: tabular-nums; }
+.coordination-graph-viewport {
+  min-width: 0; max-width: 100%; max-height: min(48vh, 36rem); overflow: auto; overscroll-behavior: contain;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-primary);
+  background-image: radial-gradient(var(--border) 1px, transparent 1px); background-size: var(--space-4) var(--space-4);
+}
+.coordination-graph-viewport:focus-visible { outline: var(--control-edge-inset) solid var(--accent); box-shadow: var(--focus-ring); }
+.coordination-graph-sheet {
+  --graph-width: var(--graph-width-3); --graph-height: var(--graph-height-3);
+  width: calc(var(--graph-width) * var(--space-4) * var(--coordination-zoom, 1));
+  height: calc(var(--graph-height) * var(--space-4) * var(--coordination-zoom, 1));
+}
+.coordination-graph-stage {
+  position: relative; width: calc(var(--graph-width) * var(--space-4)); height: calc(var(--graph-height) * var(--space-4));
+  transform: scale(var(--coordination-zoom, 1)); transform-origin: top left;
+}
+.coordination-graph-edges { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.coordination-graph-edges:not([data-columns="3"]) { display: none; }
+.coordination-graph-edges path { fill: none; stroke: var(--text-tertiary); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.coordination-graph-edges [data-edge-kind="dispatch"] { stroke-dasharray: 4 4; }
+.coordination-graph-edges [data-edge-kind="dependency"] { stroke: var(--accent); stroke-width: 2; }
+.coordination-graph-edges [data-edge-kind="rework"] { stroke: var(--warning-text); stroke-dasharray: 2 3; }
+.coordination-graph-node {
+  --graph-x: var(--graph-x-3); --graph-y: var(--graph-y-3);
+  position: absolute; left: calc(var(--graph-x) * var(--space-4)); top: calc(var(--graph-y) * var(--space-4));
+  width: calc(14 * var(--space-4)); height: calc(7 * var(--space-4)); box-sizing: border-box;
+  display: grid; grid-template-columns: var(--space-4) minmax(0, 1fr); align-content: start; align-items: start; gap: var(--space-2);
+  padding: var(--space-2); border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-primary); box-shadow: var(--shadow-sm); color: var(--text-primary);
+}
+.coordination-graph-node[data-node-kind="coordinator"] { border-color: var(--accent); background: var(--accent-subtle); }
+.coordination-graph-node[data-node-kind="reference"] { border-style: dashed; }
+.coordination-graph-node[data-selected="true"] { outline: var(--control-edge-inset) solid var(--accent); }
+.coordination-graph-node button { min-width: 0; max-height: calc(4 * var(--space-4)); overflow: hidden; justify-content: flex-start; text-align: start; }
+.coordination-node-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; line-height: var(--leading-tight); }
+.coordination-node-signal { display: inline-flex; align-items: center; justify-content: center; min-height: var(--space-6); font-size: var(--font-size-lg); color: var(--text-secondary); }
+.coordination-graph-node[data-status="running"] .coordination-node-signal { color: var(--accent); }
+.coordination-graph-node[data-status="completed"] .coordination-node-signal { color: var(--success-text); }
+.coordination-graph-node[data-status="failed"] .coordination-node-signal { color: var(--error-text); }
+.coordination-graph-node[data-status="blocked"] .coordination-node-signal { color: var(--warning-text); }
+.coordination-node-digest { grid-column: 1 / -1; color: var(--text-secondary); font-size: var(--font-size-xs); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.coordination-node-inspector { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); padding: var(--space-3); margin-block-start: var(--space-2); background: var(--bg-primary); border-inline-start: var(--space-1) solid var(--accent); border-radius: var(--radius-sm); overflow-wrap: anywhere; }
+.coordination-node-inspector[hidden] { display: none; }
+.coordination-node-inspector > * { min-width: 0; max-width: 100%; }
+.coordination-node-inspector p { font-size: var(--font-size-sm); }
+.coordination-edge-legend { display: flex; flex-wrap: wrap; gap: var(--space-3); padding-block: var(--space-2); color: var(--text-secondary); font-size: var(--font-size-xs); }
+.coordination-edge-legend span { display: inline-flex; align-items: center; gap: var(--space-1); }
+.coordination-edge-legend span::before { content: ''; width: var(--space-4); border-top: 1px dashed var(--text-tertiary); }
+.coordination-edge-legend [data-edge-legend="dependency"]::before { border-top: 2px solid var(--accent); }
+.coordination-edge-legend [data-edge-legend="rework"]::before { border-color: var(--warning-text); border-top-style: dotted; }
+.coordination-canvas-empty { padding: var(--space-3); color: var(--text-secondary); font-size: var(--font-size-sm); }
+.coordination-graph-coverage { color: var(--text-secondary); font-size: var(--font-size-xs); }
+.coordination-graph-coverage summary { cursor: pointer; font-weight: var(--weight-regular); }
+.coordination-graph-coverage small { display: block; padding-block-start: var(--space-1); }
+@container coordination-canvas (max-width: 800px) {
+  .coordination-graph-sheet { --graph-width: var(--graph-width-2); --graph-height: var(--graph-height-2); }
+  .coordination-graph-node { --graph-x: var(--graph-x-2); --graph-y: var(--graph-y-2); }
+  .coordination-graph-edges[data-columns="3"] { display: none; }
+  .coordination-graph-edges[data-columns="2"] { display: block; }
+}
+@container coordination-canvas (max-width: 530px) {
+  .coordination-graph-sheet { --graph-width: var(--graph-width-1); --graph-height: var(--graph-height-1); }
+  .coordination-graph-node { --graph-x: var(--graph-x-1); --graph-y: var(--graph-y-1); }
+  .coordination-graph-edges[data-columns="2"] { display: none; }
+  .coordination-graph-edges[data-columns="1"] { display: block; }
+}
+
+/* Coordinator attention is tied to a real assistant message, not task counts. */
+.coordination-leader-unread { margin-inline-start: var(--space-2); color: var(--accent); }
+.coordination-leader[data-unread="true"] .coordination-leader-meta { color: var(--text-primary); }
+.coordinator-budget-metrics,
+.coordinator-budget-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  gap: var(--space-4);
+}
+
+.coordinator-budget,
+.coordinator-budget-settings {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Lists are primary; topology and exact references are independent disclosures.
+ * Cap the in-chat attachment so the ordinary conversation keeps its reading space. */
+.coordination-work-list { min-width: 0; color: var(--text-primary); }
+.coordination-work-rows { max-height: min(26vh, 18rem); overflow: auto; overscroll-behavior: contain; }
+.coordination-workspace .coordination-work-rows { max-height: min(42vh, 28rem); }
+.coordination-work-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-2); padding-block: var(--space-2); border-block-end: 1px solid var(--border); min-width: 0; }
+.coordination-work-body { flex: 1 1 14rem; min-width: 0; display: flex; flex-direction: column; gap: var(--space-1); }
+.coordination-work-body strong { font-size: var(--font-size-sm); font-weight: var(--weight-semibold); line-height: var(--leading-tight); overflow-wrap: anywhere; }
+.coordination-work-body small { font-size: var(--font-size-xs); color: var(--text-secondary); }
+.coordination-work-digest { font-size: var(--font-size-xs); color: var(--text-secondary); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.coordination-work-row[data-status="failed"] .coordination-work-status { color: var(--error-text); }
+.coordination-work-row[data-status="blocked"] .coordination-work-status,
+.coordination-work-row[data-status="waiting"] .coordination-work-status { color: var(--warning-text); }
+.coordination-work-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-1); min-width: 0; max-width: 100%; }
+.coordination-list-paging { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); padding-block-start: var(--space-2); }
+.coordination-list-paging small { color: var(--text-secondary); font-size: var(--font-size-xs); }
+.coordination-topology { min-width: 0; padding-block-start: var(--space-2); }
+.coordination-topology > summary { font-size: var(--font-size-sm); cursor: pointer; }
+.coordination-reference { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); min-width: 0; max-width: 100%; }
+.coordination-reference details { min-width: 0; max-width: 100%; }
+.coordination-reference summary { font-size: var(--font-size-xs); font-weight: var(--weight-regular); cursor: pointer; }
+.coordination-reference pre { margin: var(--space-1) var(--space-0); padding: var(--space-2); background: var(--bg-primary); color: var(--text-secondary); font-family: var(--font-mono); font-size: var(--font-size-xs); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 12rem; overflow: auto; }
+.coordination-reference small { color: var(--text-secondary); font-size: var(--font-size-xs); }
+.coordination-management { display: grid; gap: var(--space-4); }
+.coordination-management-section { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-2); padding-block: var(--space-3); border-block-end: 1px solid var(--border); min-width: 0; }
+.coordination-management-section > h3,
+.coordination-management-section > p,
+.coordination-management-section > small { flex-basis: 100%; }
+.coordination-management-section p { font-size: var(--font-size-sm); overflow-wrap: anywhere; }
+.coordination-management-section small { color: var(--text-secondary); font-size: var(--font-size-xs); }
+.coordination-topology > summary:focus-visible,
+.coordination-reference summary:focus-visible { outline: var(--control-edge-inset) solid var(--accent); box-shadow: var(--focus-ring); }
+.coordination-refresh-feedback:empty { display: none; }
+
+/* Session-free task board: the Coordinator's own summary of the human's tasks,
+ * read as a todo list. One line per task behind a status glyph: a ring while
+ * open (half filled in progress), a filled disc once done or dropped. Only
+ * current work shows its note; never a progress bar or a count of sessions.
+ * Folded, the head is a single line (it wraps only when the pane is too narrow);
+ * open, the summary takes its own line under the title. */
+.coordinator-progress { color: var(--text-primary); padding: var(--space-2) var(--space-3); border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-secondary); min-width: 0; max-width: 100%; box-sizing: border-box; overflow-wrap: anywhere; }
+.coordinator-progress-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-2); cursor: pointer; list-style: none; min-width: 0; }
+.coordinator-progress-head::-webkit-details-marker { display: none; }
+.coordinator-progress-title { font-weight: var(--weight-semibold); white-space: nowrap; }
+.coordinator-progress-tally { color: var(--text-secondary); font-size: var(--font-size-xs); font-weight: var(--weight-semibold); }
+.coordinator-progress-updated { margin-inline-start: auto; color: var(--text-tertiary); font-size: var(--font-size-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.coordinator-progress-summary { flex: 1 1 8rem; min-width: 0; color: var(--text-secondary); font-size: var(--font-size-sm); line-height: var(--leading-title); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.coordinator-progress[open] .coordinator-progress-summary { order: 1; flex-basis: 100%; white-space: normal; }
+.coordinator-progress-body { display: flex; flex-direction: column; gap: var(--space-2); padding-block-start: var(--space-2); max-height: min(40vh, 26rem); overflow: auto; overscroll-behavior: contain; }
+.coordinator-progress-content { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.coordinator-progress-content:empty { display: none; }
+.coordinator-progress-tasks { display: flex; flex-direction: column; margin: var(--space-0); padding: var(--space-0); list-style: none; }
+.coordinator-progress-task:has(> .coordinator-progress-live-receipt) { flex-wrap: wrap; }
+.coordinator-progress-live-receipt { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); flex-basis: 100%; min-width: 0; color: var(--text-secondary); font-size: var(--font-size-sm); overflow-wrap: anywhere; }
+/* Evidence is a footnote to the tasks, never the first thing read. */
+.coordinator-progress-evidence-scope { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-2); padding-block-start: var(--space-2); border-top: 1px solid var(--border); color: var(--text-tertiary); font-size: var(--font-size-xs); overflow-wrap: anywhere; }
+.coordinator-progress-evidence-scope code { align-self: flex-start; max-width: 100%; padding: 0 var(--space-1); border-radius: var(--radius); background: var(--bg-tertiary); color: var(--text-tertiary); font-variant-numeric: tabular-nums; overflow-x: auto; }
+.coordinator-progress-task { position: relative; display: flex; align-items: flex-start; gap: var(--space-2); padding: var(--space-1) var(--space-2); border-radius: var(--radius); min-width: 0; font-size: var(--font-size-md); line-height: var(--leading-title); }
+/* One first-line box tall, so the glyph centers on the title's first line. */
+.coordinator-progress-glyph { flex: none; display: inline-flex; align-items: center; height: calc(var(--font-size-md) * var(--leading-title)); color: var(--text-tertiary); }
+.coordinator-progress-glyph svg { width: 1.1em; height: 1.1em; }
+.coordinator-progress-glyph-cut { stroke: var(--bg-secondary); }
+.coordinator-progress-task[data-status="in_progress"] .coordinator-progress-glyph { color: var(--accent); }
+.coordinator-progress-task[data-status="completed"] .coordinator-progress-glyph { color: var(--success-text); }
+.coordinator-progress-text { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; row-gap: var(--space-1); }
+.coordinator-progress-task-line { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: var(--space-2); min-width: 0; }
+.coordinator-progress-task-title { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.coordinator-progress-task-status, .coordinator-progress-task-evidence { font-size: var(--font-size-xs); color: var(--text-secondary); }
+/* One pill per state: the tint is the scan cue, the word stays the accessible text. */
+.coordinator-progress-task-status { flex: none; padding: 0 var(--space-2); border: 1px solid transparent; border-radius: var(--radius-pill); background: var(--bg-tertiary); color: var(--text-secondary); font-weight: var(--weight-medium); line-height: 1.7; white-space: nowrap; }
+.coordinator-progress-task[data-status="in_progress"] .coordinator-progress-task-status { background: var(--accent-subtle); border-color: var(--border); color: var(--accent); }
+.coordinator-progress-task:is([data-status="waiting"], [data-status="dropped"]) .coordinator-progress-task-status { background: var(--warning-bg); border-color: var(--warning-border); color: var(--warning-text); }
+.coordinator-progress-task[data-status="completed"] .coordinator-progress-task-status { background: var(--success-bg); border-color: var(--success-border); color: var(--success-text); }
+.coordinator-progress-task[data-status="cancelled"] .coordinator-progress-task-status { color: var(--text-tertiary); }
+.coordinator-progress-task:is([data-status="waiting"], [data-status="dropped"]) .coordinator-progress-glyph { color: var(--warning-text); }
+.coordinator-progress-task[data-status="in_progress"] .coordinator-progress-task-title { font-weight: var(--weight-medium); }
+.coordinator-progress-task[data-status="completed"] .coordinator-progress-task-title { color: var(--text-secondary); }
+.coordinator-progress-task[data-status="cancelled"] .coordinator-progress-task-title { color: var(--text-tertiary); text-decoration: line-through; }
+.coordinator-progress-task-note { overflow: hidden; color: var(--text-secondary); font-size: var(--font-size-sm); line-height: var(--leading-title); text-overflow: ellipsis; white-space: nowrap; }
+/* The one note that asks for something: a missing precondition, not progress. */
+.coordinator-progress-task[data-status="waiting"] .coordinator-progress-task-note { color: var(--warning-text); }
+.coordinator-progress-task:is([data-status="waiting"], [data-status="pending"], [data-status="dropped"], [data-status="cancelled"]) .coordinator-progress-task-note { white-space: normal; overflow-wrap: anywhere; text-align: start; }
+/* Completed notes stay available without taking a second line in the archive. */
+.coordinator-progress-task[data-status="completed"] .coordinator-progress-task-note { position: absolute; width: 1px; height: 1px; clip-path: inset(50%); }
+.coordinator-progress-finished > summary, .coordinator-progress-group > summary { cursor: pointer; color: var(--text-secondary); font-size: var(--font-size-xs); }
+.coordinator-progress-finished > .coordinator-progress-tasks, .coordinator-progress-group > .coordinator-progress-tasks { padding-block-start: var(--space-1); }
+/* A Router's Worker model leads the board's commands instead of taking a line
+ * of its own above the board. */
+.coordinator-progress-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3); }
+.coordinator-progress-commands { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); margin-inline-start: auto; }
+.coordinator-progress-command-slot { display: contents; }
+.coordinator-progress summary:focus-visible { outline: var(--control-edge-inset) solid var(--accent); box-shadow: var(--focus-ring); }
+@media (max-width: 480px) { .coordinator-progress { padding: var(--space-2); } }

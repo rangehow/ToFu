@@ -1150,7 +1150,6 @@ def register_server_production_lifecycle(
     """
     from functools import partial
 
-    from lib.model_routing import bootstrap_personal_model_routing
     from lib.production_lifecycle import (
         ProductionStartupSteps,
         register_production_lifecycle,
@@ -1163,7 +1162,9 @@ def register_server_production_lifecycle(
             validate_storage_boundary=_validate_storage_cutover_boundary,
             init_database=_init_database,
             start_storage=_start_storage_authority_sql,
-            bootstrap_model_routing=bootstrap_personal_model_routing,
+            bootstrap_model_routing=partial(
+                _server_assembly.converge_startup_model_routing,
+                DEPLOYMENT_CONFIGURATION),
             validate_imports=_validate_imports,
             start_workers=partial(
                 _start_background_workers, personal_key=personal_key),

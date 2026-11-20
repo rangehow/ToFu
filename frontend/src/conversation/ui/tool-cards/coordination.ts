@@ -217,27 +217,18 @@ const delegate: ToolPresenter = {
 
 /* ── update_task_progress ──────────────────────────────────────────── */
 
-interface BoardTask { readonly title: string; readonly status: string; readonly progress: string; readonly due: string }
-
-/** The arguments carry the full board; accepted metadata names it when they cannot. */
-function boardTasks(view: ToolView): readonly BoardTask[] {
-  const fromArgs = list(view.args.tasks).filter(isRecord).map((task) => ({
-    title: text(task.title), status: text(task.status), progress: text(task.progress), due: text(task.due),
-  }));
-  if (fromArgs.length) return fromArgs;
-  return list(record(view.meta.todoState).todos).filter(isRecord).map((todo) => ({
-    title: text(todo.content), status: text(todo.status), progress: '', due: '',
-  }));
-}
-
-function boardSentence(view: ToolView): string {
-  return text(view.args.summary) || text(record(view.meta.todoState).explanation);
+/** A missing or clipped view is not evidence of an empty board. */
+function boardTasks({ args, result }: ToolView) {
+  const rows = args.read ? result?.tasks : args.tasks;
+  if (Array.isArray(rows)) return rows.filter(isRecord);
 }
 
 const taskBoard: ToolPresenter = {
-  title: (_view, { t }) => t('toolCard.board.title'),
+  title: ({ args }, { t }) => t(args.read ? 'coordinatorProgress.title' : 'toolCard.board.title'),
   summary(view, { t }) {
     const tasks = boardTasks(view);
+    if (!tasks) return { text: '' };
+    if (record(view.args.read).title) return { text: text(tasks[0]?.title) };
     const done = tasks.filter((task) => task.status === 'completed').length;
     const active = tasks.filter((task) => task.status === 'in_progress').length;
     return {
@@ -248,19 +239,19 @@ const taskBoard: ToolPresenter = {
   body(view, context) {
     const { t } = context;
     const tasks = boardTasks(view);
-    const rows = tasks.map((task) => {
-      const state = TASK_STATES[task.status] ?? TASK_STATES.pending;
-      const due = task.due ? `<span class="ptool-coord-due">${escape(t('toolCard.board.due', { due: task.due }))}</span>` : '';
-      const progress = task.progress ? `<span class="ptool-coord-progress">${escape(task.progress)}</span>` : '';
+    const rows = tasks?.map((task) => {
+      const state = TASK_STATES[text(task.status)] ?? TASK_STATES.pending;
+      const due = text(task.due), progress = text(task.progress);
+      const label = escape(t(state[1]));
       return `<div class="ptool-todo-item ptool-todo-${state[0] === 'cancelled' ? 'pending ptool-coord-task-cancelled' : state[0]}">`
-        + `<span class="ptool-todo-mark" role="img" aria-label="${escape(t(state[1]))}" title="${escape(t(state[1]))}">${state[2]}</span>`
-        + `<span class="ptool-todo-text"><span class="ptool-coord-task-title">${escape(task.title)}</span>${due}${progress}</span>`
-        + '</div>';
+        + `<span class="ptool-todo-mark" role="img" aria-label="${label}" title="${label}">${state[2]}</span>`
+        + `<span class="ptool-todo-text"><span class="ptool-coord-task-title">${escape(text(task.title))}</span>`
+        + (due ? `<span class="ptool-coord-due">${escape(t('toolCard.board.due', { due }))}</span>` : '')
+        + (progress ? `<span class="ptool-coord-progress">${escape(progress)}</span>` : '') + '</span></div>';
     }).join('');
-    const sentence = boardSentence(view);
+    const sentence = text(view.args.read ? view.result?.summary : view.args.summary);
     return (sentence ? `<div class="ptool-coord-lead">${proseHtml(context, sentence, true)}</div>` : '')
-      + (rows ? `<div class="ptool-todo-list ptool-coord-board">${rows}</div>`
-        : `<div class="ptool-todo-empty">${escape(t('toolCard.board.empty'))}</div>`);
+      + (rows ? `<div class="ptool-todo-list ptool-coord-board">${rows}</div>` : '');
   },
   debug: (view, { t }) => [[t('toolCard.debug.revision'), String(count(view.result?.revision) ?? '')]],
 };

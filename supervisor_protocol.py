@@ -13,6 +13,7 @@ repair must remain available when the application dependency graph is broken.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
@@ -43,6 +44,7 @@ SUPERVISOR_SOURCE_FILES = (
     'serverctl_pkg/execution_plan.py',
     'serverctl_pkg/native_engine.py',
     'serverctl_pkg/native_storage_service.py',
+    'serverctl_pkg/readiness_liveness.py',
     'serverctl_pkg/resident_service.py',
     'serverctl_pkg/restart_budget.py',
     'runtime_guards.py',
@@ -63,11 +65,38 @@ class SupervisorRefreshError(RuntimeError):
     """The active lifecycle owner could not be proven current and healthy."""
 
 
+def _closure_definition_on_disk(project: Path) -> tuple[str, ...]:
+    """``SUPERVISOR_SOURCE_FILES`` as *project*'s supervisor_protocol.py declares it now.
+
+    Long-lived importers (the serving worker, the manager) would otherwise
+    hash disk with the list they imported; after a landing extends it, the
+    re-executed manager and its client disagree forever (incident 2026-11-18).
+    An unreadable or mid-write file falls back to the imported list: that
+    file is itself in the closure, so the digest still changes with it.
+    """
+    try:
+        tree = ast.parse((project / 'supervisor_protocol.py').read_bytes())
+    except (OSError, SyntaxError, ValueError):
+        return SUPERVISOR_SOURCE_FILES
+    for node in tree.body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == 'SUPERVISOR_SOURCE_FILES'):
+            try:
+                names = ast.literal_eval(node.value)
+            except ValueError:
+                break
+            if isinstance(names, tuple) and names and all(isinstance(name, str) for name in names):
+                return names
+            break
+    return SUPERVISOR_SOURCE_FILES
+
+
 def supervisor_source_fingerprint(project_path: str) -> str:
-    """Return a deterministic digest of the Supervisor dependency closure."""
+    """Return a deterministic digest of the Supervisor dependency closure on disk."""
     project = Path(project_path).resolve()
     digest = hashlib.sha256()
-    for relative_name in SUPERVISOR_SOURCE_FILES:
+    for relative_name in _closure_definition_on_disk(project):
         path = project / relative_name
         digest.update(relative_name.encode('utf-8'))
         digest.update(b'\0')
@@ -315,6 +344,11 @@ def refresh_supervisor(
         except SupervisorRefreshError as exc:
             health = None
             last_error = str(exc)
+        else:
+            # A healthy answer supersedes the exec gap's socket error; report
+            # what the manager actually loaded.
+            last_error = ('it answers generation '
+                          f"{str(health.get('sourceFingerprint') or 'unknown')[:12]}, expected {expected[:12]}")
         if supervisor_generation_matches(health, project):
             return {
                 'ok': True,

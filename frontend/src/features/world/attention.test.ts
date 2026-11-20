@@ -27,6 +27,19 @@ describe('owner attention adapter', () => {
     expect(openQuestions(LEAD, [answered])).toEqual([]);
   });
 
+  it('omits answered or superseded cards even without a later human Turn in the snapshot', () => {
+    const turns = [
+      ask('t1', 1, { guidanceId: 'g1', guidanceQuestion: 'Answered?', guidanceBlocking: false, status: 'done',
+        guidanceResponse: 'Keep queued' }),
+      ask('t2', 2, { guidanceId: 'g2', guidanceQuestion: 'Replaced?', guidanceBlocking: false, status: 'done',
+        guidanceSuperseded: true }),
+      ask('t3', 3, { guidanceId: 'g3', guidanceQuestion: 'Still waiting?', status: 'awaiting_human' }),
+      ask('t4', 4, { guidanceId: 'g4', guidanceQuestion: 'Proceed on default?', guidanceBlocking: false, status: 'done',
+        guidanceDefault: 'Keep queued' }),
+    ];
+    expect(openQuestions(LEAD, turns).map(each => each.guidanceId)).toEqual(['g3', 'g4']);
+  });
+
   it('omits a question its lead withdrew', () => {
     const turns = [
       ask('t1', 1, { guidanceId: 'g1', guidanceQuestion: 'Settled?', status: 'awaiting_human',
@@ -36,6 +49,15 @@ describe('owner attention adapter', () => {
       ask('t3', 3, { guidanceId: 'g3', guidanceQuestion: 'Still open?', status: 'awaiting_human' }),
     ];
     expect(openQuestions(LEAD, turns).map(each => each.guidanceId)).toEqual(['g3']);
+  });
+
+  it('omits a non-blocking question the owner settled on its default', () => {
+    const turns = [
+      ask('t1', 1, { guidanceId: 'g1', guidanceQuestion: 'Papers first?', guidanceBlocking: false, status: 'done',
+        guidanceDefaultAccepted: { at: 1, by: 1 } }),
+      ask('t2', 2, { guidanceId: 'g2', guidanceQuestion: 'Still open?', guidanceBlocking: false, status: 'done' }),
+    ];
+    expect(openQuestions(LEAD, turns).map(each => each.guidanceId)).toEqual(['g2']);
   });
 
   it('emits the HARNESS-1C shape, ids and tier order', () => {

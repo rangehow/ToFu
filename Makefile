@@ -28,7 +28,7 @@
 #
 # ═══════════════════════════════════════════════════════════════
 
-.PHONY: lint static-check architecture-check contracts-check monorepo-check test test-plan test-deps test-affected test-full test-unit test-api test-api-core test-chaos test-slow test-visual test-e2e test-frontend test-all test-coverage healthcheck ci smoke help desktop desktop-icons stop vendor-mcp audit-tests suite-health
+.PHONY: lint static-check architecture-check contracts contracts-check rust-gate monorepo-check test test-plan test-deps test-affected test-full test-unit test-api test-api-core test-chaos test-slow test-visual test-e2e test-frontend test-all test-coverage healthcheck ci smoke help desktop desktop-icons stop vendor-mcp audit-tests suite-health
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -49,15 +49,32 @@ static-check: ## Lint gates for changes since BASE=<ref>: ruff, Tofu-DB rustfmt 
 architecture-check: ## Reject retired surfaces and incident-only source notation
 	python3 scripts/check_architecture.py
 
+# Contract generators ported to Rust (docs/RUST_REWRITE_EVIDENCE.md, Phase 7):
+# packages/tofu-xtask renders what contracts/api_v1.yaml, events_v1.json and
+# storage_operations_v1.json derive. The gen_* scripts named after them only
+# check the Python owners that still implement those contracts.
+CARGO ?= cargo
+XTASK = $(CARGO) run --quiet --release --locked --manifest-path packages/tofu-xtask/Cargo.toml --
+
+contracts: ## Regenerate the artefacts tofu-xtask derives from the contracts
+	$(XTASK) contracts
+
 contracts-check: ## Reject generated API client and server drift
+	$(XTASK) contracts --check
 	python3 scripts/gen_conversation_sync_contract.py --check
 	python3 scripts/gen_api_v4_contract.py --check
 	python3 scripts/gen_api_v1_model_routing_contract.py --check
-	python3 scripts/gen_api_endpoint_index.py --check
-	python3 scripts/gen_event_contract.py --check
+	python3 scripts/gen_api_v1_contract.py
+	python3 scripts/gen_api_endpoint_index.py
+	python3 scripts/gen_event_contract.py
+	python3 scripts/gen_storage_operation_catalog.py
+	python3 scripts/gen_test_classification.py --check
 	python3 scripts/gen_wire_fixtures.py --check
 	python3 scripts/gen_tool_inventory.py --check
 	python3 scripts/check_config_knobs.py
+
+rust-gate: ## Measure the Rust rewrite phase gates the evidence document declares
+	python3 scripts/rust_phase_gate.py --check
 
 monorepo-check: ## Validate first-party package, version and dependency boundaries
 	python3 scripts/check_monorepo.py
@@ -140,11 +157,6 @@ PYTEST_PARALLEL = $(if $(filter 0,$(JOBS)),,-n $(JOBS))
 # jobs pass COV/COV_APPEND and upload the resulting .coverage data file.
 COV ?=
 COV_APPEND ?=
-
-# CI splits the unit tier into matrix shards (SHARD=k/n, tests/conftest.py
-# --tofu-shard); empty runs every file.
-SHARD ?=
-PYTEST_SHARD = $(if $(SHARD),--tofu-shard=$(SHARD))
 
 # Every xdist worker imports NumPy through the app/plugin graph. On a 64-core
 # host, leaving BLAS defaults untouched creates ~64 native threads PER worker;
@@ -243,11 +255,11 @@ test-bundles: ## Run release-tier bundle tests (bundles/*/tests; internal checko
 
 ifeq ($(JOBS),0)
 test-unit: ## Run unit tests (parallel; override JOBS=N, JOBS=0 for serial)
-	$(PYTEST) $(PYTEST_BASE) $(FRONTEND_UNIT_IGNORES) -m unit $(PYTEST_SHARD) --timeout=300 --tb=short -q
+	$(PYTEST) $(PYTEST_BASE) $(FRONTEND_UNIT_IGNORES) -m unit --timeout=300 --tb=short -q
 else
 test-unit: ## Run unit tests (parallel; override JOBS=N, JOBS=0 for serial)
-	$(PYTEST) $(PYTEST_BASE) $(FRONTEND_UNIT_IGNORES) -m "unit and not serial" $(PYTEST_SHARD) $(PYTEST_PARALLEL) --timeout=300 --tb=short -q $(COV)
-	$(PYTEST) $(PYTEST_BASE) $(FRONTEND_UNIT_IGNORES) -m "unit and serial" $(PYTEST_SHARD) --timeout=600 --tb=short -q $(COV_APPEND)
+	$(PYTEST) $(PYTEST_BASE) $(FRONTEND_UNIT_IGNORES) -m "unit and not serial" $(PYTEST_PARALLEL) --timeout=300 --tb=short -q $(COV)
+	$(PYTEST) $(PYTEST_BASE) $(FRONTEND_UNIT_IGNORES) -m "unit and serial" --timeout=600 --tb=short -q $(COV_APPEND)
 endif
 
 test-collect: ## Collect the CI-visible unit surface without running it (fast collection-health gate)

@@ -25,8 +25,10 @@ document.addEventListener('DOMContentLoaded', () => {
   // is committed (save) — the popup always opens clean. EVERY field the
   // 2s poll ever refreshes must go through this gate.
   function guardedField(input) {
-    input.addEventListener('input', () => { input.dataset.dirty = '1'; });
+    let revision = 0;
+    input.addEventListener('input', () => { revision += 1; input.dataset.dirty = '1'; });
     return {
+      get revision() { return revision; },
       refresh(value) {
         if (document.activeElement === input || input.dataset.dirty === '1') return;
         input.value = value;
@@ -131,6 +133,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // The background's resolver is the one authority: the popup only shows
   // its verdict and writes the normalized address back into the field.
   saveBtn.addEventListener('click', () => {
+    const submittedRevision = serverField.revision;
     saveBtn.disabled = true;
     showServerNote('Checking…', false);
     chrome.runtime.sendMessage({ type: 'setServer', url: serverInput.value }, (resp) => {
@@ -143,8 +146,10 @@ document.addEventListener('DOMContentLoaded', () => {
         showServerNote(resp.error, true);
         return;
       }
-      serverField.commit();
-      serverField.refresh(resp.url);
+      if (serverField.revision === submittedRevision) {
+        serverField.commit();
+        serverField.refresh(resp.url);
+      }
       showServerNote(resp.verified
         ? (resp.changed ? 'Using ' + resp.url + ' (Tofu server confirmed).' : 'Tofu server confirmed.')
         : resp.warning, !resp.verified);

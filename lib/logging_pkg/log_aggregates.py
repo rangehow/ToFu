@@ -121,6 +121,10 @@ _EXC_SUFFIXES = ('Error', 'Exception', 'Warning', 'Exit', 'Interrupt',
 
 def _normalize_template(first_line: str) -> str:
     """把一条消息的首行归一成模板:URL/绝对路径/hex id/数字全部占位化。"""
+    first_line = re.sub(
+        r'^\[mailbox-correlation owner=[A-Za-z0-9_.:-]{1,256} '
+        r'conversation=[A-Za-z0-9_.:-]{1,256} run=[A-Za-z0-9_.:-]{1,256}'
+        r'(?: attempt=[A-Za-z0-9_.:-]{1,256} pid=(?:[0-9]{1,19}|-))?\] ', '', first_line)
     t = _COALESCE_PREFIX_RE.sub('', first_line)
     t = _LONG_QUOTED_RE.sub("'<payload>'", t)
     t = _URL_RE.sub('<url>', t)

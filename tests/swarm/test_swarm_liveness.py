@@ -431,6 +431,47 @@ def test_session_ttl_is_refreshed_by_agent_activity():
             st._session_timestamps.pop(key, None)
 
 
+def test_session_ttl_preserves_a_live_driver_without_task_or_progress(monkeypatch):
+    """The TTL must preserve durable mailbox scope while the driver owns it."""
+    import lib.swarm.integration as integ
+    from lib.swarm.integration import _state
+    from lib.swarm.master import MasterOrchestrator
+
+    key = 'test-conv-live-driver'
+    release = threading.Event()
+    driver = threading.Thread(target=release.wait)
+    session = MasterOrchestrator.__new__(MasterOrchestrator)
+    session._driver_thread = driver
+    monkeypatch.setattr(_state, '_active_sessions', {key: session})
+    monkeypatch.setattr(_state, '_session_timestamps', {
+        key: time.time() - _state.SESSION_TTL_SECONDS - 1,
+    })
+    # Simulate a detached wave with no visible chat task and a quiet beacon.
+    monkeypatch.setattr(_state, '_key_is_live', lambda key: False)
+    monkeypatch.setattr(_state, '_session_is_producing', lambda key: False)
+    monkeypatch.setattr(_state, '_retiring_sessions', {})
+    monkeypatch.setattr(_state, '_key_aliases', {})
+    retired = []
+    monkeypatch.setattr(_state, '_start_retirement_worker_locked', retired.extend)
+
+    driver.start()
+    try:
+        with _state._sessions_lock:
+            monkeypatch.setattr(integ, '_last_cleanup', 0.0)
+            _state._cleanup_stale_sessions()
+            assert _state._active_sessions[key] is session
+            assert retired == []
+    finally:
+        release.set()
+        driver.join()
+
+    with _state._sessions_lock:
+        monkeypatch.setattr(integ, '_last_cleanup', 0.0)
+        _state._cleanup_stale_sessions()
+        assert key not in _state._active_sessions
+        assert retired == [(key, session)]
+
+
 def test_session_ttl_still_reaps_a_dead_session():
     """Complement: a genuinely quiet expired session must still be cleaned up."""
     import lib.swarm.integration._state as st

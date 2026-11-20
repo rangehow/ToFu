@@ -165,7 +165,7 @@ class LiveConformanceTest(unittest.TestCase):
             compiled = await cli.post(
                 '/api/v1/providers/templates/compile',
                 headers=headers,
-                json={'template_key': 'longcat',
+                json={'template_key': 'yourprovider',
                       'selected_model_ids': ['LongCat-2.0']},
             )
             self.assertEqual(
@@ -689,6 +689,13 @@ class DispatcherHotReloadTest(unittest.TestCase):
             reread = await self._authority(cli, headers)
             self.assertEqual(reread['revision'], saved['revision'])
             self.assertEqual(reread['model_routing'], canonical)
+            self.assertEqual(saved['reasoning_controls'], reread['reasoning_controls'])
+
+            def automatic_availability(body):
+                return next(row['availability'] for row in body['reasoning_controls']
+                            if row['model_id'] == 'alpha' and not row['provider_id'])
+
+            self.assertEqual(automatic_availability(saved), 'available')
 
             # The visible offering switch and model-grant dot remain decisive.
             canonical['offerings'][0]['enabled'] = False

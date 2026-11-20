@@ -43,6 +43,14 @@ from lib.agent_core.push_frames import PushFrameStore, StoredJsonFrame
 
 logger = get_logger(__name__)
 
+# Inbound ``/api/push`` message budget. ``lib/hypercorn_runtime.py`` configures
+# Hypercorn's transport limit from it (early rejection before Quart parses),
+# and ``routes/push.py::push_ws`` enforces the same bound in the application
+# for any ASGI runner whose config leaves Hypercorn's 16 MiB default. The Rust
+# front door mirrors it in
+# ``packages/tofu-front-rs/push/src/socket.rs::WEBSOCKET_MAX_MESSAGE_BYTES``.
+PUSH_MAX_MESSAGE_BYTES = 64 * 1024
+
 
 @dataclass(frozen=True, slots=True)
 class _QueuedPushEvent:
@@ -259,6 +267,10 @@ class PushHub:
             return bool(channel_subs) and any(
                 client.user_id == owner
                 for clients in channel_subs.values() for client in clients)
+
+    @property
+    def is_draining(self) -> bool:
+        return self._draining
 
     def register(self, client: 'PushClient') -> bool:
         with self._lock:
@@ -524,6 +536,10 @@ class PushHub:
             else:
                 # Plugin/test clients retain their enqueue(frame) protocol.
                 client.enqueue(frame)
+
+    def encode_frame(self, frame: dict) -> Future:
+        """Encode a hub-owned frame on a demand worker, as sockets send it."""
+        return self._frame_store.encode(frame)
 
     @property
     def client_count(self) -> int:

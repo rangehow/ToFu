@@ -646,13 +646,15 @@ application. It imports no storage client and never signals, restarts or
 writes a Tofu process or Tofu data. Once a minute (`PROBE_INTERVAL_S`) it:
 
 - calls `GET /api/ready` on loopback, without any proxy. This is the
-  manager's readiness probe, answered from process memory, with the manager's
-  2 s deadline.
+  manager's readiness probe, answered from process memory, under the
+  [readiness liveness contract](modules/infra_runtime.md#readiness-liveness-contract)
+  (its deadline and timeout run).
   - 200 means ready.
   - A 503 whose storage snapshot is not ready means storage is unavailable;
     `storage.degraded` means the restart breaker latched.
   - Any other 503 means the application is not ready.
-  - No answer: it reads the manager's recorded `GET /status?probe=0`
+  - No answer (refused or reset, or the contract's run of consecutive
+    timeouts): it reads the manager's recorded `GET /status?probe=0`
     (`observed=crashloop` is the manager's latched crash-loop budget).
 - reads the lines appended to `logs/server-console.log` and
   `logs/server-manager.log` since the previous tick. It matches only the
@@ -675,15 +677,14 @@ liveness-kill or breaker line read in the same tick.
 - It alerts once when it has lasted ten minutes or more (`ALERT_AFTER_S`,
   inclusive). The time counts from the first failed probe, or from an earlier
   outage line read in that tick.
-- Slow is not down. If the probe only timed out while the manager's own
-  readiness check passes, the tick counts as available (`slow`). The
-  manager's check is its state file, written within the probe interval, with
-  `observed: running` and no `unreadySince`. A refused port, a 503, a
-  degraded manager record or a stale one is still an unavailable probe. On
-  2026-11-13 from 00:22 to 00:35, every 2 s probe timed out under load. The
-  manager's own check passed except for two 5–6 s blips, yet the owner got
-  「Tofu API 无响应已 11 分钟」.
-  It alerts at once when a restart breaker latched, because a latch clears
+- Slow is not down. A probe that times out counts as available (`slow`)
+  until the contract's run of consecutive timeouts completes; an incident
+  from such a run opens at its first timeout. A refused port or a 503 is
+  still an unavailable probe. Each tick's `latencySeconds` and
+  `consecutiveTimeouts` are in `probes.jsonl`. On 2026-11-13 from 00:22 to
+  00:35, and on 2026-11-18 from 15:26 to 15:29, a 2 s probe read slow
+  answers as an outage (「Tofu API 无响应已 11 分钟」).
+- It alerts at once when a restart breaker latched, because a latch clears
   only through a restart.
 - An incident that a planned restart caused is not an outage. The watcher
   reads the manager's own restart record, the `lastRestart` that `serverctl
@@ -2091,6 +2092,124 @@ restore, prune) and `backup_copy.rs` (graph copy).
   present interiors and, when the backup pruned the generation its `RESTORE`
   marker names, continues with the newest generation, reusing every block
   already copied. Restore refuses while a prune plan is pending.
+- **Exact offline restore.** On a stable offline backup copy, run
+  `tofu-db restore --backup-dir <absolute-copy-root> --data-dir <absolute-target> --manifest-sha256 <64-hex> --source-control-generation <generation>`
+  with the SHA-256 of the published manifest bytes and its source CONTROL
+  generation derived from those authenticated bytes as described below. Existing
+  online epoch reports contain `sha256` but not the generation; offline CLI
+  `tofu-db.backup.v1` receipts contain neither selector. Do not infer generation
+  from durable sequence, filename, epoch time, or target CONTROL. Under the backup-store lease, the engine
+  selects only that manifest; an absent or changed manifest or a conflicting
+  target marker is an error, including on resume. The success receipt includes
+  both selectors. `--manifest` is not a restore selector. With neither exact
+  flag, ordinary restore and its resume behavior are unchanged. Exact selection
+  does not pin retention, make an independent copy, or replace offline `verify`
+  on the restored target. Use a separate offline copy to avoid holding the
+  rolling store's backup/prune lock. A lockless mirror must remain immutable
+  throughout restore: absence of `BACKUP_LOCK` does not fence a future writer.
+- **Offline selector procedure (current and legacy receipts).** Use
+  `python3 -m serverctl_pkg.tofudb_restore_selectors` against the exact preserved plaintext
+  manifest bytes, not a re-encoded manifest. This utility opens no backup
+  store, takes no lease, copies no graph, and performs no restore. It requires
+  an independently retained, authenticated SHA-256 receipt and compares the
+  digest **before** extracting generation from the same byte buffer. It supports
+  both legacy and current v1 manifest framing; native restore still owns full
+  checksum/state validation and selection under lease. The standard-library-only
+  helper belongs to the public checkout's recovery package, not the omitted
+  maintainer scripts tree; shipping it does not admit other private scripts or
+  change native restore authority.
+
+  **Existing online report:** obtain `sha256` from the retained successful
+  `system.backup` report (unwrap its transport envelope if present). Keep the
+  receipt's authentication/custody evidence; a hash read from the same candidate
+  manifest is not independent evidence. No duplicated authority UUID, durable
+  sequence or generation fields are required: the digest binds those manifest
+  bytes. If independent evidence also provides generation, supply the helper's
+  optional `--source-control-generation` to cross-check it; a conflict refuses.
+
+  **Legacy offline CLI receipt:** that receipt alone is insufficient. Use an
+  independently preserved/authenticated manifest-digest custody receipt, such
+  as a JSON object with `sha256` recorded when the manifest was preserved. Do
+  not mint a digest from today's candidate and call it historical evidence.
+  Without independent digest evidence, stop; this procedure cannot authenticate
+  that older cut. Receipt schemas are unchanged; no new online epoch is needed
+  to use already-preserved evidence.
+
+  The following standalone POSIX shell procedure works with either an online
+  report or a manifest-digest custody receipt whose top-level `sha256` is the
+  independent digest. Paths below refer exclusively to pre-existing offline
+  material and a separate disposable target. Do not point it at the rolling
+  live store. Run it from the source checkout, using a matching already-built
+  engine; preparing/building/deploying one is not part of this procedure.
+
+  ```sh
+  manifest=/absolute/preserved/cut.manifest
+  receipt=/absolute/preserved/independent-receipt.json
+  backup=/absolute/offline-backup-copy
+  target=/absolute/disposable-target
+  digest=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "$receipt") || exit "$?"
+  selectors=$(python3 -m serverctl_pkg.tofudb_restore_selectors --manifest "$manifest" --manifest-sha256 "$digest") || exit "$?"
+  # Only fixed flag names, hex and decimal digits are emitted; never use eval.
+  tofu-db restore --backup-dir "$backup" --data-dir "$target" $selectors || exit "$?"
+  tofu-db verify --data-dir "$target"
+  ```
+
+  Never invoke restore after a failed helper or retry without the exact flags:
+  omitting both flags deliberately selects ordinary latest restore. An exact
+  restore still refuses missing/pruned/changed source evidence, including for
+  an already-completed target, and never switches to another cut.
+
+  **Evidence limits:** completion binds the reconstructed content state, not a
+  persistent attestation of source generation: target CONTROL is normalized and
+  the RESTORE marker is removed. Preserve the original manifest and independent
+  receipt externally. Manifest-only custody is not graph/object or attachment
+  custody. Reconstruction requires every referenced object and the appropriate
+  keys; separately stored attachments require their own custody and validation.
+  Neither the helper nor manifest custody proves recovery of the actual epoch,
+  the latest acknowledged write frontier, or production disaster recovery.
+  `tests/tofudb/test_restore_selectors.py` covers both framings, missing/conflicting
+  evidence and shell refusal; `test_exact_backup_restore.py` follows both receipt
+  paths on a synthetic older cut and retains default/latest and prune refusal.
+  The standalone [offline handoff consistency fixture](../tests/fixtures/offline_handoff/README.md)
+  uses generated metadata to reject cross-identity substitutions and missing graph,
+  attachment, full restore/verify or restored-ACK evidence. It authenticates no
+  observations, opens no store, and is neither a supported receipt schema nor a
+  release gate; its positive case cannot establish backup availability or rollback.
+
+  **Synthetic chat/attachment closure gap (0.19.3 compatibility only).** The
+  current `tests/tofudb/test_exact_backup_restore.py` seeds two different generic
+  record keys with the same value. It does not produce chat attachments or compare
+  an earlier acknowledged item's bytes with a newer valid replacement of that
+  same item. The frozen `a28b2b7bf4cc28b981720fbf36e535ea7034fc5c` restore also
+  predates exact selectors: its ordinary interrupted restore explicitly permits
+  newest-generation substitution after pruning. Current exact-selector tests do
+  not retroactively certify that candidate or the original cut.
+
+  The existing attachment producer is `lib.media_attachments.ingest_document`,
+  backed by Knowledge original-file publication. The ordinary read-only
+  `lib.knowledge.store.verify_portable_original` checks a regular, no-link original
+  against exact size and SHA-256; producer metadata supplies its media `kind`.
+  `tests/conversation/test_portable_chat_restore.py` already distinguishes absent,
+  same-size wrong and symlink bytes from an exact verified original. These are
+  file-backed selected-chat import tests, not native backup restore evidence.
+  SQLite metadata alone cannot exercise original-file publication, and no
+  supported all-memory original producer is connected to the native restore
+  fixture. The selected-chat CLI's `attachment_volume_unverified` refusal remains
+  in force; its library seam is not an operational bypass.
+
+  The distinct unclosed comparison must bind an independently retained earlier
+  acknowledged message/item and its attachment inventory (identity, media kind,
+  exact size and byte digest) to the selected manifest and restored read. Its
+  controls must preserve the message reference while omitting its original
+  (missing, not verified), supply exact matching bytes (verified), and offer a
+  newer healthy same-kind/same-size item with a different digest (not recovery of
+  the earlier item). Neither an attachment link nor a healthy newer graph proves
+  this equality. No combined producer/restored-read/frontier contract is supplied
+  by the metadata fixture, selector helper or native integrity verdict. Adding a
+  dictionary receipt checker or mocking the original verifier would not close
+  this gap. Schema-71 rollback/authentication/acknowledged-write evidence and
+  matching native-build/manager acceptance remain unverified and unchanged; this
+  boundary adds no release gate and authorizes no restore or transfer.
 - **Status.** `system.metrics.onlineBackup`: `store`,
   `last_complete_generation` (`durable_sequence`, `manifest`,
   `published_unix_ms`, `age_ms`), `legacy_newest_generation`,
@@ -2983,6 +3102,148 @@ unavailable, or an answer above the generic document bound) keeps the
 resumable rows instead of deleting them. Conversation purge does not yet
 cascade to swarm rows or these records. Test:
 `tests/swarm/test_swarm_run_results.py`.
+
+### Exact Swarm lifecycle receipts (SQL prerequisite)
+
+A reusable Swarm session key cannot identify which run completed or stopped.
+SQLite and PostgreSQL reserve the run ID globally on explicit managed launch
+and store the exact scope, parent Turn/task/attempt and accepted roster in the
+same transaction. Roster publication is additive; generic updates cannot
+replace the parent or roster or reactivate a terminated managed session.
+Exact teardown can adopt an unambiguous legacy session, never a missing or
+mismatched header. Once a legacy header carries a run ID, generic save cannot
+rewrite its conversation, config (including owner and parent), or roster even
+if the parent lineage is empty; an unchanged legacy snapshot remains adoptable.
+
+`swarm.session.delete_exact` seals matching checkpoint archives, applies mailbox
+CAS disposition, persists the lifecycle receipt and removes resumable rows in
+one transaction. Stop/replacement outrank ordinary retirement and do not replace
+each other. Disposition advances even without a mailbox or after key reuse.
+Key-only delete cannot retire an identified run or act on a managed key. The
+lock order is session key, global run identity (when needed), then records.
+Generic archive puts take the same run lock before the record lock and refuse a
+disposed run even if the addressed record never existed. SQL archive point reads
+observe the record and receipt in one statement and refuse unsealed or misbound
+results for disposed runs. A roster slot alone is not archived checkpoint proof.
+
+`swarm.session.lifecycle.get` requires the full exact scope including owner to
+read a lifecycle. For whole-swarm Stop reconciliation only, an owner plus the
+original run ID returns the committed Stop disposition (or no result); it
+cannot read an open roster, find a successor, or authorize a mutation. Stop
+accepts the exact run ID from launch/activity, not a conversation key or a
+turn alias. A legacy run whose immutable ID is its spawning task ID still
+accepts that ID. Observation is not an enqueue grant.
+
+On the Python SQL runtime path,
+`swarm.session.save` with `save_mode=admit` claims one `enqueue` or
+`worker_start` handoff. The request carries exact run scope and the actual
+wave caller's task/Turn/Attempt (legacy callers have no Turn binding).
+The command holds the Turn conversation and attempt-event locks before the
+Swarm session/run locks. Its receipt commit is the linearization point: Turn
+cancellation or exact disposition committed first refuses the handoff.
+Normal caller completion can still permit worker start, but not a new wave.
+The existing command receipt stores one 17-byte compact JSON result per
+accepted handoff, plus the existing receipt metadata; no new retention policy
+or roster write is introduced by admission.
+
+A lost roster ACK retries only the frozen roster command. Its historical ACK
+is not a handoff grant; admission always uses a new command identity. An
+unknown handoff ACK is not replayed to start work. The scheduler serializes
+idle-close with roster publication through executor submission; roster presence
+alone never proves physical acceptance. A started handoff can still fail or be
+cancelled, and its receipt does not recover or activate work after process loss.
+Separate Turn/run reads were rejected because cancellation could commit between
+them or after their last read without losing the apparent permission to run.
+
+New SQL launches allocate a new run ID even on the same spawning task and
+retain that task's separate Turn/Attempt lineage. A locally observed initial
+pre-enqueue exception can reconcile only its original durable generation;
+a missing resident by itself cannot authorize retiring a running header.
+Reconciliation never enqueues or restores grants. Checkpoint, delivery ACK
+and termination writes carry the original
+run; exact teardown archives that run and does not fall back to a key-only
+delete. A valid legacy header can publish an additive roster only by adopting
+its unchanged identity and parent config. Archive/teardown failure retains
+evidence and does not authorize replacement.
+
+Explicit SQL Continue uses `swarm.session.save` with `save_mode=continue_rebind`
+([payload contract](../lib/swarm/persistence_contract.py)). It binds the current,
+owner-scoped, accepted Continue Attempt to the exact undisposed run and frozen
+session revision. The SQL authority reads the accepted Attempt's `_resumeSource`
+and checks scope, current main Turn, and cancellation under the existing
+conversation, Turn, Attempt and worker-job locks before locking session/run.
+It updates only session configuration/status and the lifecycle's current and
+immediately preceding binding. The original launch parent, roster, checkpoints,
+causal tool receipts, and archive rows are not rewritten by rebind. Each
+checkpoint mutation on a lifecycle-managed run advances the locked session
+revision used to validate the loaded checkpoint cut. Rebind also increments the run's checkpoint-writer
+epoch; save, append, mark, delivery ACK, archive writes and driver retirement
+from the old epoch cannot update or delete the rebound run. No new store or queue is introduced.
+
+A definite activation failure is recorded for the current accepted Attempt
+only while the SQL authority can still prove that Attempt has no worker-start
+grant. This includes required checkpoint reads after exact scope validation
+and failures during policy reconstruction, before rebind. A failure marker
+records lineage only: it does not require or consume a frozen revision, which
+may have advanced during a rejected paged read. Rebind still requires the
+exact current cut. Restore stages blocked-dependency checkpoint writes and
+restored result hints until scheduler handoff succeeds. An empty deduplicated
+batch is not an acknowledged handoff. An executor refusal
+of a recovered dependent after activation wakes the driver, suspends the
+run, and drains admitted peers without revoking them solely for the local
+refusal. Worker admission and refusal share the scheduler lock after child
+construction; refused preparations publish no child outcome. A refusal does
+not turn an already-admitted Attempt into failed activation.
+Residency eviction must not discard the quiescence check while a prior worker
+is still running after bounded driver shutdown.
+For ambiguous storage failures, the marker applies only if the bind has not
+committed; SQL checks that distinction under the same locks. If storage cannot
+record the marker at all, an unbound attempt is not inferred from missing evidence.
+That receipt authorizes neither retry of the failed Attempt nor work by itself. Only a later accepted Continue naming that exact settled Attempt can
+rebind the run. If rebind or restore committed but its ACK was lost, the
+current binding with an explicit no-worker-admitted witness serves the same
+purpose after that Attempt settles. A worker admission or missing predecessor
+proof refuses that shortcut.
+
+Lost ACK retries resend the same frozen command. Its ACK is not permission to
+enqueue: a fresh one-shot bound-run restore claim precedes replaying results,
+and separate admissions precede enqueueing, worker start, and each physical model request,
+including retries of the same prepared request. Desktop relays refuse guarded
+recovery before queuing because the device cannot recheck SQL at provider send.
+Guarded native entry likewise refuses unless its send path can enforce the
+fence. Managed HTTP transport rechecks after acquiring each route, including
+connect-only failover; a prior route's grant is not reusable. Responses
+WebSocket checks authenticated opens/reconnects again after connection setup,
+and each model input frame separately. Typed frame refusal evicts and closes
+the exact cached WebSocket without changing unrelated sessions. Epoch-zero
+SQL recovery retains the same physical-send checks.
+A committed Stop, replacement or cancellation that wins the corresponding handoff
+refuses it. The original tool round is reconciled by the existing checkpoint
+reader without replaying the effect. Key-only overwrite and reopening a disposed
+run are not supported. Native ordinary request shapes remain unchanged; native
+exact shapes and unsupported native-actor checkpoint recovery fail closed.
+This does not activate a backend, certify native or Rust SQL parity, or authorize
+a restart.
+
+The actual run-result consumers use point reads, not `record.list`. They check
+owner/run/agent and conversation (plus tenant for the model tool); the status
+path checks the conversation key, not project and tenant end to end. The SQL
+archive point read enforces the disposed seal and available binding fields,
+not full active archive scope. Generic listing of protected namespaces is not a
+certified result path; the Swarm `record.list` consumer is instead the scoped,
+metadata-first retained-agent roster. Disposed mailbox point reads project a
+closed run and preserve the original receipt without replaying work. SQL
+checkpoint page assembly rejects a changed header, not a consistent snapshot
+of concurrently changing checkpoints on the same run. Recovery still loads
+full checkpoints; this is not a full-scope or bounded-enumeration cutover.
+
+Growth is one permanent row per managed/adopted run (32-byte digest, owner/key,
+key index and receipt JSON), without checkpoints or transcripts. The scratch
+fixture measured 268 compact JSON bytes without a roster and 325 for one child;
+actual size depends on the identifiers and serialized specs. Receipt eviction
+cannot reopen a consumed run. Test:
+`tests/storage_authority_sql/test_swarm_lifecycle_receipt.py` and
+`tests/storage_authority_sql/test_swarm_runtime_lifecycle.py`.
 
 ### Original result retention for text report views
 

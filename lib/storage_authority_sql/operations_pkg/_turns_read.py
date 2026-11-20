@@ -162,6 +162,39 @@ def _turn_get(session: Session, payload: Mapping[str, Any]) -> Any:
     return _turn_public(session, row) if include_projection else _turn_public_metadata(row)
 
 
+def _turn_resume_plan_read(session: Session, payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Observe an exact resumable source without acquiring any resume authority."""
+    conv_id, user_id = _turn_identity(payload)
+    turn_id = _required_text(payload, "turn_id", 128)
+    attempt_id = _required_text(payload, "attempt_id", 128)
+    revision = _integer(payload, "projection_revision", minimum=0, maximum=2**63 - 1)
+    # A single statement observes the owner-scoped Turn and its current Attempt
+    # together. Preserve a missing Attempt to distinguish unavailable from stale.
+    row = session.fetch_one(
+        "SELECT t.current_attempt_id,t.projection_revision,t.status AS turn_status,"
+        "a.status AS attempt_status FROM storage_conversation_turns t "
+        "LEFT JOIN storage_generation_attempts a ON a.attempt_id=t.current_attempt_id "
+        "AND a.turn_id=t.turn_id AND a.conversation_id=t.conversation_id "
+        "WHERE t.conversation_id=? AND t.user_id=? AND t.turn_id=?",
+        (conv_id, user_id, turn_id),
+    )
+    if row is None:
+        return {"status": "source_unavailable"}
+    if row["current_attempt_id"] != attempt_id or row["projection_revision"] != revision:
+        return {"status": "stale_source"}
+    if (row["attempt_status"] not in ("interrupted", "truncated", "failed")
+            or row["turn_status"] != row["attempt_status"]):
+        return {"status": "source_unavailable"}
+    return {
+        "status": "source_pinned",
+        "sourceStatus": row["attempt_status"],
+        "conversationId": conv_id,
+        "turnId": turn_id,
+        "attemptId": attempt_id,
+        "projectionRevision": revision,
+    }
+
+
 def _turn_content_preview(session: Session, conv_id: str, user_id: int, turn_id: str, chars: int) -> Any:
     """Metadata plus ``contentPreview``, the first ``chars`` code points of the public content."""
     row = session.fetch_one(

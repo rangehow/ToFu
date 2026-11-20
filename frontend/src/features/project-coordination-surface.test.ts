@@ -768,7 +768,7 @@ it('a language switch repaints the sidebar row and the pinned task board in the 
     // The same card stays mounted (fold and scroll survive); only its copy changes.
     expect(f.canvas.querySelector('.coordinator-progress')).toBe(card);
     expect(card.querySelector('.coordinator-progress-tally')?.textContent).toBe('zh:coordinatorProgress.sidebar.active');
-    expect(card.querySelector('.coordinator-progress-glyph')?.getAttribute('aria-label')).toMatch(/^zh:coordinatorProgress\.status\./);
+    expect(card.querySelector('.coordinator-progress-task-status')?.textContent).toMatch(/^zh:coordinatorProgress\.status\./);
     expect([...card.querySelectorAll('.coordinator-progress-commands button')].map(button => button.textContent))
       .toEqual(['zh:chat.bilingualOriginal', 'zh:coordinatorProgress.history']);
     const row = f.sidebar.querySelector<HTMLElement>('.coordination-leader')!;
@@ -776,4 +776,56 @@ it('a language switch repaints the sidebar row and the pinned task board in the 
     expect(row.querySelector('.coordination-leader-meta')?.textContent).toBe('zh:coordinatorProgress.sidebar.active');
     expect(row.title).toMatch(/^zh:projectCoordination\.openCoordinator/);
   } finally { locale.language = 'en'; f.surface.destroy(); }
+});
+
+it('replaces request-scoped receipts, clears stale evidence during reads, and rejects late navigation responses', async () => {
+  const f = fixture('canvas');
+  const key = 'a'.repeat(32);
+  const state = (request: string, worker: string): CoordinatorProgressState => ({ ...progressState(), taskKeys: ['b'.repeat(32), key],
+    workEvidence: { scope: 'latest_request', coverage: 'unknown', requestId: request, sourceTurnId: `turn-${request}`,
+      rows: [{ assignmentId: `assignment-${request}`, conversationId: worker, taskKeys: [key], phase: 'active' }] } });
+  vi.mocked(f.ports.progress!.read).mockResolvedValueOnce(state('a', 'worker-a'));
+  try {
+    await f.surface.refresh();
+    expect(f.canvas.querySelector('[data-assignment-id="assignment-a"]')).not.toBeNull();
+    vi.mocked(f.ports.progress!.read).mockResolvedValueOnce(state('a', 'worker-a'));
+    await f.surface.refresh(true);
+    expect(f.canvas.querySelector('[data-assignment-id="assignment-a"]')).not.toBeNull();
+    let finish!: (value: CoordinatorProgressState) => void;
+    vi.mocked(f.ports.progress!.read).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const waiting = f.surface.refresh(true);
+    expect(f.canvas.querySelector('[data-assignment-id]')).toBeNull();
+    finish(state('b', 'worker-b')); await waiting;
+    expect(f.canvas.querySelector('[data-assignment-id="assignment-a"]')).toBeNull();
+    expect(f.canvas.querySelector('[data-assignment-id="assignment-b"]')).not.toBeNull();
+    f.canvas.querySelector<HTMLButtonElement>('.coordinator-progress-live-receipt button')!.click();
+    expect(f.ports.navigate).toHaveBeenCalledWith('worker-b');
+    vi.mocked(f.ports.progress!.read).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const retired = f.surface.refresh(true);
+    f.conversation('worker-b'); await f.surface.refresh();
+    finish(state('late', 'worker-late')); await retired;
+    expect(f.canvas.querySelector('[data-assignment-id]')).toBeNull();
+  } finally { f.surface.destroy(); }
+});
+
+it.each(['network', 'timeout'])('retires receipts without losing confirmed binding during a transient %s failure', async code => {
+  const f = fixture('canvas');
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const state: CoordinatorProgressState = { ...progressState(), taskKeys: ['b'.repeat(32), 'a'.repeat(32)],
+    workEvidence: { scope: 'latest_request', coverage: 'unknown', requestId: 'request', sourceTurnId: 'source',
+      rows: [{ assignmentId: 'assignment', conversationId: 'worker', taskKeys: ['a'.repeat(32)], phase: 'active' }] } };
+  vi.mocked(f.ports.progress!.read).mockResolvedValue(state);
+  try {
+    await f.surface.refresh();
+    expect(f.canvas.querySelector('[data-assignment-id]')).not.toBeNull();
+    vi.mocked(f.ports.binding).mockRejectedValueOnce(Object.assign(new Error(code), { code, status: 0 }));
+    await f.surface.refresh(true);
+    expect(f.canvas.querySelector('[data-assignment-id]')).toBeNull();
+    expect(f.canvas.querySelector('.coordination-read-error')).toBeNull();
+    expect(f.canvas.querySelector('.coordinator-progress')).not.toBeNull();
+    expect(f.canvas.querySelectorAll('.coordinator-progress-live-receipt')).toHaveLength(0);
+    expect(f.canvas.textContent).toContain('projectCoordination.graph.assignmentsUnavailable');
+    expect(f.surface.recover()).toBe(true);
+    await vi.waitFor(() => expect(f.canvas.querySelector('[data-assignment-id]')).not.toBeNull());
+  } finally { f.surface.destroy(); warning.mockRestore(); }
 });

@@ -12,6 +12,14 @@ from scripts import tofudb_charter_assess as charter
 
 pytestmark = pytest.mark.unit
 
+
+@pytest.fixture(autouse=True)
+def isolate_numeric_policy_from_result_prerequisite(monkeypatch):
+    # These synthetic metric-policy tests do not execute operations. The real
+    # fail-closed prerequisite is exercised in test_operation_result_evidence.py.
+    monkeypatch.setattr(charter, 'compare_results',
+                        lambda rows, **kwargs: {'qualified': True, 'reasons': []})
+
 SOURCES = {'native_source_sha256': 'a' * 64,
            'files': {name: 'b' * 64 for name in REQUIRED_SOURCES}}
 BUILD = {'format': 'tofu-db-build.v1', 'source_sha256': 'a' * 64, 'version': '0.2.0'}
@@ -136,7 +144,10 @@ def reports():
                     'runtime_policy': {
                         'tofudb': {phase: {'wal_durability': 'strict', 'profiling': False, 'profile_sample_every': 0}
                                    for phase in ('before', 'after')},
-                        'sqlite': {phase: {'synchronous': 2, 'fastpath_active': False}
+                        'sqlite': {phase: {'synchronous': 2, 'journal_mode': 'wal',
+                                          'writer_configuration_at_open': {
+                                              'synchronous': 2, 'journal_mode': 'wal'},
+                                          'fastpath_active': False}
                                    for phase in ('before', 'after')},
                         'rawsqlite': {phase: {'synchronous': 2, 'journal_mode': 'wal'}
                                       for phase in ('before', 'after')},
@@ -679,3 +690,14 @@ def test_actual_collector_fields_are_accepted_by_charter(monkeypatch, tmp_path):
         row, engines, SOURCES, {'tofudb': receipt['declared_artifact']},
         {'tofudb': receipt['artifact_before']}, runtime)
     assert charter.qualify(row, SOURCES) == {'status': 'PASS', 'reasons': []}
+
+
+@pytest.mark.parametrize('phase', ['before', 'after'])
+@pytest.mark.parametrize('writer', [None, {}, {'synchronous': 2}, {'journal_mode': 'wal'},
+    {'synchronous': 1, 'journal_mode': 'wal'},
+    {'synchronous': 2.0, 'journal_mode': 'wal'},
+    {'synchronous': 2, 'journal_mode': 'delete'}])
+def test_actual_writer_observation_required_despite_optimistic_flat_fields(phase, writer):
+    row = reports()[0]
+    row['measurement']['runtime_policy']['sqlite'][phase]['writer_configuration_at_open'] = writer
+    assert charter.qualify(row, SOURCES)['status'] == 'INSUFFICIENT'

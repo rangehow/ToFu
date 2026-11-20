@@ -40,17 +40,14 @@ def test_scroll_history_preserves_reading_anchor_and_bounds_dom(
     page.evaluate(r"""kind => {
       const cid='synthetic-scroll-'+kind;
       const makeTurn=i=>({turnId:'turn-'+i,conversationId:cid,laneId:'main',
-        ordinal:i,actor:'assistant',kind:'reply',status:'completed',
+        ordinal:i,actor:'assistant',kind:'reply',status:kind==='blocks'?'running':'completed',
         projectionRevision:1,currentAttemptId:null,createdAt:i,updatedAt:i,
-        settlement:{outcome:'completed'},projection:{segments:
+        settlement:kind==='blocks'?{}:{outcome:'completed'},projection:{segments:
           Array.from({length:kind==='blocks'?450:1},(_,j)=>({type:'text',
             blockId:`turn-${i}:block-${j}`,
             text:`History ${i}/${j}\n\n`+'Readable synthetic evidence. '.repeat(12),
             terminal:kind==='blocks'?j===449:true,
-            // Settled deliverable prose reads on the open page. Interim notes,
-            // and every non-final text of a running reply, join the reply's
-            // bounded narration well instead (ca179202e1), a separate scroller.
-            deliverable:true}))}});
+            deliverable:kind==='blocks'?j===449:true}))}});
       const turns=Array.from({length:kind==='blocks'?1:300},(_,i)=>makeTurn(i));
       window.fixtureState={...createTurnState(cid),
         turnsById:Object.fromEntries(turns.map(t=>[t.turnId,t])),

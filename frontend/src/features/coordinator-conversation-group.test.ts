@@ -427,8 +427,9 @@ it('remembers each coordinator independently and keeps the group beneath its own
   second.destroy();
 });
 
-it('tallies and keeps Workers\' background work beside the running tally', async () => {
+it('shows only the running tally and keeps background tags on the rows', async () => {
   // Owner report 2026-11-13: 29 Workers ran background commands and the sidebar showed none.
+  // Owner report 2026-11-18: a second background tally crowded the header into overlap.
   const host = document.createElement('div');
   document.body.replaceChildren(host);
   const rows: CoordinatorConversationRow[] = [
@@ -445,12 +446,11 @@ it('tallies and keeps Workers\' background work beside the running tally', async
     renderRow: row => `<div class="conv-item" data-conv-id="${row.id}"><div class="conv-date"><span class="conv-date-text">t</span>${background.has(row.id) ? '<span class="conv-status-tag conv-status-background">bg</span>' : ''}</div></div>`,
     activeConversationId: () => '', isRunning: row => row.id === 'worker-a',
     status: row => (row.id === 'worker-c' ? 'done' : 'running'),
-    hasBackground: row => background.has(row.id),
     readExpanded: () => true, writeExpanded: vi.fn(),
   });
   group.update('coordinator-1');
   await vi.waitFor(() => expect(host.querySelector('.coordinator-conversations-count')?.textContent).toBe('3'));
-  expect(host.querySelector('.coordinator-conversations-live')?.textContent).toBe('projectCoordination.running:1 · sidebar.backgroundRunningTag:2');
+  expect(host.querySelector('.coordinator-conversations-live')?.textContent).toBe('projectCoordination.running:1');
   const tags = () => [...host.querySelectorAll('.conv-item')].map(row => [row.getAttribute('data-conv-id'),
     [...row.querySelectorAll('.conv-date > span')].map(span => span.className)]);
   expect(tags()).toEqual([
@@ -462,5 +462,78 @@ it('tallies and keeps Workers\' background work beside the running tally', async
   group.refresh();
   expect(host.querySelector('.coordinator-conversations-live')?.textContent).toBe('projectCoordination.running:1');
   expect(host.querySelectorAll('.conv-status-background')).toHaveLength(0);
+  group.destroy();
+});
+it('renders a bounded page of a large inventory and pages as the body scrolls', async () => {
+  const host = document.createElement('div');
+  document.body.replaceChildren(host);
+  const rows: CoordinatorConversationRow[] = Array.from({ length: 5 }, (_, index) => ({
+    id: `worker-${index}`, title: `Work ${index}`, _coordinatorSource: 'coordinator-1', updatedAt: 100 - index,
+  }));
+  const renderRow = vi.fn((row: CoordinatorConversationRow) =>
+    `<div class="conv-item" data-conv-id="${row.id}">${row.id}</div>`);
+  class FakeObserver {
+    static last: FakeObserver | null = null;
+    readonly observed: Element[] = [];
+    readonly options: IntersectionObserverInit | undefined;
+    readonly callback: (entries: Pick<IntersectionObserverEntry, 'isIntersecting'>[]) => void;
+    constructor(callback: FakeObserver['callback'], options?: IntersectionObserverInit) {
+      this.callback = callback; this.options = options; FakeObserver.last = this;
+    }
+    observe(node: Element) { this.observed.push(node); }
+    unobserve() {}
+    disconnect() { this.observed.length = 0; }
+  }
+  const view = window as unknown as { IntersectionObserver?: unknown };
+  view.IntersectionObserver = FakeObserver;
+  try {
+    const group = createCoordinatorConversationGroup({
+      host, rows: () => rows,
+      readPage: async () => ({ conversations: [], nextCursor: null, coverage: 'complete' as const }),
+      open: vi.fn(), renderRow, activeConversationId: () => '',
+      readExpanded: () => true, writeExpanded: vi.fn(), pageSize: 2,
+    });
+    group.update('coordinator-1');
+    await vi.waitFor(() => expect(host.querySelectorAll('.conv-item')).toHaveLength(2));
+    const body = host.querySelector<HTMLElement>('.coordinator-conversations-body')!;
+    // Only the rendered page is built; the header still counts the whole inventory.
+    expect(host.querySelector('.coordinator-conversations-count')?.textContent).toBe('5');
+    expect(FakeObserver.last?.options?.root).toBe(body);
+    renderRow.mockClear();
+    group.refresh();
+    expect(renderRow).toHaveBeenCalledTimes(2);
+    FakeObserver.last!.callback([{ isIntersecting: true }]);
+    await vi.waitFor(() => expect(host.querySelectorAll('.conv-item')).toHaveLength(4));
+    FakeObserver.last!.callback([{ isIntersecting: true }]);
+    await vi.waitFor(() => expect(host.querySelectorAll('.conv-item')).toHaveLength(5));
+    expect(host.querySelector('.conv-window-sentinel')).toBeNull();
+    group.destroy();
+  } finally { delete view.IntersectionObserver; }
+});
+
+it('ages a row label in place instead of replacing the expanded rows', async () => {
+  const host = document.createElement('div');
+  document.body.replaceChildren(host);
+  const now = Date.now();
+  const rows: CoordinatorConversationRow[] = [
+    { id: 'worker-a', title: 'A', _coordinatorSource: 'coordinator-1', updatedAt: now - 59_700 },
+    { id: 'worker-b', title: 'B', _coordinatorSource: 'coordinator-1', updatedAt: now - 120_000 },
+  ];
+  const group = createCoordinatorConversationGroup({
+    host, rows: () => rows,
+    readPage: async () => ({ conversations: [], nextCursor: null, coverage: 'complete' as const }),
+    open: vi.fn(), renderRow: row => `<div class="conv-item" data-conv-id="${row.id}"><div class="conv-date"><span class="conv-date-text">t</span></div></div>`,
+    activeConversationId: () => '', readExpanded: () => true, writeExpanded: vi.fn(),
+  });
+  group.update('coordinator-1');
+  await vi.waitFor(() => expect(host.querySelectorAll('.conv-item')).toHaveLength(2));
+  const first = host.querySelector<HTMLElement>('.conv-item[data-conv-id="worker-a"]')!;
+  const before = first.querySelector('.coordinator-conversations-time')?.textContent;
+  await new Promise(resolve => setTimeout(resolve, 900));
+  group.refresh();
+  const after = host.querySelector<HTMLElement>('.conv-item[data-conv-id="worker-a"]')!;
+  // Same node: a minute label aging must not flash the list or drop hover/focus.
+  expect(after).toBe(first);
+  expect(after.querySelector('.coordinator-conversations-time')?.textContent).not.toBe(before);
   group.destroy();
 });

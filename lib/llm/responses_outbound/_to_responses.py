@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import json
 
+from lib.conversation_sync.settled_rows import is_settled, memo_get, memo_put, settle
 from lib.llm.conversion import (
     ProtocolConversionError, checked_conversion, conversion_report, object_arguments,
     stop_sequences, tool_name_reverse, validate_request,
@@ -798,6 +799,9 @@ def _messages_to_input(messages: list, reverse: dict, *,
     return items
 
 
+_RESPONSES_TOOL_KEY = ('responses-outbound', 'function-tool')
+
+
 def _convert_tools(tools: list, reverse: dict) -> list:
     """Chat-Completions tools[] → Responses tools[] (flattened function).
 
@@ -805,7 +809,9 @@ def _convert_tools(tools: list, reverse: dict) -> list:
     ``web_search`` have no chat-completions wrapper). Function fields are
     carried from the source. Omitted strictness preserves Chat Completions'
     non-strict default explicitly: Responses otherwise attempts to normalize
-    optional properties into a strict schema.
+    optional properties into a strict schema. Settled function rows retain one
+    immutable flattened twin; request-local alias validation still runs before
+    reuse. Mutable callers retain fresh mutable outputs.
     """
     converted: list = []
     for tool in tools:
@@ -815,13 +821,22 @@ def _convert_tools(tools: list, reverse: dict) -> list:
             converted.append(tool)
             continue
         func = tool.get('function') or {}
-        t: dict = {'type': 'function',
-                   'name': _truncate_name(func.get('name', ''), reverse)}
+        # Alias allocation/collision checks belong to this request, not the row.
+        name = _truncate_name(func.get('name', ''), reverse)
+        settled = is_settled(tool)
+        cached = memo_get(tool, _RESPONSES_TOOL_KEY) if settled else None
+        if cached is not None and cached[0] == name:
+            converted.append(cached[1])
+            continue
+        t: dict = {'type': 'function', 'name': name}
         if func.get('description'):
             t['description'] = func['description']
         if 'parameters' in func:
             t['parameters'] = func['parameters']
         t['strict'] = func.get('strict', False)
+        if settled:
+            t = settle(t)
+            memo_put(tool, _RESPONSES_TOOL_KEY, (name, t))
         converted.append(t)
     return converted
 

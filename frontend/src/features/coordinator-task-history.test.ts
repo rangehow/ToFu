@@ -97,6 +97,8 @@ it('renders only the rows in view, with each task\'s status, due outcome, dates 
   expect(dropped.querySelector('[data-kind="dropped"]')?.textContent).toBe('coordinatorHistory.group.dropped');
   expect(dropped.querySelector('.coordinator-history-task-meta')?.textContent).toContain('coordinatorHistory.formerTitles');
   expect(dropped.title).toContain('Task two (draft)');
+  expect(dropped.querySelector('.coordinator-history-task-note')?.textContent).toBe('coordinatorHistory.removalUnknown');
+  expect(dropped.textContent).not.toContain('Note 2');
   expect(met.querySelector('[data-kind="due-met"]')).not.toBeNull();
   expect(met.querySelector('.coordinator-history-task-note')?.textContent).toBe('Note 3');
   expect(current.getAttribute('aria-posinset')).toBe('1');

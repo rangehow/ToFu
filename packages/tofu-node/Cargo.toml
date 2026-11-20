@@ -1,0 +1,73 @@
+[package]
+name = "tofu-node"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+license = "MIT"
+description = "Tofu node program (`tofu node`): the outbound desktop_node_v1 / desktop_bridge_v3 client that replaces lib/desktop_agent"
+build = "build.rs"
+
+[[bin]]
+name = "tofu"
+path = "src/main.rs"
+
+[lib]
+name = "tofu_node"
+path = "src/lib.rs"
+
+[dependencies]
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+# Project grep/find: the regex and glob dialects ripgrep uses (pure Rust).
+regex = "1"
+globset = { version = "0.4", default-features = false }
+# GUI: screenshot encoding, locate template matching, clipboard (pure Rust).
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+rustfft = "6"
+arboard = { version = "3", default-features = false }
+# Egress frames, gzip/deflate bodies (also SyncTeX gzip), adapter archives, Codex config.
+base64 = "0.22"
+flate2 = "1"
+crc32fast = "1"
+tar = { version = "0.4", default-features = false }
+toml = { version = "0.9", default-features = false, features = ["std", "parse", "serde"] }
+
+# TLS: rustls on Linux (gcc builds ring there); the platform TLS stack on
+# macOS and Windows, so cross `cargo check` needs no C toolchain for them.
+[target.'cfg(target_os = "linux")'.dependencies]
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "0.26"
+libc = "0.2"
+# Tray: StatusNotifierItem + com.canonical.dbusmenu over D-Bus in pure Rust (zbus).
+ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }
+# X11 capture (GetImage) and input (XTEST) over the pure-Rust connection.
+x11rb = { version = "0.13", features = ["xtest"] }
+
+[target.'cfg(all(unix, not(target_os = "linux")))'.dependencies]
+ureq = { version = "2.12", default-features = false, features = ["native-tls"] }
+native-tls = "0.2"
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+tray-icon = { version = "0.24", default-features = false }
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSRunningApplication"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std"] }
+dispatch2 = "0.3"
+core-graphics = { version = "0.24", features = ["highsierra"] }
+
+[target.'cfg(windows)'.dependencies]
+ureq = { version = "2.12", default-features = false, features = ["native-tls"] }
+native-tls = "0.2"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security", "Win32_System_Registry", "Win32_UI_WindowsAndMessaging", "Win32_Globalization", "Win32_Graphics_Gdi", "Win32_UI_Input_KeyboardAndMouse"] }
+tray-icon = { version = "0.24", default-features = false }
+
+[dev-dependencies]
+tempfile = "3"
+jsonschema = { version = "0.61", default-features = false }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

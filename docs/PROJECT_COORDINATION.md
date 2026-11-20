@@ -178,9 +178,9 @@ would duplicate admission, Stop, settlement and publication authority.
 
 ### Coordinator-started sidebar conversations (owner decision 2026-11-03)
 
-Problem: delegated Workers, watchers and unstarted shells crowded the owner’s ordinary conversation rows and date-group counts. Decision: each Coordinator owns one collapsed-by-default sidebar group directly beneath its own entry, outside the owner’s date groups. It contains every conversation created by `create_conversation`, `delegate_project_work` or `dispatch_project_assignment`, including empty shells, historical workers and terminal/cancelled work. A short localized header carries the total, the aggregate running count and the date groups' down chevron, turned to point right while collapsed. A reply awaiting review is marked only on its own row, visible once the group is expanded (owner decision 2026-11-04: a header dot repeated the rows' marks and made every collapsed group read as awaiting acceptance). Expanded compact rows show title, status and relative time, newest first. The body scrolls independently without a row cap, and expansion is remembered per Coordinator in browser storage. Keyboard activation, `aria-expanded`, visible focus and reduced motion are required.
+Problem: delegated Workers, watchers and unstarted shells crowded the owner’s ordinary conversation rows and date-group counts. Decision: each Coordinator owns one collapsed-by-default sidebar group directly beneath its own entry, outside the owner’s date groups. It contains every conversation created by `create_conversation`, `delegate_project_work` or `dispatch_project_assignment`, including empty shells, historical workers and terminal/cancelled work. A short localized header carries the total, the aggregate running count and the date groups' down chevron, turned to point right while collapsed. A reply awaiting review is marked only on its own row, visible once the group is expanded (owner decision 2026-11-04: a header dot repeated the rows' marks and made every collapsed group read as awaiting acceptance). Expanded compact rows show title, status and relative time, newest first. The body scrolls independently without a data cap: every member stays reachable, but the body renders the conversation list's bounded row window (a page at a time as it scrolls), because a project can hold thousands of Workers. Rows are reconciled by conversation id, so a relative-time or status change patches its own row instead of replacing the list and dropping hover, focus and running-dot animation. Expansion is remembered per Coordinator in browser storage. Keyboard activation, `aria-expanded`, visible focus and reduced motion are required.
 
-A known Coordinator mounts its group even when the initial catalog contains no local Worker; the paged inventory supplies cold history on demand. Only a member joining or leaving the local catalog invalidates that inventory: the inventory can only add members the catalog lacks, while revisions, counts and timestamps of known members already arrive through the catalog. An added member becomes an ordinary catalog shell, so it keeps the stored folder its roster row carries (below). Invalidating on every member revision was rejected because it re-scanned the owner catalog several times per second while Workers ran; members a read adopts re-baseline membership so they never trigger a second read. The existing presence refresh also refreshes it when the Coordinator is selected. Every list refresh reaches the group, so an expanded body is rebuilt only when its rendered rows, active row, status or relative time change; otherwise hover and focus would reset on each stream tick. Adopting each page refreshes the catalog projection before the group paints, so the expanded body contains its Workers rather than an empty shell. Opening a grouped Worker also refreshes the shared active-row projection: the ordinary flat-list fast path cannot find a row owned by the group. The current selection therefore survives subsequent catalog and stream updates without changing grouping policy. A group first placed beneath an interim history row moves beneath the Coordinator's card once the catalog names that Coordinator, so one Coordinator never shows two groups.
+A known Coordinator mounts its group even when the initial catalog contains no local Worker; the paged inventory supplies cold history on demand. Only a member joining or leaving the local catalog invalidates that inventory: the inventory can only add members the catalog lacks, while revisions, counts and timestamps of known members already arrive through the catalog. An added member becomes an ordinary catalog shell, so it keeps the stored folder its roster row carries (below). Invalidating on every member revision was rejected because it re-scanned the owner catalog several times per second while Workers ran; members a read adopts re-baseline membership so they never trigger a second read. The existing presence refresh also refreshes it when the Coordinator is selected. Every list refresh reaches the group; an expanded body reconciles its rendered rows by id, replacing only a row whose markup changed and updating time and status leaves in place, so hover, focus and running-dot animation survive each stream tick. Adopting each page refreshes the catalog projection before the group paints, so the expanded body contains its Workers rather than an empty shell. Opening a grouped Worker also refreshes the shared active-row projection: the ordinary flat-list fast path cannot find a row owned by the group. The current selection therefore survives subsequent catalog and stream updates without changing grouping policy. A group first placed beneath an interim history row moves beneath the Coordinator's card once the catalog names that Coordinator, so one Coordinator never shows two groups.
 
 Server-issued `_coordinatorSource` at creation is the only direct origin evidence. The project-inventory projection additively backfills older conversations from the same paged durable assignment records used by Manage work; it never infers origin from titles or ID prefixes and does not rewrite stored settings. The global catalog projects only stored metadata: reconstructing every project's complete assignment history there made each sidebar refresh contend with active dispatch writes and could fail the whole list. A shown Coordinator group reads that project's paged roster even when no child carries provenance locally, adopts the returned rows, and retries a failed discovery on the next catalog/push refresh. Ordinary catalog reads therefore never depend on dispatch-history availability. Ordinary owner chats, swarms and sub-agents are unchanged. Search still opens workers and marks their Coordinator provenance. Grouping never deletes, archives or changes direct links, and Manage work retains the complete project inventory. A replaced Coordinator keeps a separate historical group beneath its own clickable row; its workers never rejoin the owner’s date groups. When that Coordinator is not present in the current catalog, the sidebar does not fabricate an empty historical row; the Worker remains available through search, direct navigation and Manage work.
 
@@ -240,6 +240,151 @@ registered isolated Git workspaces; recursive agents, timers, schedules and
 arbitrary tool programs are excluded. Roots that cannot host such a workspace
 are refused before any Worker exists (below).
 
+### Assignment coverage of board outcomes
+
+Problem: assignment titles and briefs do not durably identify the board outcomes
+an assignment covers. One assignment can serve several outcomes and an outcome
+can require several assignments, repairs or successor sessions.
+
+Decision: `delegate_project_work` optionally takes `board_task_keys`. The lead
+reads `update_task_progress(read={})` first: `taskKeys` is aligned with `tasks`
+(and remains aligned when `read.title` filters the response). These are the
+existing stable task-history keys, not titles or physical task IDs. The tool
+checks supplied keys against the same owner's canonical project and current
+binding's current committed board head before any Worker conversation is
+created. Departed, history-only or unknown newly supplied keys refuse without
+listing other tasks; unpublished history candidates cannot establish a link.
+Persisted keys may later describe cancelled or departed history; they never
+assert that an outcome is currently active or complete.
+
+The admitted immutable dispatch `request.boardTaskKeys` is the only assignment
+coverage state. The existing request, Coordinator request and history request
+projections carry it; consumers join it to board/history keys within the same
+owner/project/binding. Exact and history views expose optional `bindingRevision`
+from the assignment's frozen grant, distinct from `grantRevision`; an absent
+epoch is unknown, never today's binding revision. Public HTTP creation uses
+`publicRequest`, which excludes `boardTaskKeys`; only scoped Coordinator
+delegation can establish fresh coverage. Direct public authorization refuses
+new key claims while preserving exact stored replay evidence. Public embedded
+responsibility inputs use the same public request boundary. Coverage survives title changes and exact-argument
+idempotent retries without resolving titles again. Rework inherits omitted
+coverage from its pinned predecessor, and final-session successors carry the
+predecessor's coverage, only within the same Coordinator and binding revision.
+Across binding namespaces, omitted coverage stays unknown even when a key's
+bytes also appear on the new board; independently supplied current-board keys
+can establish new coverage. This does not change rework authorization or require
+same-binding inherited historical keys to remain on the board. An epoch-less
+legacy predecessor likewise leaves inherited coverage unknown without refusing
+an otherwise authorized repair.
+An explicit list replaces inherited coverage and is
+validated independently; `[]` explicitly names no board outcomes. An absent
+field, including every pre-feature assignment, means **unknown**, never an
+inferred title match. A settled assignment and its terminal review remain
+separate evidence; coverage alone does not prove an outcome satisfied.
+
+Alternatives rejected: a separate link registry duplicates immutable dispatch
+state; singular links lose valid many-to-many work; title heuristics or backfill
+invent evidence. This adds no storage migration, scheduler, board-driven launch,
+execution scope, grant or cross-project visibility. It does not change the board
+history owner's identity/rename/CAS guarantees. Regression:
+`tests/project_mod/test_coordinator_board_attribution.py`.
+
+### Storage membership selection boundary
+
+The assignment coverage producer above does not provide reverse selection.
+`ProjectDispatchRepository.read_point(id)` selects one caller-known assignment
+under its owner/project; its frozen request and grant distinguish explicit
+`boardTaskKeys: []`, omitted coverage, and a retired binding revision. It does
+not discover IDs from a task key. The existing order/source/request-budget
+indexes do not select the exact Coordinator/binding/task-key intersection.
+A ready segmented head witnesses those indexes, not board membership coverage.
+Neither an empty ad hoc prefix nor the freshest history page proves no links.
+Board refresh must not walk assignment history to manufacture that proof.
+
+The missing storage invariant is **transactionally complete, queryable reverse
+membership derived from the immutable assignment request and frozen binding**.
+A per-link application index delta is not a compatible implementation: the
+frozen coverage array has no item cap, while one existing atomic storage commit
+accepts at most 512 changes. The benign SQLite witness delegates 513 committed
+board keys successfully, replays exactly, then demonstrates that even 513
+index-only changes are refused without changing the head or source row.
+Adding a coverage cap or splitting the assignment's atomic admission changes
+existing semantics and is not an acceptable workaround. Specifications:
+`tests/storage/test_coordinator_board_storage_boundary.py`; the existing
+`test_coordinator_board_attribution.py` retains producer/admission ownership.
+
+An implementation requires a selected-storage extension, not a second coverage
+registry. The extension seam is assignment-document writes in SQL
+`operations_pkg/_project_dispatch.commit` and native
+`semantic_project_dispatch::commit`, under their existing transaction and
+receipt. A derived posting identity must include owner, canonical project,
+Coordinator ID, frozen binding revision, task key and assignment ID. Its internal
+fanout must not become N caller-supplied commit changes. The existing private
+`indexes` collection can hold postings and count/generation documents on both
+backends, read through existing exact `get` and prefix `list`; a new SQL table,
+public API or membership authority is not required. The semantic change is
+that the storage commit derives those internal writes from one source-document
+mutation, rather than requiring the application to submit each posting. SQLite
+and native must both preserve rollback, exact replay, immutable source comparison and index
+version compatibility. Revocation, review and execution updates retain links;
+assignment deletion is already forbidden. An absent binding epoch remains
+unknown and must never be assigned today's epoch.
+
+Completeness needs an authority-owned indexed-generation witness covering source
+rows, including rows with omitted or empty keys, plus per-key posting counts.
+Known positive links may be returned from freshly indexed rows even when that
+witness is incomplete; `none` requires a complete exact scope and no unknown
+coverage rows in it. Old/unindexed generations and legacy omitted keys remain
+unknown. Queries never backfill, migrate or rebuild. A generation cannot be
+advertised complete until its counts and source coverage agree; source/index
+failure rolls back the assignment write and receipt together. The boundary tests do not activate such an extension. The executable
+positive-only candidate in `tests/support/board_membership_candidate.py` is
+installed only by `tests/storage_authority_sql/test_board_membership_candidate.py`
+inside an ordinary isolated SQLite adapter fixture. It derives private versioned
+postings, per-key counts and source markers within the existing assignment
+transaction and receipt, without expanding caller `changes`. It freezes the
+source request, owner/project, binding revision and sequence on subsequent
+candidate writes. Queries page only the exact key/binding posting prefix and
+read matching source documents; missing counts or count/posting disagreement
+fail integrity. Lifecycle changes keep immutable linkage. The 513-key fixture retains 1,027
+derived documents (one source marker, 513 postings, 513 counts), totaling
+157,130 JSON bytes for its synthetic source. Postings retain a digest rather
+than duplicating the complete immutable request per link. State grows with
+source linkage and memberships, with no TTL or link cap. This is executable
+fixture code, not dormant production code or a registered storage operation.
+
+The primitive selects the explicitly supplied frozen binding and key; it does
+not assert that the binding or key is still the live board's current one. The
+fixture obtains current keys through the existing committed-board owner and
+ordinary scoped delegation. There is no runtime consumer or board refresh.
+Every candidate response is positive-only: `complete: false`, coverage `unknown`,
+including an empty result. The source marker covers that source only, not the
+project's writer population. Pre-index rows, omitted coverage, epoch-less rows,
+and explicit empty coverage cannot establish absence. Existing writers can
+still create unindexed rows or remove derived indexes; retained counts detect
+some corruption but cannot certify coverage. No query backfills or rebuilds.
+Backward read compatibility uses the existing private index document format;
+backward **writer** safety is not established. Native and PostgreSQL counterpart
+implementation/execution, old-writer fencing or trusted full capability coverage,
+and complete-generation coverage remain missing authority. The candidate is
+not enabled, not publishable as a product feature and not release/native-ready.
+Native behavior here is a source-contract assessment, not a native execution
+claim.
+
+The falsifying acceptance slice for that extension is: two assignments linked
+to one key, one assignment linked to two keys, explicit empty and omitted keys,
+the same key under retired/current binding revisions (including return to the
+same Coordinator ID), a pre-index source row and an epoch-less legacy row.
+Exact owner/project filters must precede selection. Inject a failed posting
+write and a lost acknowledgement; assert all-or-none source/postings/witness
+and no replay duplicates. Unrelated history growth must not increase selected
+document reads: work is proportional to requested keys and matching postings,
+with existing bounded pages, not lifetime assignments. Remove a posting while
+retaining its count and require integrity failure, never `none`. Membership is
+only a join input: a newest dispatch page is not all matching assignments, and
+a latest execution snapshot cannot establish historical completion, delivery,
+or per-task freshness. Those evidence owners remain separate.
+
 ### Acceptance checks (owner decision 2026-11-12)
 
 Problem: a lead (Coordinator) stated acceptance criteria only as prose in the
@@ -268,7 +413,11 @@ once (`acceptance_results_incomplete`), naming only existing checks once each
 refused while a verdict is `unmet` (`acceptance_unmet`: review with rework or
 reject instead). Each refusal carries `code`, `details`, `recovery` and
 `execution_started=false` and records nothing. `unknown` is accepted and recorded;
-rework and reject may judge some checks or none. Reads derive
+rework and reject may judge some checks or none. An accept that leaves checks
+`unknown` still publishes with its checkpoint: the verified work is integrated
+and the report states what could not be verified and what it would need. Only
+`unmet` sends work back for rework; a precondition this project cannot obtain
+never strands a checkpoint in its worktree. Reads derive
 `review.acceptanceCounts` `{met, unmet, unknown}` over every check, counting a
 check without a verdict as unknown, so an owner's own HTTP accept, which records
 no verdicts, shows every check unverified. `get_project_assignment` and the
@@ -293,13 +442,250 @@ would block the work, and a gate that only `met` passes rewards claiming
 evidence nobody observed; the count keeps it visible instead); a separate
 reviewer Worker before every review (a second paid assignment per delegation;
 the lead already reads the evidence; a reviewer Worker remains available as an
-explicit delegation when adversarial review is warranted); requiring checks on every delegation (breaks existing
+explicit delegation when adversarial review is warranted, and a review loop now
+automates it — see "Review loops"); requiring checks on every delegation (breaks existing
 callers and trivial work); storing the counts (derived data that could disagree
 with the verdicts). Specifications:
 `tests/project_mod/test_coordinator_acceptance_checks.py` (two of its scenarios
 also replay on SQLite, native and PostgreSQL in
 `tests/storage/test_coordinator_handoff_authority.py`) and the
 `acceptance_results` case of `tests/tools/test_coordinator_argument_repair.py`.
+
+### Review loops (owner request 2026-11-18)
+
+Problem: independent review caught real defects on every research deliverable
+(the knowledge project's papers each needed 2-3 audit rounds; a round caught a
+shifted data column, another overclaims, another wrong references), but a lead
+had to run that loop by hand: read the author's result, brief a reviewer, read
+its verdict, instruct the author, brief a fresh reviewer, repeat. The
+per-deliverable cost was 6-10 lead rounds of relay, and the alternative the
+acceptance-checks decision named — a reviewer Worker per delegation with the
+lead driving — is exactly what this automates. A second failure mode is review
+by the author's own context: the author re-reading its own answer does not find
+the column it shifted.
+
+Decision: `delegate_project_work` takes an optional `review`
+(`delegateRequest` in `contracts/project_dispatch_v1.schema.json`):
+`reviewers`, a non-empty list of `{role, focus}` where `role` is `correctness`
+(recompute numbers, tables and figures from sources; column/row/label alignment,
+units, sample sizes, rerun code), `overclaim` (every claim versus the evidence
+at its stated strength), `references` (citations exist, are attributed
+correctly, support the sentence; cross-references resolve) or `custom` (requires
+`focus`), plus an optional `subject` saying what to audit (defaults to the
+brief). For paper audits, independent reviewers explicitly cover novelty and
+methods, alternative mechanisms/discriminating experiments, reproducibility,
+statistical uncertainty, data/citations/figures, scope/ethics and venue rules.
+Findings locate evidence, label unverified facts unknown and suggest counterexamples
+and repairs. A `pass` needs `REVIEW_FACT: id@revision` referring to a current
+exact-source **observation** in the reviewer's conversation. The certificate must
+occupy its own line, either bare or enclosed in a matching `**` pair: bold display
+formatting does not change the binding. Partial wrappers and trailing text do not
+match. This avoids rejecting a valid source binding solely for bold formatting,
+without treating formatting or the marker itself as evidence. The common working-
+facts owner validates the exact source quote/version and rechecks freshness;
+missing/stale/derived/owner-asserted facts and bare `REVIEW_EVIDENCE: verified`
+markers cannot certify a pass. A file observation is checked against the same
+physical root identity and current file digest at certification; its stored
+quote does not keep a removed reviewer checkout available. A durable fact that
+was observed when recorded can therefore cease to certify a later report.
+The loop keeps an uncertified pass classified as `missing`, but its impasse
+reason distinguishes a missing certificate from unverified current source
+evidence, rather than claiming the report had no verdict line. The certificate
+and verdict parsers, evidence gates and audit-acceptance behavior are unchanged. An observation proves a quote exists at its
+source version, **not** that an external citation exists, supports a claim or
+that an experiment is correct. Reviewers must independently check those and
+report decision-critical unknowns as an impasse. Author self-ratings never enter
+the independent review brief; a pass is neither owner acceptance nor an oral
+prediction. Alternative rejected: parsing a reviewer-written marker as
+verification, which promotes hallucinated citations to truth. The delegation's
+result names `review_loop_id`.
+
+**Text-only handoff recovery (no automatic disclosure).** `review.subject` is the
+Coordinator's delegation-time audit description, not a separately designated author
+output. The closed `delegateRequest.review` schema has only `reviewers` and
+`subject`; it has no exact result-message reference or result-bound subject field.
+`review_loops.create` saves that description (or the brief) once, and replay returns
+the saved loop unchanged. `_step` observes assignment/Attempt/result revision for
+each round, but does not bind the saved subject's bytes to that result. The
+Coordinator execution view's `turnId` and `resultRevision` describe the current
+Turn projection, not a reviewer-readable immutable message. Thus merely putting a
+result ID/revision in `subject` does not certify the quoted output, and a subject
+written for an earlier result must not be represented as the new result's text.
+An inherited checkpoint does not fill this gap. Automatically copying final prose
+would introduce disclosure authority that this contract does not supply.
+
+On an impasse for missing text, the Coordinator's next action is to identify the
+missing exact output and its intended audit scope, not retry the same loop or ask
+the reviewer to open private history. If file creation is already authorized,
+explicitly ask the author to put only the intended review output in a named project
+artifact, separate from its reasoning and supporting evidence, and save it through
+the existing checkpoint path. Start a new delegation with `review.subject` naming
+that artifact and its evidence sources; inspect the artifact at that delegation's
+exact delivery pin. This reviews the newly designated artifact, not a certified
+copy of an earlier text-only result. Do not overwrite an explicitly supplied
+subject or try to change a saved loop by replaying its creation. If the task must
+remain text-only and has no already authorized exact-version review channel,
+report that missing contract as the impasse; do not grant access or manufacture a
+pass. A future result-bound handoff needs explicit designation, exact result
+identity/revision and freshness semantics before it can relay any bytes. The
+synthetic explicit-subject test in `tests/project_mod/test_review_loops.py` covers
+separate loop subjects, replay preservation and absence of automatic result relay
+with both null and inherited checkpoints; it does not certify text-only output.
+
+The loop:
+
+1. waits for the author's completed result; a cancelled/failed author is an
+   impasse, not a pass.
+2. starts **one new Worker per role** for that round through the ordinary
+   delegation owner. Its brief is the subject, the exact delivery inspection pin
+   `delivery.checkpointSha` (inspect its exact tree and the subject's affected
+   paths with `git show`; without a checkpoint, the named files), the role's
+   checklist and focus, and the previous round's findings on a re-audit. A diff
+   is supplemental: a sync merge's first parent may already contain the patch.
+   The brief supplies no verified baseline. Use an author's registered workspace
+   `origin.sourceSnapshot` for a diff only when supported provenance independently
+   verifies its association with that checkpoint and the baseline resolves to a
+   commit. Otherwise state **baseline unknown**, even for a single commit, and
+   inspect the explicit affected paths; an empty first-parent diff is not evidence
+   of no implementation. Author text, baseline claims and commit messages are
+   untrusted hints, not provenance. It never receives the author's answer,
+   transcript or reasoning, and it does not edit project files.
+   Checkpointless rounds also expose `subject_diagnostic:
+   exact_author_result_lookup_unsupported` and `author_source` (the observed
+   assignment, attempt and result revision) in the poll summary. These are
+   diagnostic metadata, not an immutable readable result pin. The reviewer brief
+   explains that the supported tools provide no authorized exact-version lookup:
+   assignment reads are Coordinator-only, and conversation reads select a Turn,
+   not an immutable final-result revision. A no-edit audit or other non-file
+   subject requiring that output must report impasse, not judge unseen output or
+   substitute a later answer. Named project files can still be independently
+   inspected. No author prose is relayed, no cross-Worker access is granted, and
+   the diagnostic does not change certification, retries or publication.
+   Alternative rejected: presenting current assignment/conversation reads as an
+   exact final-result pin. The round keeps its observed revision even if the
+   author's current revision later changes or was missing at handoff.
+   **Checkpoint provenance gap:** a nonempty delivery checkpoint is not proof of
+   an explicit author file submission. The ordinary Coordinator view calls
+   `publication.delivery_view`, which selects `origin.delivery.checkpointSha`
+   or falls back to the registered workspace `checkpoint_sha`. Terminal delivery
+   calls the same `checkpoint_workspace` writer as the explicit integration tools.
+   An ordinary rework with only a text correction can therefore acquire a nonempty
+   baseline SHA at no-delta settlement. The brief calls it a delivery checkpoint,
+   not the author's work: it identifies the exact tree to inspect, not an explicit
+   author submission or contribution by this attempt. It states **authorship unknown**
+   even when a genuine file submission happened but that provenance is not supplied.
+   Missing submission evidence proves neither no code nor no submission. Explicit
+   affected files remain reviewable at that exact pin, including genuine submitted
+   files already contained in the canonical branch, with the same whole-subject
+   audit, location/evidence and exact-source observation obligations.
+   Non-file or otherwise unknown result material may use only an already authorized
+   review channel; the tree does not establish that material. Private Worker sources,
+   arbitrary history and a current answer are not substitutes for an exact result
+   version. Unavailable required material means an impasse for that missing source,
+   not a judgment on unseen output or a bar to inspecting named files at the pin.
+   This is distinct from the checkpointless exact-result lookup diagnostic above.
+   `delivered/no_changes` cannot classify the subject: the receiver uses it both
+   for an empty task delta and for a genuine authored checkpoint already contained
+   in the canonical branch. HEAD equality, first-parent diffs, delivery success and
+   absence of a publication request are not author-submit witnesses.
+   The path exposes no immutable successful author-submit receipt bound to the
+   checkpoint and execution attempt. `submitSummary` and `lastCheckpointNote` are
+   mutable optional metadata, not such receipts; the summary is written before
+   capture and metadata persistence is best-effort. Missing evidence is unknown,
+   not positive proof of no submission. Classification remains unresolved rather
+   than inventing a heuristic or changing existing explicit-file subjects. A safe
+   distinction needs a source-backed successful explicit submission witness and a
+   trustworthy completeness/absence guarantee for this attempt; adding that
+   persistence is outside review briefing/diagnostic scope. The executable guidance
+   check `tests/project_mod/test_review_subject_provenance.py` covers ordinary
+   synthetic no-delta rework and a genuinely submitted, already-contained file
+   control without expected failures. Both require the supported exact-pin file
+   inspection, unknown authorship and unchanged review/evidence scope, plus the
+   authorized-channel-only and missing-source instructions. A later canonical file
+   change leaves both inspection pins and their original readable bytes unchanged.
+   Both round-2 subjects are read through `view_for_coordinator` over coherent
+   synthetic assignment/Turn/Attempt ports and
+   isolated registered workspace storage. A delivered predecessor takes the existing
+   successor builder with only its delegation/birth port replaced; the new assignment
+   owns a fresh workspace. Stale Attempt association is rejected rather than splicing
+   a predecessor's delivery into a new result. The file control uses a validated
+   project profile holding `integration_checkpoint`, exercises ordinary `admit_call`
+   (which grants its supported submit companion), and keeps the files-profile refusal.
+   These synthetic authority ports do not certify live delegation or end-to-end grant
+   admission. The fixture changes no verdict, access, publication or loop progression
+   policy and does not retrofit saved rounds.
+   It ends with `REVIEW_VERDICT: pass|fail|impasse`.
+3. a completed reviewer's result is accepted by the loop through the ordinary
+   audited `review_project_work` (no checkpoint: a reviewer delivers an audit,
+   not files). An accepting review records receipt of the audit, including a
+   `fail` or `impasse`, not acceptance or publication of the author's checkpoint.
+   The compact review receipt gives an accepted result's existing `canonicalDelivery`
+   precedence over publication guidance: canonical delivery needs no further publication
+   action, even without a publication pin. This changes only `next_step`; non-accept
+   repair guidance, noncanonical publication guidance and acceptance-check unknowns remain.
+   Neither audit prose nor a missing pin proves canonical delivery.
+   Continuation context keeps an accepted, unpinned result with unresolved delivery
+   visible using neutral inspection guidance, never an instruction to publish an
+   inherited SHA. Historical reviewer membership, original command identity and a
+   current accepting review do not establish the exact current result's text-only
+   contract: same-attempt human steering or directly read/considered project messages
+   can change purpose without changing birth identity. Absence of consumed-message
+   receipts is not proof of unchanged purpose. No authoritative exact-result type or
+   file-delivery-absence fact is supplied here; classification stops at that boundary.
+   Reviewed results with canonical delivery are omitted through the existing generic
+   lifecycle rule; active reviewers, unreviewed results and explicit publication
+   actions keep their existing visibility. No reviewer-specific loop/mailbox scan,
+   steering payload read, permission or persistence change is introduced. Alternative
+   rejected: accumulating negative-input heuristics to hide historically associated
+   reviewers gives false confidence while missing other authorized input paths.
+   Synthetic controls retain uncertain reviewer rows (including delivered human
+   steering and direct consideration), preserve actual publication actions, and omit
+   known reviewed/delivered results without mutating evidence. Every `pass` ends the loop `passed` and the lead reviews and
+   publishes the author's result as usual.
+4. any `fail` continues **the author's own session** with the failing
+   reviewers' findings via the ordinary audited `follow_up` (same grant,
+   checkout and context; a final result continues as its successor assignment),
+   and the next round audits the new result with new reviewers. An
+   `AUTHOR_VERDICT: impasse` answer ends the loop `impasse`.
+5. a reviewer's `impasse` verdict, a completed review with no verdict line, or
+   a reviewer that did not complete also ends the loop `impasse`. There is **no
+   round limit**: the loop stops only on an explicit pass verdict or a reported
+   impasse.
+
+The lead drives nothing between rounds: `poll(review_loop_id, wait_s)` advances
+each loop from dispatch evidence and waits on its pending Workers, returning on
+a verdict, on another Worker's settlement (that news is returned in `workers`,
+never swallowed), on new input, Stop or the wait's end. A named reviewer's
+settlement is internal progress, not a reason to return to the lead. The wait
+reads settlement metadata; the loop reads reviewer answers only when the round
+can be judged, rather than fetching ordinary Worker results it would discard.
+The final refresh after new input, Stop or timeout is read-only: it reports which
+Workers are still pending without starting reviewers, accepting results, sending
+rework or writing the loop record. The next poll can take those steps. Loop
+handles are polled apart from assignment IDs. Loops advance only on the lead's polls, including the
+poll a continuation Turn makes after a Worker settles; no timer, queue or
+executor of their own. Durable state is one record per loop
+(`project.review_loop.v1`, owner/project CAS) holding the spec and the Workers
+each round started, so a replayed poll never starts a reviewer twice; rounds and
+verdicts are reconstructed from the dispatch record. `review_loops.advance` is
+pure over its ports; `_Ports` reuses the Coordinator's own owners (delegation,
+`session_control.control_session`, audited review), so every reviewer birth,
+rework and accept is an ordinary audited act of this lead. A reviewer that
+could not start is an impasse named in the reason.
+
+Alternatives considered: a blocking tool call that runs the whole loop (holds
+one model round for hours of Worker time and cannot survive a restart; the
+poll contract already exists for waiting); storing the review spec on the
+assignment request like acceptance checks (the spec is loop state, not Worker
+input or authority, and the record already exists for each delegation's result);
+reusing one reviewer Worker across rounds (its own earlier verdict becomes
+context that anchors it; a fresh Worker per round is the independence the lead
+was asked for); requiring reviewers to be read-only by profile (changes the
+grant shape of every delegation; their brief forbids edits and their result
+publishes no files, so the audit is what they deliver). Specifications:
+`tests/project_mod/test_review_loops.py` (pure advance across two rounds,
+impasses, replay and durable records, plus a delegation driven through
+`delegate_project_work` and `poll`).
 
 ### Waiting for Workers
 
@@ -425,6 +811,155 @@ the model). Specifications:
 `tests/project_mod/test_coordinator_workers.py::test_an_idle_wait_ends_the_turn_while_settlement_resumes_the_coordinator`
 and `::test_a_timeout_nothing_would_resume_keeps_the_model_round`.
 
+#### A normal-park diagnostic needs a joint execution boundary
+
+The idle-wait round exit is a **candidate finish**, not an authoritative park.
+`finish_after_idle_coordinator_wait` consumes the round's wait markers and stamps
+`_toolLoopCleanFinish`; the same candidate can subsequently settle stopped,
+revoked, stale, restart-interrupted or failed. A voluntary normal answer and an
+idle-wait candidate can also derive identical completed settlement metadata.
+Neither a timeout marker nor `completed` positively identifies actual normal park.
+
+The applied terminal commit in `turn_lifecycle.record_task_event` starts the
+settlement drain only after storage accepts the terminal write. That is a real
+completion boundary, but not a park boundary: `observe_turn_end` runs before the
+asynchronous queue/background-successor arbitration. The same observation can
+precede a started successor or the no-successor recovery branch. Shutdown and an
+already-owned autopilot successor bypass the drain. Its later recovery and
+message-wake calls may themselves take the lane. Terminal listeners and the
+post-commit project callback do not join those decisions or supply a no-successor
+receipt. Thus moving a diagnostic from every poll to one of these callbacks
+would still not prove one read per genuine park.
+
+The existing same-owner source pins are separately available through the role,
+original delegation and request account. Ordinary `source_for_task` requires a
+pending/running owned physical Attempt; its `issued=True` completed-source
+exception belongs to an already-issued birth, not a new settlement-read policy.
+Do not borrow that exception, add a provisional runtime field, or scan readiness
+from these candidate/settlement/recovery callbacks.
+
+**Required joint contract, not implemented:** the Turn/request owner must define
+one linearization point joining an applied normal terminal verdict, its exact
+owner/canonical project/Coordinator/binding epoch/original request and physical
+Turn/Attempt pins, and an explicit no-successor disposition after existing
+queue/background/continuation/message handoff arbitration. It must define which
+existing same-owner read authorization survives that terminal transition and
+exclude Stop, revocation, stale/nonapplied terminal writes, replay, quiesce and
+owned successors. The same transition must own once-only diagnostic evaluation
+and delivery into the same Turn or an already-owed continuation payload; no new
+wake may be created merely to show it. If delivery is after terminal publication,
+its owner must specify how that existing payload can still receive the snapshot.
+A fresh selected request-cohort acquisition and one `pre_park_witness` evaluation
+must be counted separately from its graph-bounded external proof reads; one
+witness evaluation is not a promise of one storage RPC or a constant-size cohort.
+Duplicate callbacks and repeated waits must do no extra evaluation or dispatch,
+without a readiness ledger, timer or new scheduler. No current callback supplies
+this conjunction, and no normal-park diagnostic consumer is installed.
+
+`tests/project_mod/test_coordinator_park_transition_boundary.py` traverses the
+actual candidate-finish and terminal-verdict owners and the drain's successor
+ports with synthetic fixtures. It preserves an already-registered unborn stage
+whose exact prerequisites have just become reviewed/delivered, shows its existing
+witness once against a nonmutating fixture by an explicit oracle, and checks zero
+runtime witness/graph reads on repeated wait exits. Stopped/revoked/stale/restart/error,
+unobserved, completed-source, queued-successor, shutdown and autopilot controls
+identify the missing conjunction. These are boundary counterexamples, not tests
+certifying an implemented park hook, atomic authority races or backend parity.
+This is distinct from the ordinary wait projection proof in
+`test_coordinator_wait_readiness_boundary.py`; dispatch, wake and receipt
+semantics remain unchanged.
+
+#### Passive registered selection requires a non-effectful evidence profile
+
+A complete existing source-request selection (default dependency and policy
+inclusion) plus `pre_park_witness` distinguishes registered, unbound assignments
+whose pinned prerequisites are met from review/delivery waits and unknown
+result/workspace evidence. A stale exact result or checkpoint pin is not ready.
+The ordinary settlement-only projection deliberately carries none of that proof:
+the same unbound assignment view can accompany blocked, ready or unknown inputs.
+Neither projection establishes unassigned/current queue status, exhaustive board
+coverage or authority to start anything. Policy-free history pages cannot stand
+in for the complete request's settlement and pending-decision evidence.
+
+**Problem:** this existing evaluator is not guaranteed non-effectful on every
+file-delivery branch. `dependencies._edge` calls ordinary `delivery_view`. An
+exact publication pin with a `project_publication_authority_missing` hold can
+re-enter `validate_publication`, which may settle ended model intents in the
+current canonical assignment. The dependency snapshot's earlier settled-effect
+check does not constrain that later read. The receipt-only `diagnostic=True`
+profile avoids the revalidation, but is not currently the dependency evaluator's
+profile. Merely formatting its verdict purely would not make acquisition passive.
+The existing `finish_request` consumer invokes `pre_park_witness` before refusing
+incomplete/unreviewed completion. That refusal creates no completion receipt,
+but its diagnostic can still perform this prerequisite ledger write; it is not
+a nonmutating consumer. No new consumer is introduced here.
+
+**Decision:** no passive recommendation consumer is installed at continuation
+birth, ordinary wait or park. Qualify a canonical nonmutating dependency-read
+profile in its owner before using this witness for that purpose; do not add a
+new store, wake, binding guard, runtime flag or caller-side workaround. This is
+separate from the RFC's effectful admission/atomicity gaps and from ordinary
+publication behavior, which remains unchanged. The physical task/work association
+limitation recorded in [the readiness RFC](REGISTERED_WORK_READINESS_RFC.md#091d-explicit-cross-owner-gaps-blocking-not-solved)
+also remains uncorrected; the check does not certify a stronger association.
+
+The exact executable discriminating check is:
+
+```sh
+PYTHONPATH="$PWD" .venv/bin/python3 -m pytest -q -p no:cacheprovider --runxfail \
+  tests/project_mod/test_coordinator_registered_selection_boundary.py
+```
+
+Its four synthetic matrix cases keep two registered candidates ready while a
+third is waiting review, missing workspace evidence, stale result or stale
+checkpoint. Two request-disposition controls keep pending owner decisions and
+settled requests out of ready even when their prerequisites are met. The
+held-receipt case compares the diagnostic projection with current readiness
+using a mutation-port tripwire: no write is allowed, and the unchanged
+repository and absent births are checked before reporting the missing profile.
+A second counterexample calls ordinary `finish_project_request`, changes the
+canonical prerequisite only after the finish snapshot is captured, and measures
+only the original witness evaluation. It demonstrates exactly one injected
+ledger write (`dispatch_intent` → `settled`) while completion is refused, the
+child remains unbound and no completion receipt is created. The injected store
+is compared in full to exclude any other record change. No write reaches a live
+selected authority. This is an inherited diagnostic limitation, not a runtime
+change made by the qualification.
+With `--runxfail` both counterexamples fail at the named missing profile. The
+ordinary run keeps strict, typed expected failures so fixture errors cannot
+masquerade as that gap; a repaired owner makes them XPASS and requires removing
+the markers. These are injected ordinary repository/Turn/Attempt/workspace
+fixtures, not live sessions, backend transaction parity, native certification or
+a new runtime consumer.
+
+#### A Worker successor does not consume its Coordinator's settlement event
+
+Problem: the terminal settlement drain notified the Coordinator only when no
+queued human input or completed-background successor started on the settled
+Worker's lane. The unrelated successor could run indefinitely while the
+already-authorized request's result sat unreviewed, even though its Coordinator
+lane was idle.
+
+Decision: after giving the ordinary queues first priority, a successful
+successor branch runs the existing `recover_conversation_dispatch` with
+`coordinator_only=True`. This selects result-driven Coordinator continuation
+from the registered request, never ordinary Worker redispatch on the now-busy
+lane. The original source, owner/project/binding, Stop, observation, dependency,
+and exact command/birth gates remain authoritative; duplicate or overlapping
+drains share the same wake. No board row, title match or absent attribution
+confers authority. Running siblings, independent outcomes, owner questions,
+review and publication remain distinct evidence for that continuation, not
+reasons to wait for unrelated successor work or create one Worker per row.
+
+Alternatives rejected: waiting for the successor's next settlement (loses
+independent progress); running full Worker recovery after queue dispatch
+(retries work on a lane that already has its successor); dispatching from board
+text, polling timers or new scheduling state (neither needed nor authoritative).
+Specifications: `tests/project_mod/test_coordinator_settlement_successor.py`
+and the committed-settlement/human-priority cases in
+`tests/project_mod/test_project_dispatch_recovery.py`. These use synthetic IO
+and executor ports, not real Workers or a deployed server.
+
 #### A deferred wake waits for its lane's Turn (owner request 2026-11-18)
 
 Problem: every recovery pass of a project (each held delivery receipt on a
@@ -501,6 +1036,47 @@ pending ("Messages wake an idle lead"). Alternatives rejected: time windows
 around the Turn end (a tuned interval); dropping queued wakes (loses the
 request's continuation). Specification:
 `tests/project_mod/test_coordinator_wake_lane_events.py`.
+
+#### Failed results wakes are not idle waits
+
+A failed results Turn did not finish handling its Worker frontier. When the
+frontier still has an actionable result, a running or held sibling Worker and
+an older completed Turn's observation do not suppress the existing stall
+backoff. A later successful Turn on the same lane can discharge that wake
+while a sibling is pending, if its observation covers the current frontier.
+Settlement and startup rederive the due time from the failed Attempt. An
+existing unborn wake keeps its command and grant, but cannot bind after its
+pinned predecessor grant is revoked or its execution association advances.
+The old Turn is never regenerated. On unchanged evidence, a manual retry
+verdict commits the blocked decision and report intent before publication;
+startup replays an unacknowledged report through the same report command.
+Only an affirmative worker-exit classification (`cutCallsClassifiedSafe`)
+permits a fresh wake for the no-cut-call exception, not replay of the failed
+Attempt. Fresh Worker evidence and due decisions or commitments retain their
+existing paths. An unresolved future owner decision keeps the request open
+even when the results retry must stop, including when a later Turn has already
+seen the queued retry's results. Successful Turns retain the exact Worker
+result revision and delivery status returned by a poll in their existing
+settlement. Results-only admission rechecks that evidence and fences the
+Coordinator conversation revision at Turn creation, so a concurrent settlement
+between the read and commit requires a fresh recovery decision. Stop receipts
+also fence the selected Worker dispatch documents, whose point updates do not
+advance the project head. Worker and Coordinator Turn revisions, current
+Attempts and verdicts are checked in that same dispatch transaction: a Worker
+can settle without changing its assignment. The SQL authority holds the owned
+Turn rows through commit; the native authority validates its point reads with
+its existing transaction witness. A mismatch records neither stop nor report.
+These are distinct fences: a Turn pair can be accepted
+before its dispatch association. A definitive bind refusal settles only an
+unbound Attempt in the terminal-event transaction, without a separate start
+claim. If that write does not commit, ordinary accepted-attempt recovery still
+sees the same pair; if it does commit, replay sees the terminal outcome. A
+legacy start marker is not safe to adopt during serving. The existing
+retired-generation Turn sweep settles it after the normal liveness fence. Exhaustion and
+manual-retry verdicts do not rewrite the task board or the Workers' grants,
+checkpoints, or holds. Alternatives rejected: waiting for a held Worker to
+settle, replaying the failed Turn, or adding another wake timer.
+Specification: `tests/project_mod/test_coordinator_continuation.py`.
 
 #### Lead prompts carry no ceremony (owner request 2026-11-18)
 
@@ -1171,8 +1747,114 @@ formerly the next pass would have retried it.
 Alternatives rejected: rereading the assignment's version on every visit (one
 read per held row and pass, still bound to the lane's loop); excluding these
 holds from the storage action filter (a new receipt field in both
-authorities); converting revoked holds to terminal receipts (changes the
-delivery vocabulary the Coordinator and UI read).
+authorities). Revoked holds no longer stay held: see the next decision.
+
+### A delivery its assignment can never publish closes (2026-11-18)
+
+Problem: on 2026-11-18 the tofu, knowledge, parallel and router projects held 96
+receipts as `blocked` (`project_publication_authority_missing`, 60) or `preserved`
+("Task did not complete; checkpoint retained", 36). 71 belonged to cancelled
+assignments and 23 to results reviewed `reject` or `rework` (18 reworks had a
+successor, 9 already delivered). None could ever publish, yet views, polls and the
+Router showed them as holds, and every recovery pass decided them again. The two
+that did need a lead (a result never reviewed, an accept recorded without
+`checkpoint_sha`) belonged to finished requests, whose leads no wake told.
+
+Decision:
+- `validate_publication` raises `PublicationClosed` (cause `cancelled`, `rejected`,
+  `reworked`) for a recorded grant revocation or a reject/rework review; a Stop or
+  lapsed owner delegation stays `DispatchGrantRevoked`. Each is final: a revoked
+  grant never returns and a reject/rework is replaced only by a rework.
+- The delivery owner then settles the receipt `closed` (`delivery._close`, reason
+  `project_publication_closed: assignment <cause>; ...`), terminal like
+  `delivered`/`preserved` and outside both authorities' action filter (which asks
+  only for `working`, `pending`, `blocked`). The checkpoint and its refs stay, so a
+  successor can still merge it; a checkpoint the branch already contains still
+  settles delivered. An incomplete attempt of a cancelled assignment closes instead
+  of preserving.
+- `cancel_project_work`, the revoke API, an unadopted birth's withdrawal and a
+  reject/rework review release the row (`service._close_final_hold`), so the hold
+  closes at once; older rows close on the next recovery pass, and `delivery_view`
+  already reports a final assignment's legacy hold as `closed`. `worker_phase`
+  treats `closed` as settled.
+- A continuation lists, besides its own request's Workers, every Worker of the same
+  binding whose result awaits review or was accepted without a pin while its
+  workspace receipt is not final (`unpinned`: inspect the assignment before
+  deciding whether publication is needed; result acceptance alone requests none).
+
+Known evidence gap: that visibility requires a readable, nonfinal delivery view.
+`delivery_view=None` conflates missing/mismatched workspace or receipt evidence
+with unavailable reads. `worker_phase` currently treats an accepted result with
+that value as settled, so it can be omitted from continuation context; this is
+not canonical-delivery proof. Ordinary `project` grants all carry writable `.`
+scope, including explanation-only work, and registration establishes ownership,
+not whether the result requires file delivery. A `delivered/no_changes` receipt
+is positive delivery evidence, not a non-file intent discriminator.
+
+No read-only repair can distinguish these cases from current structured intent.
+The smallest missing producer input is a durable delivery-applicability value
+(`required` or `not_applicable`, absence remaining unknown), frozen by delegation
+on the request independently of the workspace receipt. This is a proposed input,
+not an implemented field or an inferred result; it would not itself prove delivery
+or authorize publication. Until that authority exists, keep phase/wake behavior
+unchanged rather than guess from briefs, review notes, capabilities, or missing
+checkpoints. The isolated diagnostic
+`tests/project_mod/test_coordinator_delivery_intent_diagnosis.py` reproduces the
+same absent view for completed, accepted ordinary file/explanation briefs with
+absent workspace, registered workspace without a receipt, and unavailable reads.
+It verifies projection reads leave fixture state unchanged; it is not a red/green
+repair or evidence of deployed behavior.
+
+The current optional producer negotiation stops at the closed
+`delegateRequest` and `request` definitions in
+`contracts/project_dispatch_v1.schema.json`: neither declares a request-owned
+metadata extension. `coordinator_workers.delegate` validates the arguments;
+`authorize_from_coordinator` validates the constructed request; existing readers
+validate stored nested requests in both legacy and segmented records. Thus adding
+an undeclared applicability member would break those readers, not provide a
+schema-free compatible extension. The internal ledger mutation port also forbids
+changing the immutable request. Open tool/config or prompt dictionaries are not
+delivery-metadata owners and must not carry a shadow applicability record.
+
+`tests/storage/test_coordinator_delivery_applicability_boundary.py` makes this
+stop executable through ordinary synthetic delegation adapters and disposable
+SQLite storage, for both legacy and segmented dispatch records. It probes explicit
+`required`/`not_applicable` and malformed values at argument/request admission,
+checks refusal leaves durable and execution state unchanged, and rereads omitted
+metadata after current-result review with absent/fresh delivery receipts. Worker
+summaries and the secondary Coordinator service view agree without writing state.
+The candidate field spellings in those refusal probes define no supported API.
+Request closure alone does not exclude an envelope carrier. The existing
+segmented storage contract accepts object-valued versioned envelopes;
+`SegmentedDispatch` retains unknown envelope annotations through ordinary record
+updates. The same test file now demonstrates that retention durably on SQLite
+for both proposed values, including a domain-validated current-result review.
+It also replaces the annotation after review with an invalid object: repository
+reads still accept the unchanged nested record. Thus storage compatibility is
+supported here, but applicability ownership/validation and immutable initial
+capture are not. Ordinary delegation creates no such annotation, repository
+reads project only the nested record, and the `metadata` argument is an internal
+serialization parameter, not a declared request-authoring port. The storage
+contract explicitly assigns domain validation and immutable authority to the
+repository; accepting JSON is not authorization to assign it delivery semantics.
+
+The exact stop is therefore at domain admission: neither the closed request
+ports nor the retaining envelope currently supplies an admitted, validated,
+request-frozen applicability value. Using a raw storage annotation as that value
+would introduce an arbitrary field, which this narrow task excludes. A future
+negotiation may choose a declared envelope owner instead of changing the request
+body, but must define authorized initial capture, validation, immutable linkage,
+reader exposure and compatibility before a consumer treats it as applicability.
+These tests do not prove such an extension impossible or require a request-schema
+change specifically. No diagnostic, migration/default, publication, finish,
+wake/retry, permission or automatic applicability claim is introduced.
+Expiry/revocation behavior and cross-engine metadata retention are not extended
+or certified by these probes.
+
+Alternatives rejected: an age cutoff that expires holds (a knob, and an unreviewed
+result is not stale by age); deleting receipts or checkpoints (loses what a
+successor merges); a new receipt field in the storage filter (`closed` already
+falls outside it). Verify `tests/project_mod/test_dead_delivery_holds.py`.
 
 Specs: `tests/project_mod/test_project_publication.py`
 (`test_a_hold_only_its_assignment_can_lift_is_decided_once_until_released`,
@@ -1526,18 +2208,22 @@ Decision. The human only chats with the Coordinator; the Coordinator tracks
 sessions and tells the human what matters.
 
 - Task board. The bound Coordinator authors the board with
-  `update_task_progress`: a one-sentence `summary` plus up to 24 tasks in the
-  human's words, each `pending | in_progress | completed | cancelled` with an
-  optional one-line `progress` note (`progressRequest` in
-  `contracts/project_coordination_v1.schema.json`). It is model-authored on
+  `update_task_progress`: a concise `summary` plus tasks in the human's words,
+  each `pending | in_progress | completed | cancelled` with an optional one-line
+  `progress` note (`progressToolCall` and `progressRequest` in
+  `contracts/project_coordination_v1.schema.json`). Prefer `changes` for daily
+  updates and `read` to inspect the board; `summary` with `tasks` is a deliberate
+  complete replacement. It is model-authored on
   purpose: deciding what the human cares about and summarizing it is the
   Coordinator's job. It is a summary, not evidence, and grants no authority;
   Worker records and conversations remain the evidence.
   `lib/conversations/coordinator_progress.py` keeps one validated head per
   owner/project (`project.coordinator.progress.v1`) for the current binding:
-  full replacement under CAS, unchanged content is a no-op, a lost
-  acknowledgement replays as unchanged, a replaced binding starts empty and an
-  older binding can never overwrite a newer one. Writes push the existing
+  changes and replacements publish one complete board under the same head CAS;
+  unchanged content is a no-op. A lost acknowledgement retries the same storage
+  command and recovers its receipt, never rebasing over newer work. A replaced
+  binding starts empty, and an older binding cannot overwrite a newer one.
+  Writes push the existing
   `project` hint. GET `/api/v4/project/coordination/progress?path=`
   (owner-scoped `conversations`, passive) returns `progressState`. The board
   is also the Coordinator's checklist and refreshes live from its write's
@@ -1550,8 +2236,21 @@ sessions and tells the human what matters.
   one line behind a status glyph (a ring while pending, half filled in
   progress, a filled check when completed, a filled cross when cancelled):
   in-progress work first, then the Coordinator's order, finished tasks folded.
-  Only an in-progress task shows its note, cut to one line; every other note
-  is its row's tooltip and stays in the accessibility tree. The footer holds
+  Pending means not marked started, not queued. A pending task with an explicit
+  `reason` is shown as waiting; an unexplained pending task is not called
+  blocked. Show the wait, cancellation reason, or its absence inline, not only
+  on hover. An unexplained pending row states that no start details are
+  recorded, even when it carries an ordinary progress note; this is not proof
+  that no Worker was assigned or executed. The header shows `board.updatedAt`
+  as the board update time, with its absolute time and
+  relative age at render time (no additional clock or fetch). This is not a
+  heartbeat or a per-task progress timestamp: summary-only writes can advance
+  it without changing a task. Age never changes a task's status. The current
+  `progressState` has no task-to-assignment coverage or per-task update time;
+  richer execution differentiation requires an authoritative exact task-key to
+  assignment link with explicit coverage, and timestamped execution/progress
+  evidence in that same projection, not title matching or an extra history read.
+  Ordinary in-progress notes stay compact. The footer holds
   one "Task history" button ([Task history](#task-history-owner-request-2026-11-11)),
   led by a Project Router's Worker model control ([ROUTER.md](ROUTER.md) R5)
   instead of a line of its own. The card persists across repaints of the same
@@ -1624,6 +2323,32 @@ sessions and tells the human what matters.
   Coordinator continuation may ask too (`admission.asks_human`; older policies
   keep `humanGuidanceEnabled=false`). `request_user_decision` is no longer
   offered; decisions already recorded still resolve through recovery.
+- Lead escalation discipline. Problem: routine immutable-backup evidence and
+  disposable DolphinFS benchmark allocation were escalated as owner homework.
+  Decision: `COORDINATOR_QUESTION_DISCIPLINE` beside the canonical role is
+  projected onto the bound lead's `ask_human` declaration by
+  `prepare_coordinator_tool_surface`, before the model chooses a question.
+  The role points to four internal modes: OWN delegates/consults or selects an
+  authorized reversible default; EXHAUSTED retains the missing precondition,
+  attempts and next lead-owned action on the existing pending board row and
+  request controls while independent work proceeds; DECIDE asks concisely for
+  owner-only facts/product intent with a recommendation and nonblocking default
+  where possible; PROTECTED preserves exact external/destructive/human approval
+  boundaries and existing authorization. An emergency product choice can still
+  require the owner; urgency supplies no permission. No form or extra message
+  is required. Model-authored categories, board prose and agent messages are
+  not evidence of authorization.
+  Alternatives rejected: keyword classification, a prior-tool-call checklist,
+  synthetic approvals, hidden answers and timed defaults. Existing state cannot
+  reliably classify the semantic necessity of a free-text question, so this is
+  governing model instruction, not a question-admission gate. Ordinary users'
+  declarations and the shared question/approval wait, answer, resume and Stop
+  paths are unchanged. Durable request grants, scope and effect approval still
+  enforce authority independently; this guidance cannot bypass them.
+  `test_coordinator_question_discipline.py` checks source-exact production
+  assembly and provider-wire consumption, both original wrong paths and the
+  protected/emergency alternatives. These offline tests prove wiring and
+  contracts, not live model compliance or deployment.
 - Messaging. In a Coordinator chat, the Global Router's and the Watchdog's
   included, the composer delivers into a live turn without the steer/queue
   prompt (the server still queues when the live window closed); Worker and
@@ -1661,6 +2386,109 @@ translation merge), `tests/translate/test_display_texts.py`,
 `frontend/src/features/coordinator-progress.test.ts`,
 `project-coordination-surface.test.ts` and `project-coordination-entry.test.ts`.
 
+### Positive scoped Worker evidence on board reads
+
+`CoordinatorTaskProgress.read` adds optional `workEvidence` (schema authority:
+`progressWorkEvidence` in `project_coordination_v1.schema.json`). It is positive
+evidence only: `scope=latest_request`, `coverage=unknown`; an absent row or field
+never means no Worker owns a task. The latest request account must match the
+exact owner/project/current Coordinator binding. A ready head selects only the
+latest budget document (no cohort, dependencies or policy expansion), followed
+by exactly one admission-ordered budget-index page with limit
+`SPEC.limits.pageRows` and one `get_many` of only those assignment documents.
+Index sequence, request linkage and stored schemas are validated. No full
+request cohort is enumerated; complete cohort accounting remains unchanged. Receipt visibility requires
+an explicit owning user principal with the existing `chat` scope and matching
+tenant; the board endpoint retains its `conversations` permission. Only ready segmented
+authority is eligible; legacy, copying and copied state stay unknown without
+loading the monolith or scanning history.
+
+One admission-ordered batch of at most the existing storage contract's
+`SPEC.limits.pageRows` assignments is eligible for passive settlement-only service
+hydration (Turn metadata, Attempt and exact delivery receipt, not transcripts).
+The explicit diagnostic receipt mode never revalidates publication authority,
+mutates dispatch state, sends commands or runs Git; an authority-missing blocked
+receipt stays held (or unknown if its pins are unavailable), never promoted to pending.
+Rows link only explicit keys still on the current board. Phases describe those
+receipts, not board completion; a review of a stale result is unknown. Delivery
+phases additionally require the current result/grant publication pin and its exact
+checkpoint to match the associated receipt's explicit raw checkpoint. Missing,
+empty or conflicting receipt checkpoints stay unknown even when the workspace
+has a newer or matching checkpoint; the workspace checkpoint is never a fallback.
+An accepted result without that pin
+is not delivered. The latest request pointer, binding and board head version
+are rechecked after hydration; a concurrent change returns unknown empty evidence. This read starts no work and changes no
+request, Stop, authorization, review or delivery authority.
+
+The card reuses the existing translated assignment, bounded-view and execution
+labels. Its visible code fields retain exact `scope`, `coverage`, request/source
+identity and each linked assignment's phase; these are protocol values, not
+translated title matches. Missing assignment data is stated once on the card's
+coverage line with the shared unavailable label; a per-task line exists only
+when the observed receipts give it contrast, marking every task they do not
+name. A board with no receipt at all draws no per-task line, so its absence is
+never repeated per task. Authored board status remains separate. An ended receipt uses the conservative
+unknown display label while retaining its exact `phase=ended` field, never an
+outcome-completed label. This source-only presentation requires no pending locale
+additions or translation fallback to pass committed generator validation.
+
+Problem: a model-authored board alone cannot prove current Worker activity.
+Decision: preserve latest-request evidence and add a separately identified positive
+older-request subset from one existing newest admission-index page.
+Rejected: whole-history ownership scans, inferred total coverage, and a second
+Worker state store.
+
+#### Older simultaneous requests: positive newest-page subset
+
+`coordinator_parallel_evidence.py` uses the existing passive reverse
+`assignments:order:` index to discover IDs without caller-supplied request/source
+IDs. It reads exactly one newest page at the existing storage contract's
+`SPEC.limits.pageRows`, never a cursor continuation or `history_page()` (whose
+normal selection can expand dependencies). This is an additional bounded index
+read, not a complete active-request registry or reverse board-membership index.
+
+Only explicit current task-key links under the exact owner/tenant/project and
+Coordinator binding are eligible. Latest-request assignments are excluded from
+this additional subset; their existing fields and hydration behavior remain.
+Candidate assignment documents are sequence/schema checked. Their named request
+accounts and exact source-attempt settlement documents are point-read in a batch,
+including absent settlements. A missing account, stale source/admission or any
+settlement excludes the candidate. In particular an ordinary `needs_user`
+settlement can leave a Worker running: execution activity alone is not request
+eligibility. Existing `validate_own` source/Stop/binding gates run against the
+supplied point snapshot without dependency, cohort or history expansion; they
+issue no grant or command. Diagnostic service hydration does not run publication
+validation. Ended/delivered older receipts do not establish still-active work;
+unavailable bound execution remains an explicitly linked unknown receipt.
+
+After hydration the read rechecks source/admission gates, exact receipt views,
+and all selected assignment/request/settlement document envelopes (including
+versions and absent settlements). Changed evidence discards the additional
+subset without altering latest-request behavior. The ordinary outer read still
+fences the current board record version, binding and latest request pointer.
+A revived same task key is matched only on the current board; it does not reuse
+a cached old board snapshot. Continuation can preserve assignment/work-task and
+admission identities while advancing the document version and Attempt, so stable
+IDs never substitute for those read witnesses. These are optimistic read fences,
+not atomic admission or binding guarantees.
+
+Optional `workEvidence.additionalRequests` carries each observed older request's
+exact request/source IDs and linked receipt rows. The card renders these beside
+latest receipts by exact task key, deduplicated by assignment ID with latest
+precedence. Coverage remains `unknown`, including when the newest page is full,
+empty, unrelated, or omits older running work. No count, no-owner, completion or
+complete-current-set claim follows. No title heuristic, migration, backfill,
+new index, scheduler, network effect, dispatch or publication is introduced.
+
+`tests/storage/test_coordinator_parallel_evidence_boundary.py` exercises two
+ordinary synthetic open request accounts/delegations on an isolated SQLite
+authority, same physical task with distinct source Attempts, current/revived rows,
+canonical interrupted/`LEAD_HOLD` versus ordinary interrupted receipts,
+settled-`needs_user` with running work, unrelated scope and hydration-time changes.
+The existing latest-request suite asserts both bounded index reads and selected
+document batches. This is source/SQLite fixture evidence, not native/PostgreSQL
+execution, deployment or production activation.
+
 ### One progress source (owner decision 2026-11-08)
 
 Problem: a Coordinator kept two progress lists. `update_task_progress` wrote
@@ -1677,6 +2505,34 @@ commit watch wakes for writes of every process.
 
 Decision: one progress record with two views.
 
+**Scaling the board.** The former 24-task and character limits rejected valid
+updates and encouraged omission of unrelated work. Routine `changes` apply by
+exact title to the head seen by each CAS attempt: omitted tasks and fields
+stay as written, new titles with a status append, and ambiguous or repeated
+targets refuse instead of guessing. Use `changes: []` with `summary` to change
+only the summary. To rename, reorder or remove rows, submit the full `tasks`
+with `summary` (old calls remain valid); `expected_revision` optionally fences a
+write to the exact revision last read, or zero before the first board. `read: {}`
+reads the current board without publishing, and `read: {title: ...}` selects
+exact matches. Large reads use the existing tool-result artifact path. The
+same binding-scoped head, history and promise receipts preserve complete
+content; no board-specific count or character budget governs admission. Field
+shape, single-line text, valid UTF-8, live scope, and the promise rules still
+apply. Shared transport/context limits remain distinct from the board contract.
+
+Alternatives rejected: raising the old limits (moves the failure); dividing a
+replacement into several writes (each replaces the previous one); truncating
+rows or titles (loses work or changes identity); a second task store (duplicates
+board authority). Routine updates no longer repeat the entire plan on model
+input and output; the model reads task details only when needed. A write still
+materializes the complete durable head and the exact round projection for the
+UI, not a history scan or a chain of patches to replay on every read. On a
+synthetic 150-task board (short mixed-language titles and notes, no translations
+or promises), compact UTF-8 JSON was 21,214 bytes for the head and 22,479 for
+the round projection. A one-task update sent 87 bytes instead of the full
+15,813-byte request; the model-facing checklist text was 159 bytes instead of
+7,102.
+
 - Record. The board head stays the only store of a Coordinator that keeps a
   board (its tool ceiling has `update_task_progress`; the Router Watchdog's has
   not). The task's checklist state (`_todoState`, the Turn's `todoState`, the
@@ -1685,17 +2541,17 @@ Decision: one progress record with two views.
   summary as explanation), never a second list. Both writes hold the task's
   progress lock, so they cannot interleave.
 - Writes. `update_task_progress` publishes the board and adopts its plan
-  (`publish_task_board`). Its receipt adds `plan`, the checklist the model now
-  holds, which is also the evidence that keeps the checklist block from being
-  re-injected while the receipt is visible. `todo_write` keeps its schema and
-  validation; in such a chat it publishes the accepted checklist as the board
-  (`plan_publication`, `board_from_plan`): items become tasks, a task keeps its
-  note while its title and status are unchanged, the summary stays, and a first
-  board takes the explanation when it fits on one line, else its current item.
-  A checklist the board cannot show (an item over 120 characters or on several
-  lines, or `blocked`) is rejected with that reason and changes neither view;
-  so are a replaced binding and a failed save. Every other chat keeps its own
-  checklist exactly as before.
+  (`publish_task_board`). The receipt's `plan` names the binding and board
+  revision and how to read it, not a second copy of the rows. The accepted
+  checklist stores its exact UI/Continue projection plus `boardRef`. The
+  context composer restores the reference if no matching receipt survived.
+  `todo_write` keeps its own input schema and is also a replacement in a
+  board-keeping chat (`plan_publication`, `board_from_plan`): items become tasks,
+  notes keep their title/status match, and the summary stays. A first board
+  takes the explanation on one line, else its current item's title. A multiline
+  item or `blocked` status is refused, as are a replaced binding and a failed
+  save. On success it adopts the committed projection, not the submitted
+  explanation. Ordinary chat checklists are unchanged.
 - Live refresh. Each progress write's round carries `coordinatorProgress`
   (project, Coordinator, binding revision, board revision) beside the plan's
   `todos`/`todoState`. The retained tool-round renderer feeds both to the live
@@ -1708,8 +2564,7 @@ Decision: one progress record with two views.
 Alternatives rejected: deriving the board from the task-local checklist (that
 state lives for one turn and has no summary, notes or `cancelled`); a new
 combined record (a migration for the fields the board head already validates);
-widening board tasks to checklist limits (a task row is one readable line and
-its translation entries share the board's text bounds); relaying execution-host
+relaying execution-host
 push frames to the API host for this (a second cross-process transport for what
 the durable conversation stream already delivers); polling the board or
 re-reading it on every conversation commit. Push-only hints written by the
@@ -1721,6 +2576,69 @@ invariant over both write paths, board-rule rejections, a replaced binding,
 translation, the Watchdog and ordinary chats, receipt evidence),
 `project-coordination-surface.test.ts` (re-read without a push or navigation)
 and the real-browser journey in `tests/frontend/test_project_coordinator_browser.py`.
+
+### Typed blockers on pending tasks (owner complaint 2026-11-19)
+
+Problem: the board accepted any pending row whose `reason` said what it waited
+for, so a lead could park work behind prose no one could check ("needs a
+trusted receipt") and 20 rows sat pending while nothing was dispatched. The
+write had no way to require a real dependency, a concrete next action, or a
+running assignment, and the continuation read the same unverifiable sentence
+back as its own justification.
+
+Decision: a pending row states its wait as one typed claim, `progressTask`
+`blocker` (`progressBlocker` in the coordination schema):
+
+- `active_dispatch` — `assignmentId` of a Worker this board's Coordinator
+  dispatched whose execution is running now. A missing assignment, another
+  Coordinator's/project's/binding revision's row, a revoked grant, or any other
+  status is refused, naming the assignment and why.
+- `blocked_by_dependency` — `assignmentId` and the `revision` that must settle.
+- `needs_external_resource` — the exact `resource` and the `check` that proves
+  it is present, plus exactly one of: `ownerAction` (one concrete thing the
+  owner does elsewhere to obtain it, e.g. confirming receipt on a phone), or
+  `unavailable` with a `limit` stating what stays unverified. `unavailable` is
+  terminal: the row is reported as a limit, never as a wait, and the board
+  renders it without a waiting badge.
+- `needs_owner_decision` — the `questionId` of the `ask_human` card or guidance
+  the answer arrives through, plus the one-line `question` in plain language
+  the owner can answer without domain knowledge.
+- `next_action` — the concrete `action` a Worker can start now.
+
+`reason` stays, as supplemental prose only; it never satisfies the rule. The
+schema's `oneOf` is the machine-checkable shape; `blocker_problem` names an
+empty or missing field before the union reports it vaguely, including an
+external resource with neither `ownerAction` nor `unavailable`, and
+`unavailable` without its `limit`. `check_blockers` refuses a
+row this write introduces or changes (`pending` needs a blocker; `in_progress`
+may carry one), so a status change clears the old wait like `reason`.
+
+Legacy rows are never refused on read: a row carried through byte-identical is
+accepted as before, and the projection flags it instead. `task_is_idle` marks a
+pending row that names no running assignment, no dependency and no concrete
+next action (absent, empty or generic); `progressState.idleTaskKeys` exposes it
+to the board, and the continuation brief marks the row `idle: dispatch or cancel`
+beside that row's dispatch facts ("Continuation context is anchored on the task
+board"). The brief distinguishes three states: a real wait (`Waiting for:`, an
+owner action or a dispatch), a limit (`- [pending, limit]` with what stays
+unverified), and idle. Only a wait is owner-actionable; a limit is terminal. Nothing is deleted or restatused automatically. `todo_write` has no
+blocker field, so `publish_plan` accepts its pending items and relies on the
+same idle flag; `board_from_plan` carries an existing `blocker` by title and
+status.
+
+Alternatives rejected: rejecting any `reason` text that looks like waiting
+(unfalsifiable, punishes honest notes); refusing legacy boards on read (makes
+the owner's current board unreadable and the first write impossible);
+automatically cancelling or completing idle rows (the board is the owner's
+view, and status is the Coordinator's judgment); a fifth `blocked` status (the
+board's four statuses are what the owner reads, and a pending row plus a typed
+wait already says this).
+
+Verification: `tests/project_mod/test_coordinator_progress.py` (prose-only
+refusal, each kind with its payload, a non-running or missing assignment, an
+idle legacy row flagged and preserved, the read projection's
+`idleTaskKeys`), `test_coordinator_continuation_context.py` for the rendered
+board line, and `test_coordinator_task_history.py` for the carried blocker.
 
 ### Commitments on the task board (owner request 2026-11-08)
 
@@ -1747,7 +2665,8 @@ owner reads is the ledger, and the platform wakes the lead when it is due.
   list (reconstructible from the board, never authority): per title the first
   and current due, the number of slips, the wake receipt and the closure
   (`kept`, `late`, `cancelled`). It is written in the same CAS as the board, so
-  a board and its receipts never disagree.
+  a board and its receipts never disagree. Unrelated updates cannot move a
+  closed promise's receipt or reject its already-passed due time.
 - Wake. A write that changes the earliest open due time arms one scheduler
   `once:` row for that minute (deterministic id per owner, Coordinator and
   minute; type `coordinator_commitment_due`). The row's handler re-reads the
@@ -1755,7 +2674,11 @@ owner reads is the ledger, and the platform wakes the lead when it is due.
   no wake receipt for its current due. Inside an open request with a
   continuation policy, the wake is that request's continuation (reason
   `commitment_due`), so the lead may resume, re-delegate or verify work under
-  the request's authority. Otherwise it is one `proactive` notice through
+  the request's authority. The structured wake holds every due pair; its
+  compact stored brief does not duplicate their titles. Turn birth renders
+  the promises still due from those exact pairs, so a long title or a large
+  cohort cannot cut the brief's instruction or leave off a promise.
+  Otherwise it is one `proactive` notice through
   `dispatch_scheduled_turn(..., inject_mode='steer')`, command id
   `commitment-due:` + digest of (owner, Coordinator, titles and due times):
   a running lead is steered, an idle one starts a turn that can report, ask
@@ -1845,22 +2768,26 @@ did; they now show read-only, and their removal is an owner decision.
   Coordinator, binding revision and task key): title, former titles, last
   status, last progress note, last due, first-seen, last-seen and last-change
   times and revisions, and while it is off the board when it left. A record is
-  never deleted by a later board. Every changed board write records inside
-  its head CAS attempt, before the head write, and the head stores the board's
-  keys (`taskKeys`) in the same CAS; only tasks whose title, status, note or
-  due changed, and tasks that left, are read and written. A record conflict
-  retries the whole attempt; the fold is idempotent.
+  never deleted by a later board. History preparation makes no writes. The
+  head CAS publishes the board, its `taskKeys` and changed history values
+  (`historyDelta`) together; a rejected candidate is never history. The existing
+  per-task records index only committed deltas. Before replacing a head, its
+  committed delta must be indexed; an indexing outage therefore preserves the
+  recovery copy rather than losing it. Reads overlay that copy and recheck the
+  board after reading the index, including the unpaged `tasks()` consumer.
+  Delayed indexing never replaces a newer committed revision.
 - Identity. A task keeps its key while its title is unchanged. An in-place
   title edit keeps it too: aligning the previous and new boards by title, one
   task between the same unchanged neighbours was replaced by exactly one
   task, and the replaced task was still open or the new one keeps its
   finished status (a finished task is never continued by another task); the
-  old title becomes a former title. Any other task starts its title's key
-  (`sha256` of the title), so a title that returns after leaving continues
-  its earlier task; when that key is already on the board, the task gets a key
-  of its own. Two or more replacements between the same neighbours are
-  ambiguous and start new tasks. On the owner Coordinator's 166 revisions the
-  rule keeps all 5 in-place rewordings and merges nothing else.
+  old title becomes a former title. An unmatched returning title restores only
+  its unique departed history identity under that record's current title.
+  A former title alone cannot reactivate a renamed task; duplicate-title
+  histories are ambiguous and get a fresh key. A title-derived key starts a
+  new identity only when unoccupied, otherwise the board revision and row
+  distinguish it. Two or more replacements between the same neighbours are
+  ambiguous and start new tasks.
 - Seed. A head written before task history has no `taskKeys`. Its next
   changed write seeds the history from the Coordinator's own transcript: each
   `update_task_progress` round names the revision its complete board became,
@@ -1875,15 +2802,42 @@ did; they now show read-only, and their removal is an owner decision.
   pending or in progress), completed, cancelled, newest change first, at most
   64 tasks a page (the coordination API's page bound) with an opaque cursor,
   per-group counts of the tasks matching `q` (case-insensitive, over title,
-  former titles and note), and per task whether its due was met. A task on
+  former titles, note and recorded reason), and per task whether its due was met. A task on
   the current board shows that board's text.
 - Browser. `frontend/src/features/coordinator-task-history.ts` opens a drawer
   with group filters, search and a virtualized list that renders only the
   visible rows, loads the next page when the list end comes into view and,
   while open, re-reads in place on a newer board revision, rewriting only the
   rows whose content changed. The drawer and its stylesheet
-  (`frontend/src/features/coordinator-task-history.css`, imported beside it) load on its first
-  open; its rows use the board's glyphs and status inks.
+  (`34-coordinator-task-history.css`, a deferred section) load on its first
+  open; its rows use the board's glyphs and status inks. “No longer listed”
+  means an open task left the board without being completed or cancelled; no
+  cause can be inferred from the last update. “Details” separates the recorded
+  explanation from that last update and exposes long text without a hover.
+  A cancellation reason is authored in `reason` while the task is cancelled;
+  when it leaves, history takes the reason from the previous committed board,
+  not from a staged history row. Legacy omissions still read as unknown.
+
+Before polling, asking a blocking question or yielding on owner input, a steer,
+continuation or relay, the shared role in `project_coordination.py` requires a
+quick evidence-based sweep of each known admitted outcome. Independent authorized
+work starts first; resolved prerequisites advance the exact next stage. Unreviewed
+results need Coordinator review, held delivery needs its actual hold investigated,
+and an already-admitted starting/queued dispatch must not be duplicated or made
+to await separate admission. Each outcome gets its next authorized action or a
+precise durable blocker in its board `reason`, naming missing evidence/authority
+and what resolves it. Empty-poll yielding requires no authorized actionable work.
+
+A pending row is not a Worker grant. Copied legacy titles, title matches, age,
+board status and continuation ownership labels prove neither authority, readiness
+nor exact stage ownership. Supplied evidence is used first; existing tools obtain
+missing facts without asking the owner to review internal work. The resume
+projection remains advisory and does not carry structured stage-to-assignment
+coverage, prerequisite proofs, result/checkpoint revisions or actual delivery-hold
+reasons; absence from it is not proof of no work. Creating a scheduler from board
+entries would infer authority, duplicate work and hide version-pinned dependencies.
+A stop decision is recorded as `cancelled` with a reason before removal; a
+board status never stops a Worker attempt.
 
 Alternatives rejected: keeping every board revision and deriving the history
 on each read (a read proportional to all revisions); asking the Coordinator
@@ -1896,6 +2850,124 @@ still opens the dialog, and the office game view and lead office import
 `project-coordination-graph.ts`); a separate entry for "Replace Coordinator"
 of an available binding (archiving the Coordinator chat makes its binding
 unavailable, and the sidebar row's 负责人设置 then reaches the replacement).
+
+The optional head delta requires coordinated readers and writers: older closed
+head schemas cannot read it and older writers may discard its recovery copy.
+This implementation is not a frozen-release retarget, mixed-version cutover,
+historical-alias migration or production activation. An inherited per-task
+record from the old pre-CAS writer has no commit witness: `changedRevision`
+alone cannot distinguish a rejected candidate from a committed revision once
+the head catches up. New head deltas and indexed values originating from those
+deltas are trusted only within the new-writer fixture boundary; the mechanism
+does not authenticate or repair a previously contaminated index. No migration
+or broad suppression of historical rows is performed. Live acceptance against
+such an index is blocked until a separately reviewed provenance/repair path
+establishes committed history; these fixture passes are not that evidence.
+
+#### Pre-CAS evidence and offline reconciliation boundary
+
+Dependency pin: fresh-writer assignment `de694408-a674-5d72-b4dd-f1c700d77de8`
+delivered checkpoint `2f54211b89af34073423d6bb12e1fdface545fff`, integrated by
+`614a5f1d673fb9e871b23d8a0f0c7eb26a9950dd`. Its atomic head/delta publication
+prevents new rejected candidates from becoming history; it supplies no missing
+commit witnesses for older rows.
+
+Problem: a revision fence is not commit provenance. The captured pre-CAS source
+at `d142263462235523f510e02e68e27b59cecc50f7` writes task records in
+`record_board` before the head CAS. Starting with a committed pending task, an
+abandoned revision-2 candidate adds a completed task. A legitimate summary-only
+revision-2 board retains only the original task, without touching the candidate's
+row. The head and abandoned row now legitimately share revision 2. The current
+reader accepts the candidate as off-board completed history. Current-board
+membership still confirms the original authored board row, not that candidate.
+
+A stronger indistinguishability control uses captured source at
+`d12cd290ae69d77639c683ca870be9396b8bc667`:
+
+| Step | Successful completion | Abandoned completion |
+|---|---|---|
+| Committed revision 1, time 1000 | X pending | X pending |
+| Candidate revision 2, time 2000 | X completed; head commits | X completed; every attempted head CAS conflicts |
+| Winning revision 2 | X completed | Summary changes, X stays pending; unchanged task is not rewritten |
+| Committed revision 3, time 3000 | Remove X | Remove X |
+
+That early writer's removal preserves staged content. Both final heads are the
+same empty revision-3 board. All stored values and CAS versions are identical,
+including X's `status: completed`, `completedAt: 2000`, `lastSeenRevision: 2`,
+`departedRevision: 3` and `changedRevision: 3`. Only one execution ever published
+completion. Therefore any read-only function of those surviving heads/rows must
+return the same answer in both executions: it cannot correctly certify completion
+in one and reject it in the other. This is an information-loss proof, not a
+claim that every old row is false. Later pre-CAS source restores previous-board
+content on removal; that narrows this particular schedule but does not supply a
+commit witness or eliminate the revision-2 negative control. Neither absence of
+provenance nor absence of a successful transcript round proves abandonment.
+
+Decision: no runtime classifier, suppression, replacement index, new routing
+source or repair module is introduced. Existing history/owner views are unchanged;
+their legacy limitation above remains. In particular, `recorded: true` means
+history was seeded, not that legacy publication was authenticated;
+`coverage: complete` means the query has no further page, not that historical
+source is complete. Their numeric groups cannot express unknown historical
+cardinality. Reusing those flags or counts as a reconciliation verdict would
+misstate the evidence.
+
+**Offline safe reconciliation contract (specification only, not an apply path):**
+
+- Accept only explicitly supplied immutable offline captures and their source
+  identities/digests, exact owner/project/Coordinator/binding scope, capture
+  boundaries and established commit witnesses. A copied JSON head is not itself
+  proof that its CAS committed. Do not discover production indexes/chats or
+  perform transcript seeding, backfill or writes. Missing source remains missing.
+- Preserve every supplied raw observation and its identity without rewriting,
+  deleting, suppressing or deduplicating it. Separately list positively confirmed
+  facts with exact witness references, and observations whose publication or
+  individual fields remain `unknown`. Unknown is not failed, cancelled, dropped
+  or never committed. Contradictory witnesses remain explicit conflicts rather
+  than a winning heuristic.
+- A confirmed head establishes its exact current board rows and their ordinal
+  positions; explicit `taskKeys` are the head's associations. Preserve authored
+  fields exactly, including omissions and duplicate titles. The board's
+  `updatedAt` is not a task creation, change or completion timestamp. Current
+  membership does not authenticate inherited aliases, progress, due, completion,
+  first-seen or departure fields. Even a rejected rename can leave inherited
+  optional fields in a current row; the executable control covers this too.
+- A positively committed atomic head delta establishes its exact scoped values
+  at that revision. An index value is corroborated only by an independently
+  supplied exact committed witness, not a matching/lower revision or presumed
+  writer era. A successful ordinary tool receipt may establish the publication
+  and authored fields it actually names, not exact CAS time, complete coverage,
+  missing intermediate boards or inferred historical identity. Check predecessor
+  continuity before replaying patches or deriving transitions; a gap cannot be
+  filled by title similarity or the existing returning-title rule.
+- Confirmation is per fact and witnessed revision, not promotion of an entire
+  mutable row. Retain confirmed old evidence even when newer unsupported values
+  exist; label its revision and leave later changes unknown. Exact keyed lineage
+  needs source that actually establishes that association. No title/time/status,
+  count, record-version or revision-distance guess establishes a commit. Report
+  exact counts only for the explicitly identified confirmed observation set;
+  total historical tasks and group counts remain `unknown` without complete
+  committed source. Never estimate them by subtraction or broad hiding.
+- The report is evidence/presentation only, separate from `progressHistoryPage`.
+  It grants no dispatch, readiness, assignment coverage, report linkage, delivery,
+  execution-success or owner-acceptance authority. A board's completed status is
+  an authored assertion, not verified work. Any future operational reconciliation
+  needs separately reviewed source coverage and authorization; this contract
+  authorizes no migration, schema change, deletion/reset, deployment or restart.
+
+Verification: `tests/project_mod/test_coordinator_legacy_history_evidence.py`
+executes pinned captured transition/publication methods with ordinary synthetic
+head/history CAS fixtures. The two full history sources are byte-identical Git
+blobs; fixture origins and capture boundaries are in
+`tests/fixtures/coordinator_history/README.md`. It checks matching-revision
+abandonment against a confirmed current board for both legacy versions, identical
+successful/abandoned completion observations including CAS versions, unchanged
+storage across reads, and uncommitted optional fields surviving current-board
+overlay. This is source-algorithm/in-memory evidence: no native-engine snapshot,
+SQL durability/crash, mixed-version compatibility, production contamination
+extent, live owner journey or complete historical-source coverage is established.
+No production board data is read or changed; no selected-authority assignment
+reverse index or reviewed e010 producer is changed.
 
 Verification: `tests/project_mod/test_coordinator_task_history.py` (dropped
 task, identity rule, returning title, due outcomes, changed-only writes,
@@ -1952,29 +3024,51 @@ canonical delivery; `needs_user` requires a decision/blocked report. Its immutab
 receipt and new delegation serialize in the same CAS. The receipt stops automatic
 continuation; cancel unwanted active Workers explicitly before asking for input.
 
-Continuations run under the model selection of the request they continue.
-Problem: admitted from the frozen capability policy alone, they lacked the
-request's `chatMode`, `memoryEnabled`, route (`modelRef`, `preferredProviderId`,
-`routing`, `preset`) and experiment blocks, and the role's
-`programmaticCalling=off` reached human Turns only in tool assembly, after model
-replay had pinned their policy. Every human/continuation alternation therefore
-refused the validated replay checkpoint (`restore=policy_changed`) and rebuilt
-the whole history, and continuations took the legacy model-name route instead of
-the request's routed candidate group. Decision: `admission.request_selection`
-copies those model-view selections (experiment blocks normalized, never `tools`)
-from the delegation's accepted source attempt, the route only when it names the
-grant's model; the grant still fixes capabilities, tools and model. Executor
-ingress applies the role's tool settings
-(`coordinator_policy.pin_coordinator_request_policy`, the same helper tool
-assembly and the issued policy use) before the replay pin; a failed role lookup
-keeps the submitted settings and tool assembly still fails closed. Real
-tools/model/route/experiment/system-prompt changes still refuse replay.
-Alternatives rejected: exempting dispatch tasks from witness fields (restores
-across real changes); defaulting absent fields inside the witness (cannot see
-the role or route, and invalidates every checkpoint); recording the selection in
-the grant schema (contract change that leaves existing grants cold, while the
-accepted attempt config already is the durable authority). Cost: one source
-attempt read per continuation admission. Spec:
+An incomplete/unreviewed `complete` refusal includes registered-work
+observations in its existing `error` text (not a new DTO). Only assignment IDs in
+this original request are shown: `ready` means the current own-authority and
+registered prerequisite reads succeeded, `blocked` means an explicit withdrawal
+or known review/delivery prerequisite wait, and `unknown` means unavailable or
+ambiguous evidence. The shared admission reducer retains one reason and can
+mask an ancestor withdrawal behind an intermediate rejection. Only this notice
+therefore walks the snapshot's registered prerequisite references, within the
+existing dependency graph bound and exact grant revisions, to find positive
+revoked/stopped evidence. It neither changes the admission reducer nor treats
+other invalid reasons as confirmed withdrawal. Missing records or unreadable
+evidence cannot establish a blocker. Request disposition and board-only/unregistered linkage are
+reported separately; board intentions always remain unknown. No exception text,
+grants or dependency IDs are copied into this diagnostic. This snapshot is not
+permission to launch, an instruction to ask the human about internal work, or a
+durable wake guarantee. It is not consumed by normal park or execution recovery.
+Denied completion creates no completion receipt and starts no child, but this
+existing finish consumer is not guaranteed nonmutating: its diagnostic can
+revalidate an authority-missing held publication and settle ended model intents
+in a prerequisite's canonical ledger, even though its captured snapshot had no
+open intent. See [the non-effectful evidence-profile qualification](#passive-registered-selection-requires-a-non-effectful-evidence-profile)
+and the denied-finish counterexample in
+`tests/project_mod/test_coordinator_registered_selection_boundary.py`. That
+inherited limitation is not permission to write from diagnostics; a nonmutating
+profile requires separate owning work. `needs_user`, successful completion,
+earlier exact-result/delivery refusals and independent result wakes retain their
+existing paths. Other finish observations are specified in
+`tests/project_mod/test_coordinator_finish_diagnostic.py`.
+
+**The Coordinator's model picker applies to automatic continuations.**
+Problem: a wake copied the original request's model even after the owner
+changed the saved composer selection. Decision: at admission, a Coordinator
+continuation resolves the owner-scoped model and route from the same durable
+composer settings used for a new human Turn. A route-admitted server-side
+`modelOverride` still takes precedence; without a saved selection or override,
+the grant's original model is the default. `admission.request_selection` keeps
+the accepted source's `chatMode`, `memoryEnabled` and normalized experiment
+blocks (never `tools`), and inherits its route only if there is no composer
+route for the effective model and the source route names that model. The grant,
+Worker model, checkout, account and in-flight attempts are unchanged. An accepted
+wake's durable attempt keeps its choice after a later picker change.
+Executor ingress pins the same role tool settings before the replay witness;
+real model/route changes retain only portable context when applicable.
+Alternatives rejected: adding a second model picker, mutating the original grant,
+or carrying an old provider pin over to a different model. Spec:
 `tests/project_mod/test_coordinator_replay_policy.py`.
 
 A continuation keeps its grant's tool settings through tool assembly. Problem:
@@ -2037,6 +3131,22 @@ stops the request; unsettled tool effects still block delivery claims. Stop,
 binding withdrawal and missing source evidence refuse further birth. Grants and
 continuation receipts share the segmented project-head CAS.
 
+**Undispatched wakes do not compound their prompt.** A failed first-round
+summary can leave no reply beyond diagnostics, but each retry previously
+made the board snapshot part of the next model request again. In the observed
+sequence the rejected prompt grew by about 5,700 estimated tokens per wake.
+The model replay suffix elides exact duplicate board/question/ownership
+snapshots across adjacent such wakes, and Worker evidence only when it repeats
+under the same brief and source. The current wake stays whole; changed evidence,
+due promises and decision defaults stay visible. Only synthetic Coordinator
+inputs with an exact linked reply proving local pre-dispatch summary failure
+and no output, tool rounds or steer qualify. Human-facing Coordinator reports
+are already absent from model history and do not break the sequence. The
+canonical transcript, settled failure diagnostics, validated replay prefix,
+grants and retry policy are unchanged. Stopping wakes on a transient summary
+failure or editing their durable inputs would discard recovery or audit evidence.
+Spec: `tests/project_mod/test_coordinator_failed_wake_replay.py`.
+
 ### Open outcomes cannot disappear from continuation context (2026-11-17)
 
 Problem: the Parallel lead staffed one paper while Paper B had no accountable
@@ -2045,12 +3155,16 @@ which outcomes lacked a running or queued owner; settled outcomes vanished from
 that view. The Router also blocked every distinct second initiative of a project
 as `project_busy`. A board rewrite could omit an unfinished outcome entirely.
 
-Decision: `coordinator_continuation.py` derives an advisory ownership section
-from the existing board, task history, dispatch history and conversation titles.
-Every automatic wake lists open outcomes whose names no running/queued Worker
-names, and dropped open outcomes separately. Matching uses the shared outcome
-label, never a broad brief or generic infrastructure vocabulary. It grants no
-authority, starts no work and adds no store, knob, threshold or cap.
+Decision: `coordinator_continuation.py` derives advisory ownership from the
+committed board/history identities and existing immutable assignment
+`request.boardTaskKeys`. Only queued, pending or running assignments of the
+same owner, project, Coordinator, binding epoch and tenant supply active links.
+Missing legacy epochs or unmapped tasks remain ownership-unknown, never
+unowned by title inference. New exact coverage uses the ordinary
+`delegate_project_work(board_task_keys=...)` producer; no private adapter or
+parallel receipt writer is used. Active coverage is not execution completion,
+canonical delivery, permission to act or a request-finish receipt. This read
+model starts no work and changes none of those admission/finish owners.
 `router.portfolio.ranking.start_blockers` no longer serializes distinct
 initiatives of one project; each remains a separate queued request and usage
 account. Duplicate work and unmet dependencies still block.
@@ -2067,14 +3181,19 @@ projection also reads every Coordinator request of the binding. Its durable
 Turn's board revisions are parsed and folded by the task history's own
 `boards_from_rounds`/`fold_boards`, recovering dropped outcomes the current
 head never recorded. An unfinished request whose Turn states no outcome at all
-contributes its owner request text; a durable `coordinatorSettlements` finish
+contributes its owner request text independently of other request origins;
+repeated wakes of the same origin and authored source contribute it once.
+A durable `coordinatorSettlements` finish
 receipt, or a request whose board/history already states its outcomes, adds
 none. Durable task history stays authoritative; the folded transcript is only
 used where it is incomplete or predates it, and the two are merged by history
-key. A Worker owning the board's renamed continuation does not erase the
-dropped row: only a Worker naming the dropped outcome's own title owns it.
-Ownership still reuses existing running/queued Worker titles. No new store,
-heuristic, knob or cap was added.
+key. A committed dropped identity can retain its exact active assignment
+link across rename, removal and restoration. Transcript-only and request-only
+outcomes stay visible but never fabricate ordinary assignment coverage.
+For the Global Router, routed request coverage compares the full forwarded
+source identity (conversation, Turn and message discriminator such as
+`steerId`); nearby board timestamps and shared carrier Turns prove nothing
+(docs/ROUTER.md R2, "Routed outcomes are owned by their lead").
 
 Replay limitation (second pass): the real 12:29:22 drop is replayed through
 the production projection; its next wake input lists
@@ -2141,6 +3260,19 @@ Decision:
   conversation is not live is not listed; without the snapshot Active work is
   omitted rather than guessed. Presence rows carry no elapsed minutes or last
   event, so unchanged presence keeps its bytes and is reused.
+- An open board row's wait is projected from typed evidence, never from its
+  free-text `reason` or `progress`: the task's `progressBlocker` (a running
+  assignment, a pinned dependency, an exact external resource with its check
+  and either the owner's action or its unavailable limit, the owner's question
+  with its plain-language text, or a concrete next action) and the assignment
+  IDs the dispatch record links to the row. An unavailable resource is rendered
+  as `- [pending, limit]` with what stays unverified, never as a wait. A row
+  whose `active_dispatch` is not running, or that has no running link and no
+  typed dependency/external/owner wait, is marked `idle: dispatch or cancel`. The same line states whether any assignment
+  was ever dispatched for the row and how many continuation turns it has been
+  open without one, so the lead cannot restate an invented condition as fact.
+  Free text is not copied as evidence; legacy rows without a typed blocker keep
+  their title, status, due time and task key and read as idle.
 - A wake that ended normally with unchanged evidence and nothing actionable is
   not repeated (see the stall rule above).
 
@@ -2181,11 +3313,13 @@ path and error class without an episode, so a failure matching an earlier, even
 resolved, signal recorded nothing.
 
 Decision:
-- Recovery discovers from the whole project; it never decides from that read.
-  `repository.discover()` reads every assignment once with no snapshot witness
-  (an index row and its document commit together, documents are never removed
-  and sequences never change, so each pair is checked alone) plus the settled
-  request ids from the settlement order index. Every decision still comes from
+- Recovery never decides from discovery. Recipient settlement walks the compact
+  assignment order index and materializes only its recipient, project-wide
+  continuation candidates, and older rows without immutable recovery metadata.
+  The metadata commits with each grant; no backfill or read-time write is needed.
+  Boot and dependency walks still discover every assignment. There is no snapshot
+  witness: index rows and documents commit together and sequences never change.
+  Settled request ids come from the settlement order index. Every decision still comes from
   the request's own point snapshot, the authorization CAS or live admission, so
   concurrent writers cannot make discovery uncertain. `recover_project_dispatch`
   and `recover_coordinator` share one discovery per pass.
@@ -2749,10 +3883,8 @@ deliverables, with no store of its own (owner direction 2026-11-16: reuse the
 existing report/delivery owners, no parallel store)
 (`lib/conversations/lead_deliverables.py`; `deliverableItem`/`deliverablePage`
 in `contracts/project_coordination_v1.schema.json`). Each read of
-`GET /api/v4/project/coordination/deliverables` walks the lead's main lane
-newest-first through `turn_lifecycle.lane_turns_newest_first` (one bounded
-`turn.sync.page` per Turn, so a long conversation never hits the
-whole-conversation response bound) and the conversation's artifact rows:
+`GET /api/v4/project/coordination/deliverables` projects the lead's main-lane
+Turns (through the per-Turn facts below) and the conversation's artifact rows:
 
 - reports of every kind (owner request 2026-11-17; before, deliveries only):
   the lead's own canonical `coordinator_report.*` Turns (`CoordinatorReports`);
@@ -2792,8 +3924,39 @@ channel: `CoordinatorReports` for a delivery, the relay for the Global Router,
 and `rich_response` for a published artifact. A Worker result a finished request
 merged reaches the list through the delivery report the finish requires; the
 studio's trophy shelf opens such a result as a `merge` item it builds itself.
-Cost: each read walks the whole main lane, comparable to opening the
-conversation once; the list is read when shown and on hints.
+
+Cost (2026-11-18, owner: "switching projects, the lead's board and each
+task's reports and files take long to load"). Problem: every read walked the
+whole main lane, one bounded `turn.sync.page` per Turn, and scanned every
+string of every projection. The tofu lead (158 Turns, 49 MB of projections)
+answered in 1-4 s on a quiet host and 8-18 s under load, once for the board's
+summary on each project switch and again for each expanded task; the scan also
+held the GIL inside the API process. Decision: the projection reads per-Turn
+facts (`lead_deliverables.turn_facts`: the report a Turn is, its
+`report_to_user` receipts, its `artifactId`s, its relay notice references),
+kept by `lib/conversations/lead_turn_facts.py`. The first read of a
+conversation in the API process walks the lane as before; every later read
+sends the projection revision of each Turn it holds to `turn.list_delta`
+(`turn_lifecycle.turns_changed_since`), which returns only the Turns updated
+since the previous read's watermark whose revision advanced, plus the Turns
+deleted since (tombstones), so a read costs one indexed storage read plus the
+changed Turns. Invalidation is the authority's own (projection revision,
+updated-at watermark with its overlap margin, tombstones): an entry is rebuilt
+by the walk when the delta is refused at the authority's row or response bound
+and when it was last validated longer ago than both authorities keep
+tombstones (seven days, `TURN_TOMBSTONE_RETENTION_SECONDS`). Concurrent reads
+of one conversation share one advance. Entries are reconstructible and dropped
+by memory-pressure relief (`lib.ttl_cache`); their size is a few hundred bytes
+per Turn (identity, revision, the report's title/message, receipt and
+artifact ids), never a projection. Artifact rows, task history and report
+links are still read fresh on each read; each is one storage read.
+Alternatives rejected: replaying `turn.sync.changes` after the last read
+(the change feed carries every streamed attempt event, about 60 MB in 15
+minutes of the active tofu lead, more than the walk); caching the whole page
+by the conversation's sync head (it moves with every streamed event, so an
+active lead never hits); multi-Turn walk pages (a page size or byte budget
+nothing here defines, the reason the walk reads one Turn per page); a
+derived deliverables store (rejected above).
 
 One item model and one opener serve both modes
 (`frontend/src/features/lead-deliverables/`). Opening an item shows the
@@ -2871,12 +4034,40 @@ board CAS); matching old reports to tasks by text similarity at read time
 On the board (`features/coordinator-progress.ts` with the lazily loaded
 `coordinator-task-deliverables.ts`), a task with items is a disclosure showing
 its count; expanding it lists that task's items newest first
-(`lead-deliverables/rows.ts`, older pages on demand). Tasks that left the
-board but have items follow as "Earlier tasks", and everything else (reports
-sent before `task` existed or naming no task, files published on their own,
-relayed reports) reads under "Other reports and files", so every deliverable
-stays reachable from the board. A `lead_deliverable` push for the lead and a
-reconnect re-read the summary and each open task. The sidebar's deliverables
+(`lead-deliverables/rows.ts`, older pages on demand). The summary joins its
+keys with the history it already reads: current in-progress and pending rows
+lead, then tasks removed unfinished, then folded completed/cancelled rows
+(including earlier tasks with items). An off-board item with no known history
+says "Status unknown". Task history still lists tasks without any items.
+Each board row names its state in text. "Marked complete" is the lead's
+recorded status, not a verification verdict. A separate delivery-report label
+reports whether a delivery report is explicitly linked; it implies neither
+verification nor owner acceptance. An automatic board note is labeled as such
+and never counts as a delivery report. No title matching, assignment read,
+or new store is used. Other items (unlinked reports, files published on their
+own, relayed reports) stay reachable under "Other reports and files". A
+`lead_deliverable` push, reconnect or newer board revision re-reads the summary
+and each open task. A task's list starts reading
+when the pointer enters or focus reaches its row, so it is usually there by the
+click; a list read ahead but not opened is read again on opening after a
+push, reconnect or newer board revision. Invalidation aborts and detaches a
+closed list's in-flight request: even a response that arrives despite abort
+cannot replace the newer summary or supply that opening. Opening or folding
+without invalidation keeps the same read-ahead request. Open-list refreshes
+still coalesce a follow-up read and retain older pages. Each task remembers the
+last successful first-page continuation separately from its advanced More
+cursor. A changed first-page continuation resets More, even after exhaustion;
+an unchanged one keeps the advanced cursor and adds no continuation reads.
+Continuation rows join immediately after the last fetched page's item ID,
+before retained older rows, deduplicating overlaps without timestamp comparisons
+or replacing the untouched older interval. This keeps newly exposed gap reports
+reachable across tied timestamps without rewinding unchanged lists. If the
+existing completion filtering removes that boundary item, its nearest surviving
+predecessor in the fetched interval keeps the insertion boundary; the advanced
+cursor is unchanged, and continuation rows still precede untouched older rows.
+The latest summary of each project's lead stays in the page, so a board
+mounted again for that lead (a project switch back) shows its counts at once
+while the fresh summary reads; one entry per project. The sidebar's deliverables
 section and its bridge are deleted; the lead's entry keeps its unread report
 preview.
 
@@ -2959,9 +4150,7 @@ state machine of its own.
       no conversation, so the API host's own `project` hint (a Push Hub
       publication listener) refreshes that lead.
     - a pending `kind=report` project message in a lead's mailbox, cleared once
-      the lead's round confirms it. A send never writes the mailbox head, so the
-      read includes arrivals the lead has not absorbed (`ProjectMailbox.observe`),
-      and its version changes with each newly readable arrival as well as the head.
+      the lead's round confirms it.
     - a Worker's completed, unreviewed assignment result, found on a busy-to-idle
       edge through the attempt's assignment association, and at the baseline on
       each lead's newest history page (`coverage.reports: newest_page`). It is
@@ -3445,30 +4634,38 @@ accepted execution identity. It allows only `continue`, `checkpoint_resume` and
 `stop` of the pinned Attempt and `set_model` of its session (below), in any
 project of the owner, never `regenerate`; a
 dispatched Worker keeps its exact grant. Passing `owner_delegation` always uses
-the grant; without it the owner's own message keeps the unchanged path. This is
-how the Router resumes the exact Attempts a
-restart interrupted (`tests/conversation/test_coordinator_session_control.py`
-covers it on SQL and native storage after boot recovery settled them).
+the grant; without it the owner's own message keeps the unchanged path.
+Delegated Continue is how the Router resumes the exact Attempts a restart
+interrupted (`tests/conversation/test_coordinator_session_control.py` covers
+it on SQL and native storage after boot recovery settled them).
 
 `set_model` changes only the model of an existing session, preserving its
 conversation, grant, checkout, tool checkpoint and authorization scope
 (owner decision 2026-11-09; [ROUTER.md R5](ROUTER.md#r5-router-and-worker-models-are-chosen-separately)).
 `lib/conversations/session_model.py` stores the owner's route-admitted choice as
 the server-authored `modelOverride` conversation setting; the named Attempt's
-accepted execution tenant is fenced exactly as Continue fences it, so a
-synthetic continuation or another tenant's principal cannot route a session.
-The next accepted attempt resolves the override in `TrustedDispatch.capture`;
-the running attempt keeps the model it was accepted with. `_restored_identity`
+accepted execution tenant is checked, and a lead without a current owner
+request in scope needs the owner's live delegation to route a session. Only
+`set_model` can omit the authority object while using the full standing grant:
+the server resolves authority through the same R9 checks and uses the top-level
+`reason` for audit. The next accepted attempt resolves the override in `TrustedDispatch.capture`;
+the running attempt keeps the model it was accepted with. `capture` resolves the
+conversation's configured thinking depth the same way (`apply_session_policy`),
+so every Turn of a conversation runs at the effort its owner set, whichever
+request's grant it continues (CONTEXT_COMPACTION.md, "Dispatch Turns inherit the
+conversation's effort"). `_restored_identity`
 admits only the grant's model, the session's current choice or the model the
 bound attempt's durable accepted config names, so a carrier rewritten to any
-other model loses its authority. New Workers and
-Coordinator continuations resolve the owner's current `workerModel` live rather
-than replaying their request's frozen pin, so a provider refusal is answered by
-changing one owner setting, not by starting a clean session. The change and its
-reason are recorded in `audit.log` (`session_model_changed`), and the Global
-Router's delegated call takes the same R9 path as a delegated Continue, its
-audit record naming the chosen model. `model=null`
-restores the session's original model. No provider refusal or tool output is
+other model loses its authority. New Worker grants (including reviewers and
+final-result follow-up successors) use the current Coordinator selection per
+[ROUTER.md R5](ROUTER.md#r5-router-and-worker-models-are-chosen-separately);
+an in-place follow-up keeps its grant unless the recipient has a session override.
+The change and its
+reason are recorded in `audit.log` (`session_model_changed`), and a lead's
+delegated call takes the same R9 path as a delegated Continue, its
+audit record naming the chosen model. `model=null` clears the override:
+Coordinator continuations use the saved composer choice if present, and other
+dispatch attempts use their grant's model. No provider refusal or tool output is
 rewritten.
 
 Callers pin the source Attempt, Turn revision and idempotency key. A retry uses
@@ -3655,8 +4852,16 @@ so its images are read from its records (this executor's delivered ones and
 those committed to the live Turn), and only a record whose committed author is
 the owner's own input here counts (`require_human_turn`): nonhuman steers and
 Global Router forwards add none (2026-11-17: a Coordinator could not forward the
-screenshot the owner steered into its turn). Anything else is refused (`attachment_refused`) before any
-record is written or anything is sent. An admitted file is stored once, by digest,
+screenshot the owner steered into its turn). The entire batch is checked before
+any new file is stored or existing attachment is promoted. File and image bytes
+are staged temporarily so retention uses the bytes that passed the checks, not
+another read of the source path. An invalid reference refuses the whole batch
+(`attachment_refused`). For `delegate_project_work`, the in-memory gate and
+existing durable source, request-policy and command checks run before attachment
+retention; Worker birth and the grant CAS still have their own authority checks.
+Retention is not atomic with those checks or with other retention writes: a
+later race or storage failure can leave an already-retained file without a send.
+An admitted file is stored once, by digest,
 through `lib.media_attachments.ingest_received_file` (origin `agent_message`), the
 same retained attachment a channel file or chat upload becomes; no size or count
 limit is added. The dispatch request (`request.attachments`) and the mailbox
@@ -4405,25 +5610,88 @@ the association only after its create/resume command returns. Under slow storage
 the accepted-attempt recovery scan claimed such an attempt first and started it
 unbound, so the executor refused it as not matching its "immutable birth
 association"; the delegation's own claim then lost and the attempt stayed failed.
-Decision: an attempt started by that recovery performs the same idempotent bind
-or exact continuation from its accepted config's server-captured carrier, under
-its exclusive start claim and before birth. A successor reserved only by its own
-start claim (`@dispatching:<attemptId>[:<owner>]`) or its exact durable-worker
-binding (`conversation-attempt:<attemptId>`) is unbound evidence for that
-continuation; any other task binding still refuses. A refusal settles the attempt
-with that cause, and names the first missing piece of evidence and its remedy:
-the predecessor attempt is not found, belongs to another Turn, or is still
-running; the successor is not an attempt of the continued Turn or is bound to
-another execution's task; or the pinned association names another task
+Decision: accepted-attempt recovery repeats the idempotent bind or exact
+continuation from the accepted config before dispatch. A transient refusal
+preserves the pending attempt; a definitive refusal settles it only while it is
+still current, pending, unqueued and unbound. This fence is checked in the
+terminal-event transaction. A timeout before that write commits leaves the same
+attempt indexed for recovery; after commit, replay reads the settled attempt.
+There is no start claim just to retire a refusal. A Stop or executor claim that
+wins first remains authoritative. See
+`test_project_bind_refusal_keeps_exact_attempt_recoverable`.
+
+A successor reserved only by its own start claim
+(`@dispatching:<attemptId>[:<owner>]`) or its exact durable-worker binding
+(`conversation-attempt:<attemptId>`) is unbound evidence for association
+continuation; any other binding still refuses. A refusal names the first missing
+piece of evidence and its remedy: the predecessor attempt is not found, belongs
+to another Turn, or is still running; the successor is not an attempt of the
+continued Turn or is bound to another execution's task; or the pinned
+association names another task
 (`test_a_refused_continuation_names_the_missing_evidence_and_a_remedy`).
-Alternatives rejected: a longer recovery grace (a tuned delay that
-only moves the race), skipping unbound dispatch attempts (strands them pending),
-and binding before the claim (a refusal could then neither settle nor stop retrying).
+Alternatives rejected: a longer recovery grace (only moves the race), skipping
+unbound dispatch attempts (strands them pending), and claiming solely to settle
+a refusal (a timeout after the claim hides the pending attempt from recovery).
 The claimed worker also binds through the shared dispatch-contention reread:
 another ledger writer's commit is not an authority refusal. Guards:
 `test_recovery_scan_between_birth_commit_and_bind_starts_under_the_grant_association`,
 `test_continuation_accepts_a_successor_reserved_for_its_own_execution` and
 `test_claimed_dispatch_binding_rereads_contention_before_executor_birth`.
+
+### Fresh bind authority boundary
+
+`repository.bind_execution` admits a registered, still-unstarted assignment
+through the ordinary grant path, not a reconciliation authority. Its initial
+validation checks exact owner/project/tenant/recipient/grant revision, the
+original binding epoch, human source, durable Stop and dependency readiness.
+The subsequent dispatch CAS checks the still-unbound association, grant
+revocation and exact admission revision. An identical already-bound association
+is retained evidence, including after withdrawal; returning it is not permission
+to start another executor. Runtime admission remains independently required.
+
+These checks are not one atomic proof of current request disposition and
+coordination epoch. Binding metadata, conversation availability, Stop and source
+records are read outside the dispatch commit. `one_decision` deduplicates those
+reads; it is not a transaction joining their authorities. An ordinary Worker
+bind selects its assignment document only. A Coordinator wake instead selects
+its exact source cohort, checks `continuation.ensure_open`, latest wake and
+pinned predecessor, and fences the predecessor document when present. Neither
+path exposes a supported reconciliation-only disposition selector. An unresolved
+`pendingDecision` belongs to its exact request budget; it is not a global ban on
+already-issued independent work, nor a decision a binder may consume. A
+request-budget point update need not advance the project head: a future exact
+request predicate would need its selected budget document fenced, not just a
+head read. Also, admitted `ownerDelegation` validation checks the lead reply's
+identity/owner but skips the live delegated-action grant; it cannot stand in
+for a fresh live delegation check.
+
+The existing segmented commit can fence selected dispatch documents and exact
+owned Turn witnesses in its transaction. Turn witnesses check revision, current
+Attempt and status; they do not witness coordination binding metadata or durable
+Stop. Legacy record CAS likewise joins no external authority. Consequently an
+additional application read, even immediately before or after bind, cannot
+establish the requested atomic admission. No automatic-start consumer or unused
+reconciliation API is added.
+
+A legitimate extension would need an explicitly scoped admission contract whose
+single selected-authority transaction validates the exact assignment/grant,
+original request identity and current request disposition, binding epoch and
+withdrawal witnesses together with the unstarted association write. Every writer
+of those witnesses must participate in that same conflict boundary on each
+supported backend; absent or unsupported evidence must refuse. It must preserve
+already-born lifecycle behavior and unrelated requests. The alternative is a
+Coordinator-only notice of passive evidence: no binding, executor creation,
+owner-decision consumption or automatic dispatch from the notice. The
+Coordinator would still act only through its existing authorized tools. Neither
+extension is implemented here.
+
+Specifications: `tests/project_mod/test_project_dispatch_bind_boundary.py`
+(normal exact bind, scoped denials, withdrawn authority and already-bound
+replay), the repository lifecycle fixtures, and
+`tests/project_mod/test_coordinator_continuation.py` (exact request finish,
+owner-decision and independent running-Worker controls). These unit fixtures
+use synthetic ports; they do not prove a cross-authority transaction or live
+backend admission.
 
 ### Restart-paused Worker continuation
 
@@ -4843,26 +6111,25 @@ Stop also stores one monotonic owner/conversation watermark in the declared
 point reads; this prevents restoring an old project from restoring authority.
 Human attempt/queued/task/registry-miss Stop paths record it; exact-grant internal
 cancellation does not withdraw peer grants. Storage failure is not a durable-Stop ACK.
-Grant revocation takes the repository lock only when a grant created before the Stop
-references the stopped conversation. Unrelated integration work can hold that lock for
-minutes, and the acknowledged watermark already withdrew every grant, so a Stop with
-nothing to revoke never waits for it (`tests/project_mod/test_project_dispatch_recovery.py`).
+Stop skips the repository lock when no grant created before the Stop references
+that conversation. Otherwise it tries the lock without waiting and, if acquired,
+rereads the grants under the same lock that orders publication's final checks.
 
-Problem: a Stop signals the executor first, then revokes each referenced grant
-through the shared project CAS. A revocation that lost its bounded CAS to concurrent
-dispatch writers failed the whole Stop: the person saw an unconfirmed Stop for a
-signalled task, and no later pass revoked the grant record. Decision: the
+Problem: a Stop signals the executor first, yet grant-record revocation could
+wait on integration's repository lock or fail at its bounded CAS. Decision: the
 acknowledged watermark is the withdrawal, because admission and every live executor
-fence refuse each grant created before it. Only `DispatchContention` after that ACK
-(bounded CAS attempts ended in conflicts or uncertain ACKs) is absorbed: the Stop
-receipt reports `dispatchWithdrawal: pending_revocation` instead of `complete`, the
-remaining revocations stop at the first contention, and lane-settlement or startup
-recovery revokes, from the same durable watermark, an unstarted grant it would
-otherwise retry. Admission already fences every other referenced grant, including a
-started executor's; a repeated Stop also revokes its record. An
-unacknowledged watermark, or any other storage, integrity or metadata failure, still
-fails the Stop; the executor stays signalled and its idle projection is still
-published, and repeating the same Stop is idempotent. Alternatives rejected:
+fence refuse each grant created before it. If the repository lock is already held
+or revocation encounters `DispatchContention` (bounded CAS attempts ended in
+conflicts or uncertain ACKs), Stop reports `dispatchWithdrawal: pending_revocation`
+instead of `complete` without waiting or attempting the remaining revocations.
+Lane-settlement or startup recovery revokes, from the same durable watermark, an
+unstarted grant it would otherwise retry. Admission already fences every other
+referenced grant, including a started executor's; a repeated Stop also revokes its
+record. An unacknowledged watermark or any other lock, storage, integrity or
+metadata failure still fails the Stop; the executor stays signalled and its idle
+projection is still published, and repeating the same Stop is idempotent.
+Alternatives rejected:
+waiting for publication to release the lock (does not change withdrawal),
 catching every revocation failure (hides storage and configuration faults), retrying
 beyond the CAS budget or adding a revocation queue or poller (unbounded work), and
 writing the watermark before the executor signal (delays every Stop behind dispatch
@@ -5114,9 +6381,11 @@ binding p50 22 s, p90 68 s, max 159 s, of which the isolation preflight was
 p50 4.6 s, p90 17 s and the two-walk input snapshot p50 6.7 s, p90 18 s.
 
 Decision:
-- The call admits from memory only (`delegation.admit_in_memory`: the active
-  Coordinator request, synthetic input, read-only roots, the issued policy and
-  model) and returns the deterministic assignment and conversation IDs with
+- A call without attachments admits from memory (`delegation.admit_in_memory`:
+  the active Coordinator request, synthetic input, read-only roots, the issued
+  policy and model). A call with attachments also preflights the durable source
+  before retaining files (see [Attachments on lead messages](#attachments-on-lead-messages)).
+  The call returns the deterministic assignment and conversation IDs with
   `status: starting`. The birth (`coordinator_workers._born`: one-decision
   validation, root preparation, conversation, grant, Turn, dispatch) runs on
   its own thread, recorded on the Coordinator task (`coordinator_births`). The
@@ -5152,9 +6421,10 @@ Decision:
   (`docs/modules/project_integration.md`).
 
 Accepted for speed, to restore later: a birth in flight at a restart is lost
-until replayed; refusals that need storage (binding changes, Stop races, root
-preparation) arrive through the await instead of the call; the stored tool
-count trails by the reservations in flight; a source edit or commit during the
+until replayed; durable refusals not found in attachment preflight (including
+Stop races and root preparation failures) arrive through the await instead of
+the call; the stored tool count trails by the reservations in flight; a source
+edit or commit during the
 snapshot walk can be partly in a Worker's input.
 
 Alternatives rejected: a placeholder grant written by the call (a storage
@@ -5317,6 +6587,20 @@ Worker's unconfirmed send keeps its fence; a dispatched Worker never stream-star
   call's arguments are complete, so a busy recipient lead takes the message at
   its next round and an idle one is woken, instead of after the sender's whole
   response. The same gates as a delegation apply (`_stream_start_port`).
+- Dispatch-bound Coordinator Turns start too. Every lead continuation wake
+  ("Continue the request…", restart continuations included) runs bound to its
+  continuation grant, so `is_dispatch_task` holds for it. After the 13:55
+  restart of generation 0b3b0163 the gate held every call of a dispatch task,
+  so no lead send stream-started in the 9 continuation attempts (77 sends,
+  GR `toolu_0151j3FajP71FwiMBuSyt4Gu` waited 331 s for its round), while the 2
+  non-dispatch wake attempts started 5 of 5. Every one of those sends carried
+  its required `idempotency_key` (the mailbox refuses a send without one). The
+  audit read "no key" from the handler's `called with args=` preview, which is
+  cut at 300 characters before a long message's trailing key. A dispatch task
+  now starts only when its granted role is `coordinator` and `admit_call`,
+  the dispatch admission its ordinary dispatch runs, admits the call; a refusal
+  holds the call for that dispatch to report. A dispatched Worker (`project` or
+  `files` grant) still never stream-starts.
 - Adoption: the ordinary dispatch of a call with the same key joins that start
   and submits again, which returns the same original; a changed body is
   refused (`Idempotency key reused with changed message`).
@@ -5818,6 +7102,13 @@ Focused guards: `test_project_dispatch_batches.py`,
 No provider, deployment or multi-day autonomy proof is implied by these tests.
 
 ## Version-pinned result dependencies
+
+The [registered-work readiness RFC](REGISTERED_WORK_READINESS_RFC.md) is a
+**non-implemented design** for a distinct same-request Coordinator-only wake.
+Its retained synthetic no-wake fixtures document a current limitation; they do
+not change the result-driven continuation contract, grant authority or normal
+park behavior. External-owner fencing and versioned reader/writer compatibility
+remain prerequisites; 0.19.3 is not changed by that proposal.
 
 Problem: prose references cannot fence stale results, revocation or Stop. Decision:
 up to eight distinct predecessor assignments pin exact grant/completed-result

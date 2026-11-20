@@ -7,6 +7,19 @@ selection is
 `tofu.model-routing/v2` aggregate per owner. There is no configured `Route`,
 provider model array, alias pool, or separate BYO routing authority.
 
+Problem: a creator can document reasoning support and implicit execution while
+omitting its effort ladder and default. Requiring a guessed rung prevents valid
+registration; borrowing a subscription ladder falsifies official Model facts.
+Decision: a supported `reasoning_effort` profile with `can_disable: false` and
+`effort_knowledge: undocumented` records default-only execution, without an
+effort ladder, default, disable rung or mapping. Default and non-exact intents
+omit the control (the latter record degradation); exact efforts fail closed.
+A more specific Offering with a documented ladder or incompatible explicit
+toggle controls replaces this marker; compatible partial overrides retain it. This
+is not an empty toggle ladder or a claim that no efforts exist. Alternatives
+rejected: guessing the creator default, and copying the supplier's controls into
+the creator Model. Specifications: `tests/model_routing/test_undocumented_effort.py`.
+
 Runtime execution Slots carry the effective Model/Offering `context_window`.
 Managed Codex Offerings keep `catalog_context_window` as their last admitted
 subscription-directory baseline. Refresh updates the window only while its
@@ -31,6 +44,78 @@ admission and output clamping recheck it after fallback. Legacy model-name
 estimates are fallback knowledge only, never a replacement for configured route
 metadata. Provider-observed shrink remains bounded by the declared Offering.
 See `docs/CONTEXT_COMPACTION.md` for budget and cache-rewrite policy.
+
+Problem: successful identity binding or probing does not establish that a
+Codex model grant has not been revoked. Decision: these paths bind Codex
+identity without adding credential grants; existing grants and wire exclusions
+remain unchanged. Alternatives rejected: treating reachability as consent,
+which can silently restore a revoked model. Newly bound Codex identities require
+an explicit grant.
+Specifications: `tests/model_routing/test_probe_identity.py`.
+
+The optional aggregate `revocation_history` stores owner-scoped credential,
+creator and model identity keys with independent `model_revoked` and
+`excluded_wire_model_ids` evidence. Records are normalized without requiring
+the referenced entities to still exist; owner removal or catalog sync must not
+make prior denials unknowable. This schema alone does not infer consent or grant
+access. Duplicate identity keys and malformed evidence are rejected.
+Owner PUT and provider PATCH normalize admission before deriving history with the
+same domain operation. Removing a grant or credential tombstones each removed
+model and retains its wire exclusions. Changes to a surviving grant update only
+the exclusion delta, preserving unrelated historical evidence; an explicit
+regrant clears the model tombstone and replaces its wire exclusions. Both writes
+retain server-owned Codex seen history and use the requested revision for CAS.
+Provider deletion and discovery are not grant replacements. This prevents
+resource replacement from silently erasing denials; treating every edit as a
+replacement of all historical evidence was rejected.
+When Codex login recreates a credential removed by logout, the legacy import's
+initial grants cannot override this history. For the exact credential, creator
+and model, omit a tombstoned model and carry retained wire exclusions onto any
+surviving grant. This only narrows imported grants; first login without matching
+history and refresh of an existing credential keep their existing behavior.
+Credentials with retained explicit registration baseline history also use the
+stronger recreation rule below.
+Specifications: `tests/model_routing/test_revocation_history_contract.py`,
+`tests/api/test_model_routing_revocation_put.py`, and
+`tests/oauth/test_codex_recreated_grants.py`.
+
+The optional `codex_seen_history` aggregate field retains observations scoped
+by ProviderAccess, credential and a SHA-256 account fingerprint, even after
+those entities disappear. Its completeness flag is explicit; absent or
+incomplete history is not proof of novelty. A reserved pending wire must have
+been observed in complete history, and ambiguity cancels a reservation.
+Problem: catalog presence and successful probes are supply evidence, not
+consent; the borrowed Codex login can switch outside application locks.
+Decision: the personal owner may explicitly establish a complete baseline
+from a fresh, unconditional first-party catalog response authenticated by a
+bearer whose own account matches the dispatched account header. The baseline
+records current supply and retained denials, never grants it. A repeated
+opt-in does not reset a complete baseline. Opt-out ends new automatic grants
+and cancels pending reservations across the owner's accounts; previously issued
+grants remain revocable separately. This does not reconstruct pre-baseline history.
+
+During refresh, only a current direct `200` catalog with unambiguous slugs and
+an exact bearer account can advance that account's opted-in history. ETags
+(`304`), desktop relays, static tables and last-good cache continue to support
+supply display, not grant issuance. The response is joined to the aggregate
+revision observed before its fetch; a write race can retry ordinary metadata
+admission but requires fresh evidence before planning grants. A novel visible
+wire can reserve a uniquely attributable pending identity. Its reservation
+cannot grant access until the exact OpenAI Model and provider inference profile
+pass admission; hidden, ambiguous, revoked or disappeared wires do not grant.
+
+A generated `authorization.codex_account_grants` row names one confirmed Model
+and exact wire, keyed by the full account fingerprint. It is not appended to
+legacy `authorization.models`. Only the matching account on the actual bearer
+may use the automatic grant; explicit manual wire denials are not bypassed.
+Recreating a previously baselined credential after logout clears its pending
+reservations and does not seed legacy grants: the retained history cannot
+identify which former grants were manual, so those must be explicitly restored.
+Alternatives rejected: inferring owner consent from a good catalog, using a
+cached account as proof, or fencing shared credentials with application locks.
+Specifications: `tests/oauth/test_codex_registration_flow.py`,
+`tests/model_routing/test_codex_account_grants_contract.py`, and
+`tests/model_routing/test_codex_grant_history.py`.
 
 ## Entity meanings
 
@@ -787,6 +872,40 @@ not aliases of GPT-5.5/GPT-5.6-Sol. `tokrouter.gpt-5.6-luna-coding` got
 provider-no-account 400s on Responses across all four credentials and an
 inconsistent credit-exhausted response on the no-selector face; it is not
 registered as served. Owner monitoring is SSO-permission-gated for this account.
+When the owner binds such a pending wire to a known Model in Settings, that
+binding is not evidence of upstream identity. Template supply checks the
+effective request names (including recipes without explicit `request_ids`)
+and their matching face before probing; an already-deployed name on that
+same face is supplied without a redundant provider call. The same spelling
+on another face is not evidence of supply. "No routable connection" is
+reported only when a recipe still has an unsupplied wire with no matching
+face Connection. Retirement requires the replacement recipe to cover the old
+wire/face pool and the same access to have exact, eligible recipe deployments
+on the affected faces. Eligibility uses canonical registration and secret-free grant checks on the
+final CAS candidate, after backfill and transplant. A moved heir on a disabled
+or revoked Connection cannot retire the old offering. A stale supply plan can
+insert an Offering on retry but can initialize grants only on credentials
+unchanged since planning, so it cannot undo a concurrent owner revocation.
+An offering being
+replaced in this pass cannot serve as a replacement; cyclic
+recipe claims are left alone. A spelling, alias, or unrelated deployment cannot
+retire an owner-bound offering. The aggregate allows one
+deployment per access/wire; a cross-face collision is reported as a wire
+conflict and leaves the owner row unchanged. Frontend staging resolves an exact
+selector before a generic same-URL connection. Successful sibling requests
+admit a recipe for consideration, but only an exact wire/face `ok` result marks
+an inserted deployment `passed`. For direct synchronous Requests probes,
+evidence reads the selected explicit header names from the final prepared
+request, after all protocol and gateway overrides. Their values are digested
+and matched case-insensitively by name against the destination's Connection
+and Deployment headers. Generated-only headers (including generated bearer
+authentication) are outside this comparison; an explicit credential-only
+header is not. Redirected or unobservable requests and recipe-only verdicts
+leave the deployment `unprobed`. This is prepared-request evidence, not a
+claim about remote intermediaries or other transports. Probe transport errors
+report their exception class, not request-bearing exception text. Specifications:
+`tests/model_routing/test_template_supply_races.py` and
+`tests/model_routing/test_template_supply_sync.py::test_owner_confirmed_pending_wire_is_supplied_not_unroutable`.
 
 GPT-5.5's [official model page](https://developers.openai.com/api/docs/models/gpt-5.5)
 and [API changelog](https://developers.openai.com/api/docs/changelog) establish
@@ -1359,21 +1478,6 @@ browser sent as `config.model`. Specifications:
 `tests/model_routing/test_model_routing_contract.py::test_unbound_pending_identity_reports_identity_pending_not_registration`
 and `tests/conversation/test_conversation_sync_v3.py::test_v3_route_start_provider_scoped_selection_names_its_request_name`.
 
-## Experiment-reserved credentials
-
-Credential admission is per (deployment, credential); load balancing treats
-every enabled, granted key as production capacity. An experiment's key is
-declared out of bounds for Tofu's own fallback traffic by
-`contracts/experiment_credential_reservations_v1.json` (gateway host + key
-tail, sourced from the experiment owners' launchers), not by a grant change,
-a disable or an RPM cap. `lib/llm_dispatch/credential_reservation.py` scopes
-that declaration to configured-fallback, its-recovery and pool-rescue
-dispatch; `LLMDispatcher._selection_scope` then omits those credentials for
-the scoped call, so the configured and ephemeral (request-group) slot paths
-obey it identically. Primary conversation traffic and deliberate model
-switches keep the full credential set. Rationale, episode replay and specs:
-[NETWORK.md](NETWORK.md) "Experiment-reserved credentials".
-
 ## Health and traceability
 
 Configured enablement and runtime health are separate. Route-missing (an
@@ -1687,8 +1791,12 @@ uses to gate newly released models. `lib/oauth/codex_version.py` resolves it
 at fetch time from the npm `@openai/codex` `latest` dist-tag (bounded cache,
 floor at the version pinned in `lib/oauth/outbound.py`), so new models reach
 the catalogue without a Tofu release; a registry outage degrades to the floor
-rather than failing the refresh. Executable specification:
-`tests/oauth/test_codex_version.py`.
+rather than failing the refresh. The cached rows and ETag retain the exact
+version sent on their request, including after an admission retry. A resolver
+upgrade during fetch therefore marks that cache stale and forces a new request
+without the old version's ETag; stamping the later version would conceal newly
+available models. Executable specifications:
+`tests/oauth/test_codex_version.py` and `tests/oauth/test_codex_catalog.py`.
 
 ## Daily model intelligence update
 
@@ -2007,6 +2115,14 @@ grants/exclusions; a new ModelRef grant covers only successful names on already
 authorized connections. The existing cell/time/concurrency budgets also bound
 discovery.
 
+For managed Codex (`ProviderAccess.provider_id == 'oauth_codex'`), scheduled
+probes publish diagnostics and can confirm identity, but neither mint credential
+model grants nor lift wire exclusions. Even a successful probe proves
+reachability, not account-scoped authorization; automatic Codex grants belong
+in authenticated, account-scoped registration, not the generic probe path.
+Other providers retain positive recommendation behavior and revocation-history
+protection.
+
 ### Oversized listings
 
 Owner decision 2026-10-31. Problem: creating a provider from an authenticated
@@ -2043,7 +2159,8 @@ Specifications: `tests/model_routing/test_model_routing_discovered_provider.py`,
 `Daily Provider Detection` is enabled on personal scheduler startup at `0 8 * * *`
 (08:00 server-local time); reconciliation preserves user-disabled state. The
 `provider_probe_daily` action delegates to `lib/model_routing/probe_automation.py`
-with the row owner's `providers` principal. It probes fresh matrices of enabled Offerings, including ungranted cells,
+with the row owner's `providers` principal, retaining the composed scheduler's
+tenant through the repository read and CAS. It probes fresh matrices of enabled Offerings, including ungranted cells,
 through the existing shared lane (no additional cell pool). Providers with
 no enabled Offering are skipped without changing grants.
 Each known wire uses its own Deployment's enabled Connection, including its
@@ -2075,3 +2192,7 @@ A complete all-negative run performs no authorization write. Results remain
 visible in the matrix cache and scheduler history.
 The server must be running at 08:00; missed cron occurrences are not backfilled.
 Tests: `tests/providers/test_provider_probe_automation.py`.
+
+GPT-6.2 Astra and Sol exact public facts come from their [Astra](https://developers.openai.com/api/docs/models/gpt-6.2-astra) and [Sol](https://developers.openai.com/api/docs/models/gpt-6.2-sol) pages (checked 2026-11-18); the [API changelog](https://developers.openai.com/api/docs/changelog) dates their release 2026-11-17 (the original HTML includes `Nov 17` beneath `November, 2026`; text extraction can omit the day), independently corroborated by the dated [GPT-6.2 system card](https://deploymentsafety.openai.com/gpt-6-2-astra-sol). Both accept text and images, output text, have a 1,050,000-token context and a 128,000-token output limit, and reject reasoning effort `none`. Their API effort ladder and default are not documented: maintained profiles mark effort knowledge undocumented instead of inheriting an older model's ladder. Published list prices are reference facts, not subscription charges. Exact catalog facts allow subscription identities to enter the common admission boundary; they do not grant provider access or establish availability.
+
+Creator and subscription facts stay separate for these exact IDs. The authenticated Codex catalog declares a 500,000-token window for Sol and 272,000 for Astra, with `low` default and `low`/`medium`/`high`/`xhigh`/`max`/`ultra` effort controls. These are Offering overrides, not evidence of the public API default or effort ladder. Sol's catalog also lists audio input, while its public model reference explicitly excludes audio: catalog normalization does not promote that declaration into an admitted audio capability. The public Model retains text/image input and text output. Published Standard prices are USD per million tokens, with input/cache rates doubled and output multiplied by 1.5 for the full request above 272K input tokens; they do not represent subscription charges. Subscription availability in the [Codex pricing guide](https://developers.openai.com/codex/pricing) is distinct from account-specific directory supply and a successful scoped Responses probe. Regression: `tests/model_routing/test_subscription_registration_research.py::test_gpt62_official_facts_and_codex_subscription_admission`.

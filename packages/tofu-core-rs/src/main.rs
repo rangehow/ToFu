@@ -1,8 +1,9 @@
 //! `tofu-core-rs` command line.
 //!
 //! `byte-identity`: read JSON lines `{protocol, model, max_tokens,
-//! temperature, tools, messages, base_url, api_key}` on stdin and write one
-//! line per request: `{url, headers, payload_b64}` or `{error}`.
+//! temperature, tools, messages, base_url, api_key}` (plus the optional route
+//! facts of `wire::prepare_request_json`) on stdin and write one line per
+//! request: `{url, headers, payload_b64, tools}` or `{error}`.
 //!
 //! `sessions CONFIG.json`: run the configured Turns against a harness stub and
 //! a TofuDB engine; print one JSON report (per-session stub correlation keys,
@@ -16,10 +17,9 @@ use std::thread;
 use base64::Engine as _;
 use serde_json::{json, Value};
 
-use tofu_core_rs::canonical::{build_body, BodySpec};
 use tofu_core_rs::round::{monotonic_ns, run_session, EventMode, SessionConfig};
 use tofu_core_rs::store::ConnectionInfo;
-use tofu_core_rs::wire::{prepare, Protocol};
+use tofu_core_rs::wire::{prepare_request_json, Protocol};
 
 fn byte_identity() -> Result<(), Box<dyn std::error::Error>> {
     let stdin = io::stdin();
@@ -30,28 +30,7 @@ fn byte_identity() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
         let request: Value = serde_json::from_str(&line)?;
-        let protocol = Protocol::parse(request["protocol"].as_str().unwrap_or(""))
-            .ok_or("unknown protocol")?;
-        let messages = request["messages"].as_array().cloned().unwrap_or_default();
-        let tools = request["tools"].as_array().cloned();
-        let outcome = build_body(
-            &messages,
-            &BodySpec {
-                model: request["model"].as_str().unwrap_or(""),
-                max_tokens: request["max_tokens"].as_u64().unwrap_or(4096),
-                temperature: request["temperature"].as_f64(),
-                tools: tools.as_deref(),
-            },
-        )
-        .and_then(|body| {
-            prepare(
-                body,
-                protocol,
-                request["base_url"].as_str().unwrap_or(""),
-                request["api_key"].as_str().unwrap_or(""),
-            )
-        });
-        let answer = match outcome {
+        let answer = match prepare_request_json(&request) {
             Ok(sealed) => json!({
                 "url": sealed.url,
                 "headers": sealed.headers,
@@ -64,6 +43,56 @@ fn byte_identity() -> Result<(), Box<dyn std::error::Error>> {
         stdout.write_all(b"\n")?;
     }
     stdout.flush()?;
+    Ok(())
+}
+
+fn part(name: String, bytes: &[u8]) -> Value {
+    json!({"name": name, "b64": base64::engine::general_purpose::STANDARD.encode(bytes)})
+}
+
+fn provider_wire_parts(input: &Value) -> Result<Vec<Value>, String> {
+    let mut parts = Vec::new();
+    for protocol in input["protocols"].as_array().cloned().unwrap_or_default() {
+        let name = protocol.as_str().unwrap_or("").to_owned();
+        let mut request = input.clone();
+        request["protocol"] = protocol;
+        let sealed = prepare_request_json(&request).map_err(|error| error.to_string())?;
+        parts.push(part(format!("{name}:url"), sealed.url.as_bytes()));
+        for (key, value) in &sealed.headers {
+            parts.push(part(format!("{name}:header:{key}"), value.as_bytes()));
+        }
+        parts.push(part(format!("{name}:payload"), &sealed.payload));
+    }
+    Ok(parts)
+}
+
+fn parity() -> Result<(), Box<dyn std::error::Error>> {
+    let stdin = io::stdin();
+    let mut stdout = io::BufWriter::new(io::stdout().lock());
+    for line in stdin.lock().lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let request: Value = serde_json::from_str(&line)?;
+        let boundary = request["boundary"].as_str().unwrap_or("");
+        let outcome = match boundary {
+            "provider_wire" => provider_wire_parts(&request["input"]),
+            other => Err(format!(
+                "unsupported by the prototype: boundary {other} is not ported"
+            )),
+        };
+        let answer = match outcome {
+            Ok(parts) => json!({"id": request["id"], "parts": parts}),
+            Err(reason) if reason.starts_with("unsupported by the prototype") => {
+                json!({"id": request["id"], "unsupported": reason})
+            }
+            Err(reason) => json!({"id": request["id"], "error": reason}),
+        };
+        serde_json::to_writer(&mut stdout, &answer)?;
+        stdout.write_all(b"\n")?;
+        stdout.flush()?;
+    }
     Ok(())
 }
 
@@ -177,8 +206,9 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let outcome = match args.get(1).map(String::as_str) {
         Some("byte-identity") => byte_identity(),
+        Some("parity") => parity(),
         Some("sessions") if args.len() > 2 => sessions(&args[2]),
-        _ => Err("usage: tofu-core-rs byte-identity | sessions CONFIG.json".into()),
+        _ => Err("usage: tofu-core-rs byte-identity | parity | sessions CONFIG.json".into()),
     };
     if let Err(error) = outcome {
         eprintln!("tofu-core-rs: {error}");

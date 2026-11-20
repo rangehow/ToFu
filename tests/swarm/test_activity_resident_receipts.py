@@ -33,9 +33,10 @@ from lib.swarm.protocol import SubAgentResult, SubTaskSpec
 from lib.swarm.run_messages import RunMessageRepository, binding_for
 from lib.swarm.team_messages import coordinator_binding
 from tests.swarm.test_retained_agents import RecordClient
-from tests.swarm.test_swarm_execution_controls import (
-    ROOT, _install_execution_owner, _line_within,
+from tests.swarm.test_swarm_execution_controls import (  # noqa: F401
+    ROOT, _install_execution_owner, _line_within, api_app,
 )
+__all__ = ['api_app']
 
 pytestmark = pytest.mark.unit
 OWNER, CONV, RUN = 7, 'conv-a', 'launch'

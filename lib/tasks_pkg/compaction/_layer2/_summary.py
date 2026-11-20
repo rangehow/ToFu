@@ -302,6 +302,47 @@ def _summary_route_matches_quote(summary_route: dict, expected_route: dict) -> b
     return True
 
 
+_CANDIDATE_MINT_REFUSALS = frozenset({
+    'credential_secret_missing', 'credential_secret_invalid',
+    'model_route_endpoint_invalid',
+})  # Stale issuance, owner mismatch and storage errors are not candidate-local.
+
+
+def _main_summary_fallback_route(model, pin, policy, excluded_routes):
+    """Recover only through the parent's already-issued, independent model route."""
+    from lib.llm_dispatch import get_dispatcher
+    main_slots = [slot for slot in get_dispatcher().slots.scope(pin)
+                  if model in (slot.logical_model, slot.model)]
+    if not main_slots:
+        return None
+    if any(exclusion['resolver'] == 'codex' for exclusion in excluded_routes) and all(
+            getattr(slot, 'oauth', '') == 'codex' for slot in main_slots):
+        return None
+    return {'modelId': model, 'providerId': pin, 'policy': policy,
+            'reason': 'main_after_auxiliary_credential_outage',
+            'projectedCostUsd': None, 'costBasis': {'source': 'unknown'}, 'selectionBasis': {}}
+
+
+def _requalified_summary_plan(task, initial, *, input_tokens, allowance, exclusions, refused):
+    from lib.tasks_pkg.compaction._summary_routing import select_summary_route
+
+    plan = select_summary_route(
+        task, input_tokens=input_tokens, output_tokens=_SUMMARY_MAX_TOKENS,
+        capacity_output_tokens=allowance, excluded_routes=exclusions,
+        excluded_route_identities=refused)
+    if plan.get('policy') != initial.get('policy'):
+        return None
+    revision = initial['routeIdentity']['revision']
+    parents = initial.get('_parentRouteIdentities')
+    if plan.get('requestOwned'):
+        if (plan['routeIdentity']['revision'] == revision
+                and plan.get('_parentRouteIdentities') == parents):
+            return plan
+    elif parents and plan.get('_exhaustedAuxiliarySupply') == (revision, parents):
+        return plan
+    return None
+
+
 def _summary_request_key(
     messages: list, *, owner_user_id: int | None, summary_route: dict,
     model: str | None, pinned_provider: str | None, codex_provider: str, config: dict,
@@ -509,7 +550,7 @@ def _generate_query_aware_summary(messages: list, current_query: str,
         summary_route = select_summary_route(
             task, input_tokens=summary_input_tokens,
             output_tokens=_SUMMARY_MAX_TOKENS,
-            capacity_output_tokens=dispatch_output_tokens)
+            capacity_output_tokens=dispatch_output_tokens, prepare_dispatch=expected_route is None)
         model = summary_route.get('modelId') or model
 
         if summary_route.get('requestOwned'):
@@ -585,6 +626,8 @@ def _generate_query_aware_summary(messages: list, current_query: str,
     from lib.tasks_pkg.compaction._summary_failure import (
         MAX_SUMMARY_ATTEMPTS, validate_summary_failure)
     from lib.llm.llm_errors import SubscriptionCredentialUnavailableError, SubscriptionLoginRequiredError
+    from lib.llm_dispatch._api_errors import DispatchNoCapableSlot
+    from lib.model_routing.domain import ModelRoutingError
     from lib.tasks_pkg.compaction._auxiliary_route import (
         credential_route_exclusion, group_credential_excluded,
         mint_auxiliary_route, record_auxiliary_route_success)
@@ -593,8 +636,7 @@ def _generate_query_aware_summary(messages: list, current_query: str,
     main_model = ((task.get('model') or (task.get('config') or {}).get('model')
                    or (task.get('config') or {}).get('preset'))
                   if isinstance(task, dict) else None)
-    # Same resolution as select_summary_route: active thread pin, else the
-    # task's own route group. A missing thread pin must not disable fallback.
+    # Active thread pin, else the task's own route group (as in selection).
     main_pin = ((get_pinned_provider() or str(task.get('_pinned_provider_id')
                  or (task.get('config') or {}).get('_pinned_provider_id') or ''))
                 if isinstance(task, dict) else '')
@@ -605,12 +647,12 @@ def _generate_query_aware_summary(messages: list, current_query: str,
     failure_reason = 'summary_dispatch_failed'
     initial_route = summary_route
     excluded_routes = []
+    excluded_route_identities = []
     principal = (task.get('_principalContext') or {}) if isinstance(task, dict) else {}
     tenant = principal.get('tenant_id', task.get('_tenant_id')) if isinstance(task, dict) else None
 
-    # Alias checks are secret-local, not provider attempts. Bound them by the
-    # initial finite compiler supply at one revision, never a global slot cap.
-    eligible_checks = max(1, int((initial_route.get('selectionBasis') or {}).get('eligibleRoutes') or 1))
+    # Local refusals only consume the initial finite witness supply.
+    eligible_checks = initial_route.get('_auxiliaryWitnessCount', 1)
     checked_groups = 0
     cleanup_failed = False
     primary_error_active = False  # This invocation is propagating, not its caller.
@@ -631,82 +673,59 @@ def _generate_query_aware_summary(messages: list, current_query: str,
 
     main_fallback_used = False
 
-    def _fall_back_to_main_route():
-        """Use the task's own route once after auxiliary credentials are unsent.
+    def _may_requalify():
+        return (expected_route is None and initial_route.get('requestOwned')
+                and initial_route.get('policy') == 'aa-cheapest'
+                and len(summary_attempts) < MAX_SUMMARY_ATTEMPTS
+                and not (transport.observed_provider_work or transport.transport_completed)
+                and not (abort_check and abort_check())
+                and _summary_authority_evidence(task) == authority_evidence)
 
-        No new catalog, model or provider authority: only the strict main
-        model under the parent pin selected before discovery. A main whose
-        every slot shares the failed Codex resolver cannot help; one independent
-        grant can, and dispatch's credential-outage routing skips the shared
-        slots. A quote, opt-out or authority/abort change refuses rather than
-        buying an unquoted call.
-        """
+    def _use_route(route, allowance):
         nonlocal summary_route, model, dispatch_options, dispatch_output_tokens
-        nonlocal main_fallback_used, codex_provider
-        if (main_fallback_used or expected_route is not None
-                or not initial_route.get('requestOwned')
-                or initial_route.get('policy') != 'aa-cheapest'
-                or not main_model or not main_pin
-                or len(summary_attempts) >= MAX_SUMMARY_ATTEMPTS
-                or (abort_check and abort_check())
-                or _summary_authority_evidence(task) != authority_evidence):
-            return False
-        from lib.llm_dispatch import get_dispatcher
-        main_slots = [slot for slot in list(get_dispatcher().slots)
-                      if getattr(slot, 'provider_id', '') == main_pin
-                      and main_model in (getattr(slot, 'logical_model', ''),
-                                         getattr(slot, 'model', ''))]
-        if not main_slots:
-            return False
-        if any(exclusion['resolver'] == 'codex' for exclusion in excluded_routes) and all(
-                getattr(slot, 'oauth', '') == 'codex' for slot in main_slots):
-            return False
-        main_fallback_used = True
-        summary_route = {'modelId': main_model, 'providerId': main_pin,
-                         'policy': initial_route.get('policy'),
-                         'reason': 'main_after_auxiliary_credential_outage',
-                         'projectedCostUsd': None, 'costBasis': {'source': 'unknown'},
-                         'selectionBasis': {}}
-        model = main_model
-        codex_provider = main_codex_provider
-        dispatch_output_tokens = original_output_allowance
-        dispatch_options = {**dispatch_options, 'prefer_model': main_model, 'strict_model': True}
-        if isinstance(usage_out, dict):
-            usage_out['_summaryRoute'] = summary_route
-        return True
-
-    def _reselect_route():
-        nonlocal summary_route, model, dispatch_options, dispatch_output_tokens
-        if (expected_route is not None or not initial_route.get('requestOwned')
-                or initial_route.get('policy') != 'aa-cheapest'
-                or len(summary_attempts) >= MAX_SUMMARY_ATTEMPTS
-                or checked_groups >= eligible_checks
-                or (abort_check and abort_check())
-                or _summary_authority_evidence(task) != authority_evidence):
-            return False
-        from lib.tasks_pkg.compaction._summary_routing import select_summary_route
-        candidate = select_summary_route(
-            task, input_tokens=summary_input_tokens, output_tokens=_SUMMARY_MAX_TOKENS,
-            capacity_output_tokens=original_output_allowance,
-            excluded_routes=excluded_routes)
-        # Selection may block on owner/profile/repository reads; recheck task
-        # authority before publishing a candidate or minting its credentials.
-        if (not candidate.get('requestOwned')
-                or candidate.get('policy') != initial_route.get('policy')
-                or candidate['routeIdentity'].get('revision')
-                    != initial_route['routeIdentity'].get('revision')
-                or candidate.get('_parentRouteIdentities')
-                    != initial_route.get('_parentRouteIdentities')
-                or _summary_authority_evidence(task) != authority_evidence
-                or (abort_check and abort_check())):
-            return False
-        summary_route = candidate
-        model = candidate['modelId']
-        dispatch_output_tokens = min(original_output_allowance, candidate['capacityOutputTokens'])
+        summary_route, model, dispatch_output_tokens = route, route['modelId'], allowance
         dispatch_options = {**dispatch_options, 'prefer_model': model, 'strict_model': True}
         if isinstance(usage_out, dict):
             usage_out['_summaryRoute'] = summary_route
         return True
+
+    def _fall_back_to_main_route(qualified=None):
+        nonlocal main_fallback_used, codex_provider
+        if main_fallback_used or not main_model or not main_pin or not _may_requalify():
+            return False
+        candidate = _main_summary_fallback_route(main_model, main_pin, initial_route['policy'], excluded_routes)
+        if not candidate:
+            return False
+        allowance = original_output_allowance
+        if qualified is not None:
+            allowance = qualified.get('_mainRecoveryOutputTokens')
+            if not allowance or (qualified['modelId'], qualified['providerId']) != (main_model, main_pin):
+                return False
+            candidate.update(reason='main_after_auxiliary_route_refusal', capacityOutputTokens=allowance)
+        main_fallback_used, codex_provider = True, main_codex_provider
+        return _use_route(candidate, allowance)
+
+    def _reselect_route(*, allow_qualified_main=False):
+        if not _may_requalify() or (checked_groups >= eligible_checks and not allow_qualified_main):
+            return False
+        candidate = _requalified_summary_plan(
+            task, initial_route, input_tokens=summary_input_tokens, allowance=original_output_allowance,
+            exclusions=excluded_routes, refused=excluded_route_identities)
+        if not candidate or not _may_requalify():  # Discovery may have blocked on authority reads.
+            return False
+        if not candidate.get('requestOwned'):
+            return allow_qualified_main and _fall_back_to_main_route(qualified=candidate)
+        if checked_groups >= eligible_checks:
+            return False
+        return _use_route(candidate, min(original_output_allowance, candidate['capacityOutputTokens']))
+
+    def _requalify_unavailable_group(reason):
+        # Exclude this exact witness. No provider dispatch or retry took place.
+        excluded_route_identities.append(summary_route['routeIdentity'])
+        _close_route()
+        logger.info('%s Summary candidate refused before send: model=%s provider=%s reason=%s',
+                    tag, model, summary_route['providerId'], reason)
+        return _reselect_route(allow_qualified_main=True)
 
     try:
         while True:
@@ -718,9 +737,14 @@ def _generate_query_aware_summary(messages: list, current_query: str,
                 return None
             group = None
             if summary_route.get('requestOwned'):
-                group = mint_auxiliary_route(summary_route, owner=owner_user_id,
-                                              tenant=tenant, lifecycle=auxiliary_lifecycle)
                 checked_groups += 1
+                try:
+                    group = mint_auxiliary_route(summary_route, owner=owner_user_id,
+                                                  tenant=tenant, lifecycle=auxiliary_lifecycle)
+                except ModelRoutingError as error:
+                    if error.kind in _CANDIDATE_MINT_REFUSALS and _requalify_unavailable_group(error.kind):
+                        continue
+                    raise
                 auxiliary_pin = group.pin_id
                 # Transport selection follows the materialized credential,
                 # never a provider brand or the parent OAuth slot.
@@ -742,6 +766,12 @@ def _generate_query_aware_summary(messages: list, current_query: str,
                 return None  # Secret materialization can wait too; cleanup stays owned.
             try:
                 content, usage = _dispatch('text' if dispatch_options.get('strict_model') else 'cheap')
+            except DispatchNoCapableSlot:
+                if transport.observed_provider_work or transport.transport_completed:
+                    raise RuntimeError('summary route exhausted after provider work')
+                if group is not None and _requalify_unavailable_group('no_capable_slot'):
+                    continue
+                raise
             except LocalRequestPreparationError as error:
                 cause = error.__cause__
                 unsent = (not error.provider_reached and not transport.observed_provider_work
@@ -834,8 +864,9 @@ def _generate_query_aware_summary(messages: list, current_query: str,
         failure_evidence = classify_summary_failure(
             e, provider_completed=transport.transport_completed)
         failure_reason = failure_evidence['code']
-        logger.warning('%s Summary dispatch failed (will keep messages intact): %s',
-                       tag, type(e).__name__)
+        logger.warning('%s Summary dispatch failed (will keep messages intact): %s '
+                       'code=%s model=%s route_reason=%s', tag, type(e).__name__,
+                       failure_reason, summary_route.get('modelId') or '?', summary_route.get('reason') or '?')
         return None
     except BaseException:
         primary_error_active = True

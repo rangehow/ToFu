@@ -385,6 +385,40 @@
     {
       "creator_id": "openai",
       "model_ids": [
+        "gpt-6.2-astra"
+      ],
+      "inference_profile": {
+        "source": "official",
+        "reasoning": {
+          "support": "supported",
+          "wire_format": "reasoning_effort",
+          "can_disable": false,
+          "effort_knowledge": "undocumented"
+        }
+      },
+      "evidence_url": "https://developers.openai.com/api/docs/models/gpt-6.2-astra",
+      "checked_at": "2026-11-18"
+    },
+    {
+      "creator_id": "openai",
+      "model_ids": [
+        "gpt-6.2-sol"
+      ],
+      "inference_profile": {
+        "source": "official",
+        "reasoning": {
+          "support": "supported",
+          "wire_format": "reasoning_effort",
+          "can_disable": false,
+          "effort_knowledge": "undocumented"
+        }
+      },
+      "evidence_url": "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+      "checked_at": "2026-11-18"
+    },
+    {
+      "creator_id": "openai",
+      "model_ids": [
         "gpt-6.1-sol"
       ],
       "inference_profile": {

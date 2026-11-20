@@ -19,8 +19,18 @@ Rules; every count is over the provider's own limit window, ``WINDOW_S``
   rejected by that limit and a conversation round on the lane was held by
   dispatcher backpressure (queue wait > 0). Each owner whose rounds were
   rejected during the episode is told once.
-- It closes at the first accepted conversation round after a full window with
-  no minute-limit rejection on the lane.
+- It closes when its evidence horizon passes with no further minute-limit
+  rejection on the lane. The horizon is the provider's own: one window after
+  the lane's last rejection, or later when that 429 named a longer hold
+  (``Retry-After``). The close records which evidence ended it:
+  ``recovered`` when conversation rounds on the lane were accepted after the
+  last rejection, ``lapsed`` when none used the lane (nothing routed there:
+  the Watchdog steps off it, or the owner reserved or disabled the key), so
+  none was rejected or held. The watch never sends a request to a lane to
+  close an episode; a lapsed close says the limit's state since is unobserved.
+  The horizon is checked on every observation, on every read of open
+  AppIds, and by one timer per episode set to that horizon, so a lane that
+  nothing routes to closes too.
 
 Transitions leave the dispatch thread before any storage read or wake, and one
 lane's deliveries run in order (``_deliver_to_watchdog``). A failing watch is
@@ -37,7 +47,7 @@ not add its own rounds to the limit it is reporting on.
 
 Entry points: production_dispatch, production_owner, observe_rejection,
 observe_settlement, minute_limit, avoid_throttled_appids, throttled_appids,
-QuotaWatch, WINDOW_S.
+QuotaWatch, WINDOW_S, CLOSE_RECOVERED, CLOSE_LAPSED.
 Dependencies: lib.router.watchdog.quota, imported on the delivery thread and
 by throttled_appids; lib.storage.worker_process for the reporter identity.
 """
@@ -64,6 +74,10 @@ logger = get_logger(__name__)
 # The gateway limits each AppId per model and per minute, so one provider
 # minute is the window of every count and of recovery.
 WINDOW_S = 60.0
+
+# Which evidence closed an episode (the close transition's ``cause``).
+CLOSE_RECOVERED = 'recovered'
+CLOSE_LAPSED = 'lapsed'
 
 # The gateway's wording of those limits (example-corp AIGC validation stage):
 #   "App:**4861在模型:hy4每分钟请求次数超过限制"   requests per minute
@@ -154,6 +168,13 @@ class _Event:
     limit: str | None    # 'rpm' or 'tpm' for a minute-limit rejection; None when accepted
     wait_ms: float       # dispatcher backpressure this request had waited
     ttft_ms: float | None
+    retry_after_s: float | None = None   # the hold the provider named for a rejection
+
+    @property
+    def horizon(self) -> float:
+        """Until when this rejection is evidence of a full limit: the provider's window or its named hold."""
+        hold = self.retry_after_s if self.retry_after_s is not None and self.retry_after_s > WINDOW_S else WINDOW_S
+        return self.at + hold
 
 
 @dataclass(frozen=True)
@@ -198,13 +219,27 @@ class _Episode:
     production_rejected: int
     held: int
     longest_wait_ms: float
+    horizon: float
     # owner -> the delivery record its open and close transitions share
     deliveries: dict = field(default_factory=dict)
+    # requests the provider accepted on the lane after its last rejection
+    production_accepted_since: int = 0
+    auxiliary_accepted_since: int = 0
+    timer_at: float | None = None
 
     def note(self, event: _Event) -> None:
         if event.limit:
+            self.horizon = max(self.horizon, event.horizon)
+            self.production_accepted_since = self.auxiliary_accepted_since = 0
+            if event.owner is None:
+                return
             self.production_rejected += 1
             self.last_rejected_at = event.at
+        elif event.owner is None:
+            self.auxiliary_accepted_since += 1
+            return
+        else:
+            self.production_accepted_since += 1
         if event.wait_ms > 0:
             self.held += 1
             self.longest_wait_ms = max(self.longest_wait_ms, event.wait_ms)
@@ -243,9 +278,12 @@ def _hold(ms: float) -> str:
 class QuotaWatch:
     """Per-process episodes of every quota lane in use; ``observe`` is the only writer."""
 
-    def __init__(self, *, clock=time.time, deliver=None, reporter=None):
+    def __init__(self, *, clock=time.time, deliver=None, reporter=None, schedule=None):
         self._clock = clock
         self._deliver = deliver
+        # ``schedule(delay_s, callback)`` runs callback once after delay_s; None schedules nothing
+        # (callers then rely on observations and reads to reach a horizon).
+        self._schedule = schedule
         self._lock = threading.Lock()
         self._lanes: dict[tuple, _Lane] = {}
         self._reporter = reporter
@@ -263,20 +301,68 @@ class QuotaWatch:
     def open_appids(self) -> set:
         """``(provider, credential)`` of every lane with an episode open in this process."""
         with self._lock:
-            return {(lane.provider_id, lane.credential) for lane in self._lanes.values() if lane.episode}
+            transitions = self._close_due(self._clock())
+            appids = {(lane.provider_id, lane.credential) for lane in self._lanes.values() if lane.episode}
+        self._publish(transitions)
+        return appids
+
+    def settle(self) -> None:
+        """Close every episode whose evidence horizon has passed; the episode timers call this."""
+        with self._lock:
+            transitions = self._close_due(self._clock())
+        self._publish(transitions)
 
     def observe(self, ref: _LaneRef, *, owner: int | None, limit: str | None, queue_wait_ms: float,
-                ttft_ms: float | None) -> None:
+                ttft_ms: float | None, retry_after_s: float | None = None) -> None:
         """Record one provider answer on a lane and deliver the episode transitions it caused."""
         with self._lock:
-            event = _Event(self._clock(), owner, limit, max(0.0, float(queue_wait_ms or 0.0)), ttft_ms)
+            event = _Event(self._clock(), owner, limit, max(0.0, float(queue_wait_ms or 0.0)), ttft_ms,
+                           retry_after_s)
             transitions = self._observe(ref, event)
+        self._publish(transitions)
+
+    def _publish(self, transitions: list[dict]) -> None:
         deliver = self._deliver or _deliver_to_watchdog
         for transition in transitions:
-            logger.info('[QuotaWatch] %s production quota episode on …%s %s (%s) owner=%s',
+            logger.info('[QuotaWatch] %s production quota episode on …%s %s (%s) owner=%s%s',
                         'opened' if transition['kind'] == 'open' else 'closed', transition['keyTail'],
-                        transition['model'], transition['providerId'], transition['owner'])
+                        transition['model'], transition['providerId'], transition['owner'],
+                        f" ({transition['cause']})" if transition['kind'] == 'close' else '')
             deliver(transition)
+
+    def _close_due(self, now: float) -> list[dict]:
+        """Close the episodes whose horizon passed with no rejection; re-arm the timers of the rest."""
+        transitions = []
+        for lane in self._lanes.values():
+            episode = lane.episode
+            if episode is None:
+                continue
+            if now >= episode.horizon:
+                lane.episode = None
+                transitions += [self._close(lane, episode, owner, now) for owner in episode.deliveries]
+            else:
+                self._arm(episode)
+        return transitions
+
+    def _arm(self, episode: _Episode) -> None:
+        """One pending timer per episode, at its current horizon: a lane nothing routes to still closes."""
+        if self._schedule is None or episode.timer_at == episode.horizon:
+            return
+        if episode.timer_at is not None and episode.timer_at < episode.horizon:
+            return  # the pending timer fires first and re-arms for the later horizon
+        at = episode.timer_at = episode.horizon
+        self._schedule(max(0.0, at - self._clock()), lambda: self._on_timer(at))
+
+    def _on_timer(self, at: float) -> None:
+        try:
+            with self._lock:
+                for lane in self._lanes.values():
+                    if lane.episode is not None and lane.episode.timer_at == at:
+                        lane.episode.timer_at = None
+                transitions = self._close_due(self._clock())
+            self._publish(transitions)
+        except Exception:
+            logger.warning('[QuotaWatch] horizon check failed', exc_info=True)
 
     def _observe(self, ref: _LaneRef, event: _Event) -> list[dict]:
         lane = self._lanes.get(ref.identity)
@@ -294,28 +380,38 @@ class QuotaWatch:
         window = _Window.of(lane.events)
         if not window.rejected:
             lane.clean_capacity = max(lane.clean_capacity, window.accepted)
+        # An accepted round counts toward recovery before the horizon check that
+        # it may itself be the first observation past.
+        if lane.episode is not None and not event.limit:
+            lane.episode.note(event)
+        transitions = self._close_due(event.at)
         episode = lane.episode
         if episode is None:
             if window.production_rejected and window.production_held:
-                return self._open_episode(lane, window, event.at)
-            return []
-        if event.owner is None:
-            return []
+                transitions += self._open_episode(lane, window, event.at)
+            return transitions
+        if not event.limit:
+            return transitions
         episode.note(event)
-        if event.limit:
-            if event.owner in episode.deliveries:
-                return []
-            return [self._open(lane, episode, event.owner, self._evidence(lane, window, event.at))]
-        if window.rejected:
-            return []
-        lane.episode = None
-        return [self._close(lane, episode, owner, event.at) for owner in episode.deliveries]
+        self._arm(episode)
+        if event.owner is None or event.owner in episode.deliveries:
+            return transitions
+        return transitions + [self._open(lane, episode, event.owner, self._evidence(lane, window, event.at))]
 
     def _open_episode(self, lane: _Lane, window: _Window, now: float) -> list[dict]:
         episode = lane.episode = _Episode(
             opened_at=now, first_rejected_at=window.rejections[0].at, last_rejected_at=window.rejections[-1].at,
             production_rejected=window.production_rejected, held=window.production_held,
-            longest_wait_ms=window.longest_wait_ms)
+            longest_wait_ms=window.longest_wait_ms,
+            horizon=max(event.horizon for event in lane.events if event.limit))
+        last_rejection = max(event.at for event in lane.events if event.limit)
+        for event in lane.events:
+            if event.at > last_rejection and not event.limit:
+                if event.owner is None:
+                    episode.auxiliary_accepted_since += 1
+                else:
+                    episode.production_accepted_since += 1
+        self._arm(episode)
         evidence = self._evidence(lane, window, now)
         owners = dict.fromkeys(event.owner for event in window.rejections)
         return [self._open(lane, episode, owner, evidence) for owner in owners]
@@ -357,18 +453,33 @@ class QuotaWatch:
     def _close(self, lane: _Lane, episode: _Episode, owner: int, now: float) -> dict:
         totals = {'productionRejected': episode.production_rejected, 'held': episode.held,
                   'longestWaitMs': episode.longest_wait_ms, 'firstRejectedAtMs': _ms(episode.first_rejected_at),
-                  'lastRejectedAtMs': _ms(episode.last_rejected_at)}
+                  'lastRejectedAtMs': _ms(episode.last_rejected_at), 'horizonMs': _ms(episode.horizon),
+                  'productionAcceptedSince': episode.production_accepted_since,
+                  'auxiliaryAcceptedSince': episode.auxiliary_accepted_since}
+        lane_name = f'AppId …{lane.key_tail} ({lane.provider_id}, model {lane.model})'
+        if episode.production_accepted_since:
+            cause = CLOSE_RECOVERED
+            outcome = (
+                f'Recovered at {_utc(now)} UTC: conversation rounds on {lane_name} were accepted with no per-minute '
+                f'limit rejection for a full provider minute. ')
+        else:
+            cause = CLOSE_LAPSED
+            outcome = (
+                f'Lapsed at {_utc(now)} UTC: no conversation round used {lane_name} in the provider minute (and any '
+                'hold the provider named) after its last per-minute limit rejection, so none was rejected or held; '
+                f'auxiliary requests accepted on it meanwhile: {episode.auxiliary_accepted_since}. Tofu sent no '
+                "probe to close this; the limit's state since is unobserved, and a new rejection of held rounds "
+                'opens a new episode. ')
         resolution = (
-            f'Recovered at {_utc(now)} UTC: conversation rounds on AppId …{lane.key_tail} ({lane.provider_id}, '
-            f'model {lane.model}) were accepted with no per-minute limit rejection for a full provider minute. '
-            f'Episode from {_utc(episode.first_rejected_at)} to {_utc(episode.last_rejected_at)} UTC: '
+            f'{outcome}Episode from {_utc(episode.first_rejected_at)} to {_utc(episode.last_rejected_at)} UTC: '
             f'{episode.production_rejected} conversation rounds rejected, {episode.held} held '
             f'(longest hold {_hold(episode.longest_wait_ms)}).')
-        return {**self._transition('close', lane, episode, owner), 'closedAtMs': _ms(now),
+        return {**self._transition('close', lane, episode, owner), 'closedAtMs': _ms(now), 'cause': cause,
                 'evidence': {'episode': totals}, 'resolution': resolution}
 
     def snapshot(self) -> list[dict]:
         """Every lane in use, with its current window size, totals and open episode."""
+        self.settle()
         with self._lock:
             now = self._clock()
             rows = []
@@ -422,8 +533,10 @@ def observe_rejection(slot, error, *, queue_wait_ms: float) -> None:
         limit = minute_limit(message)
         if limit is None:
             return
+        retry_after_s = getattr(error, 'retry_after_s', None)
         _WATCH.observe(_lane_ref(slot, message), owner=production_owner(), limit=limit,
-                       queue_wait_ms=queue_wait_ms, ttft_ms=None)
+                       queue_wait_ms=queue_wait_ms, ttft_ms=None,
+                       retry_after_s=float(retry_after_s) if isinstance(retry_after_s, (int, float)) else None)
     except Exception:
         logger.debug('[QuotaWatch] rejection not observed', exc_info=True)
 
@@ -473,8 +586,15 @@ def _deliver(previous: threading.Thread | None, transition: dict) -> None:
                        transition.get('owner'), exc_info=True)
 
 
-_WATCH = QuotaWatch()
+def _timer(delay_s: float, callback) -> None:
+    timer = threading.Timer(delay_s, callback)
+    timer.daemon = True
+    timer.name = 'quota-watch-horizon'
+    timer.start()
 
 
-__all__ = ['QuotaWatch', 'WINDOW_S', 'avoid_throttled_appids', 'minute_limit', 'observe_rejection',
+_WATCH = QuotaWatch(schedule=_timer)
+
+
+__all__ = ['CLOSE_LAPSED', 'CLOSE_RECOVERED', 'QuotaWatch', 'WINDOW_S', 'avoid_throttled_appids', 'minute_limit', 'observe_rejection',
            'observe_settlement', 'production_dispatch', 'production_owner', 'throttled_appids']

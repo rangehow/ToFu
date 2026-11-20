@@ -42,8 +42,8 @@ def _build_search(ctx: ToolContext) -> list[dict]:
     # — it now behaves like 'multi' (the one-shot SEARCH_TOOL_SINGLE schema
     # was removed). The composer exposure gate decides whether its schema is
     # visible; the builder describes runtime availability only.
-    from lib.tools.search import build_search_tool
-    return [build_search_tool()]
+    from lib.tools.search import build_search_tool, search_tool_for_request
+    return [build_search_tool() if ctx.schema_preview else search_tool_for_request()]
 
 
 def _build_retained_agents(ctx: ToolContext) -> list[dict]:

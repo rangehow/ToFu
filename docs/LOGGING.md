@@ -744,9 +744,11 @@ Context provenance follows existing request evidence ownership:
 `messages_snapshot.contextLineage` and
 `tool_wire_projection.contextLineage` contain only source IDs, hashes, ranges,
 transformation stages and request/transport identity. No prompt body is copied
-into the map or `CacheRoundRecord`. The latter adds only the sealed request's
-semantic/prefix IDs and its transport trace ID, preserving the existing verdict
-owner. `_wire_context_lineage` is transient usage evidence and is removed by
+into the map or `CacheRoundRecord`. For correlation, `CacheRoundRecord` emits
+its request identity only with both valid sealed semantic/prefix digests, and
+emits `trace_id` only alongside that pair when supplied. Missing fields are a
+coverage gap, not evidence for a trace-only or historical accepted-task join.
+`_wire_context_lineage` is transient usage evidence and is removed by
 the existing `_wire_*` storage projection. Source arrays use the existing
 snapshot delta/replay owner; its [growth measurement](FRONTEND_ARCHITECTURE.md)
 also covers wire projection rows. There is no new log family or retention knob.

@@ -1,10 +1,32 @@
 /** oauth endpoint facade. Owns wire paths and projections; transport/retry policy arrives through explicit ports. */
 import type { EndpointPorts, JsonObject } from './contracts';
 import type {RequestOptions} from '../transport';
+
+export type AntigravityState = 'unsupported' | 'missing_cli' | 'login_required' | 'ready' | 'unavailable';
+export interface AntigravityStatus { state: AntigravityState; browser_login_available?: boolean; }
+/** Result of installing the verified Google release on the Tofu host. */
+export interface AntigravityInstallResult {
+  provider: string;
+  status: 'installed' | 'already' | 'unsupported' | 'failed';
+  executable?: string;
+  version?: string;
+  reason?: string;
+}
+export type AntigravityPromptResult = {state: 'ready'; text: string}
+  | {state: Exclude<AntigravityState, 'ready'>; browser_login_available?: boolean};
+const ANTIGRAVITY_PATH = '/api/v4/oauth/antigravity';
+
 export function createOauthEndpoints(ports: EndpointPorts) {
   const { request, get, post } = ports;
   const oauth = {
     status:      (options: Pick<RequestOptions, 'signal'> = {}) => get('/api/v4/oauth/status', { ...options, onError: 'null' }),
+    antigravityStatus: (options: Pick<RequestOptions, 'signal'>) => get<AntigravityStatus>(ANTIGRAVITY_PATH, options),
+    antigravityLogin: (options: Pick<RequestOptions, 'signal'>) =>
+      post<AntigravityStatus>(`${ANTIGRAVITY_PATH}/login`, undefined, options),
+    antigravityInstall: (options: Pick<RequestOptions, 'signal'> = {}) =>
+      post<AntigravityInstallResult>(`${ANTIGRAVITY_PATH}/install`, undefined, {timeout: 900_000, ...options}),
+    antigravityPrompt: (prompt: string, options: Pick<RequestOptions, 'signal'>) =>
+      post<AntigravityPromptResult>(ANTIGRAVITY_PATH, {prompt}, options),
     loginPost:   (provider: string, preferConsole: boolean) =>
       post<Response | null>('/api/oauth/login',
            preferConsole ? { provider, prefer_console: true } : { provider },

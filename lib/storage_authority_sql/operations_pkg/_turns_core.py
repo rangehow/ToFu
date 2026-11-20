@@ -788,8 +788,8 @@ def _turn_public(
     }
 
 
-def _turn_public_metadata(row: Mapping[str, Any]) -> dict[str, Any]:
-    """Public turn identity/settlement shared by full and bounded readers."""
+def _turn_status_and_settlement(row: Mapping[str, Any]):
+    """Normalize the stored verdict identically for metadata and CAS witnesses."""
     stored_status = str(row["status"])
     raw_settlement = _stored_object(row["settlement_json"], "turn settlement")
     public_settlement = (
@@ -802,6 +802,12 @@ def _turn_public_metadata(row: Mapping[str, Any]) -> dict[str, Any]:
     if (stored_status in {"completed", "interrupted", "truncated", "failed", "superseded"}
             and normalized_outcome in {"completed", "interrupted", "truncated", "failed"}):
         status = normalized_outcome
+    return status, public_settlement
+
+
+def _turn_public_metadata(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Public turn identity/settlement shared by full and bounded readers."""
+    status, public_settlement = _turn_status_and_settlement(row)
     return {
         "turnId": str(row["turn_id"]),
         "presentationId": str(

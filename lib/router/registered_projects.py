@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import os
 
-__all__ = ['registered_project', 'registered_project_roots']
+__all__ = ['folder_has_project', 'registered_project', 'registered_project_roots']
 
 
 def _not_a_project(owner: int, path: str) -> bool:
@@ -33,6 +33,17 @@ def _folder_roots(owner: int) -> list[str]:
     from lib.conversations.folders import owner_folders
     return [os.path.normpath(path) for folder in owner_folders().list(owner)
             for path in folder['projectPaths'] if isinstance(path, str) and os.path.isabs(path)]
+
+
+def folder_has_project(owner: int, folder_id: str, project: str) -> bool:
+    """Whether the owner’s exact folder still includes this canonical project (no link aliases)."""
+    from lib.conversations.folders import owner_folders
+    from lib.conversations.project_identity import normalize_project_path
+    folder = owner_folders().get(owner, folder_id)
+    if folder is None:
+        return False
+    paths = folder.get('projectPaths') or [folder.get('projectPath') or '']
+    return any(normalize_project_path(path) == project for path in paths)
 
 
 def registered_project_roots(owner: int, *, client=None) -> list[str]:

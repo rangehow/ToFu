@@ -209,8 +209,12 @@ function loadConversation(id) {
   const c = conversations.find((x) => x.id === id);
   if (!c) return;
 
-  _restoreConvProject(c);
+  /* One navigation token owns both the immediate projection and the optional
+   * enrichment it starts. A conversation ID alone cannot tell a late response
+   * from an earlier visit of the same chat (A -> B -> A), so the token is the
+   * visit identity; a cold hydration restore reuses it. */
   projectRestoreEligible = _conversationProjectController.begin();
+  _restoreConvProject(c, projectRestoreEligible);
   document.getElementById("topbarTitle").textContent =
     _conversationDisplayTitle(c.title, t('chat.newConversation'));
   /* PERF: Use fast-path O(1) active-class swap instead of O(N) full sidebar rebuild.
@@ -280,11 +284,10 @@ function loadConversation(id) {
   // The snapshot and resumed ordered stream already include authoritative queue state.
   updateSendButton();
   runtimeScope.DebugPresentationState?.onConversationSwitch(id);
-  /* Project binding is part of authoritative settings. Cold opens restore it
-   * after Turn hydration above; restoring the shell copy here as well raced an
-   * identical setPaths request, rotated the server undo session, and warmed
-   * the same tree index twice. Warm opens already own exact settings. */
-  if (!c._turnSnapshotRequired) _restoreConvProject(c, projectRestoreEligible);
+  /* Project binding is part of authoritative settings. The selection above
+   * already projected this warm conversation's saved roots; repeating it here
+   * reread the same project and duplicated optional enrichment. Cold opens
+   * remain restored after Turn hydration, when the snapshot may change them. */
   /* Restore settings only after the authoritative Turn snapshot is ready. */
   if (!c._turnSnapshotRequired) restoreConversationSettingsToComposer(c, modelRestoreEligible);
 

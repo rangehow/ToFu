@@ -8,8 +8,8 @@ browser, and auth-source providers before use.
 Entry points:
 ``ensure_search_runtime`` activates the runtime on first real use;
 ``sync_search_config_if_loaded`` hot-applies settings without causing a cold
-optional import; ``search_library_is_loaded`` supports dependency-free schema
-decisions; ``submit_search_worker`` captures explicit inputs for host fan-out.
+optional import; ``prepare_search_dependency_import`` is also used by live
+schema metadata reads; ``submit_search_worker`` captures explicit inputs for host fan-out.
 The bridge and optional dependency are imported only inside real-use functions.
 """
 
@@ -27,7 +27,6 @@ logger = get_logger(__name__)
 __all__ = [
     'ensure_search_runtime', 'shutdown_search_browser_runtime',
     'prepare_search_dependency_import',
-    'search_library_is_loaded',
     'search_runtime_is_active',
     'sync_search_config_if_loaded',
     'submit_search_worker',
@@ -78,11 +77,6 @@ def prepare_search_dependency_import() -> bool:
             'Optional tofu-search import policy could not be installed: %s',
             error)
         return False
-
-
-def search_library_is_loaded() -> bool:
-    """Return whether tofu-search is already resident, without importing it."""
-    return sys.modules.get('tofu_search') is not None
 
 
 def search_runtime_is_active() -> bool:

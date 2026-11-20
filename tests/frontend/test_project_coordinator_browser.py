@@ -83,7 +83,8 @@ def test_create_independent_leader_and_keep_project_navigation_isolated(page, mo
             {'title': 'Fix folder creation in the sidebar', 'status': 'completed', 'progress': 'Merged and verified in the browser.'},
             {'title': 'Research New Year homestays in Tianyu Creek', 'status': 'in_progress',
              'progress': 'Comparing Xiaohongshu, Ctrip, YourProvider and Douyin listings.'},
-            {'title': 'Summarize the WeChat article', 'status': 'pending'},
+            {'title': 'Summarize the WeChat article', 'status': 'pending',
+             'blocker': {'kind': 'next_action', 'action': 'Read the saved article and write the summary'}},
         ]})
     page.wait_for_function('document.querySelector("#projectCoordinatorEntry .coordination-leader-meta")?.textContent === "In progress: 1"')
     # A real report reaches the sidebar by project push while another chat is open.
@@ -104,18 +105,16 @@ def test_create_independent_leader_and_keep_project_navigation_isolated(page, mo
     assert board.get_attribute('open') is None
     page.locator('#projectCoordinatorEntry .coordination-leader:not([data-unread="true"])').wait_for()
     assert reports.read()['unread'] is False and reports.read()['latest']['turnId'] == first_report['turnId']
-    expect(board.locator('.coordinator-progress-tally')).to_have_text('In progress: 1')
+    expect(board.locator('.coordinator-progress-tally')).to_have_text('In progress: 1 · 1 not started')
     expect(board.locator('.coordinator-progress-summary')).to_have_text(
         'The folder dialog fix is verified; homestay research is underway.')
-    rows = board.locator('.coordinator-progress-content > .coordinator-progress-tasks > li')
+    rows = board.locator('.coordinator-progress-content > .coordinator-progress-tasks:not(.coordinator-progress-other) > li')
     expect(rows.first).to_be_hidden()
     board.locator('summary.coordinator-progress-head').click()
     expect(rows.first).to_be_visible()
     assert rows.evaluate_all(
         '(rows) => rows.map((row) => [row.dataset.status, row.querySelector(".coordinator-progress-task-title").textContent])') == [
-        ['in_progress', 'Research New Year homestays in Tianyu Creek'], ['pending', 'Summarize the WeChat article'],
-        # The report published without a board task reads under the one Other row (bc97b91eb1).
-        ['history', 'Other reports and files']]
+        ['in_progress', 'Research New Year homestays in Tianyu Creek'], ['pending', 'Summarize the WeChat article']]
     expect(board.locator('.coordinator-progress-finished > summary')).to_have_text('Finished: 1')
     # The Worker model is a compact footer control beside Task history, never a line of its own.
     expect(board.locator('.coordinator-progress-actions > .router-worker-model')).to_have_count(1)
@@ -235,13 +234,6 @@ def test_create_independent_leader_and_keep_project_navigation_isolated(page, mo
     page.locator('#presenceStrip').get_by_role('button', name='Return to Coordinator', exact=True).click()
     page.wait_for_function('(id) => window.activeConvId === id', arg=leader)
     assert page.locator('dialog[open]').count() == 0
-    # With no folder selected, a chat filed in a folder no longer claims the sidebar
-    # slot (cf6f941615), so the sidebar resolves Alpha in Alpha's folder first.
-    page.locator(f'.folder-tab[data-folder-id="{folder_ids[0]}"]').click()
-    page.wait_for_function('''(id) => {
-        const row = document.querySelector('#projectCoordinatorEntry .coordination-leader');
-        return row && !row.hasAttribute('aria-busy') && row.dataset.coordinatorId === id;
-    }''', arg=leader)
     # Browsing Beta must not rewrite the active Alpha conversation's ownership.
     # A folder click must paint the entry inside its own handler: the list may
     # not sit empty (or jump) until the project binding read lands.
@@ -356,9 +348,7 @@ def test_coordinator_conversations_are_contained_in_a_collapsible_sidebar_group(
     expect(body.locator('.conv-item')).to_have_count(3)
     expect(body).to_contain_text('Legacy delegated worker')
     expect(body).to_contain_text('Empty delegated shell')
-    # None of these Workers was opened, so none has Turn evidence: an unhydrated
-    # shell shows no status rather than Done (df92e64f23).
-    expect(body.locator('.coordinator-conversations-status')).to_have_count(0)
+    expect(body).to_contain_text('Done')
     worker_row = body.locator(f'.conv-item[data-conv-id="{legacy}"]')
     copy_id = worker_row.locator('.conv-copy-id')
     expect(copy_id).to_have_attribute('data-conv-id', legacy)
@@ -455,11 +445,6 @@ def test_coordinator_conversations_are_contained_in_a_collapsible_sidebar_group(
                           settings={'folderId': folder_id, 'projectPath': project, '_coordinatorSource': leader},
                           messages=[{'role': 'user', 'content': f'Older delegated work {index}'}])
     page.evaluate('(id) => loadConversation(id)', leader)
-    # Leave the search and show the project's folder: a chat filed in a folder no longer
-    # claims the sidebar's Coordinator slot outside that folder (cf6f941615).
-    page.locator('#sidebarSearchInput').fill('')
-    page.locator('#sidebarSearchToggle').click()
-    page.locator(f'.folder-tab[data-folder-id="{folder_id}"]').click()
     expect(group.locator('.coordinator-conversations-count')).to_have_text('23')
     expect(body.locator('.conv-item')).to_have_count(23)
     assert body.evaluate('(el) => el.scrollHeight > el.clientHeight')
@@ -508,17 +493,12 @@ def test_sidebar_paints_each_coordinator_once_across_folder_switches(page, monke
                           settings={'folderId': folder_ids[index], 'projectPath': projects[index],
                                     '_coordinatorSource': source},
                           messages=[{'role': 'user', 'content': 'Delegated work'}])
-    # An uncategorized chat of Alpha's project: only such a chat lets the uncategorized
-    # view resolve its project's Coordinator (cf6f941615); a chat filed in a folder does not.
-    unfiled = 'alpha-unfiled-' + suffix
-    seed_conversation(unfiled, title='Unfiled Alpha chat', settings={'projectPath': projects[0]},
-                      messages=[{'role': 'user', 'content': 'Unfiled Alpha chat'}])
     page.evaluate('localStorage.setItem("tofu_ui_lang", "en")')
     page.reload()
     _dismiss_onboarding_modals(page)
     page.set_viewport_size({'width': 1440, 'height': 960})
     page.wait_for_function('(ids) => ids.every((id) => window.conversations.some((row) => row.id === id))',
-                           arg=[replaced, current, beta, unfiled, *workers])
+                           arg=[replaced, current, beta, *workers])
     history = page.locator('.coordinator-history-entry .conv-item')
     groups = page.locator('.coordination-conversation-column .coordinator-conversations:not([hidden])')
     # Uncategorized holds none of these Coordinators, so it paints none of them.
@@ -550,9 +530,9 @@ def test_sidebar_paints_each_coordinator_once_across_folder_switches(page, monke
         # Every conversation here sits in a Coordinator group, so the folder is not called empty.
         expect(page.locator('#convList .folder-view-empty')).to_have_count(0)
 
-    # Boot restores an arbitrary conversation; pin the start to the uncategorized Alpha
-    # chat, which resolves Alpha's binding before Alpha's folder is chosen.
-    page.evaluate('(id) => loadConversation(id)', unfiled)
+    # Boot restores an arbitrary conversation; pin the start to an Alpha worker opened
+    # outside its folder, which resolves Alpha's binding before Alpha's folder is chosen.
+    page.evaluate('(id) => loadConversation(id)', workers[1])
     page.wait_for_function(leader_settled, arg=current)
     visit(folder_ids[0], current, [replaced], switches_project=False)
     visit(folder_ids[1], beta, [])
@@ -614,8 +594,8 @@ def test_project_workspace_opens_from_coordinator_settings_with_server_history_r
     folder = page.request.post(origin + '/api/v4/folders', data={'name': 'Gamma', 'projectPaths': [project]})
     assert folder.ok, folder.text()
     folder_id = folder.json()['data']['id']
-    build, review, notes_worker = ['history-rows-' + kind + '-' + suffix for kind in ['build', 'review', 'notes']]
-    for cid, title in [(build, 'Parser worker'), (review, 'Review worker'), (notes_worker, 'Notes worker')]:
+    build, review = ['history-rows-' + kind + '-' + suffix for kind in ['build', 'review']]
+    for cid, title in [(build, 'Parser worker'), (review, 'Review worker')]:
         seed_conversation(cid, title=title, settings={'folderId': folder_id, 'projectPath': project},
                           messages=[{'role': 'user', 'content': title + ' transcript'}])
     unbound = page.request.get(origin + '/api/v4/project/coordination', params={'path': project}).json()['data']
@@ -647,14 +627,11 @@ def test_project_workspace_opens_from_coordinator_settings_with_server_history_r
 
     def settle(assignment_id, recipient, label, content):
         pair = started_pair(recipient, label, 'Work on ' + assignment_id)
-        # Bind before settling, as a birth does: the recipient lane's settlement
-        # births a grant it finds still unbound (214650e681), which would race
-        # this hand-built execution with a second, real one.
-        repository.bind_execution(assignment_id, pair['turn']['turnId'], pair['attempt']['attemptId'])
         assert turns.record_task_event({
             '_attemptId': pair['attempt']['attemptId'], '_userId': 1, 'id': 'task-' + label + suffix,
             'status': 'done', 'finishReason': 'stop', 'content': content, 'thinking': '', 'toolRounds': [],
             'config': {}}, {'type': 'done', 'finishReason': 'stop'})
+        repository.bind_execution(assignment_id, pair['turn']['turnId'], pair['attempt']['attemptId'])
 
     def history(**query):
         response = page.request.get(origin + '/api/v4/project/coordination/assignments',
@@ -668,9 +645,7 @@ def test_project_workspace_opens_from_coordinator_settings_with_server_history_r
     settle(parser, build, 'history-parser-run-', 'Patched src/parser.py')
     design = grant('history-design-', review, 'Review the parser design')
     settle(design, review, 'history-design-run-', 'The design holds')
-    # Its own idle lane: a settlement's recovery pass (asynchronous) births every
-    # still-unbound grant of the settled recipient, so an unbound row there would race it.
-    notes = grant('history-notes-', notes_worker, 'Check the release notes')
+    notes = grant('history-notes-', review, 'Check the release notes')
     result = next(row for row in history()['assignments'] if row['assignmentId'] == parser)['execution']['resultRevision']
     repository.record_review(parser, 'rework', 'Cover empty input', result, 1)
     # The browser receives exactly the contract's list rows; an exact lookup keeps the whole grant.
@@ -844,12 +819,17 @@ def test_coordinator_progress_writes_refresh_the_pinned_board_live(page, flask_a
 
     board_write = {'summary': 'Release is underway; the notes come next.', 'tasks': [
         {'title': 'Release 0.19.0', 'status': 'in_progress', 'progress': 'Pushing to the three remotes.'},
-        {'title': 'Write the release notes', 'status': 'pending'}]}
+        {'title': 'Write the release notes', 'status': 'pending',
+         'blocker': {'kind': 'next_action', 'action': 'Draft the release notes from the merged commits'}}]}
     checklist_write = {'todos': [
         {'content': 'Release 0.19.0', 'status': 'completed'},
         {'content': 'Write the release notes', 'status': 'in_progress'},
         {'content': 'Announce the release', 'status': 'pending'}]}
-    gate, calls = threading.Event(), []
+    extra = [{'title': f'Follow-up {i:02d}', 'status': 'pending',
+              'blocker': {'kind': 'next_action', 'action': f'Start follow-up {i:02d}'}} for i in range(25)]
+    extra[-1]['progress'] = '待核对' * 100
+    first_seen, checklist_seen = threading.Event(), threading.Event()
+    calls = []
     usage = {'prompt_tokens': 10, 'completion_tokens': 2, 'total_tokens': 12}
 
     def model(task, body, tag='', on_tool_call_ready=None):
@@ -857,18 +837,24 @@ def test_coordinator_progress_writes_refresh_the_pinned_board_live(page, flask_a
             return {'role': 'assistant', 'content': 'Title', 'tool_calls': []}, 'stop', usage
         step = task['_liveBoardStep'] = task.get('_liveBoardStep', 0) + 1
         calls.append(step)
-        if step >= 3:
+        if step >= 5:
             from lib.agent_core.events import EventType, build_event
             from lib.tasks_pkg.manager._events import append_event
-            text = 'Both writes are on the board.'
+            text = 'The board is updated and verified.'
             with task['content_lock']:
                 task['content'] += text
             append_event(task, build_event(EventType.DELTA, content=text))
             return {'role': 'assistant', 'content': text, 'tool_calls': []}, 'stop', usage
         if step == 2:
-            # Hold the turn open until the browser has shown the first write.
-            assert gate.wait(60), 'the page never showed the first board write'
-        name, arguments = ('update_task_progress', board_write) if step == 1 else ('todo_write', checklist_write)
+            assert first_seen.wait(60), 'the page never showed the first board write'
+        if step == 3:
+            assert checklist_seen.wait(60), 'the page never showed the checklist write'
+        name, arguments = {
+            1: ('update_task_progress', board_write),
+            2: ('todo_write', checklist_write),
+            3: ('update_task_progress', {'expected_revision': 2, 'changes': extra}),
+            4: ('update_task_progress', {'read': {'title': extra[-1]['title']}}),
+        }[step]
         call = {'id': f'call-live-board-{step}', 'index': 0, 'type': 'function',
                 'function': {'name': name, 'arguments': json.dumps(arguments)}}
         if on_tool_call_ready:
@@ -905,7 +891,7 @@ def test_coordinator_progress_writes_refresh_the_pinned_board_live(page, flask_a
         # update_task_progress: the board and the checklist rail show it while the turn runs.
         expect(board).to_have_attribute('data-state', 'board', timeout=30000)
         expect(board.locator('.coordinator-progress-summary')).to_have_text(board_write['summary'])
-        expect(board.locator('.coordinator-progress-tally')).to_have_text('In progress: 1')
+        expect(board.locator('.coordinator-progress-tally')).to_have_text('In progress: 1 · 1 not started')
         rail = page.locator('.chat-container .user-msg[data-turn-id] > .turn-ctx [data-tctx-todo] .tctx-todo-item')
         expect(rail).to_have_count(2)
         assert sorted(rail.evaluate_all('(items) => items.map((item) => item.title)')) == [
@@ -914,26 +900,33 @@ def test_coordinator_progress_writes_refresh_the_pinned_board_live(page, flask_a
         page.screenshot(path=str(output / 'live-1-update_task_progress.png'), animations='disabled')
         # Still mid-turn: the model has not been answered past the first write.
         assert calls in ([1], [1, 2]) and not page.evaluate('window.__leftCoordinator')
-        gate.set()
+        first_seen.set()
 
         # todo_write writes the same board: tasks replaced, the summary kept.
         titles = board.locator('.coordinator-progress-task-title')
         expect(titles).to_have_count(3, timeout=30000)
-        expect(board.locator('.coordinator-progress-content > .coordinator-progress-tasks .coordinator-progress-task-title')
+        expect(board.locator('.coordinator-progress-content > .coordinator-progress-tasks:not(.coordinator-progress-other) .coordinator-progress-task-title')
                ).to_have_text(['Write the release notes', 'Announce the release'])
         expect(board.locator('.coordinator-progress-summary')).to_have_text(board_write['summary'])
         expect(rail).to_have_count(3)
         assert sorted(rail.evaluate_all('(items) => items.map((item) => item.title)')) == sorted(
             item['content'] for item in checklist_write['todos'])
-        page.locator('#chatInner').get_by_text('Both writes are on the board.').wait_for(timeout=30000)
         page.screenshot(path=str(output / 'live-2-todo_write.png'), animations='disabled')
         board.screenshot(path=str(output / 'live-2-board.png'), animations='disabled')
+        checklist_seen.set()
+
+        # The next round appends more than 24 tasks without resending or dropping any old ones.
+        expect(titles).to_have_count(3 + len(extra), timeout=30000)
+        expect(board.get_by_text(extra[-1]['title'], exact=True)).to_be_visible()
+        page.locator('#chatInner').get_by_text('The board is updated and verified.').wait_for(timeout=30000)
         assert not page.evaluate('window.__leftCoordinator')
         shown = CoordinatorTaskProgress(1, project).read()['board']
-        assert shown['revision'] == 2 and [task['title'] for task in shown['tasks']] == [
-            item['content'] for item in checklist_write['todos']]
+        assert shown['revision'] == 3 and [task['title'] for task in shown['tasks']] == [
+            *[item['content'] for item in checklist_write['todos']], *[task['title'] for task in extra]]
+        assert shown['tasks'][-1] == extra[-1]
     finally:
-        gate.set()
+        first_seen.set()
+        checklist_seen.set()
         page.evaluate('() => clearInterval(window.__watchConversation)')
         transport.stream_llm_response = saved
         stop_workers(flask_app)
@@ -975,17 +968,25 @@ def test_task_history_keeps_every_task_the_board_ever_showed(page, monkeypatch, 
         {'title': '修复侧边栏的文件夹创建', 'status': 'completed', 'progress': '已合并，并在浏览器里验证过。'},
         {'title': '调研天屿溪的新年民宿', 'status': 'in_progress', 'progress': '正在比较小红书、携程和美团的房源。'},
         {'title': '发布 0.19.1', 'status': 'in_progress', 'progress': '正在推送三个远端。', 'due': due},
-        {'title': '整理公众号文章要点', 'status': 'pending'},
-        {'title': '迁移旧的统计脚本', 'status': 'pending'},
+        {'title': '整理公众号文章要点', 'status': 'pending',
+         'blocker': {'kind': 'next_action', 'action': '提炼公众号文章要点'}},
+        {'title': '迁移旧的统计脚本', 'status': 'pending',
+         'blocker': {'kind': 'blocked_by_dependency', 'assignmentId': 'assignment-live-2', 'revision': 1}},
     ]})
     board.publish(scope, {'summary': '发版完成；文章要点在整理。', 'tasks': [
         {'title': '发布 0.19.1', 'status': 'completed', 'progress': '三个远端都已推送并核对。', 'due': due},
         {'title': '整理公众号文章要点', 'status': 'in_progress', 'progress': '拿到链接了，正在提炼。'},
-        {'title': '迁移旧的统计脚本', 'status': 'cancelled', 'progress': '你说不再需要。'},
+        {'title': '迁移旧的统计脚本', 'status': 'cancelled', 'reason': '新备份流程已经覆盖统计脚本的功能。'},
     ]})
     board.publish(scope, {'summary': '只剩文章要点和备份恢复。', 'tasks': [
         {'title': '整理公众号文章要点', 'status': 'in_progress', 'progress': '已提炼三条，正在核对出处。'},
-        {'title': '恢复每日备份', 'status': 'pending'},
+        {'title': '恢复每日备份', 'status': 'pending',
+         'blocker': {'kind': 'needs_external_resource', 'resource': '存储管理员提供的只读快照',
+                     'check': '只读快照能打开并通过一次恢复演练',
+                     'ownerAction': '在手机上确认收到只读快照'},
+         'reason': '拿到快照后就能验证恢复。'},
+        {'title': '核实投稿规则', 'status': 'pending',
+         'blocker': {'kind': 'next_action', 'action': '打开会议官网核对今年的模板要求'}},
     ]})
 
     page.evaluate('localStorage.setItem("tofu_ui_lang", "zh")')
@@ -998,11 +999,17 @@ def test_task_history_keeps_every_task_the_board_ever_showed(page, monkeypatch, 
     card = page.locator('#presenceStrip .coordinator-progress')
     expect(card).to_have_attribute('data-state', 'board')
     card.locator('summary.coordinator-progress-head').click()
-    # The board itself shows only its current two tasks; the history keeps all six.
-    expect(card.locator('.coordinator-progress-content > .coordinator-progress-tasks > .coordinator-progress-task')).to_have_count(2)
-    # The two completed tasks that left the board follow as Earlier tasks with their
-    # automatic completion reports (7a04a68805, bc97b91eb1).
-    expect(card.locator('.coordinator-progress-earlier .coordinator-progress-task')).to_have_count(2)
+    # The active rows come first; off-board tasks with automatic notes keep their recorded status.
+    expect(card.locator('.coordinator-progress-content > ol:not(.coordinator-progress-other) > li')).to_have_count(3)
+    expect(card.locator('[data-status=waiting] .coordinator-progress-task-note')).to_be_visible()
+    expect(card.locator('[data-status=waiting] .coordinator-progress-task-note')).to_contain_text('等存储管理员提供只读快照')
+    expect(card.locator('[data-status=pending] .coordinator-progress-task-note')).to_have_text('未记录启动安排。')
+    finished = card.locator('.coordinator-progress-finished')
+    expect(finished.locator('summary')).to_have_text('已结束 2 项')
+    finished.locator('summary').click()
+    expect(finished.locator('.coordinator-progress-task-status')).to_have_text(['已标记完成', '已标记完成'])
+    expect(finished.locator('.coordinator-progress-task-evidence')).to_have_text(['未关联交付汇报', '未关联交付汇报'])
+    finished.locator('summary').click()
     assert card.get_by_role('button', name='高级管理', exact=True).count() == 0
     output = Path(__file__).resolve().parents[2] / 'output/playwright/coordinator-task-history'
     output.mkdir(parents=True, exist_ok=True)
@@ -1010,7 +1017,7 @@ def test_task_history_keeps_every_task_the_board_ever_showed(page, monkeypatch, 
     card.get_by_role('button', name='历史任务', exact=True).click()
     drawer = page.locator('dialog[open].coordinator-history-drawer')
     rows = drawer.locator('.coordinator-history-task')
-    expect(rows).to_have_count(6)
+    expect(rows).to_have_count(7)
 
     def shown():
         return rows.evaluate_all('''(rows) => rows
@@ -1018,52 +1025,70 @@ def test_task_history_keeps_every_task_the_board_ever_showed(page, monkeypatch, 
             .map((row) => [row.querySelector('.coordinator-history-task-title').textContent,
                            row.dataset.dropped === 'true' ? 'dropped' : row.dataset.status])''')
     # Groups in order: in progress, pending, dropped unfinished, completed, cancelled.
-    assert shown() == [['整理公众号文章要点', 'in_progress'], ['恢复每日备份', 'pending'],
-                       ['调研天屿溪的新年民宿', 'dropped'], ['发布 0.19.1', 'completed'],
-                       ['修复侧边栏的文件夹创建', 'completed'], ['迁移旧的统计脚本', 'cancelled']]
+    visible = shown()
+    assert visible[0] == ['整理公众号文章要点', 'in_progress']
+    assert sorted(visible[1:3]) == sorted([['恢复每日备份', 'pending'], ['核实投稿规则', 'pending']])
+    assert visible[3:] == [['调研天屿溪的新年民宿', 'dropped'], ['发布 0.19.1', 'completed'],
+                           ['修复侧边栏的文件夹创建', 'completed'], ['迁移旧的统计脚本', 'cancelled']]
     expect(drawer.locator('.coordinator-history-group')).to_have_text(
-        ['进行中1', '待开始1', '未完成即移出1', '已完成2', '已取消1'])
+        ['进行中1', '未运行2', '已离开看板1', '已完成2', '已取消1'])
     dropped = rows.filter(has_text='调研天屿溪的新年民宿')
-    expect(dropped.locator('[data-kind="dropped"]')).to_have_text('未完成即移出')
-    expect(dropped.locator('.coordinator-history-task-note')).to_have_text('正在比较小红书、携程和美团的房源。')
+    expect(dropped.locator('[data-kind="dropped"]')).to_have_text('已离开看板')
+    expect(dropped.locator('.coordinator-history-task-note')).to_have_text('任务未完成时离开看板，未记录原因。')
+    dropped.get_by_role('button', name='详情').press('Enter')
+    details = page.get_by_role('dialog', name='调研天屿溪的新年民宿')
+    expect(details).to_contain_text('最后进展：正在比较小红书、携程和美团的房源。')
+    page.keyboard.press('Escape')
+    expect(details).to_have_count(0)
+    expect(dropped.get_by_role('button', name='详情')).to_be_focused()
+    expect(rows.filter(has_text='迁移旧的统计脚本').locator('.coordinator-history-task-note')).to_have_text(
+        '取消原因：新备份流程已经覆盖统计脚本的功能。')
     released = rows.filter(has_text='发布 0.19.1')
+    expect(released.locator('[data-kind="completed"]')).to_have_text('已标记完成')
     expect(released.locator('[data-kind="due-met"]')).to_contain_text('按时完成')
     expect(rows.filter(has_text='整理公众号文章要点').locator('[data-kind="board"]')).to_have_text('在任务板上')
     expect(rows.filter(has_text='修复侧边栏的文件夹创建').locator('.coordinator-history-task-meta')).to_contain_text('首次出现')
     # The rows read like the board's: the same status glyphs.
-    assert rows.locator('.coordinator-progress-glyph[role="img"]').count() == 6
+    assert rows.locator('.coordinator-progress-glyph[role="img"]').count() == 7
 
     # Filters and search are server queries over the whole history.
     drawer.locator('[data-history-filter="dropped"]').click()
     expect(rows).to_have_count(1)
     assert shown() == [['调研天屿溪的新年民宿', 'dropped']]
     drawer.locator('[data-history-filter="all"]').click()
-    expect(rows).to_have_count(6)
+    expect(rows).to_have_count(7)
     drawer.get_by_role('searchbox').fill('远端')
     expect(rows).to_have_count(1)
     assert shown() == [['发布 0.19.1', 'completed']]
     drawer.get_by_role('searchbox').fill('')
-    expect(rows).to_have_count(6)
+    expect(rows).to_have_count(7)
 
     # A board write while the history is open updates it in place, without reopening.
     before = rows.filter(has_text='恢复每日备份').element_handle()
     board.publish(scope, {'summary': '文章要点已完成。', 'tasks': [
         {'title': '整理公众号文章要点', 'status': 'completed', 'progress': '已核对出处，发给你了。'},
-        {'title': '恢复每日备份', 'status': 'pending'},
+        {'title': '恢复每日备份', 'status': 'pending',
+         'blocker': {'kind': 'needs_external_resource', 'resource': '存储管理员提供的只读快照',
+                     'check': '只读快照能打开并通过一次恢复演练',
+                     'ownerAction': '在手机上确认收到只读快照'},
+         'reason': '拿到快照后就能验证恢复。'},
+        {'title': '核实投稿规则', 'status': 'pending',
+         'blocker': {'kind': 'next_action', 'action': '打开会议官网核对今年的模板要求'}},
     ]})
     expect(rows.filter(has_text='整理公众号文章要点').locator('.coordinator-history-task-note')).to_have_text(
         '已核对出处，发给你了。')
-    expect(drawer.locator('.coordinator-history-group')).to_have_text(['待开始1', '未完成即移出1', '已完成3', '已取消1'])
+    expect(drawer.locator('.coordinator-history-group')).to_have_text(['未运行2', '已离开看板1', '已完成3', '已取消1'])
     # The unchanged row kept its DOM node: only rows whose content changed are rebuilt.
     assert rows.filter(has_text='恢复每日备份').evaluate('(row, kept) => row === kept', before)
 
     for theme, width in [('tofu', 1440), ('dark', 1440), ('light', 390), ('tofu', 320)]:
         page.evaluate('(theme) => document.documentElement.dataset.theme = theme', theme)
         page.set_viewport_size({'width': width, 'height': 960})
-        expect(rows).to_have_count(6)
+        expect(rows).to_have_count(7)
         assert drawer.evaluate('(el) => el.scrollWidth <= el.clientWidth + 1'), theme
         assert rows.evaluate_all('(rows) => rows.every((row) => row.scrollWidth <= row.clientWidth + 1)'), theme
-        page.screenshot(path=str(output / f'history-{theme}-{width}.png'), animations='disabled')
+        expect(rows.filter(has_text='调研天屿溪的新年民宿').get_by_role('button', name='详情')).to_be_visible()
+        drawer.screenshot(path=str(output / f'history-{theme}-{width}.png'), animations='disabled')
     page.keyboard.press('Escape')
     expect(drawer).to_have_count(0)
 
@@ -1102,7 +1127,7 @@ def test_task_history_opens_fast_on_a_large_history(page, monkeypatch, tmp_path,
     leader = created.json()['data']['conversationId']
     scope = {'owner': 1, 'projectPath': project, 'coordinatorId': leader,
              'bindingRevision': created.json()['data']['revision']}
-    per_board = CONTRACT['$defs']['progressRequest']['properties']['tasks']['maxItems']
+    per_board = 24  # Realistic seed revisions, not a board size limit.
     page_size = CONTRACT['$defs']['progressHistoryPage']['properties']['tasks']['maxItems']
     total = 5000
     statuses = ['in_progress', 'pending', 'completed', 'cancelled']
@@ -1193,3 +1218,68 @@ def test_task_history_opens_fast_on_a_large_history(page, monkeypatch, tmp_path,
                 'nextPageOnScrollMs': round(next_page, 1), 'rowsMountedOfFirstPage': mounted}
     (output / 'load-time.json').write_text(json.dumps(measured, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     print('task history load time:', json.dumps(measured, ensure_ascii=False))
+
+
+def test_board_positive_receipt_is_separate_from_manual_progress(page, monkeypatch, tmp_path, assert_no_js_errors):
+    """Browser presentation fixture; SQL cohort/receipt identity is tested separately."""
+    from lib.conversations.coordinator_progress import CoordinatorTaskProgress
+    from tests._seed import seed_conversation
+    from tests.conftest import _dismiss_onboarding_modals
+    import routes.api_v1.folders as folders
+
+    monkeypatch.setattr(folders, '_FOLDERS_PATH', str(tmp_path / 'folders.json'))
+    root = tmp_path / 'Evidence'
+    root.mkdir()
+    origin = page.url.split('/?', 1)[0].rstrip('/')
+    folder = page.request.post(origin + '/api/v4/folders', data={
+        'name': 'Evidence', 'projectPaths': [str(root)]}).json()['data']['id']
+    binding = page.request.get(origin + '/api/v4/project/coordination', params={'path': str(root)}).json()['data']
+    leader = binding['conversationId']
+    worker = 'positive-worker-' + uuid.uuid4().hex
+    seed_conversation(worker, title='Exact linked work', settings={'folderId': folder, 'projectPath': str(root),
+        '_coordinatorSource': leader}, messages=[{'role': 'user', 'content': 'Synthetic work'}])
+    progress = CoordinatorTaskProgress(1, str(root))
+    progress.publish({'owner': 1, 'projectPath': str(root), 'coordinatorId': leader,
+        'bindingRevision': binding['revision']}, {'summary': 'Authored plan', 'tasks': [
+            {'title': 'Verified row', 'status': 'in_progress'},
+            {'title': 'Manual row or overlapping request', 'status': 'in_progress'}]})
+    key = progress.read()['taskKeys'][0]
+    monkeypatch.setattr('lib.conversations.coordinator_work_evidence.read_evidence', lambda *args, **kwargs: {
+        'scope': 'latest_request', 'coverage': 'unknown', 'requestId': 'synthetic-request',
+        'sourceTurnId': 'synthetic-source', 'rows': [{'assignmentId': 'synthetic-assignment',
+            'conversationId': worker, 'taskKeys': [key], 'phase': 'active'}],
+        'additionalRequests': [{'requestId': 'older-request', 'sourceTurnId': 'older-source',
+            'rows': [{'assignmentId': 'older-assignment', 'conversationId': worker,
+                      'taskKeys': [key], 'phase': 'unknown'}]}]})
+    page.evaluate('localStorage.setItem("tofu_ui_lang", "en")')
+    page.reload()
+    _dismiss_onboarding_modals(page)
+    page.locator(f'.folder-tab[data-folder-id="{folder}"]').click()
+    page.locator('#projectCoordinatorEntry .coordination-leader').click()
+    page.wait_for_function('(id) => window.activeConvId === id', arg=leader)
+    board = page.locator('#presenceStrip .coordinator-progress')
+    board.locator('summary.coordinator-progress-head').click()
+    receipt = board.locator('[data-assignment-id="synthetic-assignment"]')
+    expect(receipt).to_contain_text('Showing recorded assignments. Completion is not delivery. · Running')
+    expect(receipt).to_contain_text('"assignmentId":"synthetic-assignment"')
+    expect(receipt).to_contain_text('"requestId":"synthetic-request"')
+    older_receipt = board.locator('[data-assignment-id="older-assignment"]')
+    expect(older_receipt).to_have_attribute('data-request-id', 'older-request')
+    expect(older_receipt).to_contain_text('"sourceTurnId":"older-source"')
+    expect(older_receipt).to_contain_text('"phase":"unknown"')
+    rows = board.locator('.coordinator-progress-task')
+    expect(rows.nth(0).locator('[data-assignment-id]')).to_have_count(2)
+    expect(rows.nth(1)).to_contain_text('Execution progress unavailable')
+    expect(rows.nth(1).locator('[data-assignment-id]')).to_have_count(0)
+    expect(board.locator('.coordinator-progress-evidence-scope')).to_contain_text('Some records or links are outside this bounded view.')
+    expect(board.locator('.coordinator-progress-evidence-scope')).to_contain_text('"coverage":"unknown"')
+    expect(board.locator('.coordinator-progress-evidence-scope')).to_contain_text('"sourceTurnId":"synthetic-source"')
+    for width in (1440, 390):
+        page.set_viewport_size({'width': width, 'height': 960})
+        if width < 600:
+            page.evaluate('() => { if (!document.getElementById("sidebar").classList.contains("collapsed")) window.toggleSidebar(); }')
+            page.wait_for_function('document.getElementById("sidebar").getBoundingClientRect().right <= 1')
+        assert board.evaluate('(el) => el.scrollWidth <= el.clientWidth + 1')
+    board.get_by_role('button', name='Open responsible conversation').first.click()
+    page.wait_for_function('(id) => window.activeConvId === id', arg=worker)
+    expect(page.locator('#presenceStrip [data-assignment-id]')).to_have_count(0)

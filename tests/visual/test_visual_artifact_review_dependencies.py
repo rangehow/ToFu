@@ -58,14 +58,9 @@ def test_review_of_source_bound_facts_in_actual_application(page, owner, tmp_pat
         page.wait_for_function("typeof window.TofuModules?.resolveAction?.('loadConversation')==='function'")
         page.locator(f'.conv-item[data-conv-id="{task["convId"]}"]').wait_for(state='attached')
         page.evaluate("id=>window.TofuModules.resolveAction('loadConversation')(id)", task['convId'])
-        # Published files open from the conversation's related-files list (0f637bf9f6).
-        files = page.locator('#convFilesBtn')
-        panel = page.locator('#artifact-panel')
-        def open_artifact():
-            files.click()
-            panel.locator(f'[data-art-lib-id="{artifact["id"]}"]').click()
+        action = page.locator(f'[data-conversation-action="open-artifact"][data-operation="{artifact["id"]}"]')
         try:
-            files.wait_for(timeout=5000)
+            action.wait_for(timeout=5000)
         except Exception:
             import json
             origin = page.evaluate('location.origin')
@@ -76,7 +71,8 @@ def test_review_of_source_bound_facts_in_actual_application(page, owner, tmp_pat
             (tmp_path / 'artifact-ui-diagnostic.json').write_text(json.dumps(diagnostic, ensure_ascii=False, indent=2))
             page.screenshot(path=str(tmp_path / 'artifact-ui-diagnostic.png'))
             raise
-        open_artifact()
+        action.click()
+        panel = page.locator('#artifact-panel')
         review = panel.locator('[data-art-review]')
         review.get_by_role('button', name=text('review'), exact=True).click()
         items = review.locator('[data-review-criterion]')
@@ -93,7 +89,7 @@ def test_review_of_source_bound_facts_in_actual_application(page, owner, tmp_pat
         panel.locator('[data-art-action="close"]').click()
         page.evaluate("window.TofuModules.resolveAction('newChat')()")
         page.evaluate("id=>window.TofuModules.resolveAction('loadConversation')(id)", task['convId'])
-        open_artifact()
+        action.click()
         review.get_by_role('button', name=text('review'), exact=True).click()
         expect(review).to_contain_text(text('accepted'))
         (tmp_path / 'basis.txt').write_text('Budget: 200\nRegion: east\n')

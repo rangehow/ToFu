@@ -19,6 +19,10 @@ sha1_smol = "1"
 flate2 = "1"
 base64 = "0.22"
 libc = "0.2"
+# Event types of the execution engine are generated from contracts/events_v1.json.
+tofu-contracts = { path = "../tofu-contracts" }
+# The single storage.v2 client (Phase 3a); the engine binds its redactor.
+tofu-storage-client = { path = "../tofu-storage-client" }
 
 [profile.release]
 lto = false

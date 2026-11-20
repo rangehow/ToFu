@@ -46,6 +46,36 @@ that is rigorous instead of a vibe check.
 - **The scaffold is a text proposal.** `build_scaffold` renders
   `main.tex` + `sections/<slug>.tex` stubs as text for the user to confirm;
   files are created only afterwards via the normal journaled write tools.
+- **Layout overflow is judged by TeX, causes by the source.** TeX writes an
+  `Overfull \hbox`/`\vbox` record only past the document's own tolerance
+  (`\hfuzz`/`\vfuzz`, 0.1pt in the LaTeX kernel), so every record is an
+  overflow by the document's own contract and is reported with no further
+  threshold: `lib/paper/builds/badboxes.py` parses the final log once;
+  `paper_build` diagnostics carry each box as an `overfull_hbox`/
+  `overfull_vbox` warning, and the document pipeline's render gate refuses
+  any. The venue registry (`lib/longform/documents/venues.py`) records no
+  overfull tolerance for any venue, so none is invented here.
+  The source rule `_check_length_specs` explains likely causes in width
+  arguments (tabular `p/m/b` columns, `tabular*`/`tabularx` widths,
+  `minipage`/`\parbox`, `\includegraphics[width=]`): a width that is not a
+  TeX dimension (`p{5}`, `p{0..05\textwidth}`, `p{2ptt}`) is a
+  `length_malformed` error; a factor above 1 of a line-width register
+  (`\textwidth`, `\linewidth`, `\columnwidth`, `\hsize`) is a
+  `length_exceeds_line` warning, because one box wider than its line
+  overflows by construction. Known false positives: a table scaled or
+  rotated outside its float, or a locally redefined register; inside a float
+  that uses `\resizebox`/`\scalebox`/`adjustbox`/`sideways` the row drops to
+  info. Calc/`\dimexpr` arithmetic is left to TeX and the log. Origin: a
+  number formatter rewrote `p{0.05\textwidth}` as `p{5\textwidth}` (a
+  2,400pt overflow) and every gate passed.
+- **Papers built outside the build service** (a project Makefile) run
+  `scripts/document_pipeline.py tex-check <main.tex> --log <build/main.log>`
+  (`run_tex_checks`): the length rows plus one row per overfull box and any
+  TeX error in the log. A missing log or a log that stopped on an error is
+  an error row, never a pass; exit 2 on any error or warning row. File
+  attribution follows the log's open-file stack and TeX reports a
+  paragraph's lines when it ends, so a range can start in an `\input` file
+  already closed (reported under the parent file).
 - All three tools are **read-only** (no write partition, no approval gate);
   the handler reuses `paper_build`'s document resolution and receipt lookup.
 
@@ -92,5 +122,9 @@ that is rigorous instead of a vibe check.
 `python3 -m pytest tests/paper/test_paper_quality.py -x -q` covers every rule
 (fires + stays quiet), graphics resolution, poppler parsing and absence,
 report shape, dossier budget/content, scaffold slugs, and the handler
-against a tmp project root. Regression neighbors:
+against a tmp project root. `tests/paper/test_tex_layout_gate.py` covers the
+length rule (corrupted, malformed, valid and unjudgeable widths, scaled
+floats), the overfull parser, build diagnostics, `run_tex_checks`, and real
+pdfTeX compiles of a corrupted column and of valid wide layouts (skipped
+without `pdflatex` on PATH). Regression neighbors:
 `tests/paper/test_paper_citation_audit.py`, `tests/paper/test_paper_build_tool.py`.

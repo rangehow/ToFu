@@ -14,6 +14,8 @@ import pytest
 from lib.conversation_sync.command_service import (
     _journal_resume_file_fields,
     _resume_executor_config,
+    continue_retained_config,
+    restore_accepted_attempt_config,
 )
 from lib.tool_results.tool_round_replay import scan_replayable_tool_round_prefix
 
@@ -420,6 +422,48 @@ def test_resume_records_a_typed_result_for_each_call_its_batch_announced(
     # Same provider batch as the row that announced it.
     assert (closure['llmRound'], closure['attemptId']) == (177, 'attempt-3')
     assert scan_replayable_tool_round_prefix(rows).blocked_position is None
+
+
+def test_continue_planner_gets_executor_occurrences_without_restoring_an_attempt(monkeypatch):
+    from copy import deepcopy
+
+    from lib.conversation_sync import command_service
+    from lib.tool_results.tool_round_replay import UNRECORDED_TOOL_RESULT_FIELD
+
+    journal_reads = []
+
+    def journal_fallback(turn, config):
+        journal_reads.append(turn['turnId'])
+        return {'checkpointModifiedFileList': ['a.py'], 'checkpointModifiedFiles': 1}
+
+    monkeypatch.setattr(command_service, '_journal_resume_file_fields', journal_fallback)
+    monkeypatch.setattr(command_service, 'get_attempt',
+                        lambda *a, **kw: pytest.fail('no accepted attempt reread'))
+    turn = {
+        'turnId': 'turn-1', 'actor': 'assistant', 'kind': 'chat',
+        'settlement': {'cause': 'user_abort'},
+        'projection': {
+            'content': 'interrupted prose', 'thinking': 'interrupted thinking',
+            'toolRounds': _workspace_admission_turn(poll_row=True),
+            'usageComplete': False,
+        },
+    }
+    before = deepcopy(turn)
+    retained = continue_retained_config(turn)
+    assert journal_reads == []
+    assert turn == before
+    assert retained['checkpointToolRounds'][-1][UNRECORDED_TOOL_RESULT_FIELD] is True
+    assert retained['checkpointUsageComplete'] is False
+    assert 'checkpointModifiedFileList' not in retained
+    assert '_attemptId' not in retained
+    assert set(retained) == {'checkpointToolRounds', 'checkpointImages', 'checkpointUsageComplete'}
+
+    restored = restore_accepted_attempt_config(turn, {
+        'attemptId': 'attempt-new', 'operation': 'continue',
+    }, user_id=1, accepted_config={})
+    assert {key: restored[key] for key in retained} == retained
+    assert restored['checkpointModifiedFileList'] == ['a.py']
+    assert journal_reads == ['turn-1']
 
 
 def test_checkpoint_resume_of_the_lost_sibling_shape_sends_a_valid_request() -> None:

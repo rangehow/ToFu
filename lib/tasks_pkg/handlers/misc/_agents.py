@@ -63,10 +63,18 @@ def _handle_scheduler_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, c
         # durable hand-off marker that links to the background watcher.
         fn_args['_parent_task'] = task
         fn_args['_tool_round_num'] = rn
+    if actor.role != 'owner':
+        executor = lambda name, arguments: execute_role_scheduler_tool(actor, name, arguments, task=task)
+    elif fn_name == 'schedule_manage' and fn_args.get('action') == 'run':
+        executor = lambda name, arguments: execute_scheduler_tool(
+            name, arguments, principal=actor.invocation_principal,
+            manual_detect_admission=actor.manual_detect_admission,
+            caller_shutdown=task.get('_manualDetectHostShutdown'))
+    else:
+        executor = execute_scheduler_tool
     return simple_call(
         task, fn_name, fn_args, rn, round_entry, tc_id,
-        executor=(execute_scheduler_tool if actor.role == 'owner' else
-                  lambda name, arguments: execute_role_scheduler_tool(actor, name, arguments, task=task)),
+        executor=executor,
         source='Scheduler', module_tag='Scheduler',
         post_build=_scheduler_post_build,
     )

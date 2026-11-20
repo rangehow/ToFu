@@ -1,0 +1,29 @@
+[package]
+name = "tofu-search-native"
+version = "0.12.28"
+edition = "2021"
+license = "MIT"
+description = "Native text kernels of tofu-search: lexical tokens, query passages, URL/content dedup and BM25"
+publish = false
+
+# Standalone like packages/tofu-db: the search distribution builds from its own
+# directory and never joins a monorepo Cargo workspace.
+[workspace]
+
+[lib]
+name = "tofu_search_native"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# The Python extension module. Off for `cargo test` so the pure core links
+# without libpython; maturin enables it (see pyproject.toml).
+python = ["dep:pyo3"]
+
+[dependencies]
+pyo3 = { version = "0.27", features = ["abi3-py310"], optional = true }
+unicode-normalization = "0.1"
+rustc-hash = "2"
+
+[profile.release]
+codegen-units = 1
+lto = "fat"

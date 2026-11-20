@@ -1,0 +1,1319 @@
+<!DOCTYPE html>
+<html class="client-nojs vector-feature-language-in-header-enabled vector-feature-language-in-main-menu-disabled vector-feature-language-in-main-page-header-disabled vector-feature-page-tools-pinned-disabled vector-feature-toc-pinned-clientpref-1 vector-feature-main-menu-pinned-disabled vector-feature-limited-width-clientpref-1 vector-feature-limited-width-content-enabled vector-feature-custom-font-size-clientpref-1 vector-feature-appearance-pinned-clientpref-1 skin-theme-clientpref-day vector-sticky-header-enabled vector-toc-available skin-thumbsize-clientpref-standard skin-underline-clientpref-browser" lang="ko" dir="ltr">
+<head>
+<meta charset="UTF-8">
+<title>러스트 (프로그래밍 언어) - 위키백과, 우리 모두의 백과사전</title>
+<script>/* stub */</script>
+<script>/* stub */</script>
+<link rel="stylesheet" href="/w/load.php?lang=ko&amp;modules=ext.cite.parsoid.styles%7Cext.cite.styles%7Cext.pygments%2CwikimediaBadges%7Cext.readingLists.bookmark.icons%2Cstyles%7Cext.tmh.player.styles%7Cext.uls.interlanguage%7Cext.visualEditor.desktopArticleTarget.noscript%7Cext.wikimediaBadges.ulsV2%7Cext.wikimediamessages.styles%7Cjquery.makeCollapsible.styles%7Cskins.vector.icons%2Cstyles%7Cskins.vector.search.codex.styles%7Cwikibase.client.init&amp;only=styles&amp;skin=vector-2022">
+<script async="" src="/w/load.php?lang=ko&amp;modules=startup&amp;only=scripts&amp;raw=1&amp;skin=vector-2022">/* stub */</script>
+<meta name="ResourceLoaderDynamicStyles" content="">
+<link rel="stylesheet" href="/w/load.php?lang=ko&amp;modules=ext.gadget.SectionFont&amp;only=styles&amp;skin=vector-2022">
+<link rel="stylesheet" href="/w/load.php?lang=ko&amp;modules=site.styles&amp;only=styles&amp;skin=vector-2022">
+<meta name="generator" content="MediaWiki 1.48.0-wmf.4">
+<meta name="referrer" content="origin">
+<meta name="referrer" content="origin-when-cross-origin">
+<meta name="robots" content="max-image-preview:standard">
+<meta name="format-detection" content="telephone=no">
+<meta property="og:image" content="https://thumb.wikimedia.org/wikipedia/commons/thumb/d/d5/Rust_programming_language_black_logo.svg/1280px-Rust_programming_language_black_logo.svg.png?utm_source=ko.wikipedia.org&amp;utm_campaign=index&amp;utm_content=thumbnail">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="1200">
+<meta name="viewport" content="width=1120">
+<meta property="og:title" content="러스트 (프로그래밍 언어) - 위키백과, 우리 모두의 백과사전">
+<meta property="og:type" content="website">
+<link rel="preconnect" href="//thumb.wikimedia.org">
+<link rel="alternate" type="application/x-wiki" title="편집" href="/w/index.php?title=%EB%9F%AC%EC%8A%A4%ED%8A%B8_(%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4)&amp;action=edit">
+<link rel="apple-touch-icon" href="/static/apple-touch/wikipedia.png">
+<link rel="icon" href="/static/favicon/wikipedia.ico">
+<link rel="search" type="application/opensearchdescription+xml" href="/w/rest.php/v1/search" title="위키백과 (ko)">
+<link rel="EditURI" type="application/rsd+xml" href="//ko.wikipedia.org/w/api.php?action=rsd">
+<link rel="canonical" href="https://ko.wikipedia.org/wiki/%EB%9F%AC%EC%8A%A4%ED%8A%B8_(%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4)">
+<link rel="license" href="https://creativecommons.org/licenses/by-sa/4.0/deed.ko">
+<link rel="alternate" type="application/atom+xml" title="위키백과 아톰 피드" href="/w/index.php?title=%ED%8A%B9%EC%88%98:%EC%B5%9C%EA%B7%BC%EB%B0%94%EB%80%9C&amp;feed=atom">
+<link rel="dns-prefetch" href="//meta.wikimedia.org" />
+<link rel="dns-prefetch" href="auth.wikimedia.org">
+</head>
+<body class="mediawiki ltr sitedir-ltr mw-hide-empty-elt action-view skin-vector-2022 ns-0 ns-subject mw-editable page-러스트_프로그래밍_언어 rootpage-러스트_프로그래밍_언어 skin--responsive skin-vector skin-vector-search-vue">
+<div id="mw-aria-live-region" class="mw-aria-live-region" aria-live="polite"></div><a class="mw-jump-link" href="#bodyContent">본문으로 이동</a>
+<div class="vector-header-container">
+	<header class="vector-header mw-header no-font-mode-scale">
+		<div class="vector-header-start">
+			<nav class="vector-main-menu-landmark" aria-label="사이트">
+				
+<div id="vector-main-menu-dropdown" class="vector-dropdown vector-main-menu-dropdown vector-button-flush-left vector-button-flush-right"  title="주 메뉴" >
+	<input type="checkbox" id="vector-main-menu-dropdown-checkbox" role="button" aria-haspopup="true" data-event-name="ui.dropdown-vector-main-menu-dropdown" class="vector-dropdown-checkbox "  aria-label="주 메뉴"   >
+	<label id="vector-main-menu-dropdown-label" for="vector-main-menu-dropdown-checkbox" class="vector-dropdown-label cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--icon-only " aria-hidden="true"  ><span class="vector-icon mw-ui-icon-menu mw-ui-icon-wikimedia-menu cdx-button__icon"></span>
+
+<span class="vector-dropdown-label-text">주 메뉴</span>
+	</label>
+	<div class="vector-dropdown-content">
+
+
+				<div id="vector-main-menu-unpinned-container" class="vector-unpinned-container">
+		
+<div id="vector-main-menu" class="vector-main-menu vector-pinnable-element">
+	<div
+	class="vector-pinnable-header vector-main-menu-pinnable-header vector-pinnable-header-unpinned"
+	data-feature-name="main-menu-pinned"
+	data-pinnable-element-id="vector-main-menu"
+	data-pinned-container-id="vector-main-menu-pinned-container"
+	data-unpinned-container-id="vector-main-menu-unpinned-container"
+>
+	<div class="vector-pinnable-header-label">주 메뉴</div>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-pin-button" data-event-name="pinnable-header.vector-main-menu.pin" aria-label="주 메뉴을(를) 사이드바로 이동">사이드바로 이동</button>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-unpin-button" data-event-name="pinnable-header.vector-main-menu.unpin" aria-label="주 메뉴을(를) 숨기기">숨기기</button>
+</div>
+
+	
+<div id="p-navigation" class="vector-menu mw-portlet mw-portlet-navigation"  >
+	<div class="vector-menu-heading">
+		둘러보기
+	</div>
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			<li id="n-mainpage-description" class="mw-list-item"><a href="/wiki/%EC%9C%84%ED%82%A4%EB%B0%B1%EA%B3%BC:%EB%8C%80%EB%AC%B8" title="대문으로 가기 [z]" accesskey="z"><span>대문</span></a></li><li id="n-recentchanges" class="mw-list-item"><a href="/wiki/%ED%8A%B9%EC%88%98:%EC%B5%9C%EA%B7%BC%EB%B0%94%EB%80%9C" title="위키의 최근 바뀐 목록 [r]" accesskey="r"><span>최근 바뀜</span></a></li><li id="n-currentevents" class="mw-list-item"><a href="/wiki/%ED%8F%AC%ED%84%B8:%EC%9A%94%EC%A6%98_%ED%99%94%EC%A0%9C" title="최근의 소식 알아 보기"><span>요즘 화제</span></a></li><li id="n-randompage" class="mw-list-item"><a href="/wiki/%ED%8A%B9%EC%88%98:%EC%9E%84%EC%9D%98%EB%AC%B8%EC%84%9C" title="무작위로 선택된 문서 불러오기 [x]" accesskey="x"><span>임의 문서로</span></a></li>
+		</ul>
+		
+	</div>
+</div>
+
+	
+<div id="p-사용자_모임" class="vector-menu mw-portlet mw-portlet-사용자_모임"  >
+	<div class="vector-menu-heading">
+		사용자 모임
+	</div>
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			<li id="n-projectchat" class="mw-list-item"><a href="/wiki/%EC%9C%84%ED%82%A4%EB%B0%B1%EA%B3%BC:%EC%82%AC%EB%9E%91%EB%B0%A9"><span>사랑방</span></a></li><li id="n-portal" class="mw-list-item"><a href="/wiki/%EC%9C%84%ED%82%A4%EB%B0%B1%EA%B3%BC:%EC%82%AC%EC%9A%A9%EC%9E%90_%EB%AA%A8%EC%9E%84" title="위키백과 참여자를 위한 토론/대화 공간입니다."><span>사용자 모임</span></a></li><li id="n-request" class="mw-list-item"><a href="/wiki/%EC%9C%84%ED%82%A4%EB%B0%B1%EA%B3%BC:%EC%9A%94%EC%B2%AD"><span>관리 요청</span></a></li>
+		</ul>
+		
+	</div>
+</div>
+
+<div id="p-편집_안내" class="vector-menu mw-portlet mw-portlet-편집_안내"  >
+	<div class="vector-menu-heading">
+		편집 안내
+	</div>
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			<li id="n-helpintro" class="mw-list-item"><a href="/wiki/%EB%8F%84%EC%9B%80%EB%A7%90:%EC%86%8C%EA%B0%9C"><span>소개</span></a></li><li id="n-help" class="mw-list-item"><a href="/wiki/%EC%9C%84%ED%82%A4%EB%B0%B1%EA%B3%BC:%EB%8F%84%EC%9B%80%EB%A7%90" title="도움말"><span>도움말</span></a></li><li id="n-policy" class="mw-list-item"><a href="/wiki/%EC%9C%84%ED%82%A4%EB%B0%B1%EA%B3%BC:%EC%A0%95%EC%B1%85%EA%B3%BC_%EC%A7%80%EC%B9%A8"><span>정책과 지침</span></a></li><li id="n-qna" class="mw-list-item"><a href="/wiki/%EC%9C%84%ED%82%A4%EB%B0%B1%EA%B3%BC:%EC%A7%88%EB%AC%B8%EB%B0%A9"><span>질문방</span></a></li>
+		</ul>
+		
+	</div>
+</div>
+
+</div>
+
+				</div>
+
+	</div>
+</div>
+
+		</nav>
+			
+<a href="/wiki/%EC%9C%84%ED%82%A4%EB%B0%B1%EA%B3%BC:%EB%8C%80%EB%AC%B8" class="mw-logo">
+	<img class="mw-logo-icon" src="/static/images/icons/wikipedia.png" alt="" aria-hidden="true" height="50" width="50">
+	<span class="mw-logo-container skin-invert">
+		<img class="mw-logo-wordmark" alt="위키백과" src="/static/images/mobile/copyright/wikipedia-wordmark-ko.svg" style="width: 7.5em; height: 1.75em;">
+		<img class="mw-logo-tagline" alt="" src="/static/images/mobile/copyright/wikipedia-tagline-ko.svg" width="120" height="13" style="width: 7.5em; height: 0.8125em;">
+	</span>
+</a>
+
+		</div>
+		<div class="vector-header-end">
+			
+<div id="p-search" role="search" class="vector-search-box-vue  vector-search-box-collapses vector-search-box-show-thumbnail vector-search-box-auto-expand-width vector-search-box">
+	<a href="/wiki/%ED%8A%B9%EC%88%98:%EA%B2%80%EC%83%89" class="cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--icon-only search-toggle" title="위키백과 검색 [f]" accesskey="f"><span class="vector-icon mw-ui-icon-search mw-ui-icon-wikimedia-search cdx-button__icon"></span>
+
+<span>검색</span>
+	</a>
+	<div class="vector-typeahead-search-container">
+		<div class="cdx-typeahead-search cdx-typeahead-search--show-thumbnail cdx-typeahead-search--auto-expand-width">
+			<form action="/w/index.php" id="searchform" class="cdx-search-input cdx-search-input--has-end-button">
+				<div id="simpleSearch" class="cdx-search-input__input-wrapper"  data-search-loc="header-moved">
+					<div class="cdx-text-input cdx-text-input--has-start-icon">
+						<input
+							class="cdx-text-input__input mw-searchInput" autocomplete="off"
+							 type="search" name="search" placeholder="위키백과 검색" aria-label="위키백과 검색" autocapitalize="none" spellcheck="false" title="위키백과 검색 [f]" accesskey="f" id="searchInput"
+							>
+						<span class="cdx-text-input__icon cdx-text-input__start-icon"></span>
+					</div>
+					<input type="hidden" name="title" value="특수:검색">
+				</div>
+				<button class="cdx-button cdx-search-input__end-button">검색</button>
+			</form>
+		</div>
+	</div>
+</div>
+
+			<nav class="vector-user-links vector-user-links-wide" aria-label="개인 도구">
+	<div class="vector-user-links-main">
+	
+<div id="p-vector-user-menu-preferences" class="vector-menu mw-portlet emptyPortlet"  >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			
+		</ul>
+		
+	</div>
+</div>
+
+	
+<div id="p-vector-user-menu-userpage" class="vector-menu mw-portlet emptyPortlet"  >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			
+		</ul>
+		
+	</div>
+</div>
+
+	<nav class="vector-appearance-landmark" aria-label="외관">
+		
+<div id="vector-appearance-dropdown" class="vector-dropdown "  title="문서의 글꼴 크기, 폭, 색의 모습을 변경합니다" >
+	<input type="checkbox" id="vector-appearance-dropdown-checkbox" role="button" aria-haspopup="true" data-event-name="ui.dropdown-vector-appearance-dropdown" class="vector-dropdown-checkbox "  aria-label="외관"   >
+	<label id="vector-appearance-dropdown-label" for="vector-appearance-dropdown-checkbox" class="vector-dropdown-label cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--icon-only " aria-hidden="true"  ><span class="vector-icon mw-ui-icon-appearance mw-ui-icon-wikimedia-appearance cdx-button__icon"></span>
+
+<span class="vector-dropdown-label-text">외관</span>
+	</label>
+	<div class="vector-dropdown-content">
+
+
+			<div id="vector-appearance-unpinned-container" class="vector-unpinned-container">
+				
+			</div>
+		
+	</div>
+</div>
+
+	</nav>
+	
+<div id="p-vector-user-menu-notifications" class="vector-menu mw-portlet emptyPortlet"  >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			
+		</ul>
+		
+	</div>
+</div>
+
+	
+<div id="p-vector-user-menu-overflow" class="vector-menu mw-portlet"  >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			<li id="pt-sitesupport-2" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="https://donate.wikimedia.org/?wmf_source=donate&amp;wmf_medium=sidebar&amp;wmf_campaign=ko.wikipedia.org&amp;uselang=ko" data-mw-donate-attempt="top_link" class=""><span>기부</span></a>
+</li>
+<li id="pt-createaccount-2" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/w/index.php?title=%ED%8A%B9%EC%88%98:%EA%B3%84%EC%A0%95%EB%A7%8C%EB%93%A4%EA%B8%B0&amp;returnto=%EB%9F%AC%EC%8A%A4%ED%8A%B8+%28%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D+%EC%96%B8%EC%96%B4%29" title="계정을 만들고 로그인하는 것이 좋습니다. 하지만 필수는 아닙니다" class=""><span>계정 만들기</span></a>
+</li>
+<li id="pt-login-2" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/w/index.php?title=%ED%8A%B9%EC%88%98:%EB%A1%9C%EA%B7%B8%EC%9D%B8&amp;returnto=%EB%9F%AC%EC%8A%A4%ED%8A%B8+%28%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D+%EC%96%B8%EC%96%B4%29" title="위키백과에 로그인하면 여러가지 편리한 기능을 사용할 수 있습니다. [o]" accesskey="o" class=""><span>로그인</span></a>
+</li>
+
+			
+		</ul>
+		
+	</div>
+</div>
+
+	</div>
+	
+<div id="vector-user-links-dropdown" class="vector-dropdown vector-user-menu vector-button-flush-right vector-user-menu-logged-out vector-user-links-dropdown--collapsible"  title="더 많은 옵션" >
+	<input type="checkbox" id="vector-user-links-dropdown-checkbox" role="button" aria-haspopup="true" data-event-name="ui.dropdown-vector-user-links-dropdown" class="vector-dropdown-checkbox "  aria-label="개인 도구"   >
+	<label id="vector-user-links-dropdown-label" for="vector-user-links-dropdown-checkbox" class="vector-dropdown-label cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--icon-only " aria-hidden="true"  ><span class="vector-icon mw-ui-icon-userAvatar mw-ui-icon-wikimedia-userAvatar cdx-button__icon"></span>
+
+<span class="vector-dropdown-label-text">개인 도구</span>
+	</label>
+	<div class="vector-dropdown-content">
+
+
+		
+<div id="p-personal" class="vector-menu mw-portlet mw-portlet-personal"  title="사용자 메뉴" >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			<li id="pt-sitesupport" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="https://donate.wikimedia.org/?wmf_source=donate&amp;wmf_medium=sidebar&amp;wmf_campaign=ko.wikipedia.org&amp;uselang=ko" data-mw-donate-attempt="top_link" class=""><span class="vector-icon mw-ui-icon-heart mw-ui-icon-wikimedia-heart cdx-button__icon"></span>
+
+<span>기부</span></a>
+</li>
+<li id="pt-createaccount" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/w/index.php?title=%ED%8A%B9%EC%88%98:%EA%B3%84%EC%A0%95%EB%A7%8C%EB%93%A4%EA%B8%B0&amp;returnto=%EB%9F%AC%EC%8A%A4%ED%8A%B8+%28%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D+%EC%96%B8%EC%96%B4%29" title="계정을 만들고 로그인하는 것이 좋습니다. 하지만 필수는 아닙니다" class=""><span class="vector-icon mw-ui-icon-userAvatar mw-ui-icon-wikimedia-userAvatar cdx-button__icon"></span>
+
+<span>계정 만들기</span></a>
+</li>
+<li id="pt-login" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/w/index.php?title=%ED%8A%B9%EC%88%98:%EB%A1%9C%EA%B7%B8%EC%9D%B8&amp;returnto=%EB%9F%AC%EC%8A%A4%ED%8A%B8+%28%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D+%EC%96%B8%EC%96%B4%29" title="위키백과에 로그인하면 여러가지 편리한 기능을 사용할 수 있습니다. [o]" accesskey="o" class=""><span class="vector-icon mw-ui-icon-logIn mw-ui-icon-wikimedia-logIn cdx-button__icon"></span>
+
+<span>로그인</span></a>
+</li>
+
+			
+		</ul>
+		
+	</div>
+</div>
+
+	
+	</div>
+</div>
+
+</nav>
+
+		</div>
+	</header>
+</div>
+<div class="mw-page-container">
+	<div class="mw-page-container-inner">
+		<div class="vector-sitenotice-container">
+			<div id="siteNotice"></div>
+		</div>
+		<div class="vector-column-start">
+			<div class="vector-main-menu-container">
+		<div id="mw-navigation">
+			<nav id="mw-panel" class="vector-main-menu-landmark" aria-label="사이트">
+				<div id="vector-main-menu-pinned-container" class="vector-pinned-container">
+				
+				</div>
+		</nav>
+		</div>
+	</div>
+	<div class="vector-sticky-pinned-container">
+				<nav id="mw-panel-toc" aria-label="목차" data-event-name="ui.sidebar-toc" class="mw-table-of-contents-container vector-toc-landmark">
+					<div id="vector-toc-pinned-container" class="vector-pinned-container">
+					<div id="vector-toc" class="vector-toc vector-pinnable-element">
+	<div
+	class="vector-pinnable-header vector-toc-pinnable-header vector-pinnable-header-pinned"
+	data-feature-name="toc-pinned"
+	data-pinnable-element-id="vector-toc"
+	data-pinned-container-id="vector-toc-pinned-container"
+	data-unpinned-container-id="vector-toc-unpinned-container"
+>
+	<h2 class="vector-pinnable-header-label">목차</h2>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-pin-button" data-event-name="pinnable-header.vector-toc.pin" aria-label="목차을(를) 사이드바로 이동">사이드바로 이동</button>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-unpin-button" data-event-name="pinnable-header.vector-toc.unpin" aria-label="목차을(를) 숨기기">숨기기</button>
+</div>
+
+
+	<ul class="vector-toc-contents" id="mw-panel-toc-list">
+		<li id="toc-mw-content-text"
+			class="vector-toc-list-item vector-toc-level-1">
+			<a href="#" class="vector-toc-link">
+				<div class="vector-toc-text">처음 위치</div>
+			</a>
+		</li>
+		<li id="toc-역사"
+		class="vector-toc-list-item vector-toc-level-1">
+		<a class="vector-toc-link" href="#역사">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">1</span>
+				<span>역사</span>
+			</div>
+		</a>
+		
+			<button aria-controls="toc-역사-sublist" class="cdx-button cdx-button--weight-quiet cdx-button--icon-only vector-toc-toggle">
+				<span class="vector-icon mw-ui-icon-wikimedia-expand"></span>
+				<span>역사 하위 문단 토글하기</span>
+			</button>
+		
+		<ul id="toc-역사-sublist" class="vector-toc-list">
+			<li id="toc-2006–2009:_초기"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#2006–2009:_초기">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">1.1</span>
+					<span>2006–2009: 초기</span>
+				</div>
+			</a>
+			
+			<ul id="toc-2006–2009:_초기-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-2009–2012:_모질라_후원"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#2009–2012:_모질라_후원">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">1.2</span>
+					<span>2009–2012: 모질라 후원</span>
+				</div>
+			</a>
+			
+			<ul id="toc-2009–2012:_모질라_후원-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-2012–2015:_진화"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#2012–2015:_진화">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">1.3</span>
+					<span>2012–2015: 진화</span>
+				</div>
+			</a>
+			
+			<ul id="toc-2012–2015:_진화-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-2015–2020:_서보(Servo)와_초기_채택"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#2015–2020:_서보(Servo)와_초기_채택">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">1.4</span>
+					<span>2015–2020: 서보(Servo)와 초기 채택</span>
+				</div>
+			</a>
+			
+			<ul id="toc-2015–2020:_서보(Servo)와_초기_채택-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-2020–현재:_모질라_감원_및_러스트_재단"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#2020–현재:_모질라_감원_및_러스트_재단">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">1.5</span>
+					<span>2020–현재: 모질라 감원 및 러스트 재단</span>
+				</div>
+			</a>
+			
+			<ul id="toc-2020–현재:_모질라_감원_및_러스트_재단-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+	</ul>
+	</li>
+	<li id="toc-구문_및_기능"
+		class="vector-toc-list-item vector-toc-level-1">
+		<a class="vector-toc-link" href="#구문_및_기능">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">2</span>
+				<span>구문 및 기능</span>
+			</div>
+		</a>
+		
+			<button aria-controls="toc-구문_및_기능-sublist" class="cdx-button cdx-button--weight-quiet cdx-button--icon-only vector-toc-toggle">
+				<span class="vector-icon mw-ui-icon-wikimedia-expand"></span>
+				<span>구문 및 기능 하위 문단 토글하기</span>
+			</button>
+		
+		<ul id="toc-구문_및_기능-sublist" class="vector-toc-list">
+			<li id="toc-Hello_World_프로그램"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Hello_World_프로그램">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.1</span>
+					<span>Hello World 프로그램</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Hello_World_프로그램-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-변수"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#변수">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.2</span>
+					<span>변수</span>
+				</div>
+			</a>
+			
+			<ul id="toc-변수-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-블록_표현식_및_제어_흐름"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#블록_표현식_및_제어_흐름">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.3</span>
+					<span>블록 표현식 및 제어 흐름</span>
+				</div>
+			</a>
+			
+			<ul id="toc-블록_표현식_및_제어_흐름-sublist" class="vector-toc-list">
+				<li id="toc-if_표현식"
+			class="vector-toc-list-item vector-toc-level-3">
+			<a class="vector-toc-link" href="#if_표현식">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.3.1</span>
+					<span><span>if</span> 표현식</span>
+				</div>
+			</a>
+			
+			<ul id="toc-if_표현식-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-while_루프"
+			class="vector-toc-list-item vector-toc-level-3">
+			<a class="vector-toc-link" href="#while_루프">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.3.2</span>
+					<span><span>while</span> 루프</span>
+				</div>
+			</a>
+			
+			<ul id="toc-while_루프-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-for_루프_및_반복자"
+			class="vector-toc-list-item vector-toc-level-3">
+			<a class="vector-toc-link" href="#for_루프_및_반복자">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.3.3</span>
+					<span><span>for</span> 루프 및 반복자</span>
+				</div>
+			</a>
+			
+			<ul id="toc-for_루프_및_반복자-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-loop_및_break_문"
+			class="vector-toc-list-item vector-toc-level-3">
+			<a class="vector-toc-link" href="#loop_및_break_문">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.3.4</span>
+					<span><span>loop</span> 및 <span>break</span> 문</span>
+				</div>
+			</a>
+			
+			<ul id="toc-loop_및_break_문-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+	</ul>
+		</li>
+		<li id="toc-패턴_매칭"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#패턴_매칭">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.4</span>
+					<span>패턴 매칭</span>
+				</div>
+			</a>
+			
+			<ul id="toc-패턴_매칭-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-자료형"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#자료형">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.5</span>
+					<span>자료형</span>
+				</div>
+			</a>
+			
+			<ul id="toc-자료형-sublist" class="vector-toc-list">
+				<li id="toc-기본_자료형"
+			class="vector-toc-list-item vector-toc-level-3">
+			<a class="vector-toc-link" href="#기본_자료형">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.5.1</span>
+					<span>기본 자료형</span>
+				</div>
+			</a>
+			
+			<ul id="toc-기본_자료형-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-복합_자료형"
+			class="vector-toc-list-item vector-toc-level-3">
+			<a class="vector-toc-link" href="#복합_자료형">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.5.2</span>
+					<span>복합 자료형</span>
+				</div>
+			</a>
+			
+			<ul id="toc-복합_자료형-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+	</ul>
+		</li>
+		<li id="toc-소유권_및_참조"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#소유권_및_참조">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.6</span>
+					<span>소유권 및 참조</span>
+				</div>
+			</a>
+			
+			<ul id="toc-소유권_및_참조-sublist" class="vector-toc-list">
+				<li id="toc-생애_주기"
+			class="vector-toc-list-item vector-toc-level-3">
+			<a class="vector-toc-link" href="#생애_주기">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.6.1</span>
+					<span>생애 주기</span>
+				</div>
+			</a>
+			
+			<ul id="toc-생애_주기-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+	</ul>
+		</li>
+		<li id="toc-사용자_정의_자료형"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#사용자_정의_자료형">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.7</span>
+					<span>사용자 정의 자료형</span>
+				</div>
+			</a>
+			
+			<ul id="toc-사용자_정의_자료형-sublist" class="vector-toc-list">
+				<li id="toc-표준_라이브러리"
+			class="vector-toc-list-item vector-toc-level-3">
+			<a class="vector-toc-link" href="#표준_라이브러리">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.7.1</span>
+					<span>표준 라이브러리</span>
+				</div>
+			</a>
+			
+			<ul id="toc-표준_라이브러리-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+	</ul>
+		</li>
+		<li id="toc-포인터"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#포인터">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.8</span>
+					<span>포인터</span>
+				</div>
+			</a>
+			
+			<ul id="toc-포인터-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-형_변환"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#형_변환">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.9</span>
+					<span>형 변환</span>
+				</div>
+			</a>
+			
+			<ul id="toc-형_변환-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-다형성"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#다형성">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.10</span>
+					<span>다형성</span>
+				</div>
+			</a>
+			
+			<ul id="toc-다형성-sublist" class="vector-toc-list">
+				<li id="toc-트레이트"
+			class="vector-toc-list-item vector-toc-level-3">
+			<a class="vector-toc-link" href="#트레이트">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.10.1</span>
+					<span>트레이트</span>
+				</div>
+			</a>
+			
+			<ul id="toc-트레이트-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-제네릭_함수"
+			class="vector-toc-list-item vector-toc-level-3">
+			<a class="vector-toc-link" href="#제네릭_함수">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.10.2</span>
+					<span>제네릭 함수</span>
+				</div>
+			</a>
+			
+			<ul id="toc-제네릭_함수-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-트레이트_객체"
+			class="vector-toc-list-item vector-toc-level-3">
+			<a class="vector-toc-link" href="#트레이트_객체">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.10.3</span>
+					<span>트레이트 객체</span>
+				</div>
+			</a>
+			
+			<ul id="toc-트레이트_객체-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+	</ul>
+		</li>
+		<li id="toc-메모리_관리"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#메모리_관리">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.11</span>
+					<span>메모리 관리</span>
+				</div>
+			</a>
+			
+			<ul id="toc-메모리_관리-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-Unsafe"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Unsafe">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.12</span>
+					<span>Unsafe</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Unsafe-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-매크로"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#매크로">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.13</span>
+					<span>매크로</span>
+				</div>
+			</a>
+			
+			<ul id="toc-매크로-sublist" class="vector-toc-list">
+				<li id="toc-선언적_매크로"
+			class="vector-toc-list-item vector-toc-level-3">
+			<a class="vector-toc-link" href="#선언적_매크로">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.13.1</span>
+					<span>선언적 매크로</span>
+				</div>
+			</a>
+			
+			<ul id="toc-선언적_매크로-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-절차적_매크로"
+			class="vector-toc-list-item vector-toc-level-3">
+			<a class="vector-toc-link" href="#절차적_매크로">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.13.2</span>
+					<span>절차적 매크로</span>
+				</div>
+			</a>
+			
+			<ul id="toc-절차적_매크로-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+	</ul>
+		</li>
+		<li id="toc-C_및_C++와의_인터페이스"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#C_및_C++와의_인터페이스">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">2.14</span>
+					<span>C 및 C++와의 인터페이스</span>
+				</div>
+			</a>
+			
+			<ul id="toc-C_및_C++와의_인터페이스-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+	</ul>
+	</li>
+	<li id="toc-보안"
+		class="vector-toc-list-item vector-toc-level-1">
+		<a class="vector-toc-link" href="#보안">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">3</span>
+				<span>보안</span>
+			</div>
+		</a>
+		
+		<ul id="toc-보안-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+	<li id="toc-생태계"
+		class="vector-toc-list-item vector-toc-level-1">
+		<a class="vector-toc-link" href="#생태계">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">4</span>
+				<span>생태계</span>
+			</div>
+		</a>
+		
+			<button aria-controls="toc-생태계-sublist" class="cdx-button cdx-button--weight-quiet cdx-button--icon-only vector-toc-toggle">
+				<span class="vector-icon mw-ui-icon-wikimedia-expand"></span>
+				<span>생태계 하위 문단 토글하기</span>
+			</button>
+		
+		<ul id="toc-생태계-sublist" class="vector-toc-list">
+			<li id="toc-컴파일러"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#컴파일러">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">4.1</span>
+					<span>컴파일러</span>
+				</div>
+			</a>
+			
+			<ul id="toc-컴파일러-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-Cargo"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Cargo">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">4.2</span>
+					<span>Cargo</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Cargo-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-Rustfmt"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Rustfmt">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">4.3</span>
+					<span>Rustfmt</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Rustfmt-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-Clippy"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Clippy">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">4.4</span>
+					<span>Clippy</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Clippy-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-버전_관리_시스템"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#버전_관리_시스템">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">4.5</span>
+					<span>버전 관리 시스템</span>
+				</div>
+			</a>
+			
+			<ul id="toc-버전_관리_시스템-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-IDE_지원"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#IDE_지원">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">4.6</span>
+					<span>IDE 지원</span>
+				</div>
+			</a>
+			
+			<ul id="toc-IDE_지원-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+	</ul>
+	</li>
+	<li id="toc-성능"
+		class="vector-toc-list-item vector-toc-level-1">
+		<a class="vector-toc-link" href="#성능">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">5</span>
+				<span>성능</span>
+			</div>
+		</a>
+		
+		<ul id="toc-성능-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+	<li id="toc-채택"
+		class="vector-toc-list-item vector-toc-level-1">
+		<a class="vector-toc-link" href="#채택">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">6</span>
+				<span>채택</span>
+			</div>
+		</a>
+		
+		<ul id="toc-채택-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+	<li id="toc-학술_연구"
+		class="vector-toc-list-item vector-toc-level-1">
+		<a class="vector-toc-link" href="#학술_연구">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">7</span>
+				<span>학술 연구</span>
+			</div>
+		</a>
+		
+		<ul id="toc-학술_연구-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+	<li id="toc-커뮤니티"
+		class="vector-toc-list-item vector-toc-level-1">
+		<a class="vector-toc-link" href="#커뮤니티">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">8</span>
+				<span>커뮤니티</span>
+			</div>
+		</a>
+		
+			<button aria-controls="toc-커뮤니티-sublist" class="cdx-button cdx-button--weight-quiet cdx-button--icon-only vector-toc-toggle">
+				<span class="vector-icon mw-ui-icon-wikimedia-expand"></span>
+				<span>커뮤니티 하위 문단 토글하기</span>
+			</button>
+		
+		<ul id="toc-커뮤니티-sublist" class="vector-toc-list">
+			<li id="toc-러스트_재단"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#러스트_재단">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">8.1</span>
+					<span>러스트 재단</span>
+				</div>
+			</a>
+			
+			<ul id="toc-러스트_재단-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-거버넌스_팀"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#거버넌스_팀">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">8.2</span>
+					<span>거버넌스 팀</span>
+				</div>
+			</a>
+			
+			<ul id="toc-거버넌스_팀-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+	</ul>
+	</li>
+	<li id="toc-같이_보기"
+		class="vector-toc-list-item vector-toc-level-1">
+		<a class="vector-toc-link" href="#같이_보기">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">9</span>
+				<span>같이 보기</span>
+			</div>
+		</a>
+		
+		<ul id="toc-같이_보기-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+	<li id="toc-각주"
+		class="vector-toc-list-item vector-toc-level-1">
+		<a class="vector-toc-link" href="#각주">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">10</span>
+				<span>각주</span>
+			</div>
+		</a>
+		
+		<ul id="toc-각주-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+	<li id="toc-참조"
+		class="vector-toc-list-item vector-toc-level-1">
+		<a class="vector-toc-link" href="#참조">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">11</span>
+				<span>참조</span>
+			</div>
+		</a>
+		
+			<button aria-controls="toc-참조-sublist" class="cdx-button cdx-button--weight-quiet cdx-button--icon-only vector-toc-toggle">
+				<span class="vector-icon mw-ui-icon-wikimedia-expand"></span>
+				<span>참조 하위 문단 토글하기</span>
+			</button>
+		
+		<ul id="toc-참조-sublist" class="vector-toc-list">
+			<li id="toc-도서_출처"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#도서_출처">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">11.1</span>
+					<span>도서 출처</span>
+				</div>
+			</a>
+			
+			<ul id="toc-도서_출처-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-기타"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#기타">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">11.2</span>
+					<span>기타</span>
+				</div>
+			</a>
+			
+			<ul id="toc-기타-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-더_읽어보기"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#더_읽어보기">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">11.3</span>
+					<span>더 읽어보기</span>
+				</div>
+			</a>
+			
+			<ul id="toc-더_읽어보기-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+	</ul>
+	</li>
+	<li id="toc-외부_링크"
+		class="vector-toc-list-item vector-toc-level-1">
+		<a class="vector-toc-link" href="#외부_링크">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">12</span>
+				<span>외부 링크</span>
+			</div>
+		</a>
+		
+		<ul id="toc-외부_링크-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+</ul>
+</div>
+
+					</div>
+		</nav>
+			</div>
+		</div>
+		<div class="mw-content-container">
+			<main id="content" class="mw-body">
+				<header class="mw-body-header vector-page-titlebar no-font-mode-scale">
+					<nav aria-label="목차" class="vector-toc-landmark">
+						
+<div id="vector-page-titlebar-toc" class="vector-dropdown vector-page-titlebar-toc vector-button-flush-left"  title="목차" >
+	<input type="checkbox" id="vector-page-titlebar-toc-checkbox" role="button" aria-haspopup="true" data-event-name="ui.dropdown-vector-page-titlebar-toc" class="vector-dropdown-checkbox "  aria-label="목차 토글"   >
+	<label id="vector-page-titlebar-toc-label" for="vector-page-titlebar-toc-checkbox" class="vector-dropdown-label cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--icon-only " aria-hidden="true"  ><span class="vector-icon mw-ui-icon-listBullet mw-ui-icon-wikimedia-listBullet cdx-button__icon"></span>
+
+<span class="vector-dropdown-label-text">목차 토글</span>
+	</label>
+	<div class="vector-dropdown-content">
+
+
+							<div id="vector-page-titlebar-toc-unpinned-container" class="vector-unpinned-container">
+			</div>
+		
+	</div>
+</div>
+
+					</nav>
+					<h1 id="firstHeading" class="firstHeading mw-first-heading"><span lang="ko" dir="ltr"><span class="mw-page-title-main">러스트 (프로그래밍 언어)</span></span></h1>
+			
+<div id="p-lang-btn" class="vector-dropdown mw-portlet mw-portlet-lang"  >
+	<input type="checkbox" id="p-lang-btn-checkbox" role="button" aria-haspopup="true" data-event-name="ui.dropdown-p-lang-btn" class="vector-dropdown-checkbox mw-interlanguage-selector"  aria-label="60개 언어" aria-description="다른 언어로 문서를 방문합니다. 60개 언어로 읽을 수 있습니다"  >
+	<label id="p-lang-btn-label" for="p-lang-btn-checkbox" class="vector-dropdown-label cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--action-progressive mw-portlet-lang-heading-60" aria-hidden="true"  ><span class="vector-icon mw-ui-icon-language-progressive mw-ui-icon-wikimedia-language-progressive cdx-button__icon"></span>
+
+<span class="vector-dropdown-label-text">60개 언어</span>
+	</label>
+	<div class="vector-dropdown-content">
+
+		<div class="vector-menu-content">
+			
+			<ul class="vector-menu-content-list">
+				
+				<li class="interlanguage-link interwiki-af mw-list-item"><a href="https://af.wikipedia.org/wiki/Rust_(programmeertaal)" title="Rust (programmeertaal) – 아프리칸스어" lang="af" hreflang="af" data-title="Rust (programmeertaal)" data-language-autonym="Afrikaans" data-language-local-name="아프리칸스어" class="interlanguage-link-target"><span>Afrikaans</span></a></li><li class="interlanguage-link interwiki-ar mw-list-item"><a href="https://ar.wikipedia.org/wiki/%D8%B1%D8%B3%D8%AA_(%D9%84%D8%BA%D8%A9_%D8%A8%D8%B1%D9%85%D8%AC%D8%A9)" title="رست (لغة برمجة) – 아랍어" lang="ar" hreflang="ar" data-title="رست (لغة برمجة)" data-language-autonym="العربية" data-language-local-name="아랍어" class="interlanguage-link-target"><span>العربية</span></a></li><li class="interlanguage-link interwiki-az mw-list-item"><a href="https://az.wikipedia.org/wiki/Rust_(proqramla%C5%9Fd%C4%B1rma_dili)" title="Rust (proqramlaşdırma dili) – 아제르바이잔어" lang="az" hreflang="az" data-title="Rust (proqramlaşdırma dili)" data-language-autonym="Azərbaycanca" data-language-local-name="아제르바이잔어" class="interlanguage-link-target"><span>Azərbaycanca</span></a></li><li class="interlanguage-link interwiki-be mw-list-item"><a href="https://be.wikipedia.org/wiki/Rust" title="Rust – 벨라루스어" lang="be" hreflang="be" data-title="Rust" data-language-autonym="Беларуская" data-language-local-name="벨라루스어" class="interlanguage-link-target"><span>Беларуская</span></a></li><li class="interlanguage-link interwiki-bg mw-list-item"><a href="https://bg.wikipedia.org/wiki/Rust" title="Rust – 불가리아어" lang="bg" hreflang="bg" data-title="Rust" data-language-autonym="Български" data-language-local-name="불가리아어" class="interlanguage-link-target"><span>Български</span></a></li><li class="interlanguage-link interwiki-bh mw-list-item"><a href="https://bh.wikipedia.org/wiki/%E0%A4%B0%E0%A4%B8%E0%A5%8D%E0%A4%9F_(%E0%A4%AA%E0%A5%8D%E0%A4%B0%E0%A5%8B%E0%A4%97%E0%A5%8D%E0%A4%B0%E0%A4%BE%E0%A4%AE%E0%A4%BF%E0%A4%82%E0%A4%97_%E0%A4%AD%E0%A4%BE%E0%A4%B7%E0%A4%BE)" title="रस्ट (प्रोग्रामिंग भाषा) – 보지푸리어" lang="bh" hreflang="bh" data-title="रस्ट (प्रोग्रामिंग भाषा)" data-language-autonym="भोजपुरी" data-language-local-name="보지푸리어" class="interlanguage-link-target"><span>भोजपुरी</span></a></li><li class="interlanguage-link interwiki-bn mw-list-item"><a href="https://bn.wikipedia.org/wiki/%E0%A6%B0%E0%A6%BE%E0%A6%B8%E0%A7%8D%E0%A6%9F_(%E0%A6%AA%E0%A7%8D%E0%A6%B0%E0%A7%8B%E0%A6%97%E0%A7%8D%E0%A6%B0%E0%A6%BE%E0%A6%AE%E0%A6%BF%E0%A6%82_%E0%A6%AD%E0%A6%BE%E0%A6%B7%E0%A6%BE)" title="রাস্ট (প্রোগ্রামিং ভাষা) – 벵골어" lang="bn" hreflang="bn" data-title="রাস্ট (প্রোগ্রামিং ভাষা)" data-language-autonym="বাংলা" data-language-local-name="벵골어" class="interlanguage-link-target"><span>বাংলা</span></a></li><li class="interlanguage-link interwiki-ca mw-list-item"><a href="https://ca.wikipedia.org/wiki/Rust_(llenguatge_de_programaci%C3%B3)" title="Rust (llenguatge de programació) – 카탈로니아어" lang="ca" hreflang="ca" data-title="Rust (llenguatge de programació)" data-language-autonym="Català" data-language-local-name="카탈로니아어" class="interlanguage-link-target"><span>Català</span></a></li><li class="interlanguage-link interwiki-ckb mw-list-item"><a href="https://ckb.wikipedia.org/wiki/%DA%95%DB%95%D8%B3%D8%AA_(%D8%B2%D9%85%D8%A7%D9%86%DB%8C_%D8%A8%DB%95%D8%B1%D9%86%D8%A7%D9%85%DB%95%D8%B3%D8%A7%D8%B2%DB%8C)" title="ڕەست (زمانی بەرنامەسازی) – 소라니 쿠르드어" lang="ckb" hreflang="ckb" data-title="ڕەست (زمانی بەرنامەسازی)" data-language-autonym="کوردی" data-language-local-name="소라니 쿠르드어" class="interlanguage-link-target"><span>کوردی</span></a></li><li class="interlanguage-link interwiki-cs mw-list-item"><a href="https://cs.wikipedia.org/wiki/Rust_(programovac%C3%AD_jazyk)" title="Rust (programovací jazyk) – 체코어" lang="cs" hreflang="cs" data-title="Rust (programovací jazyk)" data-language-autonym="Čeština" data-language-local-name="체코어" class="interlanguage-link-target"><span>Čeština</span></a></li><li class="interlanguage-link interwiki-da mw-list-item"><a href="https://da.wikipedia.org/wiki/Rust_(programmeringssprog)" title="Rust (programmeringssprog) – 덴마크어" lang="da" hreflang="da" data-title="Rust (programmeringssprog)" data-language-autonym="Dansk" data-language-local-name="덴마크어" class="interlanguage-link-target"><span>Dansk</span></a></li><li class="interlanguage-link interwiki-de mw-list-item"><a href="https://de.wikipedia.org/wiki/Rust_(Programmiersprache)" title="Rust (Programmiersprache) – 독일어" lang="de" hreflang="de" data-title="Rust (Programmiersprache)" data-language-autonym="Deutsch" data-language-local-name="독일어" class="interlanguage-link-target"><span>Deutsch</span></a></li><li class="interlanguage-link interwiki-dtp mw-list-item"><a href="https://dtp.wikipedia.org/wiki/Rust_(boros_tokud)" title="Rust (boros tokud) – 중앙 두순어" lang="dtp" hreflang="dtp" data-title="Rust (boros tokud)" data-language-autonym="Kadazandusun" data-language-local-name="중앙 두순어" class="interlanguage-link-target"><span>Kadazandusun</span></a></li><li class="interlanguage-link interwiki-en badge-Q17437798 badge-goodarticle mw-list-item" title="좋은 글"><a href="https://en.wikipedia.org/wiki/Rust_(programming_language)" title="Rust (programming language) – 영어" lang="en" hreflang="en" data-title="Rust (programming language)" data-language-autonym="English" data-language-local-name="영어" class="interlanguage-link-target"><span>English</span></a></li><li class="interlanguage-link interwiki-eo mw-list-item"><a href="https://eo.wikipedia.org/wiki/Rust_(programlingvo)" title="Rust (programlingvo) – 에스페란토어" lang="eo" hreflang="eo" data-title="Rust (programlingvo)" data-language-autonym="Esperanto" data-language-local-name="에스페란토어" class="interlanguage-link-target"><span>Esperanto</span></a></li><li class="interlanguage-link interwiki-es mw-list-item"><a href="https://es.wikipedia.org/wiki/Rust_(lenguaje_de_programaci%C3%B3n)" title="Rust (lenguaje de programación) – 스페인어" lang="es" hreflang="es" data-title="Rust (lenguaje de programación)" data-language-autonym="Español" data-language-local-name="스페인어" class="interlanguage-link-target"><span>Español</span></a></li><li class="interlanguage-link interwiki-et mw-list-item"><a href="https://et.wikipedia.org/wiki/Rust" title="Rust – 에스토니아어" lang="et" hreflang="et" data-title="Rust" data-language-autonym="Eesti" data-language-local-name="에스토니아어" class="interlanguage-link-target"><span>Eesti</span></a></li><li class="interlanguage-link interwiki-eu mw-list-item"><a href="https://eu.wikipedia.org/wiki/Rust_(programazio-lengoaia)" title="Rust (programazio-lengoaia) – 바스크어" lang="eu" hreflang="eu" data-title="Rust (programazio-lengoaia)" data-language-autonym="Euskara" data-language-local-name="바스크어" class="interlanguage-link-target"><span>Euskara</span></a></li><li class="interlanguage-link interwiki-fa mw-list-item"><a href="https://fa.wikipedia.org/wiki/%D8%B1%D8%A7%D8%B3%D8%AA_(%D8%B2%D8%A8%D8%A7%D9%86_%D8%A8%D8%B1%D9%86%D8%A7%D9%85%D9%87%E2%80%8C%D9%86%D9%88%DB%8C%D8%B3%DB%8C)" title="راست (زبان برنامه‌نویسی) – 페르시아어" lang="fa" hreflang="fa" data-title="راست (زبان برنامه‌نویسی)" data-language-autonym="فارسی" data-language-local-name="페르시아어" class="interlanguage-link-target"><span>فارسی</span></a></li><li class="interlanguage-link interwiki-fi mw-list-item"><a href="https://fi.wikipedia.org/wiki/Rust_(ohjelmointikieli)" title="Rust (ohjelmointikieli) – 핀란드어" lang="fi" hreflang="fi" data-title="Rust (ohjelmointikieli)" data-language-autonym="Suomi" data-language-local-name="핀란드어" class="interlanguage-link-target"><span>Suomi</span></a></li><li class="interlanguage-link interwiki-fr mw-list-item"><a href="https://fr.wikipedia.org/wiki/Rust_(langage)" title="Rust (langage) – 프랑스어" lang="fr" hreflang="fr" data-title="Rust (langage)" data-language-autonym="Français" data-language-local-name="프랑스어" class="interlanguage-link-target"><span>Français</span></a></li><li class="interlanguage-link interwiki-ga mw-list-item"><a href="https://ga.wikipedia.org/wiki/Rust_(teanga_r%C3%ADomhchl%C3%A1r%C3%BAch%C3%A1in)" title="Rust (teanga ríomhchlárúcháin) – 아일랜드어" lang="ga" hreflang="ga" data-title="Rust (teanga ríomhchlárúcháin)" data-language-autonym="Gaeilge" data-language-local-name="아일랜드어" class="interlanguage-link-target"><span>Gaeilge</span></a></li><li class="interlanguage-link interwiki-gl mw-list-item"><a href="https://gl.wikipedia.org/wiki/Rust_(linguaxe_de_programaci%C3%B3n)" title="Rust (linguaxe de programación) – 갈리시아어" lang="gl" hreflang="gl" data-title="Rust (linguaxe de programación)" data-language-autonym="Galego" data-language-local-name="갈리시아어" class="interlanguage-link-target"><span>Galego</span></a></li><li class="interlanguage-link interwiki-he mw-list-item"><a href="https://he.wikipedia.org/wiki/%D7%A8%D7%90%D7%A1%D7%98_(%D7%A9%D7%A4%D7%AA_%D7%AA%D7%9B%D7%A0%D7%95%D7%AA)" title="ראסט (שפת תכנות) – 히브리어" lang="he" hreflang="he" data-title="ראסט (שפת תכנות)" data-language-autonym="עברית" data-language-local-name="히브리어" class="interlanguage-link-target"><span>עברית</span></a></li><li class="interlanguage-link interwiki-hr mw-list-item"><a href="https://hr.wikipedia.org/wiki/Rust_(programski_jezik)" title="Rust (programski jezik) – 크로아티아어" lang="hr" hreflang="hr" data-title="Rust (programski jezik)" data-language-autonym="Hrvatski" data-language-local-name="크로아티아어" class="interlanguage-link-target"><span>Hrvatski</span></a></li><li class="interlanguage-link interwiki-hu mw-list-item"><a href="https://hu.wikipedia.org/wiki/Rust_(programoz%C3%A1si_nyelv)" title="Rust (programozási nyelv) – 헝가리어" lang="hu" hreflang="hu" data-title="Rust (programozási nyelv)" data-language-autonym="Magyar" data-language-local-name="헝가리어" class="interlanguage-link-target"><span>Magyar</span></a></li><li class="interlanguage-link interwiki-id mw-list-item"><a href="https://id.wikipedia.org/wiki/Rust_(bahasa_pemrograman)" title="Rust (bahasa pemrograman) – 인도네시아어" lang="id" hreflang="id" data-title="Rust (bahasa pemrograman)" data-language-autonym="Bahasa Indonesia" data-language-local-name="인도네시아어" class="interlanguage-link-target"><span>Bahasa Indonesia</span></a></li><li class="interlanguage-link interwiki-io mw-list-item"><a href="https://io.wikipedia.org/wiki/Rust_(programifo-linguo)" title="Rust (programifo-linguo) – 이도어" lang="io" hreflang="io" data-title="Rust (programifo-linguo)" data-language-autonym="Ido" data-language-local-name="이도어" class="interlanguage-link-target"><span>Ido</span></a></li><li class="interlanguage-link interwiki-is mw-list-item"><a href="https://is.wikipedia.org/wiki/Rust_(forritunarm%C3%A1l)" title="Rust (forritunarmál) – 아이슬란드어" lang="is" hreflang="is" data-title="Rust (forritunarmál)" data-language-autonym="Íslenska" data-language-local-name="아이슬란드어" class="interlanguage-link-target"><span>Íslenska</span></a></li><li class="interlanguage-link interwiki-isv mw-list-item"><a href="https://isv.wikipedia.org/wiki/Rust" title="Rust – 인터슬라빅" lang="isv" hreflang="isv" data-title="Rust" data-language-autonym="Medžuslovjansky" data-language-local-name="인터슬라빅" class="interlanguage-link-target"><span>Medžuslovjansky</span></a></li><li class="interlanguage-link interwiki-it mw-list-item"><a href="https://it.wikipedia.org/wiki/Rust_(linguaggio_di_programmazione)" title="Rust (linguaggio di programmazione) – 이탈리아어" lang="it" hreflang="it" data-title="Rust (linguaggio di programmazione)" data-language-autonym="Italiano" data-language-local-name="이탈리아어" class="interlanguage-link-target"><span>Italiano</span></a></li><li class="interlanguage-link interwiki-ja mw-list-item"><a href="https://ja.wikipedia.org/wiki/Rust_(%E3%83%97%E3%83%AD%E3%82%B0%E3%83%A9%E3%83%9F%E3%83%B3%E3%82%B0%E8%A8%80%E8%AA%9E)" title="Rust (プログラミング言語) – 일본어" lang="ja" hreflang="ja" data-title="Rust (プログラミング言語)" data-language-autonym="日本語" data-language-local-name="일본어" class="interlanguage-link-target"><span>日本語</span></a></li><li class="interlanguage-link interwiki-kab mw-list-item"><a href="https://kab.wikipedia.org/wiki/Rust_(Tutlayt_Usihel)" title="Rust (Tutlayt Usihel) – 커바일어" lang="kab" hreflang="kab" data-title="Rust (Tutlayt Usihel)" data-language-autonym="Taqbaylit" data-language-local-name="커바일어" class="interlanguage-link-target"><span>Taqbaylit</span></a></li><li class="interlanguage-link interwiki-lmo mw-list-item"><a href="https://lmo.wikipedia.org/wiki/Rust_(lenguagg_de_programazzion)" title="Rust (lenguagg de programazzion) – 롬바르드어" lang="lmo" hreflang="lmo" data-title="Rust (lenguagg de programazzion)" data-language-autonym="Lombard" data-language-local-name="롬바르드어" class="interlanguage-link-target"><span>Lombard</span></a></li><li class="interlanguage-link interwiki-lv mw-list-item"><a href="https://lv.wikipedia.org/wiki/Rust" title="Rust – 라트비아어" lang="lv" hreflang="lv" data-title="Rust" data-language-autonym="Latviešu" data-language-local-name="라트비아어" class="interlanguage-link-target"><span>Latviešu</span></a></li><li class="interlanguage-link interwiki-ml mw-list-item"><a href="https://ml.wikipedia.org/wiki/%E0%B4%B1%E0%B4%B8%E0%B5%8D%E0%B4%B1%E0%B5%8D%E0%B4%B1%E0%B5%8D_(%E0%B4%AA%E0%B5%8D%E0%B4%B0%E0%B5%8B%E0%B4%97%E0%B5%8D%E0%B4%B0%E0%B4%BE%E0%B4%AE%E0%B4%BF%E0%B4%82%E0%B4%97%E0%B5%8D_%E0%B4%AD%E0%B4%BE%E0%B4%B7)" title="റസ്റ്റ് (പ്രോഗ്രാമിംഗ് ഭാഷ) – 말라얄람어" lang="ml" hreflang="ml" data-title="റസ്റ്റ് (പ്രോഗ്രാമിംഗ് ഭാഷ)" data-language-autonym="മലയാളം" data-language-local-name="말라얄람어" class="interlanguage-link-target"><span>മലയാളം</span></a></li><li class="interlanguage-link interwiki-ms mw-list-item"><a href="https://ms.wikipedia.org/wiki/Rust_(bahasa_pengaturcaraan)" title="Rust (bahasa pengaturcaraan) – 말레이어" lang="ms" hreflang="ms" data-title="Rust (bahasa pengaturcaraan)" data-language-autonym="Bahasa Melayu" data-language-local-name="말레이어" class="interlanguage-link-target"><span>Bahasa Melayu</span></a></li><li class="interlanguage-link interwiki-nl mw-list-item"><a href="https://nl.wikipedia.org/wiki/Rust_(programmeertaal)" title="Rust (programmeertaal) – 네덜란드어" lang="nl" hreflang="nl" data-title="Rust (programmeertaal)" data-language-autonym="Nederlands" data-language-local-name="네덜란드어" class="interlanguage-link-target"><span>Nederlands</span></a></li><li class="interlanguage-link interwiki-no mw-list-item"><a href="https://no.wikipedia.org/wiki/Rust_(programmeringsspr%C3%A5k)" title="Rust (programmeringsspråk) – 노르웨이어(보크말)" lang="nb" hreflang="nb" data-title="Rust (programmeringsspråk)" data-language-autonym="Norsk bokmål" data-language-local-name="노르웨이어(보크말)" class="interlanguage-link-target"><span>Norsk bokmål</span></a></li><li class="interlanguage-link interwiki-pl mw-list-item"><a href="https://pl.wikipedia.org/wiki/Rust_(j%C4%99zyk_programowania)" title="Rust (język programowania) – 폴란드어" lang="pl" hreflang="pl" data-title="Rust (język programowania)" data-language-autonym="Polski" data-language-local-name="폴란드어" class="interlanguage-link-target"><span>Polski</span></a></li><li class="interlanguage-link interwiki-pt mw-list-item"><a href="https://pt.wikipedia.org/wiki/Rust_(linguagem_de_programa%C3%A7%C3%A3o)" title="Rust (linguagem de programação) – 포르투갈어" lang="pt" hreflang="pt" data-title="Rust (linguagem de programação)" data-language-autonym="Português" data-language-local-name="포르투갈어" class="interlanguage-link-target"><span>Português</span></a></li><li class="interlanguage-link interwiki-qu mw-list-item"><a href="https://qu.wikipedia.org/wiki/Rust" title="Rust – 케추아어" lang="qu" hreflang="qu" data-title="Rust" data-language-autonym="Runa Simi" data-language-local-name="케추아어" class="interlanguage-link-target"><span>Runa Simi</span></a></li><li class="interlanguage-link interwiki-ro mw-list-item"><a href="https://ro.wikipedia.org/wiki/Rust_(limbaj_de_programare)" title="Rust (limbaj de programare) – 루마니아어" lang="ro" hreflang="ro" data-title="Rust (limbaj de programare)" data-language-autonym="Română" data-language-local-name="루마니아어" class="interlanguage-link-target"><span>Română</span></a></li><li class="interlanguage-link interwiki-ru mw-list-item"><a href="https://ru.wikipedia.org/wiki/Rust_(%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)" title="Rust (язык программирования) – 러시아어" lang="ru" hreflang="ru" data-title="Rust (язык программирования)" data-language-autonym="Русский" data-language-local-name="러시아어" class="interlanguage-link-target"><span>Русский</span></a></li><li class="interlanguage-link interwiki-si mw-list-item"><a href="https://si.wikipedia.org/wiki/Rust_(%E0%B6%9A%E0%B7%8A%E2%80%8D%E0%B6%BB%E0%B6%B8%E0%B6%BD%E0%B7%9A%E0%B6%9B%E0%B6%B1_%E0%B6%B7%E0%B7%8F%E0%B7%82%E0%B7%8F%E0%B7%80)" title="Rust (ක්‍රමලේඛන භාෂාව) – 싱할라어" lang="si" hreflang="si" data-title="Rust (ක්‍රමලේඛන භාෂාව)" data-language-autonym="සිංහල" data-language-local-name="싱할라어" class="interlanguage-link-target"><span>සිංහල</span></a></li><li class="interlanguage-link interwiki-simple mw-list-item"><a href="https://simple.wikipedia.org/wiki/Rust_(programming_language)" title="Rust (programming language) – 쉬운 영어" lang="en-simple" hreflang="en-simple" data-title="Rust (programming language)" data-language-autonym="Simple English" data-language-local-name="쉬운 영어" class="interlanguage-link-target"><span>Simple English</span></a></li><li class="interlanguage-link interwiki-sk mw-list-item"><a href="https://sk.wikipedia.org/wiki/Rust_(programovac%C3%AD_jazyk)" title="Rust (programovací jazyk) – 슬로바키아어" lang="sk" hreflang="sk" data-title="Rust (programovací jazyk)" data-language-autonym="Slovenčina" data-language-local-name="슬로바키아어" class="interlanguage-link-target"><span>Slovenčina</span></a></li><li class="interlanguage-link interwiki-sq mw-list-item"><a href="https://sq.wikipedia.org/wiki/Rust_(gjuh%C3%AB_programimi)" title="Rust (gjuhë programimi) – 알바니아어" lang="sq" hreflang="sq" data-title="Rust (gjuhë programimi)" data-language-autonym="Shqip" data-language-local-name="알바니아어" class="interlanguage-link-target"><span>Shqip</span></a></li><li class="interlanguage-link interwiki-sr mw-list-item"><a href="https://sr.wikipedia.org/wiki/Rust_(%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D1%81%D0%BA%D0%B8_%D1%98%D0%B5%D0%B7%D0%B8%D0%BA)" title="Rust (програмски језик) – 세르비아어" lang="sr" hreflang="sr" data-title="Rust (програмски језик)" data-language-autonym="Српски / srpski" data-language-local-name="세르비아어" class="interlanguage-link-target"><span>Српски / srpski</span></a></li><li class="interlanguage-link interwiki-sv mw-list-item"><a href="https://sv.wikipedia.org/wiki/Rust_(programspr%C3%A5k)" title="Rust (programspråk) – 스웨덴어" lang="sv" hreflang="sv" data-title="Rust (programspråk)" data-language-autonym="Svenska" data-language-local-name="스웨덴어" class="interlanguage-link-target"><span>Svenska</span></a></li><li class="interlanguage-link interwiki-sw mw-list-item"><a href="https://sw.wikipedia.org/wiki/Rust" title="Rust – 스와힐리어" lang="sw" hreflang="sw" data-title="Rust" data-language-autonym="Kiswahili" data-language-local-name="스와힐리어" class="interlanguage-link-target"><span>Kiswahili</span></a></li><li class="interlanguage-link interwiki-te mw-list-item"><a href="https://te.wikipedia.org/wiki/%E0%B0%B0%E0%B0%B8%E0%B1%8D%E0%B0%9F%E0%B1%8D_(%E0%B0%AA%E0%B1%8D%E0%B0%B0%E0%B1%8B%E0%B0%97%E0%B1%8D%E0%B0%B0%E0%B0%BE%E0%B0%AE%E0%B0%BF%E0%B0%82%E0%B0%97%E0%B1%8D_%E0%B0%AD%E0%B0%BE%E0%B0%B7)" title="రస్ట్ (ప్రోగ్రామింగ్ భాష) – 텔루구어" lang="te" hreflang="te" data-title="రస్ట్ (ప్రోగ్రామింగ్ భాష)" data-language-autonym="తెలుగు" data-language-local-name="텔루구어" class="interlanguage-link-target"><span>తెలుగు</span></a></li><li class="interlanguage-link interwiki-th mw-list-item"><a href="https://th.wikipedia.org/wiki/%E0%B8%A0%E0%B8%B2%E0%B8%A9%E0%B8%B2%E0%B8%A3%E0%B8%B1%E0%B8%AA%E0%B8%95%E0%B9%8C" title="ภาษารัสต์ – 태국어" lang="th" hreflang="th" data-title="ภาษารัสต์" data-language-autonym="ไทย" data-language-local-name="태국어" class="interlanguage-link-target"><span>ไทย</span></a></li><li class="interlanguage-link interwiki-tok mw-list-item"><a href="https://tok.wikipedia.org/wiki/toki_ilo_Wasi" title="toki ilo Wasi – 도기 보나" lang="tok" hreflang="tok" data-title="toki ilo Wasi" data-language-autonym="Toki pona" data-language-local-name="도기 보나" class="interlanguage-link-target"><span>Toki pona</span></a></li><li class="interlanguage-link interwiki-tr mw-list-item"><a href="https://tr.wikipedia.org/wiki/Rust_(programlama_dili)" title="Rust (programlama dili) – 튀르키예어" lang="tr" hreflang="tr" data-title="Rust (programlama dili)" data-language-autonym="Türkçe" data-language-local-name="튀르키예어" class="interlanguage-link-target"><span>Türkçe</span></a></li><li class="interlanguage-link interwiki-uk mw-list-item"><a href="https://uk.wikipedia.org/wiki/Rust_(%D0%BC%D0%BE%D0%B2%D0%B0_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D1%83%D0%B2%D0%B0%D0%BD%D0%BD%D1%8F)" title="Rust (мова програмування) – 우크라이나어" lang="uk" hreflang="uk" data-title="Rust (мова програмування)" data-language-autonym="Українська" data-language-local-name="우크라이나어" class="interlanguage-link-target"><span>Українська</span></a></li><li class="interlanguage-link interwiki-vi mw-list-item"><a href="https://vi.wikipedia.org/wiki/Rust_(ng%C3%B4n_ng%E1%BB%AF_l%E1%BA%ADp_tr%C3%ACnh)" title="Rust (ngôn ngữ lập trình) – 베트남어" lang="vi" hreflang="vi" data-title="Rust (ngôn ngữ lập trình)" data-language-autonym="Tiếng Việt" data-language-local-name="베트남어" class="interlanguage-link-target"><span>Tiếng Việt</span></a></li><li class="interlanguage-link interwiki-zh-min-nan mw-list-item"><a href="https://zh-min-nan.wikipedia.org/wiki/Rust_(pian-t%C3%AAng_g%C3%BA-gi%C3%A2n)" title="Rust (pian-têng gú-giân) – 민난어" lang="nan" hreflang="nan" data-title="Rust (pian-têng gú-giân)" data-language-autonym="閩南語 / Bân-lâm-gí" data-language-local-name="민난어" class="interlanguage-link-target"><span>閩南語 / Bân-lâm-gí</span></a></li><li class="interlanguage-link interwiki-zh-yue mw-list-item"><a href="https://zh-yue.wikipedia.org/wiki/Rust" title="Rust – 광둥어" lang="yue" hreflang="yue" data-title="Rust" data-language-autonym="粵語" data-language-local-name="광둥어" class="interlanguage-link-target"><span>粵語</span></a></li><li class="interlanguage-link interwiki-zh mw-list-item"><a href="https://zh.wikipedia.org/wiki/Rust_(%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80)" title="Rust (编程语言) – 중국어" lang="zh" hreflang="zh" data-title="Rust (编程语言)" data-language-autonym="中文" data-language-local-name="중국어" class="interlanguage-link-target"><span>中文</span></a></li>
+			</ul>
+			<div class="after-portlet after-portlet-lang"><span class="wb-langlinks-edit wb-langlinks-link"><a href="https://www.wikidata.org/wiki/Special:EntityPage/Q575650#sitelinks-wikipedia" title="언어 간 링크 편집" class="wbc-editpage">링크 편집</a></span></div>
+		</div>
+
+	</div>
+</div>
+</header>
+				<div class="vector-page-toolbar">
+					<div class="vector-page-toolbar-container">
+						<div id="left-navigation">
+							<nav aria-label="이름공간">
+								
+<div id="p-associated-pages" class="vector-menu vector-menu-tabs mw-portlet mw-portlet-associated-pages"  >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			<li id="ca-nstab-main" class="selected mw-list-item vector-tab-noicon"><a data-mw-interface  href="/wiki/%EB%9F%AC%EC%8A%A4%ED%8A%B8_(%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4)" title="본문 보기 [c]" accesskey="c" class=""><span>문서</span></a>
+</li>
+<li id="ca-talk" class="mw-list-item vector-tab-noicon"><a data-mw-interface  href="/wiki/%ED%86%A0%EB%A1%A0:%EB%9F%AC%EC%8A%A4%ED%8A%B8_(%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4)" rel="discussion" title="문서의 내용에 대한 토론 문서 [t]" accesskey="t" class=""><span>토론</span></a>
+</li>
+
+			
+		</ul>
+		
+	</div>
+</div>
+
+								
+<div id="vector-variants-dropdown" class="vector-dropdown emptyPortlet"  >
+	<input type="checkbox" id="vector-variants-dropdown-checkbox" role="button" aria-haspopup="true" data-event-name="ui.dropdown-vector-variants-dropdown" class="vector-dropdown-checkbox " aria-label="언어 변종 바꾸기"    >
+	<label id="vector-variants-dropdown-label" for="vector-variants-dropdown-checkbox" class="vector-dropdown-label cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet" aria-hidden="true"  ><span class="vector-dropdown-label-text">한국어</span>
+	</label>
+	<div class="vector-dropdown-content">
+
+
+					
+<div id="p-variants" class="vector-menu mw-portlet mw-portlet-variants emptyPortlet"  >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			
+		</ul>
+		
+	</div>
+</div>
+
+				
+	</div>
+</div>
+
+							</nav>
+						</div>
+						<div id="right-navigation" class="vector-collapsible">
+							<nav aria-label="보기">
+			    
+<div id="p-views" class="vector-menu vector-menu-tabs mw-portlet mw-portlet-views"  >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			<li id="ca-view" class="selected mw-list-item vector-menu-item--collapsible vector-tab-noicon"><a data-mw-interface  href="/wiki/%EB%9F%AC%EC%8A%A4%ED%8A%B8_(%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4)" class=""><span>읽기</span></a>
+</li>
+<li id="ca-edit" class="mw-list-item vector-menu-item--collapsible vector-tab-noicon"><a data-mw-interface  href="/w/index.php?title=%EB%9F%AC%EC%8A%A4%ED%8A%B8_(%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4)&amp;action=edit" title="이 문서의 원본 코드를 편집 [e]" accesskey="e" class=""><span>편집</span></a>
+</li>
+<li id="ca-history" class="mw-list-item vector-menu-item--collapsible vector-tab-noicon"><a data-mw-interface  href="/w/index.php?title=%EB%9F%AC%EC%8A%A4%ED%8A%B8_(%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4)&amp;action=history" title="이 문서의 과거 편집 내역입니다. [h]" accesskey="h" class=""><span>역사 보기</span></a>
+</li>
+<li id="ca-bookmark" class="mw-list-item vector-menu-item--collapsible"><a href="#" class="cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--icon-only reading-lists-bookmark" id="" title="이 문서를 저장된 항목에 추가"><span class="vector-icon mw-ui-icon-bookmarkOutline mw-ui-icon-wikimedia-bookmarkOutline cdx-button__icon"></span>
+
+<span>저장</span>
+</a>
+</li>
+
+			
+		</ul>
+		
+	</div>
+</div>
+
+			</nav>
+
+							<nav class="vector-page-tools-landmark" aria-label="페이지 도구">
+								
+<div id="vector-page-tools-dropdown" class="vector-dropdown vector-page-tools-dropdown"  >
+	<input type="checkbox" id="vector-page-tools-dropdown-checkbox" role="button" aria-haspopup="true" data-event-name="ui.dropdown-vector-page-tools-dropdown" class="vector-dropdown-checkbox "  aria-label="도구"   >
+	<label id="vector-page-tools-dropdown-label" for="vector-page-tools-dropdown-checkbox" class="vector-dropdown-label cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--icon-only " aria-hidden="true"  ><span class="vector-icon mw-ui-icon-verticalEllipsis mw-ui-icon-wikimedia-verticalEllipsis cdx-button__icon"></span>
+
+<span class="vector-dropdown-label-text">도구</span>
+	</label>
+	<div class="vector-dropdown-content">
+
+
+									<div id="vector-page-tools-unpinned-container" class="vector-unpinned-container">
+						
+<div id="vector-page-tools" class="vector-page-tools vector-pinnable-element">
+	<div
+	class="vector-pinnable-header vector-page-tools-pinnable-header vector-pinnable-header-unpinned"
+	data-feature-name="page-tools-pinned"
+	data-pinnable-element-id="vector-page-tools"
+	data-pinned-container-id="vector-page-tools-pinned-container"
+	data-unpinned-container-id="vector-page-tools-unpinned-container"
+>
+	<div class="vector-pinnable-header-label">도구</div>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-pin-button" data-event-name="pinnable-header.vector-page-tools.pin" aria-label="도구을(를) 사이드바로 이동">사이드바로 이동</button>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-unpin-button" data-event-name="pinnable-header.vector-page-tools.unpin" aria-label="도구을(를) 숨기기">숨기기</button>
+</div>
+
+	
+<div id="p-cactions" class="vector-menu mw-portlet mw-portlet-cactions emptyPortlet vector-has-collapsible-items"  >
+	<div class="vector-menu-heading">
+		작업
+	</div>
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			<li id="ca-view-more" class="selected mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/wiki/%EB%9F%AC%EC%8A%A4%ED%8A%B8_(%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4)" class=""><span class="vector-icon mw-ui-icon-eye mw-ui-icon-wikimedia-eye cdx-button__icon"></span>
+
+<span>읽기</span></a>
+</li>
+<li id="ca-edit-more" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/w/index.php?title=%EB%9F%AC%EC%8A%A4%ED%8A%B8_(%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4)&amp;action=edit" title="이 문서의 원본 코드를 편집 [e]" accesskey="e" class=""><span class="vector-icon mw-ui-icon-edit mw-ui-icon-wikimedia-edit cdx-button__icon"></span>
+
+<span>편집</span></a>
+</li>
+<li id="ca-history-more" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/w/index.php?title=%EB%9F%AC%EC%8A%A4%ED%8A%B8_(%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4)&amp;action=history" title="이 문서의 과거 편집 내역입니다. [h]" accesskey="h" class=""><span class="vector-icon mw-ui-icon-history mw-ui-icon-wikimedia-history cdx-button__icon"></span>
+
+<span>역사 보기</span></a>
+</li>
+<li id="ca-bookmark-more" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="#" class="reading-lists-bookmark" title="이 문서를 저장된 항목에 추가"><span class="vector-icon mw-ui-icon-bookmarkOutline mw-ui-icon-wikimedia-bookmarkOutline cdx-button__icon"></span>
+
+<span>저장</span></a>
+</li>
+
+			
+		</ul>
+		
+	</div>
+</div>
+
+<div id="p-tb" class="vector-menu mw-portlet mw-portlet-tb"  >
+	<div class="vector-menu-heading">
+		일반
+	</div>
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			<li id="t-whatlinkshere" class="mw-list-item"><a href="/wiki/%ED%8A%B9%EC%88%98:%EA%B0%80%EB%A6%AC%ED%82%A4%EB%8A%94%EB%AC%B8%EC%84%9C/%EB%9F%AC%EC%8A%A4%ED%8A%B8_(%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4)" title="여기를 가리키는 모든 위키 문서의 목록 [j]" accesskey="j"><span>여기를 가리키는 문서</span></a></li><li id="t-recentchangeslinked" class="mw-list-item"><a href="/wiki/%ED%8A%B9%EC%88%98:%EB%A7%81%ED%81%AC%EC%B5%9C%EA%B7%BC%EB%B0%94%EB%80%9C/%EB%9F%AC%EC%8A%A4%ED%8A%B8_(%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4)" rel="nofollow" title="이 문서에서 링크한 문서의 최근 바뀜 [k]" accesskey="k"><span>가리키는 글의 최근 바뀜</span></a></li><li id="t-upload" class="mw-list-item"><a href="//ko.wikipedia.org/wiki/위키백과:파일_올리기" title="파일 업로드 [u]" accesskey="u"><span>파일 올리기</span></a></li><li id="t-permalink" class="mw-list-item"><a href="/w/index.php?title=%EB%9F%AC%EC%8A%A4%ED%8A%B8_(%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4)&amp;oldid=42736710" title="이 문서의 이 판에 대한 고유 링크"><span>고유 링크</span></a></li><li id="t-info" class="mw-list-item"><a href="/w/index.php?title=%EB%9F%AC%EC%8A%A4%ED%8A%B8_(%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4)&amp;action=info" title="이 문서에 대한 자세한 정보"><span>문서 정보</span></a></li><li id="t-cite" class="mw-list-item"><a href="/w/index.php?title=%ED%8A%B9%EC%88%98:%EC%9D%B4%EB%AC%B8%EC%84%9C%EC%9D%B8%EC%9A%A9&amp;page=%EB%9F%AC%EC%8A%A4%ED%8A%B8_%28%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4%29&amp;id=42736710&amp;wpFormIdentifier=titleform" title="이 문서를 인용하는 방법에 대한 정보"><span>이 문서 인용하기</span></a></li><li id="t-urlshortener" class="mw-list-item"><a href="/w/index.php?title=%ED%8A%B9%EC%88%98:UrlShortener&amp;url=https%3A%2F%2Fko.wikipedia.org%2Fwiki%2F%25EB%259F%25AC%25EC%258A%25A4%25ED%258A%25B8_%28%25ED%2594%2584%25EB%25A1%259C%25EA%25B7%25B8%25EB%259E%2598%25EB%25B0%258D_%25EC%2596%25B8%25EC%2596%25B4%29"><span>축약된 URL 얻기</span></a></li><li id="parsermigration-switch-to-legacy" class="mw-list-item"><a href="/w/index.php?title=%EB%9F%AC%EC%8A%A4%ED%8A%B8_(%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4)&amp;useparsoid=0"><span>기존 파서로 전환</span></a></li>
+		</ul>
+		
+	</div>
+</div>
+
+<div id="p-coll-print_export" class="vector-menu mw-portlet mw-portlet-coll-print_export"  >
+	<div class="vector-menu-heading">
+		인쇄/내보내기
+	</div>
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			<li id="coll-create_a_book" class="mw-list-item"><a href="/w/index.php?title=%ED%8A%B9%EC%88%98:%EC%B1%85&amp;bookcmd=book_creator&amp;referer=%EB%9F%AC%EC%8A%A4%ED%8A%B8+%28%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D+%EC%96%B8%EC%96%B4%29"><span>책 만들기</span></a></li><li id="coll-download-as-rl" class="mw-list-item"><a href="/w/index.php?title=%ED%8A%B9%EC%88%98:DownloadAsPdf&amp;page=%EB%9F%AC%EC%8A%A4%ED%8A%B8_%28%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4%29&amp;action=show-download-screen"><span>PDF로 다운로드</span></a></li><li id="t-print" class="mw-list-item"><a href="javascript:print();" rel="alternate" title="이 문서의 인쇄용 판 [p]" accesskey="p"><span>인쇄용 판</span></a></li>
+		</ul>
+		
+	</div>
+</div>
+
+<div id="p-wikibase-otherprojects" class="vector-menu mw-portlet mw-portlet-wikibase-otherprojects"  >
+	<div class="vector-menu-heading">
+		다른 프로젝트
+	</div>
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			<li class="wb-otherproject-link wb-otherproject-abstract mw-list-item"><a href="https://abstract.wikipedia.org/wiki/Q575650" hreflang="en"><span>추상 위키백과</span></a></li><li class="wb-otherproject-link wb-otherproject-commons mw-list-item"><a href="https://commons.wikimedia.org/wiki/Category:Rust_(programming_language)" hreflang="en"><span>위키미디어 공용</span></a></li><li id="t-wikibase" class="wb-otherproject-link wb-otherproject-wikibase-dataitem mw-list-item"><a href="https://www.wikidata.org/wiki/Special:EntityPage/Q575650" title="데이터 저장소에 연결된 항목을 가리키는 링크 [g]" accesskey="g"><span>위키데이터 항목</span></a></li>
+		</ul>
+		
+	</div>
+</div>
+
+</div>
+
+									</div>
+				
+	</div>
+</div>
+
+							</nav>
+						</div>
+					</div>
+				</div>
+				<div class="vector-column-end no-font-mode-scale">
+					<div class="vector-sticky-pinned-container">
+						<nav class="vector-page-tools-landmark" aria-label="페이지 도구">
+							<div id="vector-page-tools-pinned-container" class="vector-pinned-container">
+				
+							</div>
+		</nav>
+						<nav class="vector-appearance-landmark" aria-label="외관">
+							<div id="vector-appearance-pinned-container" class="vector-pinned-container">
+				<div id="vector-appearance" class="vector-appearance vector-pinnable-element">
+	<div
+	class="vector-pinnable-header vector-appearance-pinnable-header vector-pinnable-header-pinned"
+	data-feature-name="appearance-pinned"
+	data-pinnable-element-id="vector-appearance"
+	data-pinned-container-id="vector-appearance-pinned-container"
+	data-unpinned-container-id="vector-appearance-unpinned-container"
+>
+	<div class="vector-pinnable-header-label">외관</div>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-pin-button" data-event-name="pinnable-header.vector-appearance.pin" aria-label="외관을(를) 사이드바로 이동">사이드바로 이동</button>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-unpin-button" data-event-name="pinnable-header.vector-appearance.unpin" aria-label="외관을(를) 숨기기">숨기기</button>
+</div>
+
+
+</div>
+
+							</div>
+		</nav>
+					</div>
+				</div>
+				<div id="bodyContent" class="vector-body" aria-labelledby="firstHeading" data-mw-ve-target-container>
+					<div class="vector-body-before-content">
+							<div class="mw-indicators">
+		</div>
+
+						<div id="siteSub" class="noprint">위키백과, 우리 모두의 백과사전.</div>
+						<div id="contentSub"><div id="mw-content-subtitle"></div></div>
+						
+					</div>
+					
+					<div id="mw-content-text" class="mw-body-content"><div class="mw-content-ltr mw-parser-output" lang="ko" dir="ltr" data-mw-parsoid-version="0.25.0.0-alpha1" data-mw-html-version="2.8.0"><section data-mw-section-id="0" id="mwAQ"><span class="mw-empty-elt" about="#mwt1" typeof="mw:Transclusion" id="mwAg" data-mw='{"parts":[{"template":{"target":{"wt":"프로그래밍 언어 정보\n","href":"./틀:프로그래밍_언어_정보"},"params":{"name":{"wt":"러스트"},"logo":{"wt":"Rust programming language black logo.svg{{!}}class=skin-invert"},"logo size":{"wt":"150px"},"logo alt":{"wt":"Rust logo: a capital letter R attached inside a sprocket with teeth on the outside, both black on a white background"},"paradigms":{"wt":"{{Cslist|\n  [[프로그래밍 언어의 비교|멀티 패러다임]]:\n  [[병행 컴퓨팅|병행]]|\n  [[함수형 프로그래밍|함수형]]|\n  [[제네릭 프로그래밍|제네릭]]|\n  [[명령형 프로그래밍|명령형]]|\n  [[구조적 프로그래밍|구조적]]|\n}}"},"released":{"wt":"{{시작 날짜와 나이|2012|01|20}}&lt;ref name=Rust0.1a>{{메일링 인용|last=Anderson |first=Brian |date=2012-01-24 |title=[rust-dev] The Rust compiler 0.1 is unleashed |url=https://mail.mozilla.org/pipermail/rust-dev/2012-January/001256.html |mailing-list=rust-dev |access-date=2025-01-07 |archive-url=https://web.archive.org/web/20120124160628/https://mail.mozilla.org/pipermail/rust-dev/2012-January/001256.html |archive-date=January 24, 2012 }}&lt;/ref>"},"developer":{"wt":"The Rust Team"},"latest release version":{"wt":"{{위키데이터|property|edit|reference|P548=Q2804309|P348}}"},"latest release date":{"wt":"{{시작 날짜와 나이|{{wikidata|qualifier|mdy|P548=Q2804309|P348|P577}}}}"},"typing":{"wt":"{{Cslist|\n  [[Affine type system|아핀]]|\n  [[자료형 추론|추론]]|\n  [[명목적 자료형 체계|명목]]|\n  [[정적 자료형 지정|정적]]|\n  [[강하고 약한 자료형 지정|강]]|\n}}"},"programming language":{"wt":"[[OCaml]] (2006–2011)&lt;br/>Rust (2012–현재)"},"platform":{"wt":"[[컴퓨팅 플랫폼]]{{Refn|group=note|빌드 도구, 호스트 도구 및 표준 라이브러리는 [[X86-64]], [[ARM 아키텍처|ARM]], [[MIPS 아키텍처|MIPS]], [[RISC-V]], [[웹어셈블리]], [[i686]], [[AArch64]], [[파워PC]], [[리눅스 온 IBM Z|s390x]]를 지원한다.&lt;ref name=CrossPlatform>{{웹 인용|title=Platform Support |website=The rustc book |url=https://doc.rust-lang.org/rustc/platform-support.html |access-date=2022-06-27 |archive-date=2022-06-30  |archive-url=https://web.archive.org/web/20220630164523/https://doc.rust-lang.org/rustc/platform-support.html |url-status=live }}&lt;/ref>}}"},"operating system":{"wt":"[[운영체제]]{{Refn|group=note|[[윈도우]], [[리눅스]], [[macOS]], [[FreeBSD]], [[NetBSD]], [[일루모스]]가 지원된다. [[안드로이드 (운영체제)|안드로이드]], [[IOS]], [[하이쿠 (운영 체제)|하이쿠]], [[레독스 OS|레독스]], [[구글 퓨시아|퓨시아]]에서의 호스트 빌드 도구는 공식적으로 제공되지 않으며, 이들 운영체제는 대상(target)으로만 지원된다.&lt;ref name=\"CrossPlatform\" />}}"},"license":{"wt":"[[MIT 허가서|MIT]], [[아파치 라이선스|Apache 2.0]]{{Refn|group=note|[[LLVM]] 또는 [[MSVC]]와 같은 제3자 종속성은 자체 라이선스를 따른다.&lt;ref>{{웹 인용|title=Copyright |url=https://github.com/rust-lang/rust/blob/master/COPYRIGHT |website=[[깃허브]] |publisher=The Rust Programming Language |date=19 October 2022 |access-date=2022-10-19  |archive-date=2023-07-22  |archive-url=https://web.archive.org/web/20230722190056/http://github.com/rust-lang/rust/blob/master/COPYRIGHT |url-status=live }}&lt;/ref>&lt;ref name=\"licenses\" />}}"},"file ext":{"wt":"&lt;code>.rs&lt;/code>, &lt;code>.rlib&lt;/code>"},"website":{"wt":"{{URL|https://www.rust-lang.org/|rust-lang.org}}"},"implementations":{"wt":"[[러스트 컴파일러]], [[GNU 컴파일러 모음|GCC]],"},"influenced by":{"wt":"{{Cslist|\n  [[Alef (프로그래밍 언어)|Alef]]|\n  [[BETA (프로그래밍 언어)|BETA]]|\n  [[CLU (프로그래밍 언어)|CLU]]|\n  [[C 샤프|C#]]|\n  [[C++]]|\n  [[Cyclone (프로그래밍 언어)|Cyclone]]|\n  [[Elm (프로그래밍 언어)|Elm]]|\n  [[얼랭|Erlang]]|\n  [[하스켈]]|\n  [[Hermes (프로그래밍 언어)|Hermes]]|\n  [[림보 (프로그래밍 언어)|Limbo]]|\n  [[메사 (프로그래밍 언어)|Mesa]]|\n  [[Napier88|Napier]]|\n  [[Newsqueak]]|\n  [[Typestate analysis|NIL]]{{refn|group=note|name=nil|NIL은 여러 소스에서 러스트의 영향으로 언급된다. 이는 로버트 스트롬(Robert Strom) 등이 [[IBM]]에서 개발한 네트워크 구현 언어(Network Implementation Language)를 의미하며, 이는 [[Typestate analysis|타입스테이트 분석]]의 선구자였다.&lt;ref name=\"Strom1983\">{{서적 인용|last1=Strom|first1=Robert E.|title=Proceedings of the 10th ACM SIGACT-SIGPLAN symposium on Principles of programming languages - POPL &apos;83|year=1983|pages=276–284|doi=10.1145/567067.567093|chapter=Mechanisms for compile-time enforcement of security|isbn=0897910907|s2cid=6630704 }}&lt;/ref>&lt;ref>{{저널 인용|last=Strom|first=Robert E.|author2=Yemini, Shaula |title=Typestate: A programming language concept for enhancing software reliability|journal=IEEE Transactions on Software Engineering|year=1986|volume=12|issue=1 |pages=157–171|publisher=IEEE |url=https://www.cs.cmu.edu/~aldrich/papers/classic/tse12-typestate.pdf|doi=10.1109/tse.1986.6312929|bibcode=1986ITSEn..12..157S |s2cid=15575346 }}&lt;/ref> New Implementation of LISP과는 혼동하지 말 것}}|\n  [[OCaml]]|\n  [[루비 (프로그래밍 언어)|Ruby]]|\n  [[Sather]]|\n  [[스킴 (프로그래밍 언어)|Scheme]]|\n  [[표준 ML]]|\n  [[스위프트 (프로그래밍 언어)|Swift]]&lt;ref>{{웹 인용|title=Uniqueness Types |url=https://blog.rust-lang.org/2016/08/10/Shape-of-errors-to-come.html |access-date=2016-10-08 |website=Rust Blog |quote=\"Those of you familiar with the Elm style may recognize that the updated {{mono|--explain}} messages draw heavy inspiration from the Elm approach.\" |archive-date=2016-09-15  |archive-url=https://web.archive.org/web/20160915133745/https://blog.rust-lang.org/2016/08/10/Shape-of-errors-to-come.html |url-status=live }}&lt;/ref>&lt;ref name=\"influences\" />\n}}"},"influenced":{"wt":"{{Cslist|\n  [[이드리스 (프로그래밍 언어)|Idris]]&lt;ref>{{웹 인용|title=Uniqueness Types |url=http://docs.idris-lang.org/en/latest/reference/uniqueness-types.html |access-date=2022-07-14 |website=Idris 1.3.3 documentation |quote=\"They are inspired by ... ownership types and borrowed pointers in the Rust programming language.\" |archive-date=2018-11-21  |archive-url=https://web.archive.org/web/20181121072557/http://docs.idris-lang.org/en/latest/reference/uniqueness-types.html |url-status=live }}&lt;/ref>|\n  [[PHP]]&lt;ref>{{웹 인용|url=https://wiki.php.net/rfc/attributes_v2 |title=PHP RFC: Attributes v2 |first1=Benjamin |last1=Eberlei |first2=Martin |last2=Schröder |website=wiki.php.net |date=2020-03-09 |access-date=2026-05-11}}&lt;/ref>&lt;ref>{{웹 인용|url=https://wiki.php.net/rfc/match_expression_v2 |title=PHP RFC: Match expression v2 |first=Ilija |last=Tovilo |website=wiki.php.net |date=2020-05-22 |access-date=2020-11-29}}&lt;/ref>&lt;ref>{{웹 인용|url=https://wiki.php.net/rfc/enumerations |title=PHP RFC: Enumerations |first1=Larry |last1=Garfield |first2=Ilija |last2=Tovilo |website=wiki.php.net |date=2020-12-04 |access-date=2026-05-11}}&lt;/ref>&lt;ref>{{웹 인용|url=https://wiki.php.net/rfc/pattern-matching |title=PHP RFC: Pattern Matching |first1=Larry |last1=Garfield |first2=Ilija |last2=Tovilo |website=wiki.php.net |date=2020-11-11 |access-date=2026-05-11}}&lt;/ref>|\n  [[Project Verona]]&lt;ref name=\"Project Verona\" />|\n  [[SPARK (프로그래밍 언어)|SPARK]]&lt;ref name=\"Jaloyan\" />|\n  [[스위프트 (프로그래밍 언어)|Swift]]&lt;ref name=\"Lattner\" />|\n  [[V (프로그래밍 언어)|V]]&lt;ref>{{웹 인용|title=V documentation (Introduction) |url=https://github.com/vlang/v/blob/master/doc/docs.md#introduction |access-date=2023-11-04 |website=[[깃허브]] |publisher=The V Programming Language |language=en}}&lt;/ref>|\n  [[Zig (프로그래밍 언어)|Zig]]&lt;ref>{{웹 인용|last=Yegulalp |first=Serdar |date=2016-08-29 |title=New challenger joins Rust to topple C language |url=https://www.infoworld.com/article/3113083/new-challenger-joins-rust-to-upend-c-language.html |access-date=2022-10-19 |website=[[인포월드]] |language=en |archive-date=2021-11-25  |archive-url=https://web.archive.org/web/20211125104022/https://www.infoworld.com/article/3113083/new-challenger-joins-rust-to-upend-c-language.html |url-status=live }}&lt;/ref>|\n  [[Gleam (프로그래밍 언어)|Gleam]]&lt;ref name=\"Gleam\" />|\n}}"}},"i":0}}]}'><style data-mw-deduplicate="TemplateStyles:r40956678" typeof="mw:Extension/templatestyles" about="#mwt2" data-mw='{"name":"templatestyles","attrs":{"src":"Module:Infobox/styles.css"},"body":{"extsrc":""}}'>/* stub */</style></span><table class="infobox vevent" about="#mwt1" id="mwAw"><caption class="infobox-title summary">러스트</caption><tbody><tr><td colspan="2" class="infobox-image"><span class="skin-invert" typeof="mw:File"><a href="https://ko.wikipedia.org/wiki/파일:Rust_programming_language_black_logo.svg" class="mw-file-description"><img resource="https://ko.wikipedia.org/wiki/파일:Rust_programming_language_black_logo.svg" src="//thumb.wikimedia.org/wikipedia/commons/thumb/d/d5/Rust_programming_language_black_logo.svg/250px-Rust_programming_language_black_logo.svg.png?utm_source=ko.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail" decoding="async" loading="lazy" srcset="//thumb.wikimedia.org/wikipedia/commons/thumb/d/d5/Rust_programming_language_black_logo.svg/330px-Rust_programming_language_black_logo.svg.png?utm_source=ko.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail 2x" alt="Rust logo: a capital letter R attached inside a sprocket with teeth on the outside, both black on a white background" data-file-width="106" data-file-height="106" data-file-type="drawing" height="150" width="150" class="mw-file-element"/></a></span></td></tr><tr><th scope="row" class="infobox-label"><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/프로그래밍_패러다임" title="프로그래밍 패러다임">패러다임</a></th><td class="infobox-data"><style data-mw-deduplicate="TemplateStyles:r25807965" typeof="mw:Extension/templatestyles" about="#mwt3" data-mw='{"name":"templatestyles","attrs":{"src":"Cslist/styles.css"}}'>/* stub */</style><ul class="cslist"><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/프로그래밍_언어의_비교" title="프로그래밍 언어의 비교">멀티 패러다임</a>:
+  <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/병행_컴퓨팅" title="병행 컴퓨팅">병행</a></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/함수형_프로그래밍" title="함수형 프로그래밍">함수형</a></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/제네릭_프로그래밍" title="제네릭 프로그래밍">제네릭</a></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/명령형_프로그래밍" title="명령형 프로그래밍">명령형</a></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/구조적_프로그래밍" title="구조적 프로그래밍">구조적</a></li></ul></td></tr><tr><th scope="row" class="infobox-label"><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/프로그래머" title="프로그래머">개발자</a></th><td class="infobox-data organiser">The Rust Team</td></tr><tr><th scope="row" class="infobox-label">발표일</th><td class="infobox-data">2012년 1월 20일<span class="noprint">(14년 전)</span><span style="display:none">(<span class="bday dtstart published updated">2012-01-20</span>)</span><sup about="#mwt5" class="mw-ref reference" id="cite_ref-Rust0.1a_1-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Rust0.1a"},"body":{"id":"mw-reference-text-cite_note-Rust0.1a-1"}}'><a href="#cite_note-Rust0.1a-1" id="mwBA"><span class="mw-reflink-text" id="mwBQ"><span class="cite-bracket" id="mwBg">[</span>1<span class="cite-bracket" id="mwBw">]</span></span></a></sup></td></tr><tr><th scope="row" class="infobox-label">최근 버전</th><td class="infobox-data">1.100.0<sup about="#mwt7" class="mw-ref reference" id="cite_ref-wikidata-e8f68e73306cbb7a7edfd4e1f63081a410cb6f6b-v20_2-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"wikidata-e8f68e73306cbb7a7edfd4e1f63081a410cb6f6b-v20"},"body":{"id":"mw-reference-text-cite_note-wikidata-e8f68e73306cbb7a7edfd4e1f63081a410cb6f6b-v20-2"}}'><a href="#cite_note-wikidata-e8f68e73306cbb7a7edfd4e1f63081a410cb6f6b-v20-2" id="mwCA"><span class="mw-reflink-text" id="mwCQ"><span class="cite-bracket" id="mwCg">[</span>2<span class="cite-bracket" id="mwCw">]</span></span></a></sup><span typeof="mw:Entity"> </span><span class="mw-valign-text-top" typeof="mw:File/Frameless" data-mw='{"caption":"위키데이터에서 편집하기"}'><a href="https://www.wikidata.org/wiki/Q575650?uselang=ko#P348" title="위키데이터에서 편집하기"><img resource="https://ko.wikipedia.org/wiki/파일:OOjs_UI_icon_edit-ltr-progressive.svg" src="//thumb.wikimedia.org/wikipedia/commons/thumb/8/8a/OOjs_UI_icon_edit-ltr-progressive.svg/20px-OOjs_UI_icon_edit-ltr-progressive.svg.png?utm_source=ko.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail" decoding="async" loading="lazy" alt="위키데이터에서 편집하기" data-file-width="20" data-file-height="20" data-file-type="drawing" height="10" width="10" class="mw-file-element"/></a></span></td></tr><tr><th scope="row" class="infobox-label">최근 버전 출시일</th><td class="infobox-data">2026년 11월 12일<span class="noprint">(6일 전)</span><span style="display:none">(<span class="bday dtstart published updated">2026년 11월 12일</span>)</span></td></tr><tr><th scope="row" class="infobox-label"><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/자료형_체계" title="자료형 체계">자료형 체계</a></th><td class="infobox-data"><link rel="mw-deduplicated-inline-style" href="mw-data:TemplateStyles:r25807965" about="#mwt9" typeof="mw:Extension/templatestyles" data-mw='{"name":"templatestyles","attrs":{"src":"Cslist/styles.css"}}'/><ul class="cslist"><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/Affine_type_system?action=edit&amp;redlink=1" title="Affine type system (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Affine type system"]}}'>아핀</a></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/자료형_추론" title="자료형 추론">추론</a></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/명목적_자료형_체계" title="명목적 자료형 체계">명목</a></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/정적_자료형_지정?action=edit&amp;redlink=1" title="정적 자료형 지정 (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["정적 자료형 지정"]}}'>정적</a></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/강하고_약한_자료형_지정?action=edit&amp;redlink=1" title="강하고 약한 자료형 지정 (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["강하고 약한 자료형 지정"]}}'>강</a></li></ul></td></tr><tr><th scope="row" class="infobox-label">구현 언어</th><td class="infobox-data"><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/OCaml" title="OCaml">OCaml</a> (2006–2011)<br/>Rust (2012–현재)</td></tr><tr><th scope="row" class="infobox-label"><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/컴퓨팅_플랫폼" title="컴퓨팅 플랫폼">플랫폼</a></th><td class="infobox-data"><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/컴퓨팅_플랫폼" title="컴퓨팅 플랫폼">컴퓨팅 플랫폼</a><sup about="#mwt13" class="mw-ref reference" id="cite_ref-4" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"group":"note"},"body":{"id":"mw-reference-text-cite_note-4"}}'><a href="#cite_note-4" data-mw-group="note" id="mwDA"><span class="mw-reflink-text" id="mwDQ"><span class="cite-bracket" id="mwDg">[</span>note 1<span class="cite-bracket" id="mwDw">]</span></span></a></sup></td></tr><tr><th scope="row" class="infobox-label"><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/운영_체제" title="운영 체제" class="mw-redirect">운영 체제</a></th><td class="infobox-data"><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/운영체제" title="운영체제">운영체제</a><sup about="#mwt18" class="mw-ref reference" id="cite_ref-5" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"group":"note"},"body":{"id":"mw-reference-text-cite_note-5"}}'><a href="#cite_note-5" data-mw-group="note" id="mwEA"><span class="mw-reflink-text" id="mwEQ"><span class="cite-bracket" id="mwEg">[</span>note 2<span class="cite-bracket" id="mwEw">]</span></span></a></sup></td></tr><tr><th scope="row" class="infobox-label"><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/소프트웨어_사용권" title="소프트웨어 사용권">라이선스</a></th><td class="infobox-data"><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/MIT_허가서" title="MIT 허가서">MIT</a>, <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/아파치_라이선스" title="아파치 라이선스">Apache 2.0</a><sup about="#mwt26" class="mw-ref reference" id="cite_ref-8" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"group":"note"},"body":{"id":"mw-reference-text-cite_note-8"}}'><a href="#cite_note-8" data-mw-group="note" id="mwFA"><span class="mw-reflink-text" id="mwFQ"><span class="cite-bracket" id="mwFg">[</span>note 3<span class="cite-bracket" id="mwFw">]</span></span></a></sup></td></tr><tr><th scope="row" class="infobox-label"><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/파일_확장자" title="파일 확장자">파일 확장자</a></th><td class="infobox-data"><code>.rs</code>, <code>.rlib</code></td></tr><tr><th scope="row" class="infobox-label">웹사이트</th><td class="infobox-data"><span class="url"><a rel="mw:ExtLink nofollow" href="https://www.rust-lang.org/" class="external text">rust-lang.org</a></span></td></tr><tr><th colspan="2" class="infobox-header" style="background-color: #eee;">주요 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/프로그래밍_언어_구현체" title="프로그래밍 언어 구현체">구현체</a></th></tr><tr><td colspan="2" class="infobox-full-data"><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/러스트_컴파일러?action=edit&amp;redlink=1" title="러스트 컴파일러 (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["러스트 컴파일러"]}}'>러스트 컴파일러</a>, <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/GNU_컴파일러_모음" title="GNU 컴파일러 모음">GCC</a>,</td></tr><tr><th colspan="2" class="infobox-header" style="background-color: #eee;">영향을 받은 언어</th></tr><tr><td colspan="2" class="infobox-full-data"><link rel="mw-deduplicated-inline-style" href="mw-data:TemplateStyles:r25807965" about="#mwt30" typeof="mw:Extension/templatestyles" data-mw='{"name":"templatestyles","attrs":{"src":"Cslist/styles.css"}}'/><ul class="cslist"><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/Alef_(프로그래밍_언어)?action=edit&amp;redlink=1" title="Alef (프로그래밍 언어) (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Alef (프로그래밍 언어)"]}}'>Alef</a></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/BETA_(프로그래밍_언어)?action=edit&amp;redlink=1" title="BETA (프로그래밍 언어) (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["BETA (프로그래밍 언어)"]}}'>BETA</a></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/CLU_(프로그래밍_언어)" title="CLU (프로그래밍 언어)">CLU</a></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/C_샤프" title="C 샤프">C#</a></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/C++" title="C++">C++</a></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/Cyclone_(프로그래밍_언어)?action=edit&amp;redlink=1" title="Cyclone (프로그래밍 언어) (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Cyclone (프로그래밍 언어)"]}}'>Cyclone</a></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/Elm_(프로그래밍_언어)?action=edit&amp;redlink=1" title="Elm (프로그래밍 언어) (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Elm (프로그래밍 언어)"]}}'>Elm</a></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/얼랭" title="얼랭">Erlang</a></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/하스켈" title="하스켈">하스켈</a></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/Hermes_(프로그래밍_언어)?action=edit&amp;redlink=1" title="Hermes (프로그래밍 언어) (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Hermes (프로그래밍 언어)"]}}'>Hermes</a></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/림보_(프로그래밍_언어)" title="림보 (프로그래밍 언어)">Limbo</a></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/메사_(프로그래밍_언어)" title="메사 (프로그래밍 언어)">Mesa</a></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/Napier88?action=edit&amp;redlink=1" title="Napier88 (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Napier88"]}}'>Napier</a></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/Newsqueak?action=edit&amp;redlink=1" title="Newsqueak (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Newsqueak"]}}'>Newsqueak</a></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/Typestate_analysis?action=edit&amp;redlink=1" title="Typestate analysis (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Typestate analysis"]}}'>NIL</a><sup about="#mwt37" class="mw-ref reference" id="cite_ref-nil_11-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"nil","group":"note"},"body":{"id":"mw-reference-text-cite_note-nil-11"}}'><a href="#cite_note-nil-11" data-mw-group="note" id="mwGA"><span class="mw-reflink-text" id="mwGQ"><span class="cite-bracket" id="mwGg">[</span>note 4<span class="cite-bracket" id="mwGw">]</span></span></a></sup></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/OCaml" title="OCaml">OCaml</a></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/루비_(프로그래밍_언어)" title="루비 (프로그래밍 언어)">Ruby</a></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/Sather?action=edit&amp;redlink=1" title="Sather (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Sather"]}}'>Sather</a></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/스킴_(프로그래밍_언어)" title="스킴 (프로그래밍 언어)">Scheme</a></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/표준_ML" title="표준 ML">표준 ML</a></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/스위프트_(프로그래밍_언어)" title="스위프트 (프로그래밍 언어)">Swift</a><sup about="#mwt42" class="mw-ref reference" id="cite_ref-12" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-12"}}'><a href="#cite_note-12" id="mwHA"><span class="mw-reflink-text" id="mwHQ"><span class="cite-bracket" id="mwHg">[</span>8<span class="cite-bracket" id="mwHw">]</span></span></a></sup><sup about="#mwt44" class="mw-ref reference" id="cite_ref-influences_13-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"influences"}}'><a href="#cite_note-influences-13" id="mwIA"><span class="mw-reflink-text" id="mwIQ"><span class="cite-bracket" id="mwIg">[</span>9<span class="cite-bracket" id="mwIw">]</span></span></a></sup></li></ul></td></tr><tr><th colspan="2" class="infobox-header" style="background-color: #eee;">영향을 준 언어</th></tr><tr><td colspan="2" class="infobox-full-data"><link rel="mw-deduplicated-inline-style" href="mw-data:TemplateStyles:r25807965" about="#mwt46" typeof="mw:Extension/templatestyles" data-mw='{"name":"templatestyles","attrs":{"src":"Cslist/styles.css"}}'/><ul class="cslist"><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/이드리스_(프로그래밍_언어)" title="이드리스 (프로그래밍 언어)">Idris</a><sup about="#mwt48" class="mw-ref reference" id="cite_ref-14" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-14"}}'><a href="#cite_note-14" id="mwJA"><span class="mw-reflink-text" id="mwJQ"><span class="cite-bracket" id="mwJg">[</span>10<span class="cite-bracket" id="mwJw">]</span></span></a></sup></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/PHP" title="PHP">PHP</a><sup about="#mwt51" class="mw-ref reference" id="cite_ref-15" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-15"}}'><a href="#cite_note-15" id="mwKA"><span class="mw-reflink-text" id="mwKQ"><span class="cite-bracket" id="mwKg">[</span>11<span class="cite-bracket" id="mwKw">]</span></span></a></sup><sup about="#mwt54" class="mw-ref reference" id="cite_ref-16" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-16"}}'><a href="#cite_note-16" id="mwLA"><span class="mw-reflink-text" id="mwLQ"><span class="cite-bracket" id="mwLg">[</span>12<span class="cite-bracket" id="mwLw">]</span></span></a></sup><sup about="#mwt57" class="mw-ref reference" id="cite_ref-17" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-17"}}'><a href="#cite_note-17" id="mwMA"><span class="mw-reflink-text" id="mwMQ"><span class="cite-bracket" id="mwMg">[</span>13<span class="cite-bracket" id="mwMw">]</span></span></a></sup><sup about="#mwt60" class="mw-ref reference" id="cite_ref-18" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-18"}}'><a href="#cite_note-18" id="mwNA"><span class="mw-reflink-text" id="mwNQ"><span class="cite-bracket" id="mwNg">[</span>14<span class="cite-bracket" id="mwNw">]</span></span></a></sup></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/Project_Verona" title="Project Verona">Project Verona</a><sup about="#mwt62" class="mw-ref reference" id="cite_ref-Project_Verona_19-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Project Verona"}}'><a href="#cite_note-Project_Verona-19" id="mwOA"><span class="mw-reflink-text" id="mwOQ"><span class="cite-bracket" id="mwOg">[</span>15<span class="cite-bracket" id="mwOw">]</span></span></a></sup></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/SPARK_(프로그래밍_언어)?action=edit&amp;redlink=1" title="SPARK (프로그래밍 언어) (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["SPARK (프로그래밍 언어)"]}}'>SPARK</a><sup about="#mwt64" class="mw-ref reference" id="cite_ref-Jaloyan_20-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Jaloyan"}}'><a href="#cite_note-Jaloyan-20" id="mwPA"><span class="mw-reflink-text" id="mwPQ"><span class="cite-bracket" id="mwPg">[</span>16<span class="cite-bracket" id="mwPw">]</span></span></a></sup></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/스위프트_(프로그래밍_언어)" title="스위프트 (프로그래밍 언어)">Swift</a><sup about="#mwt66" class="mw-ref reference" id="cite_ref-Lattner_21-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Lattner"}}'><a href="#cite_note-Lattner-21" id="mwQA"><span class="mw-reflink-text" id="mwQQ"><span class="cite-bracket" id="mwQg">[</span>17<span class="cite-bracket" id="mwQw">]</span></span></a></sup></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/V_(프로그래밍_언어)" title="V (프로그래밍 언어)">V</a><sup about="#mwt69" class="mw-ref reference" id="cite_ref-22" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-22"}}'><a href="#cite_note-22" id="mwRA"><span class="mw-reflink-text" id="mwRQ"><span class="cite-bracket" id="mwRg">[</span>18<span class="cite-bracket" id="mwRw">]</span></span></a></sup></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/Zig_(프로그래밍_언어)" title="Zig (프로그래밍 언어)">Zig</a><sup about="#mwt72" class="mw-ref reference" id="cite_ref-23" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-23"}}'><a href="#cite_note-23" id="mwSA"><span class="mw-reflink-text" id="mwSQ"><span class="cite-bracket" id="mwSg">[</span>19<span class="cite-bracket" id="mwSw">]</span></span></a></sup></li><li><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/Gleam_(프로그래밍_언어)?action=edit&amp;redlink=1" title="Gleam (프로그래밍 언어) (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Gleam (프로그래밍 언어)"]}}'>Gleam</a><sup about="#mwt74" class="mw-ref reference" id="cite_ref-Gleam_24-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Gleam"}}'><a href="#cite_note-Gleam-24" id="mwTA"><span class="mw-reflink-text" id="mwTQ"><span class="cite-bracket" id="mwTg">[</span>20<span class="cite-bracket" id="mwTw">]</span></span></a></sup></li></ul></td></tr></tbody></table>
+
+<p id="mwUA"><b id="mwUQ">러스트</b>(<span style="font-size: smaller;" about="#mwt76" typeof="mw:Transclusion" id="mwUg" data-mw='{"parts":[{"template":{"target":{"wt":"llang","href":"./틀:Llang"},"params":{"1":{"wt":"en"},"2":{"wt":"Rust"}},"i":0}}]}'><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/영어" title="영어">영어</a><span typeof="mw:Entity">:</span> </span><span lang="en" about="#mwt76">Rust</span><link rel="mw:PageProp/Category" href="./분류:영어_표기를_포함한_문서#러스트%20(프로그래밍%20언어)" about="#mwt76" id="mwUw"/>)는 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/컴퓨터_성능" title="컴퓨터 성능" id="mwVA">컴퓨터 성능</a>, <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/자료형_안전" title="자료형 안전" id="mwVQ">자료형 안전</a>, <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/병행성" title="병행성" id="mwVg">병행성</a>, <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/메모리_보안" title="메모리 보안" id="mwVw">메모리 보안</a>을 강조하는 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/범용_프로그래밍_언어" title="범용 프로그래밍 언어" id="mwWA">범용 프로그래밍 언어</a>이다. 러스트는 여러 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/프로그래밍_패러다임" title="프로그래밍 패러다임" id="mwWQ">프로그래밍 패러다임</a>을 지원한다. <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/불변성" title="불변성" class="mw-redirect" id="mwWg">불변성</a>, <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/고차_함수" title="고차 함수" id="mwWw">고차 함수</a>, <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/대수적_자료형" title="대수적 자료형" id="mwXA">대수적 자료형</a>, <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/패턴_매칭" title="패턴 매칭" id="mwXQ">패턴 매칭</a>을 포함한 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/함수형_프로그래밍" title="함수형 프로그래밍" id="mwXg">함수형 프로그래밍</a>의 아이디어에서 영향을 받았다. 또한 구조체, <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/공용체" title="공용체" class="mw-redirect mw-disambig" id="mwXw">열거형</a>, 트레이트, 메서드를 통해 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/객체_지향_프로그래밍" title="객체 지향 프로그래밍" id="mwYA">객체 지향 프로그래밍</a>을 지원한다. 러스트는 기존의 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/쓰레기_수집_(컴퓨터_과학)" title="쓰레기 수집 (컴퓨터 과학)" class="mw-redirect" id="mwYQ">쓰레기 수집기</a> 없이 메모리 보안(즉, 모든 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/참조_(컴퓨터_과학)" title="참조 (컴퓨터 과학)" class="mw-redirect" id="mwYg">참조</a>가 유효한 메모리를 가리킴)을 강제한다. 대신 메모리 보안 오류와 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/데이터_레이스" title="데이터 레이스" class="mw-redirect" id="mwYw">데이터 레이스</a>는 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/컴파일_타임" title="컴파일 타임" id="mwZA">컴파일 타임</a>에 참조의 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/객체_생애_주기?action=edit&amp;redlink=1" title="객체 생애 주기 (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" id="mwZQ" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["객체 생애 주기"]}}'>객체 생애 주기</a>를 추적하는 "보로우 체크(borrow checker)"를 통해 방지된다.</p>
+
+<p id="mwZg">소프트웨어 개발자 그레이던 호어(Graydon Hoare)가 2006년 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/모질라" title="모질라" id="mwZw">모질라</a>에서 근무하며 러스트를 창시했고, 2009년 모질라가 공식적으로 프로젝트를 후원했다. 첫 안정 버전인 러스트 1.0은 2015년 5월에 발표되었다. 이 프로젝트는 2021년 2월부터 <a rel="mw:WikiLink" href="#러스트_재단" class="mw-selflink-fragment" id="mwaA">러스트 재단</a>의 후원을 받고 있다. 많은 소프트웨어 프로젝트, 특히 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/웹_서비스" title="웹 서비스" id="mwaQ">웹 서비스</a>와 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/시스템_소프트웨어" title="시스템 소프트웨어" id="mwag">시스템 소프트웨어</a>에 채택되었다. 학술적으로 연구되고 있으며 개발자 커뮤니티가 성장하고 있다.</p>
+
+<meta property="mw:PageProp/toc" id="mwaw" data-mw='{"autoGenerated":true}'/></section><section data-mw-section-id="1" id="mwbA" aria-labelledby="역사"><div class="mw-heading mw-heading2"><h2 id="역사"><span id=".EC.97.AD.EC.82.AC" typeof="mw:FallbackId"></span>역사</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/w/index.php?title=%EB%9F%AC%EC%8A%A4%ED%8A%B8_(%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4)&amp;action=edit&amp;section=1" title="문단 편집: 역사"><span>편집</span></a><span class="mw-editsection-bracket">]</span></span></div>
+<section data-mw-section-id="2" id="mwbQ" aria-labelledby="2006–2009:_초기"><div class="mw-heading mw-heading3"><h3 id="2006–2009:_초기"><span id="2006.E2.80.932009:_.EC.B4.88.EA.B8.B0" typeof="mw:FallbackId"></span>2006–2009: 초기</h3><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/w/index.php?title=%EB%9F%AC%EC%8A%A4%ED%8A%B8_(%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4)&amp;action=edit&amp;section=2" title="문단 편집: 2006–2009: 초기"><span>편집</span></a><span class="mw-editsection-bracket">]</span></span></div>
+<figure class="mw-default-size mw-halign-right" typeof="mw:File/Thumb" id="mwbg"><a href="https://ko.wikipedia.org/wiki/파일:MozillaCaliforniaHeadquarters.JPG" class="mw-file-description" id="mwbw"><img resource="https://ko.wikipedia.org/wiki/파일:MozillaCaliforniaHeadquarters.JPG" src="//thumb.wikimedia.org/wikipedia/commons/thumb/d/dd/MozillaCaliforniaHeadquarters.JPG/250px-MozillaCaliforniaHeadquarters.JPG?utm_source=ko.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail" decoding="async" loading="lazy" srcset="//thumb.wikimedia.org/wikipedia/commons/thumb/d/dd/MozillaCaliforniaHeadquarters.JPG/500px-MozillaCaliforniaHeadquarters.JPG?utm_source=ko.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail 2x" data-file-width="2560" data-file-height="1920" data-file-type="bitmap" height="188" width="250" class="mw-file-element" id="mwcA"/></a><figcaption id="mwcQ"><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/캘리포니아주" title="캘리포니아주" id="mwcg">캘리포니아주</a> <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/마운틴뷰_(캘리포니아주)" title="마운틴뷰 (캘리포니아주)" id="mwcw">마운틴뷰</a>에 있는 모질라 재단 본부, 2009년 6월</figcaption></figure>
+<p id="mwdA">2006년, 러스트는 모질라 직원 그레이던 호어의 개인 프로젝트로 시작되었다. MIT 테크놀로지 리뷰에 따르면, 그는 아파트 건물의 고장 난 승강기 소프트웨어가 충돌한 것에 대한 좌절감으로 프로젝트를 시작했으며,<sup about="#mwt79" class="mw-ref reference" id="cite_ref-MITTechReview_25-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"},"body":{"id":"mw-reference-text-cite_note-MITTechReview-25"}}'><a href="#cite_note-MITTechReview-25" id="mwdQ"><span class="mw-reflink-text" id="mwdg"><span class="cite-bracket" id="mwdw">[</span>21<span class="cite-bracket" id="mweA">]</span></span></a></sup> "생존을 위해 과도하게 설계된" <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/녹병균" title="녹병균" id="mweQ">녹병균</a>의 이름을 따서 언어의 이름을 지었다.<sup about="#mwt80" class="mw-ref reference" id="cite_ref-MITTechReview_25-1" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mweg"><span class="mw-reflink-text" id="mwew"><span class="cite-bracket" id="mwfA">[</span>21<span class="cite-bracket" id="mwfQ">]</span></span></a></sup> 2006년부터 2009년까지 러스트는 모질라 내에 알려지지 않았고 호어의 자유 시간에 작성되었다.<sup about="#mwt82" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"},"body":{"id":"mw-reference-text-cite_note-Klabnik2016ACMHistory-26"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwfg"><span class="mw-reflink-text" id="mwfw"><span class="cite-bracket" id="mwgA">[</span>22<span class="cite-bracket" id="mwgQ">]</span></span></a></sup><sup class="reference nowrap" about="#mwt77" typeof="mw:Transclusion" id="mwgg" data-mw='{"parts":[{"template":{"target":{"wt":"참고 쪽","href":"./틀:참고_쪽"},"params":{"at":{"wt":"7:50"}},"i":0}}]}'><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>7:50<span typeof="mw:Entity"> </span></sup> 호어는 모질라 내의 작은 그룹이 관심을 가지게 된 2009년경부터 언어에 대해 이야기하기 시작했다.<sup about="#mwt84" class="mw-ref reference" id="cite_ref-Hoare2010_27-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Hoare2010"},"body":{"id":"mw-reference-text-cite_note-Hoare2010-27"}}'><a href="#cite_note-Hoare2010-27" id="mwgw"><span class="mw-reflink-text" id="mwhA"><span class="cite-bracket" id="mwhQ">[</span>23<span class="cite-bracket" id="mwhg">]</span></span></a></sup></p>
+
+<p id="mwhw">초기 기여자들은 이 언어가 주로 기존의 아이디어를 기반으로 했다는 데 동의했다. 호어는 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/CLU_(프로그래밍_언어)" title="CLU (프로그래밍 언어)" id="mwiA">CLU</a>, <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/BETA_(프로그래밍_언어)?action=edit&amp;redlink=1" title="BETA (프로그래밍 언어) (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" id="mwiQ" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["BETA (프로그래밍 언어)"]}}'>BETA</a>, <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/메사_(프로그래밍_언어)" title="메사 (프로그래밍 언어)" id="mwig">Mesa</a>, NIL,<sup about="#mwt85" class="mw-ref reference" id="cite_ref-nil_11-1" rel="dc:references" typeof="mw:Transclusion mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"nil","group":"note"},"body":{"html":""},"parts":[{"template":{"target":{"wt":"Refn","href":"./틀:Refn"},"params":{"group":{"wt":"note"},"name":{"wt":"nil"}},"i":0}}]}'><a href="#cite_note-nil-11" data-mw-group="note" id="mwiw"><span class="mw-reflink-text" id="mwjA"><span class="cite-bracket" id="mwjQ">[</span>note 4<span class="cite-bracket" id="mwjg">]</span></span></a></sup> <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/얼랭" title="얼랭" id="mwjw">Erlang</a>, <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/Newsqueak?action=edit&amp;redlink=1" title="Newsqueak (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" id="mwkA" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Newsqueak"]}}'>Newsqueak</a>, <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/Napier88?action=edit&amp;redlink=1" title="Napier88 (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" id="mwkQ" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Napier88"]}}'>Napier</a>, <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/Hermes_(프로그래밍_언어)?action=edit&amp;redlink=1" title="Hermes (프로그래밍 언어) (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" id="mwkg" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Hermes (프로그래밍 언어)"]}}'>Hermes</a>, <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/Sather?action=edit&amp;redlink=1" title="Sather (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" id="mwkw" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Sather"]}}'>Sather</a>, <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/Alef_(프로그래밍_언어)?action=edit&amp;redlink=1" title="Alef (프로그래밍 언어) (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" id="mwlA" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Alef (프로그래밍 언어)"]}}'>Alef</a>, <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/림보_(프로그래밍_언어)" title="림보 (프로그래밍 언어)" id="mwlQ">Limbo</a> 등 1970년대, 1980년대, 1990년대 언어들을 영향으로 언급했다.<sup about="#mwt89" class="mw-ref reference" id="cite_ref-Hoare2010_27-1" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Hoare2010"}}'><a href="#cite_note-Hoare2010-27" id="mwlg"><span class="mw-reflink-text" id="mwlw"><span class="cite-bracket" id="mwmA">[</span>23<span class="cite-bracket" id="mwmQ">]</span></span></a></sup> 그는 이 언어를 "미래가 자기 자신으로부터 구원받을 수 있도록 과거에서 온 기술"이라고 설명했다.<sup about="#mwt90" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-1" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwmg"><span class="mw-reflink-text" id="mwmw"><span class="cite-bracket" id="mwnA">[</span>22<span class="cite-bracket" id="mwnQ">]</span></span></a></sup><sup class="reference nowrap" about="#mwt88" typeof="mw:Transclusion" id="mwng" data-mw='{"parts":[{"template":{"target":{"wt":"참고 쪽","href":"./틀:참고_쪽"},"params":{"at":{"wt":"8:17"}},"i":0}}]}'><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>8:17<span typeof="mw:Entity"> </span></sup><sup about="#mwt91" class="mw-ref reference" id="cite_ref-Hoare2010_27-2" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Hoare2010"}}'><a href="#cite_note-Hoare2010-27" id="mwnw"><span class="mw-reflink-text" id="mwoA"><span class="cite-bracket" id="mwoQ">[</span>23<span class="cite-bracket" id="mwog">]</span></span></a></sup> 초기 기여자 매니시 고레가오카르(Manish Goregaokar)도 비슷하게 "대부분 수십 년 된 연구"를 기반으로 한다고 설명했다.<sup about="#mwt92" class="mw-ref reference" id="cite_ref-MITTechReview_25-2" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mwow"><span class="mw-reflink-text" id="mwpA"><span class="cite-bracket" id="mwpQ">[</span>21<span class="cite-bracket" id="mwpg">]</span></span></a></sup></p>
+
+<p id="mwpw">첫 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/컴파일러" title="컴파일러" id="mwqA">컴파일러</a>는 약 38,000줄의 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/OCaml" title="OCaml" id="mwqQ">OCaml</a>로 작성되었다.<sup about="#mwt98" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-2" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwqg"><span class="mw-reflink-text" id="mwqw"><span class="cite-bracket" id="mwrA">[</span>22<span class="cite-bracket" id="mwrQ">]</span></span></a></sup><sup class="reference nowrap" about="#mwt93" typeof="mw:Transclusion" id="mwrg" data-mw='{"parts":[{"template":{"target":{"wt":"참고 쪽","href":"./틀:참고_쪽"},"params":{"at":{"wt":"15:34"}},"i":0}}]}'><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>15:34<span typeof="mw:Entity"> </span></sup><sup about="#mwt100" class="mw-ref reference" id="cite_ref-OCamlCompiler_28-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"OCamlCompiler"},"body":{"id":"mw-reference-text-cite_note-OCamlCompiler-28"}}'><a href="#cite_note-OCamlCompiler-28" id="mwrw"><span class="mw-reflink-text" id="mwsA"><span class="cite-bracket" id="mwsQ">[</span>24<span class="cite-bracket" id="mwsg">]</span></span></a></sup> 초기 컴파일러는 <code class="mw-highlight mw-highlight-lang-text mw-content-ltr" style="" dir="ltr" typeof="mw:Extension/syntaxhighlight mw:Transclusion" about="#mwt94" id="mwsw" data-mw='{"name":"syntaxhighlight","attrs":{"lang":"text","class":"","id":"","style":"","inline":"1"},"body":{"extsrc":"obj"},"parts":[{"template":{"target":{"wt":"코드","href":"./틀:코드"},"params":{"1":{"wt":"obj"}},"i":0}}]}'>obj</code> 키워드를 통한 명시적 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/객체_지향_프로그래밍" title="객체 지향 프로그래밍" id="mwtA">객체 지향 프로그래밍</a><sup about="#mwt101" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-3" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwtQ"><span class="mw-reflink-text" id="mwtg"><span class="cite-bracket" id="mwtw">[</span>22<span class="cite-bracket" id="mwuA">]</span></span></a></sup><sup class="reference nowrap" about="#mwt96" typeof="mw:Transclusion" id="mwuQ" data-mw='{"parts":[{"template":{"target":{"wt":"참고 쪽","href":"./틀:참고_쪽"},"params":{"at":{"wt":"10:08"}},"i":0}}]}'><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>10:08<span typeof="mw:Entity"> </span></sup>과 초기화되지 않음에서 초기화됨으로 변하는 변수 상태를 추적하는 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/타입스테이트_분석?action=edit&amp;redlink=1" title="타입스테이트 분석 (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" id="mwug" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["타입스테이트 분석"]}}'>타입스테이트 분석</a> 시스템 등 오늘날에는 존재하지 않는 여러 기능을 지원했다.<sup about="#mwt102" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-4" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwuw"><span class="mw-reflink-text" id="mwvA"><span class="cite-bracket" id="mwvQ">[</span>22<span class="cite-bracket" id="mwvg">]</span></span></a></sup><sup class="reference nowrap" about="#mwt97" typeof="mw:Transclusion" id="mwvw" data-mw='{"parts":[{"template":{"target":{"wt":"참고 쪽","href":"./틀:참고_쪽"},"params":{"at":{"wt":"13:12"}},"i":0}}]}'><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>13:12<span typeof="mw:Entity"> </span></sup></p>
+
+</section><section data-mw-section-id="3" id="mwwA" aria-labelledby="2009–2012:_모질라_후원"><div class="mw-heading mw-heading3"><h3 id="2009–2012:_모질라_후원"><span id="2009.E2.80.932012:_.EB.AA.A8.EC.A7.88.EB.9D.BC_.ED.9B.84.EC.9B.90" typeof="mw:FallbackId"></span>2009–2012: 모질라 후원</h3><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/w/index.php?title=%EB%9F%AC%EC%8A%A4%ED%8A%B8_(%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4)&amp;action=edit&amp;section=3" title="문단 편집: 2009–2012: 모질라 후원"><span>편집</span></a><span class="mw-editsection-bracket">]</span></span></div>
+<p id="mwwQ">2009년, 모질라는 공식적으로 프로젝트를 후원했다.<sup about="#mwt103" class="mw-ref reference" id="cite_ref-MITTechReview_25-3" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mwwg"><span class="mw-reflink-text" id="mwww"><span class="cite-bracket" id="mwxA">[</span>21<span class="cite-bracket" id="mwxQ">]</span></span></a></sup> <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/브렌던_아이크" title="브렌던 아이크" id="mwxg">브렌던 아이크</a>와 기타 임원들은 러스트를 안전한 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/웹_브라우저" title="웹 브라우저" id="mwxw">웹 브라우저</a> 엔진에 사용할 가능성에 흥미를 느끼고 패트릭 월튼, 니코 마사키스, 펠릭스 클록, 매니시 고레가오카르를 포함한 엔지니어들을 프로젝트에 배치했다.<sup about="#mwt104" class="mw-ref reference" id="cite_ref-MITTechReview_25-4" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mwyA"><span class="mw-reflink-text" id="mwyQ"><span class="cite-bracket" id="mwyg">[</span>21<span class="cite-bracket" id="mwyw">]</span></span></a></sup> 프로젝트 개발자들이 사용한 회의실은 문 밖에 표지판을 붙여 "너드 동굴(nerd cave)"이라고 불렀다.<sup about="#mwt105" class="mw-ref reference" id="cite_ref-MITTechReview_25-5" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mwzA"><span class="mw-reflink-text" id="mwzQ"><span class="cite-bracket" id="mwzg">[</span>21<span class="cite-bracket" id="mwzw">]</span></span></a></sup></p>
+
+<p id="mw0A">작업은 OCaml 컴파일러에서 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/LLVM" title="LLVM" id="mw0Q">LLVM</a>을 대상으로 하는 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/자기_호스팅_컴파일러?action=edit&amp;redlink=1" title="자기 호스팅 컴파일러 (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" id="mw0g" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["자기 호스팅 컴파일러"]}}'>자기 호스팅 컴파일러</a>(즉, 러스트로 작성됨)로 전환되었다.<sup about="#mwt114" class="mw-ref reference" id="cite_ref-Rust0.1_29-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Rust0.1"},"body":{"id":"mw-reference-text-cite_note-Rust0.1-29"}}'><a href="#cite_note-Rust0.1-29" id="mw0w"><span class="mw-reflink-text" id="mw1A"><span class="cite-bracket" id="mw1Q">[</span>25<span class="cite-bracket" id="mw1g">]</span></span></a></sup><sup about="#mwt106" class="mw-ref reference" id="cite_ref-31" rel="dc:references" typeof="mw:Transclusion mw:Extension/ref" data-mw='{"name":"ref","attrs":{"group":"note"},"body":{"id":"mw-reference-text-cite_note-31"},"parts":[{"template":{"target":{"wt":"Refn","href":"./틀:Refn"},"params":{"group":{"wt":"note"},"1":{"wt":"이 사건의 정확한 날짜는 불확실하다. 러스트 컴파일러 버전의 공개 역사는 2012년부터 시작된다.&lt;ref name=Nelson2022RustConf>{{영상 인용|url=https://www.youtube.com/watch?v=oUIjG-y4zaA |last=Nelson |first=Jynn |title=RustConf 2022 - Bootstrapping: The once and future compiler |publisher=Rust Team |date=2022-08-05 |access-date=2024-10-29 |location=Portland, Oregon |via=YouTube}}&lt;/ref>"}},"i":0}}]}'><a href="#cite_note-31" data-mw-group="note" id="mw1w"><span class="mw-reflink-text" id="mw2A"><span class="cite-bracket" id="mw2Q">[</span>note 5<span class="cite-bracket" id="mw2g">]</span></span></a></sup> 소유권 시스템은 2010년까지 마련되었다.<sup about="#mwt115" class="mw-ref reference" id="cite_ref-MITTechReview_25-6" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mw2w"><span class="mw-reflink-text" id="mw3A"><span class="cite-bracket" id="mw3Q">[</span>21<span class="cite-bracket" id="mw3g">]</span></span></a></sup> 러스트 로고는 자전거 체인링을 기반으로 2011년에 개발되었다.<sup about="#mwt117" class="mw-ref reference" id="cite_ref-32" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-32"}}'><a href="#cite_note-32" id="mw3w"><span class="mw-reflink-text" id="mw4A"><span class="cite-bracket" id="mw4Q">[</span>27<span class="cite-bracket" id="mw4g">]</span></span></a></sup> 2010년대 초반에는 모질라의 풀타임 엔지니어들과 오픈 소스 기여자들의 참여가 증가했다.<sup about="#mwt118" class="mw-ref reference" id="cite_ref-MITTechReview_25-7" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mw4w"><span class="mw-reflink-text" id="mw5A"><span class="cite-bracket" id="mw5Q">[</span>21<span class="cite-bracket" id="mw5g">]</span></span></a></sup></p>
+
+<p id="mw5w">2012년 1월 20일, 러스트 0.1이 윈도우, 리눅스, macOS를 위한 첫 공개 릴리스가 되었다.<sup about="#mwt120" class="mw-ref reference" id="cite_ref-Rust0.1a_1-1" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Rust0.1a"},"body":{"html":"&lt;cite class=\"citation mailinglist\" about=\"#mwt119\" typeof=\"mw:Transclusion\" id=\"mw6A\" data-mw=&apos;{\"parts\":[{\"template\":{\"target\":{\"wt\":\"메일링 인용\",\"href\":\"./틀:메일링_인용\"},\"params\":{\"last\":{\"wt\":\"Anderson\"},\"first\":{\"wt\":\"Brian\"},\"date\":{\"wt\":\"2012-01-24\"},\"title\":{\"wt\":\"[rust-dev] The Rust compiler 0.1 is unleashed\"},\"url\":{\"wt\":\"https://mail.mozilla.org/pipermail/rust-dev/2012-January/001256.html\"},\"mailing-list\":{\"wt\":\"rust-dev\"},\"access-date\":{\"wt\":\"2025-01-07\"},\"archive-url\":{\"wt\":\"https://web.archive.org/web/20120124160628/https://mail.mozilla.org/pipermail/rust-dev/2012-January/001256.html\"},\"archive-date\":{\"wt\":\"January 24, 2012\"}},\"i\":0}}]}&apos;>Anderson, Brian (2012년 1월 24일). &lt;a rel=\"mw:ExtLink nofollow\" href=\"https://web.archive.org/web/20120124160628/https://mail.mozilla.org/pipermail/rust-dev/2012-January/001256.html\" class=\"external text\">&lt;span typeof=\"mw:Entity\">“&lt;/span>&lt;span typeof=\"mw:Entity\">[&lt;/span>rust-dev&lt;span typeof=\"mw:Entity\">]&lt;/span> The Rust compiler 0.1 is unleashed&lt;span typeof=\"mw:Entity\">”&lt;/span>&lt;/a> (메일링 리스트). &lt;span typeof=\"mw:Entity\">《&lt;/span>rust-dev&lt;span typeof=\"mw:Entity\">》&lt;/span>. 2012년 1월 24일에 &lt;a rel=\"mw:ExtLink nofollow\" href=\"https://mail.mozilla.org/pipermail/rust-dev/2012-January/001256.html\" class=\"external text\">원본 문서&lt;/a>에서 보존된 문서&lt;span class=\"reference-accessdate\">. 2025년 1월 7일에 확인함&lt;/span>.&lt;/cite>&lt;span title=\"ctx_ver=Z39.88-2004&amp;amp;rft_val_fmt=info%3Aofi%2Ffmt%3Akev%3Amtx%3Abook&amp;amp;rft.genre=unknown&amp;amp;rft.btitle=%5Brust-dev%5D+The+Rust+compiler+0.1+is+unleashed&amp;amp;rft.date=2012-01-24&amp;amp;rft.aulast=Anderson&amp;amp;rft.aufirst=Brian&amp;amp;rft_id=https%3A%2F%2Fmail.mozilla.org%2Fpipermail%2Frust-dev%2F2012-January%2F001256.html&amp;amp;rfr_id=info%3Asid%2Fko.wikipedia.org%3A%EB%9F%AC%EC%8A%A4%ED%8A%B8+%28%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D+%EC%96%B8%EC%96%B4%29\" class=\"Z3988\" about=\"#mwt119\" id=\"mw6Q\">&lt;span style=\"display:none;\">&lt;span typeof=\"mw:Entity\"> &lt;/span>&lt;/span>&lt;/span>"}}'><a href="#cite_note-Rust0.1a-1" id="mw6g"><span class="mw-reflink-text" id="mw6w"><span class="cite-bracket" id="mw7A">[</span>1<span class="cite-bracket" id="mw7Q">]</span></span></a></sup><sup about="#mwt122" class="mw-ref reference" id="cite_ref-ExtremeTechRust0.1_33-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"ExtremeTechRust0.1"},"body":{"id":"mw-reference-text-cite_note-ExtremeTechRust0.1-33"}}'><a href="#cite_note-ExtremeTechRust0.1-33" id="mw7g"><span class="mw-reflink-text" id="mw7w"><span class="cite-bracket" id="mw8A">[</span>28<span class="cite-bracket" id="mw8Q">]</span></span></a></sup></p>
+
+</section><section data-mw-section-id="4" id="mw8g" aria-labelledby="2012–2015:_진화"><div class="mw-heading mw-heading3"><h3 id="2012–2015:_진화"><span id="2012.E2.80.932015:_.EC.A7.84.ED.99.94" typeof="mw:FallbackId"></span>2012–2015: 진화</h3><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/w/index.php?title=%EB%9F%AC%EC%8A%A4%ED%8A%B8_(%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4)&amp;action=edit&amp;section=4" title="문단 편집: 2012–2015: 진화"><span>편집</span></a><span class="mw-editsection-bracket">]</span></span></div>
+<p id="mw8w">다음 해들은 러스트 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/자료형_체계" title="자료형 체계" id="mw9A">자료형 체계</a>의 실질적인 변화로 특징지어진다.<sup about="#mwt127" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-5" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mw9Q"><span class="mw-reflink-text" id="mw9g"><span class="cite-bracket" id="mw9w">[</span>22<span class="cite-bracket" id="mw-A">]</span></span></a></sup><sup class="reference nowrap" about="#mwt123" typeof="mw:Transclusion" id="mw-Q" data-mw='{"parts":[{"template":{"target":{"wt":"참고 쪽","href":"./틀:참고_쪽"},"params":{"at":{"wt":"18:36"}},"i":0}}]}'><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>18:36<span typeof="mw:Entity"> </span></sup><sup about="#mwt128" class="mw-ref reference" id="cite_ref-MITTechReview_25-8" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mw-g"><span class="mw-reflink-text" id="mw-w"><span class="cite-bracket" id="mw_A">[</span>21<span class="cite-bracket" id="mw_Q">]</span></span></a></sup> 소유권 시스템을 통한 메모리 관리는 점진적으로 통합 및 확장되었고, 2013년까지 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/쓰레기_수집_(컴퓨터_과학)" title="쓰레기 수집 (컴퓨터 과학)" class="mw-redirect" id="mw_g">쓰레기 수집기</a>는 거의 사용되지 않았으며 결국 제거되었다.<sup about="#mwt129" class="mw-ref reference" id="cite_ref-MITTechReview_25-9" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mw_w"><span class="mw-reflink-text" id="mwAQA"><span class="cite-bracket" id="mwAQE">[</span>21<span class="cite-bracket" id="mwAQI">]</span></span></a></sup> 또한 타입스테이트, <code class="mw-highlight mw-highlight-lang-text mw-content-ltr" style="" dir="ltr" typeof="mw:Extension/syntaxhighlight mw:Transclusion" about="#mwt124" id="mwAQM" data-mw='{"name":"syntaxhighlight","attrs":{"lang":"text","class":"","id":"","style":"","inline":"1"},"body":{"extsrc":"pure"},"parts":[{"template":{"target":{"wt":"코드","href":"./틀:코드"},"params":{"1":{"wt":"pure"}},"i":0}}]}'>pure</code> 키워드,<sup about="#mwt131" class="mw-ref reference" id="cite_ref-34" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-34"}}'><a href="#cite_note-34" id="mwAQQ"><span class="mw-reflink-text" id="mwAQU"><span class="cite-bracket" id="mwAQY">[</span>29<span class="cite-bracket" id="mwAQc">]</span></span></a></sup> 다양한 특수 포인터 형식 및 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/채널_(컴퓨팅)?action=edit&amp;redlink=1" title="채널 (컴퓨팅) (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" id="mwAQg" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["채널 (컴퓨팅)"]}}'>채널</a>에 대한 구문 지원도 제거되었다.<sup about="#mwt132" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-6" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwAQk"><span class="mw-reflink-text" id="mwAQo"><span class="cite-bracket" id="mwAQs">[</span>22<span class="cite-bracket" id="mwAQw">]</span></span></a></sup><sup class="reference nowrap" about="#mwt126" typeof="mw:Transclusion" id="mwAQ0" data-mw='{"parts":[{"template":{"target":{"wt":"참고 쪽","href":"./틀:참고_쪽"},"params":{"at":{"wt":"22:32"}},"i":0}}]}'><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>22:32<span typeof="mw:Entity"> </span></sup></p>
+
+<p id="mwAQ4">스티브 클랩닉(Steve Klabnik)에 따르면, 이 기간 동안 언어는 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/C++" title="C++" id="mwAQ8">C++</a>에서 오는 개발자(예: 기능의 저수준 성능), <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/스크립트_언어" title="스크립트 언어" id="mwARA">스크립트 언어</a> 개발자(예: Cargo 및 패키지 관리), <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/함수형_프로그래밍" title="함수형 프로그래밍" id="mwARE">함수형 프로그래밍</a> 개발자(예: 자료형 체계)로부터 영향을 받았다.<sup about="#mwt134" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-7" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwARI"><span class="mw-reflink-text" id="mwARM"><span class="cite-bracket" id="mwARQ">[</span>22<span class="cite-bracket" id="mwARU">]</span></span></a></sup><sup class="reference nowrap" about="#mwt133" typeof="mw:Transclusion" id="mwARY" data-mw='{"parts":[{"template":{"target":{"wt":"참고 쪽","href":"./틀:참고_쪽"},"params":{"at":{"wt":"30:50"}},"i":0}}]}'><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>30:50<span typeof="mw:Entity"> </span></sup></p>
+
+<p id="mwARc">2013년, 그레이던 호어는 러스트에서 물러났다.<sup about="#mwt139" class="mw-ref reference" id="cite_ref-MITTechReview_25-10" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mwARg"><span class="mw-reflink-text" id="mwARk"><span class="cite-bracket" id="mwARo">[</span>21<span class="cite-bracket" id="mwARs">]</span></span></a></sup> 호어의 출발 이후, 러스트는 초기 6명으로 구성된 "핵심 팀(core team)"<sup about="#mwt140" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-8" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwARw"><span class="mw-reflink-text" id="mwAR0"><span class="cite-bracket" id="mwAR4">[</span>22<span class="cite-bracket" id="mwAR8">]</span></span></a></sup><sup class="reference nowrap" about="#mwt135" typeof="mw:Transclusion" id="mwASA" data-mw='{"parts":[{"template":{"target":{"wt":"참고 쪽","href":"./틀:참고_쪽"},"params":{"at":{"wt":"21:45"}},"i":0}}]}'><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>21:45<span typeof="mw:Entity"> </span></sup>과 다양한 기타 팀에 걸쳐 총 30~40명의 개발자로 구성된 연합 거버넌스 구조 아래 유기적으로 진화했다.<sup about="#mwt141" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-9" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwASE"><span class="mw-reflink-text" id="mwASI"><span class="cite-bracket" id="mwASM">[</span>22<span class="cite-bracket" id="mwASQ">]</span></span></a></sup><sup class="reference nowrap" about="#mwt136" typeof="mw:Transclusion" id="mwASU" data-mw='{"parts":[{"template":{"target":{"wt":"참고 쪽","href":"./틀:참고_쪽"},"params":{"at":{"wt":"22:22"}},"i":0}}]}'><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>22:22<span typeof="mw:Entity"> </span></sup> 2014년 3월, 새로운 언어 기능에 대한 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/의굔_요청?action=edit&amp;redlink=1" title="의굔 요청 (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" id="mwASY" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["의굔 요청"]}}'>의굔 요청</a>(RFC) 프로세스가 추가되었다.<sup about="#mwt142" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-10" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwASc"><span class="mw-reflink-text" id="mwASg"><span class="cite-bracket" id="mwASk">[</span>22<span class="cite-bracket" id="mwASo">]</span></span></a></sup><sup class="reference nowrap" about="#mwt137" typeof="mw:Transclusion" id="mwASs" data-mw='{"parts":[{"template":{"target":{"wt":"참고 쪽","href":"./틀:참고_쪽"},"params":{"at":{"wt":"33:47"}},"i":0}}]}'><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>33:47<span typeof="mw:Entity"> </span></sup> 2016년까지 핵심 팀은 9명으로 성장했고 1600개 이상의 RFC가 있었다.<sup about="#mwt143" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-11" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwASw"><span class="mw-reflink-text" id="mwAS0"><span class="cite-bracket" id="mwAS4">[</span>22<span class="cite-bracket" id="mwAS8">]</span></span></a></sup><sup class="reference nowrap" about="#mwt138" typeof="mw:Transclusion" id="mwATA" data-mw='{"parts":[{"template":{"target":{"wt":"참고 쪽","href":"./틀:참고_쪽"},"params":{"at":{"wt":"34:08"}},"i":0}}]}'><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>34:08<span typeof="mw:Entity"> </span></sup></p>
+
+<p id="mwATE">개발은 버전 1.0(이후 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/하위_호환성" title="하위 호환성" id="mwATI">하위 호환성</a> 제공 시작)을 위한 기능 확정에 집중했다.<sup about="#mwt145" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-12" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwATM"><span class="mw-reflink-text" id="mwATQ"><span class="cite-bracket" id="mwATU">[</span>22<span class="cite-bracket" id="mwATY">]</span></span></a></sup><sup class="reference nowrap" about="#mwt144" typeof="mw:Transclusion" id="mwATc" data-mw='{"parts":[{"template":{"target":{"wt":"참고 쪽","href":"./틀:참고_쪽"},"params":{"at":{"wt":"41:26"}},"i":0}}]}'><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>41:26<span typeof="mw:Entity"> </span></sup> 2014년 1월 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/닥터_돕스_저널" title="닥터 돕스 저널" id="mwATg">닥터 돕스 저널</a>에 기고한 앤드류 빈스톡(Andrew Binstock)에 따르면, 러스트는 "놀랍도록 우아한 언어"로 널리 간주되었지만 버전마다 급격하게 변경되었기 때문에 채택이 느려졌다.<sup about="#mwt147" class="mw-ref reference" id="cite_ref-35" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-35"}}'><a href="#cite_note-35" id="mwATk"><span class="mw-reflink-text" id="mwATo"><span class="cite-bracket" id="mwATs">[</span>30<span class="cite-bracket" id="mwATw">]</span></span></a></sup></p>
+
+<p id="mwAT0">2015년 5월 15일, 러스트 1.0이 첫 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/안정_릴리스?action=edit&amp;redlink=1" title="안정 릴리스 (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" id="mwAT4" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["안정 릴리스"]}}'>안정 릴리스</a>가 되었다.<sup about="#mwt149" class="mw-ref reference" id="cite_ref-MITTechReview_25-11" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mwAT8"><span class="mw-reflink-text" id="mwAUA"><span class="cite-bracket" id="mwAUE">[</span>21<span class="cite-bracket" id="mwAUI">]</span></span></a></sup> 1년 후, 컴파일러는 최소 1,400명의 기여자를 확보했으며 패키지 관리 웹사이트 Crates.io에 최소 5,000개의 제3자 라이브러리가 게시되었다.<sup about="#mwt150" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-13" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwAUM"><span class="mw-reflink-text" id="mwAUQ"><span class="cite-bracket" id="mwAUU">[</span>22<span class="cite-bracket" id="mwAUY">]</span></span></a></sup><sup class="reference nowrap" about="#mwt148" typeof="mw:Transclusion" id="mwAUc" data-mw='{"parts":[{"template":{"target":{"wt":"참고 쪽","href":"./틀:참고_쪽"},"params":{"at":{"wt":"43:15"}},"i":0}}]}'><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>43:15<span typeof="mw:Entity"> </span></sup></p>
+
+</section><section data-mw-section-id="5" id="mwAUg" aria-labelledby="2015–2020:_서보(Servo)와_초기_채택"><div class="mw-heading mw-heading3"><h3 id="2015–2020:_서보(Servo)와_초기_채택"><span id="2015.E2.80.932020:_.EC.84.9C.EB.B3.B4.28Servo.29.EC.99.80_.EC.B4.88.EA.B8.B0_.EC.B1.84.ED.83.9D" typeof="mw:FallbackId"></span>2015–2020: 서보(Servo)와 초기 채택</h3><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/w/index.php?title=%EB%9F%AC%EC%8A%A4%ED%8A%B8_(%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4)&amp;action=edit&amp;section=5" title="문단 편집: 2015–2020: 서보(Servo)와 초기 채택"><span>편집</span></a><span class="mw-editsection-bracket">]</span></span></div>
+<figure class="mw-default-size mw-halign-right" typeof="mw:File/Thumb" id="mwAUk"><a href="https://ko.wikipedia.org/wiki/파일:Home_page_servo_v0.01.png" class="mw-file-description" id="mwAUo"><img resource="https://ko.wikipedia.org/wiki/파일:Home_page_servo_v0.01.png" src="//thumb.wikimedia.org/wikipedia/commons/thumb/3/39/Home_page_servo_v0.01.png/250px-Home_page_servo_v0.01.png?utm_source=ko.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail" decoding="async" loading="lazy" srcset="//thumb.wikimedia.org/wikipedia/commons/thumb/3/39/Home_page_servo_v0.01.png/500px-Home_page_servo_v0.01.png?utm_source=ko.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail 2x" data-file-width="1855" data-file-height="1056" data-file-type="bitmap" height="142" width="250" class="mw-file-element" id="mwAUs"/></a><figcaption id="mwAUw">모질라의 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/서보_브라우저_엔진?action=edit&amp;redlink=1" title="서보 브라우저 엔진 (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" id="mwAU0" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["서보 브라우저 엔진"]}}'>서보 브라우저 엔진</a> 초기 홈페이지</figcaption></figure>
+<p id="mwAU4"><a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/서보_브라우저_엔진?action=edit&amp;redlink=1" title="서보 브라우저 엔진 (문서가 존재하지 않음)" class="new" typeof="mw:LocalizedAttrs" id="mwAU8" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["서보 브라우저 엔진"]}}'>서보 브라우저 엔진</a>의 개발은 모질라와 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/삼성그룹" title="삼성그룹" id="mwAVA">삼성그룹</a>의 자금 지원을 받아 러스트와 병행하여 계속되었다.<sup about="#mwt154" class="mw-ref reference" id="cite_ref-36" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-36"}}'><a href="#cite_note-36" id="mwAVE"><span class="mw-reflink-text" id="mwAVI"><span class="cite-bracket" id="mwAVM">[</span>31<span class="cite-bracket" id="mwAVQ">]</span></span></a></sup> 러스트의 새로운 기능은 서보 팀에 의해 테스트되었고, 서보의 새로운 기능은 러스트 팀에 피드백을 제공하는 데 사용되었다.<sup about="#mwt155" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-14" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwAVU"><span class="mw-reflink-text" id="mwAVY"><span class="cite-bracket" id="mwAVc">[</span>22<span class="cite-bracket" id="mwAVg">]</span></span></a></sup><sup class="reference nowrap" about="#mwt151" typeof="mw:Transclusion" id="mwAVk" data-mw='{"parts":[{"template":{"target":{"wt":"참고 쪽","href":"./틀:참고_쪽"},"params":{"at":{"wt":"5:41"}},"i":0}}]}'><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>5:41<span typeof="mw:Entity"> </span></sup> 서보의 첫 번째 버전은 2016년에 출시되었다.<sup about="#mwt156" class="mw-ref reference" id="cite_ref-MITTechReview_25-12" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mwAVo"><span class="mw-reflink-text" id="mwAVs"><span class="cite-bracket" id="mwAVw">[</span>21<span class="cite-bracket" id="mwAV0">]</span></span></a></sup> <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/파이어폭스" title="파이어폭스" id="mwAV4">파이어폭스</a> 웹 브라우저는 2016년(버전 45)부터 러스트 코드를 포함했다.<sup about="#mwt157" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-15" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwAV8"><span class="mw-reflink-text" id="mwAWA"><span class="cite-bracket" id="mwAWE">[</span>22<span class="cite-bracket" id="mwAWI">]</span></span></a></sup><sup class="reference nowrap" about="#mwt152" typeof="mw:Transclusion" id="mwAWM" data-mw='{"parts":[{"template":{"target":{"wt":"참고 쪽","href":"./틀:참고_쪽"},"params":{"at":{"wt":"53:30"}},"i":0}}]}'><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>53:30<span typeof="mw:Entity"> </span></sup><sup about="#mwt159" class="mw-ref reference" id="cite_ref-37" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-37"}}'><a href="#cite_note-37" id="mwAWQ"><span class="mw-reflink-text" id="mwAWU"><span class="cite-bracket" id="mwAWY">[</span>32<span class="cite-bracket" id="mwAWc">]</span></span></a></sup> 그러나 서보의 구성 요소는 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/게코_(소프트웨어)" title="게코 (소프트웨어)" id="mwAWg">게코</a> 및 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/게코_(소프트웨어)#Quantum" title="게코 (소프트웨어)" id="mwAWk">Quantum</a> 프로젝트의 일환으로 2017년 9월(버전 57)이 되어서야 파이어폭스에 등장했다.<sup about="#mwt161" class="mw-ref reference" id="cite_ref-38" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-38"}}'><a href="#cite_note-38" id="mwAWo"><span class="mw-reflink-text" id="mwAWs"><span class="cite-bracket" id="mwAWw">[</span>33<span class="cite-bracket" id="mwAW0">]</span></span></a></sup></p>
+
+<p id="mwAW4">1.0 이후 몇 년 동안 <a rel="mw:WikiLink" href="#Rustfmt" class="mw-selflink-fragment" id="mwAW8">Rustfmt</a>, <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/통합_개발_환경" title="통합 개발 환경" id="mwAXA">통합 개발 환경</a> (IDE) 지원,<sup about="#mwt165" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-16" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwAXE"><span class="mw-reflink-text" id="mwAXI"><span class="cite-bracket" id="mwAXM">[</span>22<span class="cite-bracket" id="mwAXQ">]</span></span></a></sup><sup class="reference nowrap" about="#mwt162" typeof="mw:Transclusion" id="mwAXU" data-mw='{"parts":[{"template":{"target":{"wt":"참고 쪽","href":"./틀:참고_쪽"},"params":{"at":{"wt":"44:56"}},"i":0}}]}'><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>44:56<span typeof="mw:Entity"> </span></sup> 및 정기적인 컴파일러 테스트와 릴리스 주기를 포함하여 툴체인 생태계가 개선되었다.<sup about="#mwt166" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-17" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwAXY"><span class="mw-reflink-text" id="mwAXc"><span class="cite-bracket" id="mwAXg">[</span>22<span class="cite-bracket" id="mwAXk">]</span></span></a></sup><sup class="reference nowrap" about="#mwt163" typeof="mw:Transclusion" id="mwAXo" data-mw='{"parts":[{"template":{"target":{"wt":"참고 쪽","href":"./틀:참고_쪽"},"params":{"at":{"wt":"46:48"}},"i":0}}]}'><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>46:48<span typeof="mw:Entity"> </span></sup> 러스트 커뮤니티는 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/행동_지침" title="행동 지침" id="mwAXs">행동 지침</a>과 토론을 위한 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/IRC" title="IRC" id="mwAXw">IRC</a> 채팅을 얻었다.<sup about="#mwt167" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-18" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwAX0"><span class="mw-reflink-text" id="mwAX4"><span class="cite-bracket" id="mwAX8">[</span>22<span class="cite-bracket" id="mwAYA">]</span></span></a></sup><sup class="reference nowrap" about="#mwt164" typeof="mw:Transclusion" id="mwAYE" data-mw='{"parts":[{"template":{"target":{"wt":"참고 쪽","href":"./틀:참고_쪽"},"params":{"at":{"wt":"50:36"}},"i":0}}]}'><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>50:36<span typeof="mw:Entity"> </span></sup></p>
+
+<p id="mwAYI">모질라 외부에서 가장 먼저 알려진 채택 사례는 삼성, <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/페이스북" title="페이스북" id="mwAYM">페이스북</a>(현 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/메타_플랫폼스" title="메타 플랫폼스" id="mwAYQ">메타 플랫폼스</a>), <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/드롭박스" title="드롭박스" id="mwAYU">드롭박스</a>, <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/Ember.js" title="Ember.js" id="mwAYY">Ember.js</a>의 배후 회사인 Tilde, Inc.의 개별 프로젝트였다.<sup about="#mwt169" class="mw-ref reference" id="cite_ref-Klabnik2016ACMHistory_26-19" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"Klabnik2016ACMHistory"}}'><a href="#cite_note-Klabnik2016ACMHistory-26" id="mwAYc"><span class="mw-reflink-text" id="mwAYg"><span class="cite-bracket" id="mwAYk">[</span>22<span class="cite-bracket" id="mwAYo">]</span></span></a></sup><sup class="reference nowrap" about="#mwt168" typeof="mw:Transclusion" id="mwAYs" data-mw='{"parts":[{"template":{"target":{"wt":"참고 쪽","href":"./틀:참고_쪽"},"params":{"at":{"wt":"55:44"}},"i":0}}]}'><span typeof="mw:Entity">:</span><span typeof="mw:Entity"> </span>55:44<span typeof="mw:Entity"> </span></sup><sup about="#mwt170" class="mw-ref reference" id="cite_ref-MITTechReview_25-13" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mwAYw"><span class="mw-reflink-text" id="mwAY0"><span class="cite-bracket" id="mwAY4">[</span>21<span class="cite-bracket" id="mwAY8">]</span></span></a></sup> <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/아마존_웹_서비스" title="아마존 웹 서비스" id="mwAZA">아마존 웹 서비스</a>는 2020년에 뒤따랐다.<sup about="#mwt171" class="mw-ref reference" id="cite_ref-MITTechReview_25-14" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mwAZE"><span class="mw-reflink-text" id="mwAZI"><span class="cite-bracket" id="mwAZM">[</span>21<span class="cite-bracket" id="mwAZQ">]</span></span></a></sup> 엔지니어들은 채택 이유로 성능, 쓰레기 수집기의 부재, 안전성, 개발자 경험을 꼽았다. 아마존 개발자들은 러스트 코드가 유사한 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/자바_(프로그래밍_언어)" title="자바 (프로그래밍 언어)" id="mwAZU">자바</a> 코드보다 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/컴퓨터_성능" title="컴퓨터 성능" id="mwAZY">에너지 효율</a>이 더 높다는 2017년 연구 결과를 인용했다.<sup about="#mwt172" class="mw-ref reference" id="cite_ref-MITTechReview_25-15" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mwAZc"><span class="mw-reflink-text" id="mwAZg"><span class="cite-bracket" id="mwAZk">[</span>21<span class="cite-bracket" id="mwAZo">]</span></span></a></sup><sup about="#mwt174" class="mw-ref reference" id="cite_ref-2017PortugalEnergyStudy_39-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"2017PortugalEnergyStudy"},"body":{"id":"mw-reference-text-cite_note-2017PortugalEnergyStudy-39"}}'><a href="#cite_note-2017PortugalEnergyStudy-39" id="mwAZs"><span class="mw-reflink-text" id="mwAZw"><span class="cite-bracket" id="mwAZ0">[</span>34<span class="cite-bracket" id="mwAZ4">]</span></span></a></sup></p>
+
+</section><section data-mw-section-id="6" id="mwAZ8" aria-labelledby="2020–현재:_모질라_감원_및_러스트_재단"><div class="mw-heading mw-heading3"><h3 id="2020–현재:_모질라_감원_및_러스트_재단"><span id="2020.E2.80.93.ED.98.84.EC.9E.AC:_.EB.AA.A8.EC.A7.88.EB.9D.BC_.EA.B0.90.EC.9B.90_.EB.B0.8F_.EB.9F.AC.EC.8A.A4.ED.8A.B8_.EC.9E.AC.EB.8B.A8" typeof="mw:FallbackId"></span>2020–현재: 모질라 감원 및 러스트 재단</h3><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/w/index.php?title=%EB%9F%AC%EC%8A%A4%ED%8A%B8_(%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4)&amp;action=edit&amp;section=6" title="문단 편집: 2020–현재: 모질라 감원 및 러스트 재단"><span>편집</span></a><span class="mw-editsection-bracket">]</span></span></div>
+<p id="mwAaA">2020년 8월, 모질라는 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/코로나19_범유행" title="코로나19 범유행" id="mwAaE">코로나19 범유행</a> 중 기업 구조 조정의 일환으로 1,000명의 직원 중 250명을 해고했다.<sup about="#mwt176" class="mw-ref reference" id="cite_ref-40" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-40"}}'><a href="#cite_note-40" id="mwAaI"><span class="mw-reflink-text" id="mwAaM"><span class="cite-bracket" id="mwAaQ">[</span>35<span class="cite-bracket" id="mwAaU">]</span></span></a></sup><sup about="#mwt178" class="mw-ref reference" id="cite_ref-41" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-41"}}'><a href="#cite_note-41" id="mwAaY"><span class="mw-reflink-text" id="mwAac"><span class="cite-bracket" id="mwAag">[</span>36<span class="cite-bracket" id="mwAak">]</span></span></a></sup> 서보 팀은 해체되었다. 이 사건은 러스트의 미래에 대한 우려를 불러일으켰다.<sup about="#mwt180" class="mw-ref reference" id="cite_ref-42" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-42"}}'><a href="#cite_note-42" id="mwAao"><span class="mw-reflink-text" id="mwAas"><span class="cite-bracket" id="mwAaw">[</span>37<span class="cite-bracket" id="mwAa0">]</span></span></a></sup> 러스트 핵심 팀은 감원의 영향을 인정하고 독립적인 재단에 대한 계획을 발표했다. 첫 번째 목표는 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/상표" title="상표" id="mwAa4">상표</a>와 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/도메인_네임" title="도메인 네임" id="mwAa8">도메인 네임</a>을 소유하고 재정적 책임을 지는 것이었다.<sup about="#mwt182" class="mw-ref reference" id="cite_ref-43" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-43"}}'><a href="#cite_note-43" id="mwAbA"><span class="mw-reflink-text" id="mwAbE"><span class="cite-bracket" id="mwAbI">[</span>38<span class="cite-bracket" id="mwAbM">]</span></span></a></sup></p>
+
+<p id="mwAbQ">2021년 2월 8일, <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/아마존_웹_서비스" title="아마존 웹 서비스" id="mwAbU">아마존 웹 서비스</a>, <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/구글" title="구글" id="mwAbY">구글</a>, <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/화웨이" title="화웨이" id="mwAbc">화웨이</a>, <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/마이크로소프트" title="마이크로소프트" id="mwAbg">마이크로소프트</a>, <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/모질라" title="모질라" id="mwAbk">모질라</a>가 창립 회원으로 <a rel="mw:WikiLink" href="#러스트_재단" class="mw-selflink-fragment" id="mwAbo">러스트 재단</a>이 형성되었다.<sup about="#mwt184" class="mw-ref reference" id="cite_ref-44" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-44"}}'><a href="#cite_note-44" id="mwAbs"><span class="mw-reflink-text" id="mwAbw"><span class="cite-bracket" id="mwAb0">[</span>39<span class="cite-bracket" id="mwAb4">]</span></span></a></sup><sup about="#mwt186" class="mw-ref reference" id="cite_ref-45" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-45"}}'><a href="#cite_note-45" id="mwAb8"><span class="mw-reflink-text" id="mwAcA"><span class="cite-bracket" id="mwAcE">[</span>40<span class="cite-bracket" id="mwAcI">]</span></span></a></sup> 재단은 보조금과 서버 자금 지원을 통해 개발자를 재정적으로 지원할 예정이다.<sup about="#mwt187" class="mw-ref reference" id="cite_ref-MITTechReview_25-16" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"MITTechReview"}}'><a href="#cite_note-MITTechReview-25" id="mwAcM"><span class="mw-reflink-text" id="mwAcQ"><span class="cite-bracket" id="mwAcU">[</span>21<span class="cite-bracket" id="mwAcY">]</span></span></a></sup> 2021년 4월 6일 블로그 게시물에서 구글은 <a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/안드로이드_오픈_소스_프로젝트" title="안드로이드 오픈 소스 프로젝트" class="mw-redirect" id="mwAcc">안드로이드 오픈 소스 프로젝트</a> 내에서 러스트 지원을 발표했다.<sup about="#mwt189" class="mw-ref reference" id="cite_ref-46" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-46"}}'><a href="#cite_note-46" id="mwAcg"><span class="mw-reflink-text" id="mwAck"><span class="cite-bracket" id="mwAco">[</span>41<span class="cite-bracket" id="mwAcs">]</span></span></a></sup> 페이스북(<a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/메타_플랫폼스" title="메타 플랫폼스" id="mwAcw">메타 플랫폼스</a>)은 2021년 4월 재단에 합류했으며,<sup about="#mwt191" class="mw-ref reference" id="cite_ref-47" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-47"}}'><a href="#cite_note-47" id="mwAc0"><span class="mw-reflink-text" id="mwAc4"><span class="cite-bracket" id="mwAc8">[</span>42<span class="cite-bracket" id="mwAdA">]</span></span></a></sup> 11월에는 ARM(<a rel="mw:WikiLink" href="https://ko.wikipedia.org/wiki/ARM_홀딩스" title="ARM 홀딩스" id="mwAdE">ARM 홀딩스</a>)이 뒤를 이었다.<sup about="#mwt193" class="mw-ref reference" id="cite_ref-48" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-48"}}'><a href="#cite_note-48" id="mwAdI"><span class="mw-reflink-text" id="mwAdM"><span class="cite-bracket" id="mwAdQ">[</span>43<span class="cite-bracket" id="mwAdU">]</span></span></a></sup></p>
+
+<p id="mwAdY">2021년 11월 22일, 행동 지침 집행을 담당하는 중재 팀은 "핵심 팀이 스스로에게만 책임을 지는 위치에 있는 것에 항의하여" 사임했다.<sup about="#mwt195" class="mw-ref reference" id="cite_ref-moderation_49-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"moderation"},"body":{"id":"mw-reference-text-cite_note-moderation-49"}}'><a href="#cite_note-moderation-49" id="mwAdc"><span class="mw-reflink-text" id="mwAdg"><span class="cite-bracket" id="mwAdk">[</span>44<span class="cite-bracket" id="mwAdo">]</span></span></a></sup> 2022년 5월, 러스트 리더십 위원회는 사건에 대한 대응을 발표했다.<sup about="#mwt197" class="mw-ref reference" id="cite_ref-50" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-50"}}'><a href="#cite_note-50" id="mwAds"><span class="mw-reflink-text" id="mwAdw"><span class="cite-bracket" id="mwAd0">[</span>45<span class="cite-bracket" id="mwAd4">]</span></span></a></sup></p>
+
+<p id="mwAd8">러스트 재단은 2023년 4월 6일 새로운 상표 정책 초안을 게시했으며, 이는 광범위한 부정적인 반응을 불러일으켰다.<sup about="#mwt199" class="mw-ref reference" id="cite_ref-ApologizesTrademarkPolicy_51-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"ApologizesTrademarkPolicy"},"body":{"id":"mw-reference-text-cite_note-ApologizesTrademarkPolicy-51"}}'><a href="#cite_note-ApologizesTrademarkPolicy-51" id="mwAeA"><span class="mw-reflink-text" id="mwAeE"><span class="cite-bracket" id="mwAeI">[</span>46<span class="cite-bracket" id="mwAeM">]</span></span></a></sup> 상표 정책에는 러스트 로고와 이름을 사용할 수 있는 방법에 대한 규칙이 포함되었다.<sup about="#mwt200" class="mw-ref reference" id="cite_ref-ApologizesTrademarkPolicy_51-1" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"ApologizesTrademarkPolicy"}}'>

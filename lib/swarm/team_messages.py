@@ -91,7 +91,8 @@ def validate_coordinator(binding: dict) -> None:
             or task_user_id(parent) != binding['owner']
             or str(parent.get('_tenant_id') or '') != binding['tenant']
             or str(parent.get('convId') or '') != binding['conversationId']):
-        raise RunMessageError('message_run_ended', 'Original coordinator is no longer running')
+        raise RunMessageError('message_run_ended', 'Original coordinator is no longer running',
+                              category='coordinator_inactive')
 
 
 def prepare_coordinator_mailbox(task: dict) -> None:

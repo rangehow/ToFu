@@ -183,6 +183,9 @@ def run_scheduled_review(task: dict) -> tuple[bool, str]:
     from .compute_patrol import ingest_compute_patrols
     # Off-host patrols cannot reach Tofu; their published flags become signals before the snapshot reads them.
     ingest_compute_patrols(owner)
+    from .quota import settle_quota_alerts
+    # Quota alerts no live evidence holds open close before the snapshot counts them.
+    settle_quota_alerts(owner)
     periodic = task.get('system_key') == REVIEW_SYSTEM_KEY
     counts, cursor = {}, None
     while True:

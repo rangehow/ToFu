@@ -31,7 +31,7 @@ from lib.quart_sync import owned_sync_command, request_json
 
 from lib.api_response import api_error, api_ok
 from lib.log import get_logger, resolve_inbound_rid, set_principal, task_log_tag
-from lib.agent_core.push import PushClient, hub
+from lib.agent_core.push import PUSH_MAX_MESSAGE_BYTES, PushClient, hub
 from lib.control_rpc import ControlRpcSession
 
 if TYPE_CHECKING:
@@ -46,6 +46,10 @@ PUSH_RECEIVE_IDLE_TIMEOUT_SECONDS = 180.0
 # release (receive idle, backlog overflow, shutdown) must not end in 1000: the
 # page that is still alive reconnects and reconciles instead of staying offline.
 PUSH_SERVER_RELEASE_CLOSE_CODE = 1001
+# RFC 6455 7.4.3 "message too big". A message above
+# ``PUSH_MAX_MESSAGE_BYTES`` is refused before JSON parsing or dispatch, so an
+# oversized frame is never answered by the application.
+PUSH_MESSAGE_TOO_BIG_CLOSE_CODE = 1009
 
 logger = get_logger(__name__)
 
@@ -140,6 +144,126 @@ def _resolve_push_ws_auth_offloop(headers, cookies, peer, origin_proven):
     Only supplied transport snapshots reach the worker, never WS globals.
     """
     return _resolve_push_ws_auth(headers, cookies, peer, origin_proven)
+
+
+async def _decide_push_handshake(headers, cookies, peer, subprotocols, rid):
+    """The one push-socket handshake policy, for Quart and the front door.
+
+    Returns ``(status, AuthContext | None, owner_user_id | None)``: ``101``
+    with a context and owner, or the refusal status (403 local-kernel Host,
+    401 credential/owner) with ``None``. Inputs are transport snapshots.
+    """
+    from routes.api_v1.auth import local_kernel_authority_refused
+    if local_kernel_authority_refused(headers.get('Host')):
+        logger.warning('[Push] WS rejected (reason=local_kernel_host, rid=%s)',
+                       rid)
+        return 403, None, None
+    if isinstance(peer, (tuple, list)):
+        peer = tuple(peer)
+    try:
+        from quart import current_app as _app
+        from routes.api_v1.auth import (
+            presented_push_origin_proof, push_origin_proof_matches)
+        origin_proven = push_origin_proof_matches(
+            _app.secret_key, cookies,
+            presented_push_origin_proof(subprotocols))
+        ctx, auth_reason = await _resolve_push_ws_auth_offloop(
+            headers, cookies, peer, origin_proven)
+    except Exception as e:
+        logger.warning('[Push] WS auth resolve failed closed (rid=%s): %s',
+                       rid, e)
+        ctx, auth_reason = None, 'auth_error'
+    if ctx is None:
+        logger.warning('[Push] WS rejected (reason=%s, rid=%s)',
+                       auth_reason, rid)
+        return 401, None, None
+    user_id = ctx.owner_user_id
+    if not user_id:
+        from lib.auth_mode import is_multi_user
+        if is_multi_user():
+            logger.warning(
+                '[Push] WS rejected (reason=owner_required, rid=%s)', rid)
+            return 401, None, None
+        # Composition boundary for the declared personal installation. Core
+        # push routing never knows or guesses this identity.
+        from lib.identity import PERSONAL_USER_ID
+        user_id = PERSONAL_USER_ID
+    return 101, ctx, user_id
+
+
+async def _admit_front_door_socket(op: dict) -> dict:
+    """Decide one Rust front-door push handshake (``admit`` bridge op).
+
+    ``op`` carries the browser handshake as the front door saw it: header
+    pairs, the raw query, the real socket peer and offered subprotocols.
+    """
+    from urllib.parse import parse_qsl
+
+    from werkzeug.datastructures import Headers
+    from werkzeug.http import parse_cookie
+
+    from lib.agent_core.push import _require_owner_user_id
+    from routes.api_v1.auth import PUSH_SUBPROTOCOL
+
+    headers = Headers([(str(name), str(value))
+                       for name, value in op.get('headers') or ()])
+    query_rid = next((value for name, value in parse_qsl(
+        str(op.get('query') or ''), keep_blank_values=True)
+        if name == '_rid'), None)
+    try:
+        rid = resolve_inbound_rid(headers.get('X-Request-ID'), query_rid)
+    except Exception as e:
+        rid = resolve_inbound_rid(None, None)
+        logger.debug('[Push] rid resolve failed (minted %s): %s', rid, e)
+    if hub.is_draining:
+        logger.warning('[Push] WS rejected (reason=server_closing, rid=%s)', rid)
+        return {'status': 503, 'rid': rid}
+    cookies = dict(parse_cookie(';'.join(headers.getlist('Cookie'))))
+    subprotocols = tuple(str(item) for item in op.get('subprotocols') or ())
+    status, ctx, user_id = await _decide_push_handshake(
+        headers, cookies, tuple(op.get('peer') or ()), subprotocols, rid)
+    if ctx is None:
+        return {'status': status, 'rid': rid}
+    return {
+        'status': 101,
+        'userId': _require_owner_user_id(user_id),
+        'rid': rid,
+        'subprotocol': PUSH_SUBPROTOCOL if PUSH_SUBPROTOCOL in subprotocols else None,
+    }
+
+
+@push_bp.websocket('/api/push/front-door-bridge')
+async def push_front_door_bridge():
+    """The Rust front door's push bridge (``lib/agent_core/push_front_door.py``).
+
+    Only the front door holding the application secret, connecting from
+    loopback, may open it; it is refused like a push socket while closing.
+    """
+    from quart import abort, current_app
+    from quart import json as quart_json
+
+    from lib.agent_core.push_front_door import (
+        FrontDoorBridgeSession, bridge_request_authorized)
+
+    if not bridge_request_authorized(websocket.headers, _push_ws_peer(),
+                                     str(current_app.secret_key or '')):
+        logger.warning('[Push] front-door bridge rejected (unauthorized)')
+        abort(403)
+    session = FrontDoorBridgeSession(
+        hub, admit=_admit_front_door_socket, abort=_handle_abort,
+        encode_control=quart_json.dumps)
+    if not hub.register(session):
+        abort(503)
+    logger.info('[Push] front-door bridge connected')
+    try:
+        await websocket.accept()
+        await session.run(websocket.receive, websocket.send)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        await session.aclose()
+        hub.unregister(session)
+        logger.info('[Push] front-door bridge closed')
 
 
 @push_bp.route('/api/push/debug/presence', methods=['POST'])
@@ -268,51 +392,25 @@ async def push_ws():
         logger.debug('[Push] rid resolve failed (minted %s): %s', _rid, _e)
 
     # ── Resolve WS handshake auth (HTTP before_request does not run) ────
-    from routes.api_v1.auth import local_kernel_authority_refused
-    if local_kernel_authority_refused(websocket.headers.get('Host')):
-        from quart import abort
-        logger.warning('[Push] WS rejected (reason=local_kernel_host, rid=%s)',
-                       _rid)
-        abort(403)
     try:
         # Snapshot transport data before dispatch; preserve case-insensitive
         # header lookup and do not let a worker touch connection-owned values.
         _headers = websocket.headers.copy()
         _cookies = dict(websocket.cookies)
         _peer = _push_ws_peer()
-        if isinstance(_peer, (tuple, list)):
-            _peer = tuple(_peer)
-        from quart import current_app as _app
-        from routes.api_v1.auth import (
-            presented_push_origin_proof, push_origin_proof_matches)
-        _origin_proven = push_origin_proof_matches(
-            _app.secret_key, _cookies,
-            presented_push_origin_proof(websocket.requested_subprotocols))
-        _ctx, _auth_reason = await _resolve_push_ws_auth_offloop(
-            _headers, _cookies, _peer, _origin_proven)
+        _subprotocols = tuple(websocket.requested_subprotocols or ())
     except Exception as _e:
-        logger.warning('[Push] WS auth resolve failed closed (rid=%s): %s',
+        logger.warning('[Push] WS handshake snapshot failed closed (rid=%s): %s',
                        _rid, _e)
-        _ctx, _auth_reason = None, 'auth_error'
+        from quart import abort
+        abort(401)
+    _status, _ctx, _user_id = await _decide_push_handshake(
+        _headers, _cookies, _peer, _subprotocols, _rid)
     if _ctx is None:
         # Abort before the first send/receive accepts the upgrade, allowing
-        # Quart/Hypercorn to return an HTTP 401 handshake response.
+        # Quart/Hypercorn to return the HTTP refusal (401/403).
         from quart import abort
-        logger.warning('[Push] WS rejected (reason=%s, rid=%s)',
-                       _auth_reason, _rid)
-        abort(401)
-    _user_id = _ctx.owner_user_id
-    if not _user_id:
-        from lib.auth_mode import is_multi_user
-        if is_multi_user():
-            from quart import abort
-            logger.warning(
-                '[Push] WS rejected (reason=owner_required, rid=%s)', _rid)
-            abort(401)
-        # Composition boundary for the declared personal installation. Core
-        # push routing never knows or guesses this identity.
-        from lib.identity import PERSONAL_USER_ID
-        _user_id = PERSONAL_USER_ID
+        abort(_status)
     # Bind identity so audit_log auto-attaches it (ENTERPRISE_EVOLUTION.md,
     # Identity and authorization); the HTTP path does the same in auth_before_request.
     set_principal(getattr(_ctx, 'key_id', '') or '', _user_id)
@@ -334,6 +432,7 @@ async def push_ws():
 
     send_task = None
     recv_task = None
+    release_code = PUSH_SERVER_RELEASE_CLOSE_CODE
 
     async def _sender():
         """Drain the client queue and send frames to the WebSocket."""
@@ -364,11 +463,12 @@ async def push_ws():
 
     async def _receiver():
         """Receive bounded RPC plus legacy push control commands."""
+        nonlocal release_code
         try:
             while True:
                 try:
-                    raw = await asyncio.wait_for(
-                        websocket.receive_json(),
+                    message = await asyncio.wait_for(
+                        websocket.receive(),
                         timeout=PUSH_RECEIVE_IDLE_TIMEOUT_SECONDS,
                     )
                 except TimeoutError:
@@ -377,6 +477,20 @@ async def push_ws():
                         '(rid=%s, timeout=%.0fs)',
                         _rid, PUSH_RECEIVE_IDLE_TIMEOUT_SECONDS)
                     return
+                # ``receive_json`` would parse before the bound is known. Count
+                # the same bytes the transport/Rust front door count, then
+                # refuse the frame without dispatching it.
+                size = (len(message.encode('utf-8'))
+                        if isinstance(message, str) else len(message))
+                if size > PUSH_MAX_MESSAGE_BYTES:
+                    logger.info(
+                        '[Push] Client message too big; releasing socket '
+                        '(rid=%s, bytes=%d, max=%d, close=%d)',
+                        _rid, size, PUSH_MAX_MESSAGE_BYTES,
+                        PUSH_MESSAGE_TOO_BIG_CLOSE_CODE)
+                    release_code = PUSH_MESSAGE_TOO_BIG_CLOSE_CODE
+                    return
+                raw = websocket.json_module.loads(message)
                 if rpc_session.receive(raw):
                     continue
                 _handle_client_frame(client, raw)
@@ -401,7 +515,7 @@ async def push_ws():
         await _join_socket_halves(send_task, recv_task)
         # A peer disconnect cancels this handler before it gets here, so only
         # a server-side release replaces Quart's default 1000 close.
-        await websocket.close(PUSH_SERVER_RELEASE_CLOSE_CODE)
+        await websocket.close(release_code)
     except asyncio.CancelledError:
         pass
     finally:

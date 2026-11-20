@@ -1,4 +1,4 @@
-"""Workers run on the coordinator's workerModel, else the owner's default (R5)."""
+"""Worker grants use the owner's current Coordinator selection unless overridden (R5)."""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -17,27 +17,29 @@ CATALOG = [{'function': {'name': name}} for name in
            ('run_command', 'read_files', *CONTRACT['continuationTools'])]
 
 
-class Bindings:
-    def __init__(self, worker_model=''):
-        self.model = worker_model
+class Dispatch:
+    owner = OWNER
 
-    def worker_model(self, path):
-        assert path == '/work/project'
-        return self.model
+    def __init__(self):
+        self.settings = {}
+        self.reads = 0
+
+    def _conversation(self, conversation_id):
+        assert conversation_id == 'coordinator'
+        self.reads += 1
+        return self.settings
 
 
 @pytest.fixture
 def task(monkeypatch):
-    from lib.conversations import project_coordination
     import lib
-    bindings = Bindings()
-    monkeypatch.setattr(project_coordination, 'ProjectCoordinationRepository', lambda owner: bindings)
+    dispatch = Dispatch()
     monkeypatch.setattr(lib, 'LLM_MODEL', 'owner-default-model')
     value = {'id': 'coordinator-task', 'convId': 'coordinator', '_userId': OWNER,
              'config': {'codeExecEnabled': True},
              '_coordinatorDispatchScope': {'project_path': '/work/project', 'binding_revision': 1,
                                            'conversation_id': 'coordinator', 'user_id': OWNER}}
-    return SimpleNamespace(value=value, bindings=bindings)
+    return SimpleNamespace(value=value, dispatch=dispatch)
 
 
 def _issue(task):
@@ -46,20 +48,22 @@ def _issue(task):
 
 
 def test_tool_assembly_never_reads_the_setting_and_workers_skip_the_coordinator_model(task):
-    task.bindings.model = 'worker-strong-model'
+    task.dispatch.settings.update(model='router-current-model', workerModel='worker-strong-model')
     policy = _issue(task)
     assert policy.model is None and policy.coordinator_model == 'router-light-model'
-    issued = issued_worker_policy(SimpleNamespace(), task.value)
+    assert task.dispatch.reads == 0
+    issued = issued_worker_policy(task.dispatch, task.value)
     assert issued.model == 'worker-strong-model'
-    continuation = policy_for_task(SimpleNamespace(), task.value, None)['continuation']
+    continuation = policy_for_task(task.dispatch, task.value, None)['continuation']
     assert continuation['model'] == 'router-light-model'
-    assert continuation['workerModel'] == 'worker-strong-model'
+    assert continuation['workerModel'] == 'router-light-model'  # frozen source controls, not live dispatch
 
 
-def test_absent_setting_uses_the_owner_default_not_the_coordinator_model(task):
+def test_absent_session_selection_uses_the_owner_default_not_the_frozen_attempt(task):
     _issue(task)
-    assert issued_worker_policy(SimpleNamespace(), task.value).model == 'owner-default-model'
-    assert task.value['_coordinatorWorkerModel'] == 'owner-default-model'
+    assert issued_worker_policy(task.dispatch, task.value).model == 'owner-default-model'
+    task.dispatch.settings['model'] = 'current-session-model'
+    assert issued_worker_policy(task.dispatch, task.value).model == 'current-session-model'
 
 
 def test_no_model_at_all_is_an_explicit_refusal(task, monkeypatch):
@@ -67,7 +71,7 @@ def test_no_model_at_all_is_an_explicit_refusal(task, monkeypatch):
     monkeypatch.setattr(lib, 'LLM_MODEL', '')
     _issue(task)
     with pytest.raises(PermissionError, match='No Worker model'):
-        resolve_worker_model(task.value)
+        resolve_worker_model(task.dispatch, task.value)
 
 
 
@@ -97,7 +101,7 @@ def test_router_without_a_model_choice_runs_forwarded_requests_on_the_owner_defa
     assert config['model'] == config['preset'] == 'owner-default-model'
     capture_worker_policy(task.value, config, CATALOG,
                           _resolve_model_config(config, 'coordinator-task')['model'])
-    continuation = policy_for_task(SimpleNamespace(), task.value, None)['continuation']
+    continuation = policy_for_task(task.dispatch, task.value, None)['continuation']
     assert continuation['model'] == continuation['workerModel'] == 'owner-default-model'
 
 @pytest.mark.parametrize('controls', [
@@ -109,12 +113,13 @@ def test_continuations_resolve_the_current_worker_model_not_the_frozen_one(task,
     refusal the owner changes workerModel once and the same request's Workers
     follow it (lib/conversations/session_model.py). Its own model stays frozen."""
     from lib.project_dispatch import continuation
-    task.bindings.model = 'worker-current-model'
+    task.dispatch.settings['workerModel'] = 'worker-current-model'
     row = {'request': {'delegation': {'policy': {'config': {}, 'continuation': {
         'version': 1, 'workerTools': ['run_command'], 'tools': ['report_to_user'], **controls}}}}}
     monkeypatch.setattr(continuation, 'current_continuation', lambda task, **kwargs: row)
     capture_worker_policy(task.value, {}, CATALOG, 'ignored-assembly-model')
-    policy = task.value['_coordinatorWorkerPolicy']
+    assert task.dispatch.reads == 0
+    policy = issued_worker_policy(task.dispatch, task.value)
     assert policy.model == 'worker-current-model' and policy.coordinator_model == 'coordinator-model'
 
 

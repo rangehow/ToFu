@@ -102,13 +102,7 @@ def _wait_until(predicate, timeout=2.0, poll=0.02):
 def _reset_global_state(task_id: str):
     """Clear any leaking session / inbox / tombstones between tests."""
     with _sessions_lock:
-        session = _active_sessions.pop(task_id, None)
-    # A spawned session outlives the test that launched it; its driver still
-    # builds late agents (past the test's factory patch) and persists their
-    # results through whatever storage a later test installed.
-    if session is not None and session._driver_thread is not None:
-        session.abort()
-        session.wait_terminated()
+        _active_sessions.pop(task_id, None)
     agent_inbox.reset_for_test(task_id)
 
 
@@ -231,6 +225,35 @@ class TestTypedErrorContract(unittest.TestCase):
             on_event=None))
         self.assertEqual(
             nonretryable_tool_error_code(reply), 'execution_budget_exhausted')
+
+    def test_retryable_capacity_is_not_terminal(self):
+        from lib.tools.result_envelope import (
+            nonretryable_tool_error_code, tool_result_error)
+        payload = self._spawn_error(
+            {'agents': [{'objective': 'a'}, {'objective': 'b'},
+                        {'objective': 'c'}, {'objective': 'd'},
+                        {'objective': 'e'}, {'objective': 'f'},
+                        {'objective': 'g'}, {'objective': 'h'},
+                        {'objective': 'i'}]})
+        # Over the wave cap: retryable, so it must parse but NOT be terminal.
+        parsed = tool_result_error(payload)
+        if parsed is not None and parsed.code == 'swarm_wave_capacity':
+            self.assertTrue(parsed.retryable)
+            self.assertIsNone(nonretryable_tool_error_code(payload))
+
+    def test_context_fields_stay_model_visible(self):
+        # The reason these are NOT ToolResultEnvelopeV2 wrappers: the flat
+        # shape keeps limit/requested on the model-facing payload instead of
+        # stripped into an evidence sidecar.
+        payload = self._spawn_error(
+            {'agents': [{'objective': 'a'}, {'objective': 'b'},
+                        {'objective': 'c'}, {'objective': 'd'},
+                        {'objective': 'e'}, {'objective': 'f'},
+                        {'objective': 'g'}, {'objective': 'h'},
+                        {'objective': 'i'}]})
+        if payload.get('error', {}).get('code') == 'swarm_wave_capacity':
+            self.assertIn('limit', payload)
+            self.assertIn('requested', payload)
 
 
 # ═════════════════════════════════════════════════════════
@@ -1287,8 +1310,9 @@ class TestSessionTTLLiveness(unittest.TestCase):
         sess = integ.get_active_session(self.task_id)
         if sess is not None:
             deadline = time.time() + 5.0
-            while not sess.is_terminated and time.time() < deadline:
+            while sess.has_live_driver and time.time() < deadline:
                 time.sleep(0.02)
+            self.assertFalse(sess.has_live_driver, "driver settlement must finish before testing eviction")
         with integ._sessions_lock:
             integ._session_timestamps[self.task_id] = (
                 time.time() - integ.SESSION_TTL_SECONDS - 10)

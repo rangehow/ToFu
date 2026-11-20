@@ -15,7 +15,7 @@ import {
   type DeliverableVisual, type LeadDeliverable,
 } from './model';
 import type { DeliverableOpener } from './open';
-import './lead-deliverables.css';
+import '../../styles/application/36-lead-deliverables.css';
 
 export interface DeliverableRowOptions {
   opener(): Promise<DeliverableOpener>;

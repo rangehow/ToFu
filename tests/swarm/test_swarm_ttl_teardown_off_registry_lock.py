@@ -47,12 +47,14 @@ def blocked_teardown(monkeypatch):
     release = threading.Event()
     deleted = []
 
-    def slow_delete(key):
+    def slow_delete(operation, payload):
+        assert operation == 'swarm.session.delete'
         entered.set()
         release.wait(5)
-        deleted.append(key)
+        deleted.append(payload['swarm_key'])
+        return {'deleted': True}
 
-    monkeypatch.setattr('lib.swarm.persistence.delete_session', slow_delete)
+    monkeypatch.setattr('lib.swarm.persistence._command', slow_delete)
     monkeypatch.setattr(_state.agent_inbox, 'clear', lambda *_args, **_kwargs: None)
     session = _ExpiredSession()
     with _state._sessions_lock:

@@ -14,7 +14,8 @@ from collections.abc import Mapping
 from pathlib import Path
 import time
 
-from lib.conversations.session_model import apply_session_model, session_model
+from lib.conversations.session_model import (
+    REASONING_FIELDS, apply_session_policy, session_model)
 from lib.identity import PrincipalContext
 from lib.llm.llm_errors import AbortedError, ToolAdmissionRefused
 from lib.log import get_logger
@@ -349,19 +350,19 @@ def require_isolated_worker_root(project_path, *, cancel=None, progress=None):
 
 
 # Model-view selections of the human request a Coordinator continuation resumes.
-# Never authority: the grant fixes capabilities, tools and the model.
+# Never capability authority: the grant fixes tools and permissions.
 REQUEST_SELECTION_FIELDS = ('chatMode', 'memoryEnabled', 'thinkingEnabled', 'defaultThinkingDepth')
 REQUEST_ROUTE_FIELDS = ('modelRef', 'preferredProviderId', 'routing', 'preset', 'provider_id', 'providerId')
 
 
-def request_selection(binding, assignment):
+def request_selection(binding, assignment, *, model, composer_route):
     """Selections a Coordinator continuation keeps from its accepted human request.
 
     The continuation resumes that request's conversation and model view. Admitted
     from the grant alone it ran under another route and replay policy, so every
     alternation with a human Turn rebuilt the whole history. Experiment blocks
-    are copied normalized (the grant owns ``tools``); a route naming another
-    model than the grant's is not inherited.
+    are copied normalized (the grant owns ``tools``). The current composer
+    route wins; otherwise only the exact accepted model's route is inherited.
     """
     from lib.context_experiment_flags import normalize_context_experiment_flags
     request = assignment['request']
@@ -370,8 +371,9 @@ def request_selection(binding, assignment):
     selection = {key: deepcopy(accepted[key]) for key in REQUEST_SELECTION_FIELDS if key in accepted}
     selection.update((block, value) for block, value in
                      normalize_context_experiment_flags(accepted).items() if block != 'tools')
+    if composer_route:
+        return {**selection, **composer_route}
     route = accepted.get('modelRef')
-    model = apply_session_model(binding['recipientId'], request['model'], owner=binding['owner'])
     if (route.get('model_id') if isinstance(route, dict) else accepted.get('model')) == model:
         selection.update((key, deepcopy(accepted[key])) for key in REQUEST_ROUTE_FIELDS if key in accepted)
     return selection
@@ -440,8 +442,6 @@ class TrustedDispatch:
         profile = profile_for(assignment)
         if profile['mode'] in ('project', 'coordinator'):
             config = deepcopy(assignment['request']['delegation']['policy']['config'])
-        if profile['mode'] == 'coordinator':
-            config = {**request_selection(self.binding, assignment), **config}
         config.update({KEY: deepcopy(self.binding),
             WORKSPACE_TASK_KEY: self.task_id,
             '_turnPrincipalTenantId': self.binding['tenant'] or '',
@@ -450,13 +450,16 @@ class TrustedDispatch:
             'model': assignment['request']['model'], 'executionLimits': execution_limits(assignment),
             'planMode': False, 'autopilot': False, 'activeFlow': '', 'humanGuidanceEnabled': asks_human(profile),
             'autoTranslate': False})
-        if profile['mode'] in ('project', 'coordinator'):
-            # The owner may change the session's model between accepted attempts
-            # (lib/conversations/session_model.py). The grant, tools, checkout and
-            # account are unchanged; an in-flight attempt is never rewritten.
-            # Route fields come only from request_selection, which inherits them
-            # only when they name this same effective model.
-            config['model'] = apply_session_model(recipient, config['model'], owner=owner)
+        coordinator = profile['mode'] == 'coordinator'
+        if coordinator or profile['mode'] == 'project':
+            # The next attempt uses the owned selection without rewriting the
+            # grant, checkout, account or any previously accepted attempt.
+            composer_route = apply_session_policy(recipient, config, owner=owner,
+                                                  use_composer_model=coordinator)
+            if coordinator:
+                selection = request_selection(self.binding, assignment, model=config['model'],
+                                              composer_route=composer_route)
+                config = {**selection, **config}
         if self.follows is not None:
             config[FOLLOW_UP_KEY] = deepcopy(self.follows['source'])
         if profile['mode'] != 'project':
@@ -559,10 +562,10 @@ def turn_dispatch(conversation_id, turn, accepted_config, *, user_id):
 def continue_recovered_execution(config, turn_id, attempt_id):
     """Bind or advance the association for an attempt started by recovery.
 
-    Accepted-attempt recovery can claim an attempt whose delegation committed it
-    but has not yet bound it. Under that exclusive claim this performs the same
-    idempotent bind/exact continuation from the accepted config's server-captured
-    carrier, so binding still precedes executor birth. Other configs are untouched.
+    Accepted-attempt recovery can see a Turn whose delegation committed it but
+    has not yet bound it. Perform the same idempotent bind/continuation from its
+    accepted config's server-captured carrier before dispatch. Other configs are
+    untouched.
     """
     if KEY not in config:
         return None
@@ -612,8 +615,10 @@ def _restored_identity(config, *, task=None, admission=None):
         original = assignment['request']['delegation']['policy']['config']
         # humanGuidanceEnabled is fenced exactly above: the shared policy config
         # disables it for Workers, while a Coordinator continuation may ask.
+        # Thinking is the conversation's model view (apply_session_policy), not a capability.
         for key, value in original.items():
-            if key not in ('tools', 'humanGuidanceEnabled') and config.get(key) != value:
+            if (key not in ('tools', 'humanGuidanceEnabled', *REASONING_FIELDS)
+                    and config.get(key) != value):
                 raise PermissionError('Project worker capability policy changed after admission')
         expected = (original.get('tools', {}) if profile['mode'] == 'project'
                     else {**original.get('tools', {}), 'programmaticCalling': 'off'})

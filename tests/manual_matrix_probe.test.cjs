@@ -116,3 +116,20 @@ test('rejected new-model save aborts probe and exposes Probe not started instead
   assert.equal(sandbox._stgMatrixProbe.provider.start_error, true);
   assert.equal(toasts.at(-1), 'Probe not started: model add rejected');
 });
+
+
+test('bulk and model-row Detect never promote the credential identity witness to explicit key selection', () => {
+  const {context, savedJson} = fixture();
+  // Even a staged activation is not consent to probe that disabled canonical key.
+  context.credentials[0].row.enabled = true;
+  const bulk = owner.buildManualMatrixProbeCommand(context, savedJson);
+  assert.deepEqual(bulk.credential_ids, ['z', 'a']);
+  assert.equal(bulk.only, undefined);
+  const row = owner.buildManualMatrixProbeCommand(context, savedJson, {only: {model_ids: ['renamed']}});
+  assert.deepEqual(row.only, {model_ids: ['renamed']});
+  const cell = owner.buildManualMatrixProbeCommand(context, savedJson,
+    {only: {key_idxs: [0], model_ids: ['renamed']}});
+  assert.deepEqual(cell.only, {key_idxs: [0], model_ids: ['renamed']});
+  const empty = owner.buildManualMatrixProbeCommand(context, savedJson, {only: {key_idxs: []}});
+  assert.deepEqual(empty.only.key_idxs, []);
+});

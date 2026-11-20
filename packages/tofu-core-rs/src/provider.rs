@@ -1,5 +1,6 @@
 //! Provider transport: blocking HTTP/1.1 keep-alive POST and SSE decoding of
-//! the three wire faces (Chat Completions, Anthropic Messages, Responses).
+//! the three wire faces (Chat Completions, Anthropic Messages, Responses)
+//! through the ported production stream parser (`crate::stream`).
 //!
 //! Scope: the plain-HTTP loopback provider of `benchmarks/harness_perf`
 //! (`stub_provider.py`), which answers with a `Content-Length` SSE body. TLS,
@@ -12,6 +13,7 @@ use std::time::Instant;
 
 use serde_json::Value;
 
+use crate::stream::{self, StreamOutcome};
 use crate::wire::{Protocol, SealedRequest};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -162,144 +164,53 @@ impl Connection {
     }
 }
 
-fn number(value: Option<&Value>) -> u64 {
-    value.and_then(Value::as_u64).unwrap_or(0)
-}
-
-fn str_of(value: Option<&Value>) -> &str {
-    value.and_then(Value::as_str).unwrap_or("")
-}
-
-/// Decode one complete SSE body into a completion.
+/// Decode one complete SSE body through the ported production parser
+/// (`crate::stream`); only a verified provider finish is a completion.
 pub fn decode_sse(protocol: Protocol, body: &[u8]) -> io::Result<Completion> {
-    let text = std::str::from_utf8(body)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "non-UTF-8 stream"))?;
-    let mut completion = Completion::default();
-    let mut finished = false;
-    for event in text.split("\n\n") {
-        let data: String = event
-            .lines()
-            .filter_map(|line| line.strip_prefix("data:"))
-            .map(|line| line.strip_prefix(' ').unwrap_or(line))
-            .collect::<Vec<_>>()
-            .join("\n");
-        if data.is_empty() {
-            continue;
+    let outcome = stream::parse(protocol, "", "", body)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
+    let finished = match outcome {
+        StreamOutcome::Raised(raised) => {
+            return Err(io::Error::other(format!(
+                "{}: {}",
+                raised.class, raised.message
+            )))
         }
-        if data == "[DONE]" {
-            finished = true;
-            continue;
-        }
-        let payload: Value = serde_json::from_str(&data)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        match protocol {
-            Protocol::OpenAi => {
-                if let Some(usage) = payload.get("usage").filter(|u| u.is_object()) {
-                    completion.input_tokens = number(usage.get("prompt_tokens"));
-                    completion.output_tokens = number(usage.get("completion_tokens"));
-                }
-                let Some(choice) = payload.get("choices").and_then(|c| c.get(0)) else {
-                    continue;
-                };
-                if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
-                    completion.finish_reason = reason.to_owned();
-                }
-                let delta = &choice["delta"];
-                completion.text.push_str(str_of(delta.get("content")));
-                if let Some(Value::Array(calls)) = delta.get("tool_calls") {
-                    for call in calls {
-                        let index = number(call.get("index")) as usize;
-                        while completion.tool_calls.len() <= index {
-                            completion.tool_calls.push(ToolCall {
-                                id: String::new(),
-                                name: String::new(),
-                                arguments: String::new(),
-                            });
-                        }
-                        let slot = &mut completion.tool_calls[index];
-                        if let Some(id) = call.get("id").and_then(Value::as_str) {
-                            slot.id = id.to_owned();
-                        }
-                        let function = &call["function"];
-                        slot.name.push_str(str_of(function.get("name")));
-                        slot.arguments.push_str(str_of(function.get("arguments")));
-                    }
-                }
-            }
-            Protocol::Anthropic => match str_of(payload.get("type")) {
-                "message_start" => {
-                    completion.input_tokens =
-                        number(payload["message"]["usage"].get("input_tokens"));
-                }
-                "content_block_start" => {
-                    let block = &payload["content_block"];
-                    if str_of(block.get("type")) == "tool_use" {
-                        completion.tool_calls.push(ToolCall {
-                            id: str_of(block.get("id")).to_owned(),
-                            name: str_of(block.get("name")).to_owned(),
-                            arguments: String::new(),
-                        });
-                    }
-                }
-                "content_block_delta" => {
-                    let delta = &payload["delta"];
-                    match str_of(delta.get("type")) {
-                        "text_delta" => completion.text.push_str(str_of(delta.get("text"))),
-                        "input_json_delta" => {
-                            if let Some(call) = completion.tool_calls.last_mut() {
-                                call.arguments.push_str(str_of(delta.get("partial_json")));
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                "message_delta" => {
-                    completion.finish_reason =
-                        str_of(payload["delta"].get("stop_reason")).to_owned();
-                    completion.output_tokens = number(payload["usage"].get("output_tokens"));
-                }
-                "message_stop" => finished = true,
-                _ => {}
-            },
-            Protocol::Responses => match str_of(payload.get("type")) {
-                "response.output_text.delta" => {
-                    completion.text.push_str(str_of(payload.get("delta")))
-                }
-                "response.output_item.done" => {
-                    let item = &payload["item"];
-                    if str_of(item.get("type")) == "function_call" {
-                        completion.tool_calls.push(ToolCall {
-                            id: str_of(item.get("call_id")).to_owned(),
-                            name: str_of(item.get("name")).to_owned(),
-                            arguments: str_of(item.get("arguments")).to_owned(),
-                        });
-                    }
-                }
-                "response.completed" => {
-                    let usage = &payload["response"]["usage"];
-                    completion.input_tokens = number(usage.get("input_tokens"));
-                    completion.output_tokens = number(usage.get("output_tokens"));
-                    completion.finish_reason = if completion.tool_calls.is_empty() {
-                        "stop".into()
-                    } else {
-                        "tool_calls".into()
-                    };
-                    finished = true;
-                }
-                _ => {}
-            },
-        }
-    }
-    if protocol == Protocol::OpenAi && !completion.finish_reason.is_empty() {
-        finished = true;
-    }
-    if !finished {
+        StreamOutcome::Finished(finished) => finished,
+    };
+    if finished.state != "provider_finished" {
         return Err(io::Error::new(
             io::ErrorKind::UnexpectedEof,
-            "stream ended before its terminal event",
+            format!("stream is not a verified completion ({})", finished.state),
         ));
     }
-    Ok(completion)
+    let text = |value: &Value| value.as_str().unwrap_or("").to_owned();
+    let tool_calls = finished
+        .message
+        .get("tool_calls")
+        .and_then(Value::as_array)
+        .map(|calls| {
+            calls
+                .iter()
+                .map(|call| ToolCall {
+                    id: text(&call["id"]),
+                    name: text(&call["function"]["name"]),
+                    arguments: text(&call["function"]["arguments"]),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(Completion {
+        text: finished
+            .message
+            .get("content")
+            .map(text)
+            .unwrap_or_default(),
+        tool_calls,
+        finish_reason: finished.finish_reason().to_owned(),
+        input_tokens: finished.normalized.input.max(0) as u64,
+        output_tokens: finished.normalized.output.max(0) as u64,
+    })
 }
 
 #[cfg(test)]

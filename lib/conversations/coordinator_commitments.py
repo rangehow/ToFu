@@ -74,6 +74,7 @@ def check_commitments(previous, request, *, now):
 
     ``now`` is epoch seconds (the repository/board clock).
     """
+    previous_due = {task['title']: task for task in (previous or {}).get('tasks', ()) if task.get('due')}
     previous_open = {task['title']: task for task in (previous or {}).get('tasks', ())
                      if task.get('due') and task['status'] in _OPEN}
     now_ms = int(now * 1000)
@@ -87,13 +88,16 @@ def check_commitments(previous, request, *, now):
                 raise ValueError(f'two open commitments share the title {task["title"]!r}; '
                                  'a title identifies a commitment')
             seen.add(task['title'])
-        earlier = previous_open.get(task['title'])
-        if earlier is None or earlier.get('due') != task['due']:
-            if moment <= now_ms:
-                raise ValueError(f'the due time of {task["title"]!r} must be in the future '
-                                 f'({task["due"]} already passed)')
-    for title, earlier in previous_open.items():
-        task = next((task for task in request['tasks'] if task['title'] == title), None)
+        earlier = previous_open.get(task['title']) or previous_due.get(task['title'])
+        unchanged = (earlier is not None and earlier['due'] == task['due']
+                     and (earlier['status'] in _OPEN or task['status'] not in _OPEN))
+        if not unchanged and moment <= now_ms:
+            raise ValueError(f'the due time of {task["title"]!r} must be in the future '
+                             f'({task["due"]} already passed)')
+    # Preserve the first matching row for legacy snapshots with duplicate titles.
+    by_title = {task['title']: task for task in reversed(request['tasks']) if task['title'] in previous_open}
+    for title in previous_open:
+        task = by_title.get(title)
         if task is None:
             raise ValueError(f'the open commitment {title!r} must not disappear from the board: '
                              'mark it completed when done, cancelled when dropped, or set a new due')
@@ -117,6 +121,13 @@ def merge_commitments(previous, request, receipts, *, now):
             row = {'title': task['title'], 'firstDueAt': moment, 'dueAt': moment,
                    'slips': 0, 'createdAt': now, 'state': 'open'}
         else:
+            # A status/note change elsewhere cannot retroactively move the
+            # closure time of a promise already kept, late or cancelled.
+            closed = row['state'] == 'cancelled' if task['status'] == 'cancelled' else (
+                task['status'] == 'completed' and row['state'] in {'kept', 'late'})
+            if closed and row['dueAt'] == moment and task['title'] not in old_open:
+                merged.append(row)
+                continue
             row = dict(row)
             if task['title'] in old_open and row['dueAt'] != moment:
                 row['slips'] = int(row.get('slips', 0)) + 1

@@ -146,6 +146,9 @@ class ToolContext:
     # once at assembly start and records it here; the inventory generator and
     # parity checks pass ``EVERY_CAPABILITY_AVAILABLE`` to stay host-independent.
     environment: EnvironmentSnapshot | None = None
+    # Inventory and offline schema inspection do not read optional runtime
+    # capability metadata. Actual executable catalogs always use live schemas.
+    schema_preview: bool = False
 
     # ── Mutated by the assembler between phases ──
     current_count: int = 0

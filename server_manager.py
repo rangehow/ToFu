@@ -45,6 +45,10 @@ from runtime_guards import (
 )
 from runtime_path_policy import instance_heartbeat_path, resolve_runtime_base
 from tofu_dotenv import read_dotenv_values
+from serverctl_pkg.readiness_liveness import (
+    ANSWERED, READINESS_PROBE_DEADLINE_SECONDS, READINESS_TIMEOUT_RUN, SLOW, TIMEOUT, UNANSWERED,
+    probe_outcome, readiness_verdict, timeout_run,
+)
 from serverctl_pkg.restart_budget import (
     ARTIFACT_PREPARATION_SECONDS, FRONTEND_PREFLIGHT_SECONDS, STORAGE_ENGINE_PREFLIGHT_SECONDS,
 )
@@ -59,6 +63,8 @@ DEFAULT_WEDGE_STREAK = 120.0
 DEFAULT_MAX_FAILURES = 5
 DEFAULT_FAILURE_WINDOW = 120.0
 DEFAULT_FAILURE_HISTORY_KEEP = 50
+# Every readiness probe's outcome and latency (readiness liveness contract).
+READINESS_PROBE_LOG = 'readiness-probes.jsonl'
 DEFAULT_SIDECAR_LEASE_RELEASE_WAIT = 10.0
 DEFAULT_ORPHAN_SIDECAR_REAP_WAIT = 15.0
 DEFAULT_STORAGE_LEASE_POLL_INTERVAL = 0.1
@@ -985,7 +991,7 @@ def probe_application_readiness(
     expected_pid: int | None,
     *,
     preferred_scheme: str = '',
-    timeout: float = 2.0,
+    timeout: float = READINESS_PROBE_DEADLINE_SECONDS,
 ) -> dict[str, Any]:
     """Verify loopback worker identity and its dependency readiness.
 
@@ -993,7 +999,16 @@ def probe_application_readiness(
     not be used as traffic readiness; callers require both ``liveness`` and
     ``ready``. Current workers return their PID from ``/api/ready``, allowing
     one normal probe. Older workers fall back to the two-endpoint contract.
+
+    ``timeout`` bounds the whole probe (the readiness liveness contract's
+    per-probe deadline). ``outcome`` says whether anything answered
+    (``serverctl_pkg.readiness_liveness``) and ``latencySeconds`` how long
+    the probe took: to the deciding answer, or to the deadline. A deadline
+    expiry stops the probe: a server that accepted the request but did not
+    answer it cannot answer another endpoint or scheme sooner.
     """
+    started = time.monotonic()
+    deadline_at = started + timeout
     result: dict[str, Any] = {
         'health': False,
         'liveness': False,
@@ -1007,22 +1022,38 @@ def probe_application_readiness(
         'readinessError': '',
         'readinessState': None,
         'storageState': None,
+        'outcome': UNANSWERED,
+        'latencySeconds': 0.0,
+        'deadlineSeconds': timeout,
     }
+
+    def settled(outcome: str) -> dict[str, Any]:
+        result['outcome'] = outcome
+        result['latencySeconds'] = round(time.monotonic() - started, 3)
+        return result
+
+    def read(url: str, context: ssl.SSLContext | None) -> tuple[int, dict[str, Any]]:
+        remaining = deadline_at - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f'readiness probe deadline of {timeout:g} s expired')
+        return _read_probe_json(url, timeout=remaining, context=context)
+
     checked_port = _valid_server_port(port)
     if checked_port is None:
         result['livenessError'] = f'invalid application port: {port!r}'
         result['error'] = result['livenessError']
-        return result
+        return settled(UNANSWERED)
     if not isinstance(expected_pid, int):
         result['livenessError'] = 'locked worker PID is unavailable'
         result['error'] = result['livenessError']
-        return result
+        return settled(UNANSWERED)
 
     schemes = ([preferred_scheme]
                if preferred_scheme in ('http', 'https') else [])
     schemes.extend(
         scheme for scheme in ('http', 'https') if scheme not in schemes)
     last_error = ''
+    outcome = UNANSWERED
     for scheme in schemes:
         context = ssl._create_unverified_context() if scheme == 'https' else None
         base_url = f'{scheme}://127.0.0.1:{checked_port}'
@@ -1030,12 +1061,20 @@ def probe_application_readiness(
         ready_payload = None
         ready_error = ''
         try:
-            ready_status, ready_payload = _read_probe_json(
-                base_url + '/api/ready', timeout=timeout, context=context)
+            ready_status, ready_payload = read(base_url + '/api/ready', context)
         except (OSError, ValueError, urllib.error.URLError,
                 json.JSONDecodeError) as exc:
             ready_error = f'{scheme} readiness probe failed: {exc}'
+            if probe_outcome(exc) == TIMEOUT:
+                last_error = (f'{scheme} readiness probe gave no answer within '
+                              f'{timeout:g} s')
+                outcome = TIMEOUT
+                break
+            if isinstance(exc, ValueError):
+                outcome = ANSWERED
 
+        if ready_payload is not None:
+            outcome = ANSWERED
         if ready_payload is not None and ready_payload.get('pid') is not None:
             payload_pid = ready_payload.get('pid')
             if payload_pid != expected_pid:
@@ -1052,23 +1091,31 @@ def probe_application_readiness(
                 'pidMatches': True,
                 'livenessError': '',
             })
-            return _settle_readiness_probe(
+            _settle_readiness_probe(
                 result,
                 scheme=scheme,
                 port=checked_port,
                 status=int(ready_status),
                 payload=ready_payload,
             )
+            return settled(ANSWERED)
 
         # Compatibility path for a worker generation whose readiness payload
         # predates the PID field, or when readiness transport itself failed.
         try:
-            health_status, health_payload = _read_probe_json(
-                base_url + '/api/health', timeout=timeout, context=context)
+            health_status, health_payload = read(base_url + '/api/health', context)
         except (OSError, ValueError, urllib.error.URLError,
                 json.JSONDecodeError) as exc:
             last_error = f'{scheme} identity liveness probe failed: {exc}'
+            if probe_outcome(exc) == TIMEOUT:
+                last_error = (f'{scheme} identity liveness probe gave no answer '
+                              f'within {timeout:g} s')
+                outcome = TIMEOUT
+                break
+            if isinstance(exc, ValueError):
+                outcome = ANSWERED
             continue
+        outcome = ANSWERED
 
         payload_pid = health_payload.get('pid')
         pid_matches = payload_pid == expected_pid
@@ -1099,18 +1146,19 @@ def probe_application_readiness(
         if ready_payload is None:
             detail = ready_error or f'{scheme} readiness probe failed'
             result.update(readinessError=detail, error=detail)
-            return result
-        return _settle_readiness_probe(
+            return settled(ANSWERED)
+        _settle_readiness_probe(
             result,
             scheme=scheme,
             port=checked_port,
             status=int(ready_status),
             payload=ready_payload,
         )
+        return settled(ANSWERED)
 
     result['livenessError'] = last_error or 'identity liveness probe failed'
     result['error'] = result['livenessError']
-    return result
+    return settled(outcome)
 
 
 def _explicit_server_port(args: list[str]) -> int | None:
@@ -1445,6 +1493,13 @@ class LifecycleManager:
         from serverctl_pkg.execution_service import ExecutionService
         self._execution = ExecutionService(self.project, self.python)
         self._last_log_maintenance_at = 0.0
+        self._readiness_log_day = ''
+        self._readiness_log_error = ''
+        self._readiness_log_lock = threading.Lock()
+        # Advanced by every lifecycle operation (start, stop, restart, spawn,
+        # terminate). A readiness probe runs outside the lifecycle lock and
+        # applies its verdict only if no operation intervened.
+        self._lifecycle_epoch = 0
         self._last_monitor_error = ''
         self._trace_requested_at: float | None = None
         self._monitor_error_count = 0
@@ -1938,7 +1993,8 @@ class LifecycleManager:
             'worker controlled exit recorded pid=%s reason=%s recovery=%s',
             pid, reason, recovery_source or 'none')
         self._log_worker_exit(retired_worker, process_exit, logging.INFO)
-        self._save()
+        # The worker already exited; a full volume must not abort what follows.
+        self._save_failure_record('planned exit')
         self._reap_retired_worker(retired_worker)
         return True
 
@@ -2665,26 +2721,112 @@ class LifecycleManager:
         actual = proc_start_ticks(pid)
         return expected is None or actual is None or expected == actual
 
-    def _http_probe(
-        self, expected_pid: int, timeout: float = 2.0,
-    ) -> dict[str, Any]:
+    def _http_probe(self, expected_pid: int) -> dict[str, Any]:
+        """One readiness probe of the worker; network only, never under the lifecycle lock."""
         mode = ''
         try:
             mode = (self.data_dir / '.last_serve_mode').read_text().strip()
         except OSError:
             pass
         preferred_scheme = 'https' if mode == 'https' else 'http'
-        return probe_application_readiness(
+        probe = probe_application_readiness(
             self.port,
             expected_pid,
             preferred_scheme=preferred_scheme,
-            timeout=timeout,
         )
+        return probe
 
-    def _http_healthy(self, expected_pid: int, timeout: float = 2.0) -> bool:
-        """Compatibility predicate for the complete readiness contract."""
-        probe = self._http_probe(expected_pid, timeout=timeout)
-        return bool(probe.get('liveness') and probe.get('ready'))
+    def _account_readiness_probe(
+        self, pid: int, probe: dict[str, Any], *, source: str,
+    ) -> dict[str, Any]:
+        """Record one probe and apply the readiness liveness contract to it.
+
+        Called under the lifecycle lock; it does no I/O. The returned
+        ``readinessProbe`` record carries the probe's outcome and latency;
+        the caller appends it to ``logs/readiness-probes.jsonl`` after
+        releasing the lock. The monitor's probes (``source='monitor'``) also
+        persist it in the state file and carry the timeout run; a status
+        snapshot (``source='status'``) is judged against that run but never
+        changes it. A run belongs to one worker PID. A deadline expiry
+        shorter than the contract's run is ``slow``: the caller keeps its
+        standing verdict. The run's last expiry makes the probe unanswered
+        (identity liveness fails).
+        """
+        outcome = str(probe.get('outcome') or UNANSWERED)
+        previous = self._state.get('readinessProbe') or {}
+        previous_run = (int(previous.get('consecutiveTimeouts') or 0)
+                        if previous.get('pid') == pid else 0)
+        run = timeout_run(previous_run, outcome)
+        verdict = readiness_verdict(outcome, run)
+        record = {
+            'at': round(_now(), 3),
+            'pid': pid,
+            'outcome': outcome,
+            'latencySeconds': probe.get('latencySeconds'),
+            'deadlineSeconds': probe.get('deadlineSeconds'),
+            'consecutiveTimeouts': run,
+            'verdict': verdict,
+            'ready': bool(probe.get('liveness') and probe.get('ready')),
+            'source': source,
+        }
+        if source == 'monitor':
+            self._state['readinessProbe'] = record
+        probe = {**probe, 'readinessProbe': record}
+        if verdict == SLOW:
+            return {**probe, 'slow': True}
+        if outcome == TIMEOUT:
+            error = (
+                f'readiness probe unanswered: {run} consecutive probes gave no '
+                f'answer within {READINESS_PROBE_DEADLINE_SECONDS:g} s')
+            if run == READINESS_TIMEOUT_RUN and source == 'monitor':
+                logger.error('worker pid=%s gave no readiness answer: %s', pid, error)
+            return {**probe, 'livenessError': error, 'error': error}
+        return probe
+
+    def _stale_readiness_probe(self, pid: int, probe: dict[str, Any], source: str) -> dict[str, Any]:
+        """The record of a probe whose worker or lifecycle changed while it ran; it judges nothing."""
+        return {
+            'at': round(_now(), 3), 'pid': pid,
+            'outcome': str(probe.get('outcome') or UNANSWERED),
+            'latencySeconds': probe.get('latencySeconds'),
+            'deadlineSeconds': probe.get('deadlineSeconds'),
+            'verdict': 'stale', 'source': source,
+        }
+
+    def _append_readiness_probe_log(self, record: dict[str, Any] | None) -> None:
+        """One JSON line per probe; the current and the previous local day are kept.
+
+        Written outside the lifecycle lock; its own lock orders concurrent
+        monitor and status writers.
+        """
+        if not record:
+            return
+        path = self.logs_dir / READINESS_PROBE_LOG
+        day = time.strftime('%Y-%m-%d', time.localtime(record['at']))
+        with self._readiness_log_lock:
+            self._write_readiness_probe_line(path, day, record)
+
+    def _write_readiness_probe_line(self, path: Path, day: str, record: dict[str, Any]) -> None:
+        try:
+            if self._readiness_log_day != day:
+                try:
+                    written = time.strftime(
+                        '%Y-%m-%d', time.localtime(path.stat().st_mtime))
+                except FileNotFoundError:
+                    written = day
+                if written != day:
+                    os.replace(path, path.with_name(path.name + '.1'))
+                self._readiness_log_day = day
+            descriptor = os.open(
+                path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            with os.fdopen(descriptor, 'a', encoding='utf-8') as stream:
+                stream.write(json.dumps(record, sort_keys=True) + '\n')
+            self._readiness_log_error = ''
+        except OSError as exc:
+            signature = f'{type(exc).__name__}: {exc}'
+            if signature != self._readiness_log_error:
+                self._readiness_log_error = signature
+                logger.warning('readiness probe log write failed: %s', signature)
 
     def _server_env(self) -> dict[str, str]:
         return dict(self._state.get('serverEnv') or {})
@@ -2834,164 +2976,206 @@ class LifecycleManager:
         }
 
     def status(self, *, probe_health: bool = False) -> dict[str, Any]:
+        """The manager's snapshot; ``probe_health`` adds a live readiness probe taken outside the lock.
+
+        The probe applies only if no lifecycle operation ran while it waited
+        and the same worker still holds the instance lock; otherwise the
+        snapshot is re-read and reports no live probe (``ready`` None).
+        """
         with self._lock:
             low = self._lock_status()
             conflict, foreign = self._port_conflict(low)
-            worker = dict(self._state.get('worker') or {})
-            recent_failure_count = len(self._recent_failure_times())
-            observed = self._state.get('observed') or 'stopped'
-            desired = self._state.get('desired')
-            launcher_alive = self._launcher_is_alive()
-            storage_lease: dict[str, Any] = {}
-            if (desired == 'running' and not low.get('running')
-                    and not launcher_alive):
-                candidate = self._active_storage_lease()
-                if self._storage_lease_blocks_worker(candidate):
-                    storage_lease = candidate
-            identity_error = self._identity_error(low) if low.get('running') else None
-            foreign_owner = (
-                self._foreign_owner(low)
-                if desired == 'running' and not low.get('running')
-                and not launcher_alive else '')
-            if conflict or identity_error or foreign_owner:
-                observed = 'conflict'
-            elif low.get('running'):
-                if self._state.get('desired') == 'stopped':
-                    observed = 'stopping'
-                else:
-                    observed = 'running' if port_accepts(self.port) else 'starting'
-            elif desired == 'stopped':
-                observed = 'stopped'
-            elif launcher_alive:
-                observed = ('starting' if self._worker_within_boot_grace()
-                            else 'degraded')
-            elif storage_lease:
-                observed = (
-                    'maintenance'
-                    if storage_lease.get('kind') == 'offline_maintenance'
-                    else 'conflict')
-            elif recent_failure_count >= self.max_failures:
-                # Match the latch predicate in _record_failure exactly: only
-                # the windowed count latches recovery. A stale
-                # consecutiveFailures (failures spread beyond the window, where
-                # recovery keeps retrying) must not be reported as crashloop;
-                # a genuine latch is preserved because it set observed above
-                # and no earlier branch fires.
-                observed = 'crashloop'
-            probe: dict[str, Any] = {}
-            liveness = None
-            ready = None
-            if probe_health and low.get('running') and not conflict:
-                probe = self._http_probe(int(low['pid']))
+            if not (probe_health and low.get('running') and not conflict):
+                return self._status_snapshot(low, conflict, foreign, None)
+            epoch = self._lifecycle_epoch
+        pid = int(low['pid'])
+        raw = self._http_probe(pid)
+        with self._lock:
+            if epoch != self._lifecycle_epoch:
+                current = self._lock_status()
+                same = (current.get('running') and current.get('pid') == pid
+                        and current.get('processStartTime') == low.get('processStartTime'))
+                low = current
+                conflict, foreign = self._port_conflict(low)
+                if not same or conflict:
+                    snapshot = self._status_snapshot(low, conflict, foreign, None)
+                    record = self._stale_readiness_probe(pid, raw, 'status')
+                    raw = None
+            if raw is not None:
+                probed = self._account_readiness_probe(pid, raw, source='status')
+                record = probed.get('readinessProbe')
+                snapshot = self._status_snapshot(low, conflict, foreign, probed)
+        self._append_readiness_probe_log(record)
+        return snapshot
+
+    def _status_snapshot(self, low: dict[str, Any], conflict: bool, foreign: list[int],
+                         probed: dict[str, Any] | None) -> dict[str, Any]:
+        """Build the status snapshot under the lifecycle lock; ``probed`` is an accounted probe or None."""
+        worker = dict(self._state.get('worker') or {})
+        recent_failure_count = len(self._recent_failure_times())
+        observed = self._state.get('observed') or 'stopped'
+        desired = self._state.get('desired')
+        launcher_alive = self._launcher_is_alive()
+        storage_lease: dict[str, Any] = {}
+        if (desired == 'running' and not low.get('running')
+                and not launcher_alive):
+            candidate = self._active_storage_lease()
+            if self._storage_lease_blocks_worker(candidate):
+                storage_lease = candidate
+        identity_error = self._identity_error(low) if low.get('running') else None
+        foreign_owner = (
+            self._foreign_owner(low)
+            if desired == 'running' and not low.get('running')
+            and not launcher_alive else '')
+        if conflict or identity_error or foreign_owner:
+            observed = 'conflict'
+        elif low.get('running'):
+            if self._state.get('desired') == 'stopped':
+                observed = 'stopping'
+            else:
+                observed = 'running' if port_accepts(self.port) else 'starting'
+        elif desired == 'stopped':
+            observed = 'stopped'
+        elif launcher_alive:
+            observed = ('starting' if self._worker_within_boot_grace()
+                        else 'degraded')
+        elif storage_lease:
+            observed = (
+                'maintenance'
+                if storage_lease.get('kind') == 'offline_maintenance'
+                else 'conflict')
+        elif recent_failure_count >= self.max_failures:
+            # Match the latch predicate in _record_failure exactly: only
+            # the windowed count latches recovery. A stale
+            # consecutiveFailures (failures spread beyond the window, where
+            # recovery keeps retrying) must not be reported as crashloop;
+            # a genuine latch is preserved because it set observed above
+            # and no earlier branch fires.
+            observed = 'crashloop'
+        probe: dict[str, Any] = {}
+        liveness = None
+        ready = None
+        if probed is not None:
+            probe = probed
+            if probe.get('slow'):
+                # Slow is not down: report the manager's standing verdict.
+                liveness = True
+                ready = self._state.get('observed') == 'running'
+                probe = {**probe, 'liveness': True, 'ready': ready,
+                         'livenessError': '', 'readinessError': (
+                             '' if ready else str(self._state.get('lastError') or ''))}
+            else:
                 liveness = probe.get('liveness') is True
                 ready = probe.get('ready') is True
-                if liveness and ready and observed == 'starting':
-                    # A verified ready worker resolves an inconclusive bare
-                    # TCP connect without overriding stopping or conflicts.
-                    observed = 'running'
-                if not (liveness and ready) and observed == 'running':
-                    observed = 'degraded'
-            last_error = foreign_owner or self._state.get('lastError') or ''
-            if liveness is True and ready is True:
-                # The returned snapshot should never contradict its own live
-                # probe while the background reconcile is between ticks.
-                last_error = ''
-            elif probe:
-                last_error = str(
-                    probe.get('readinessError') if liveness
-                    else probe.get('livenessError') or last_error)
-                verdict = self._native_storage_verdict() if liveness else ''
-                if verdict:
-                    last_error = f'{last_error}; {verdict}'
-            execution_record = self._execution.record()
-            execution_error = (self._execution.readiness_error(
-                execution_record, self._state.get('executionRecovery') or {})
-                if desired == 'running' else '')
-            if execution_error:
-                ready = False
-                last_error = execution_error
-                if observed not in {'conflict', 'stopping', 'crashloop'}:
-                    observed = 'degraded'
-            worker_resource_budget = worker_resource_budget_snapshot(
-                low.get('pid'))
-            return {
-                **low,
-                'desired': self._state.get('desired'),
-                'observed': observed,
-                'port': self.port,
-                # ``health`` is retained for older CLI consumers and means
-                # identity liveness, exactly as it did before readiness became
-                # an explicit second probe.
-                'health': liveness,
-                'liveness': liveness,
-                'ready': ready,
-                'probeScheme': probe.get('scheme'),
-                'livenessError': probe.get('livenessError') or '',
-                'readinessError': execution_error or probe.get('readinessError') or '',
-                'readinessState': probe.get('readinessState'),
-                'storageState': probe.get('storageState'),
-                'storageLease': storage_lease or None,
-                'nativeStorageService': {
-                    key: value for key, value in self._native_storage.record().items()
-                    if key in {'state', 'pid', 'nativePid', 'serviceId', 'error'}
-                } or None,
-                'executionService': {
-                    key: value for key, value in execution_record.items()
-                    if key in {'state', 'pid', 'serviceId', 'error'}
-                } or None,
-                'owner': 'tofu-manager',
-                'managerPid': os.getpid(),
-                'resourceBudgetPolicyVersion': RESOURCE_BUDGET_POLICY_VERSION,
-                'workerResourceBudget': worker_resource_budget or None,
-                'worker': worker,
-                'restartCount': int(self._state.get('restartCount') or 0),
-                'workerFailureCount': int(
-                    self._state.get('workerFailureCount') or 0),
-                'plannedExitCount': int(
-                    self._state.get('plannedExitCount') or 0),
-                'exitAccountingSince': float(
-                    self._state.get('exitAccountingSince') or 0),
-                'lastWorkerExitAt': float(
-                    self._state.get('lastWorkerExitAt') or 0),
-                'lastWorkerExitKind': (
-                    self._state.get('lastWorkerExitKind') or ''),
-                'lastWorkerExitReason': (
-                    self._state.get('lastWorkerExitReason') or ''),
-                'consecutiveFailures': int(self._state.get('consecutiveFailures') or 0),
-                'recentFailureCount': recent_failure_count,
-                'failureWindowSeconds': self.failure_window,
-                'maxFailures': self.max_failures,
-                'lastFailureAt': float(self._state.get('lastFailureAt') or 0),
-                'lastFailureReason': self._state.get('lastFailureReason') or '',
-                'lastExitCause': self._state.get('lastExitCause') or '',
-                'lastWorkerProcessExit': dict(
-                    self._state.get('lastWorkerProcessExit') or {}),
-                'lastCgroupOomDelta': int(
-                    self._state.get('lastCgroupOomDelta') or 0),
-                'cgroupOomKillCount': self._state.get(
-                    'lastCgroupOomKillCount'),
-                'workerBytecodeCache': dict(
-                    self._state.get('workerBytecodeCache') or {}),
-                'workerRuntime': dict(
-                    self._state.get('workerRuntime') or {}),
-                'runtimeSuspect': dict(
-                    self._state.get('runtimeSuspect') or {}),
-                'lastRecoveredAt': float(self._state.get('lastRecoveredAt') or 0),
-                'lastRecoverySeconds': self._state.get('lastRecoverySeconds'),
-                'nextRetryAt': float(self._state.get('nextRetryAt') or 0),
-                'lastRestart': dict(self._state.get('lastRestart') or {}),
-                'storageRetention': dict(self._state.get('storageRetention') or {}),
-                'lastError': last_error,
-                'environmentQuarantine': dict(
-                    self._state.get('environmentQuarantine') or {}),
-                'launchSource': self._state.get('launchSource') or '',
-                'serverArgs': list(self._state.get('serverArgs') or []),
-                'serverEnv': dict(self._state.get('serverEnv') or {}),
-                'foreignListenerPids': foreign,
-                'workerLog': str(self.worker_log),
-                'managerLog': str(self.logs_dir / 'server-manager.log'),
-                'stateFile': str(self.state_path),
-            }
+            if liveness and ready and observed == 'starting':
+                # A verified ready worker resolves an inconclusive bare
+                # TCP connect without overriding stopping or conflicts.
+                observed = 'running'
+            if not (liveness and ready) and observed == 'running':
+                observed = 'degraded'
+        last_error = foreign_owner or self._state.get('lastError') or ''
+        if liveness is True and ready is True:
+            # The returned snapshot should never contradict its own live
+            # probe while the background reconcile is between ticks.
+            last_error = ''
+        elif probe:
+            last_error = str(
+                probe.get('readinessError') if liveness
+                else probe.get('livenessError') or last_error)
+            verdict = self._native_storage_verdict() if liveness else ''
+            if verdict:
+                last_error = f'{last_error}; {verdict}'
+        execution_record = self._execution.record()
+        execution_error = (self._execution.readiness_error(
+            execution_record, self._state.get('executionRecovery') or {})
+            if desired == 'running' else '')
+        if execution_error:
+            ready = False
+            last_error = execution_error
+            if observed not in {'conflict', 'stopping', 'crashloop'}:
+                observed = 'degraded'
+        worker_resource_budget = worker_resource_budget_snapshot(
+            low.get('pid'))
+        return {
+            **low,
+            'desired': self._state.get('desired'),
+            'observed': observed,
+            'port': self.port,
+            # ``health`` is retained for older CLI consumers and means
+            # identity liveness, exactly as it did before readiness became
+            # an explicit second probe.
+            'health': liveness,
+            'liveness': liveness,
+            'ready': ready,
+            'probeScheme': probe.get('scheme'),
+            'livenessError': probe.get('livenessError') or '',
+            'readinessError': execution_error or probe.get('readinessError') or '',
+            'readinessState': probe.get('readinessState'),
+            'storageState': probe.get('storageState'),
+            'readinessProbe': (probe.get('readinessProbe')
+                               or dict(self._state.get('readinessProbe') or {}) or None),
+            'storageLease': storage_lease or None,
+            'nativeStorageService': {
+                key: value for key, value in self._native_storage.record().items()
+                if key in {'state', 'pid', 'nativePid', 'serviceId', 'error'}
+            } or None,
+            'executionService': {
+                key: value for key, value in execution_record.items()
+                if key in {'state', 'pid', 'serviceId', 'error'}
+            } or None,
+            'owner': 'tofu-manager',
+            'managerPid': os.getpid(),
+            'resourceBudgetPolicyVersion': RESOURCE_BUDGET_POLICY_VERSION,
+            'workerResourceBudget': worker_resource_budget or None,
+            'worker': worker,
+            'restartCount': int(self._state.get('restartCount') or 0),
+            'workerFailureCount': int(
+                self._state.get('workerFailureCount') or 0),
+            'plannedExitCount': int(
+                self._state.get('plannedExitCount') or 0),
+            'exitAccountingSince': float(
+                self._state.get('exitAccountingSince') or 0),
+            'lastWorkerExitAt': float(
+                self._state.get('lastWorkerExitAt') or 0),
+            'lastWorkerExitKind': (
+                self._state.get('lastWorkerExitKind') or ''),
+            'lastWorkerExitReason': (
+                self._state.get('lastWorkerExitReason') or ''),
+            'consecutiveFailures': int(self._state.get('consecutiveFailures') or 0),
+            'recentFailureCount': recent_failure_count,
+            'failureWindowSeconds': self.failure_window,
+            'maxFailures': self.max_failures,
+            'lastFailureAt': float(self._state.get('lastFailureAt') or 0),
+            'lastFailureReason': self._state.get('lastFailureReason') or '',
+            'lastExitCause': self._state.get('lastExitCause') or '',
+            'lastWorkerProcessExit': dict(
+                self._state.get('lastWorkerProcessExit') or {}),
+            'lastCgroupOomDelta': int(
+                self._state.get('lastCgroupOomDelta') or 0),
+            'cgroupOomKillCount': self._state.get(
+                'lastCgroupOomKillCount'),
+            'workerBytecodeCache': dict(
+                self._state.get('workerBytecodeCache') or {}),
+            'workerRuntime': dict(
+                self._state.get('workerRuntime') or {}),
+            'runtimeSuspect': dict(
+                self._state.get('runtimeSuspect') or {}),
+            'lastRecoveredAt': float(self._state.get('lastRecoveredAt') or 0),
+            'lastRecoverySeconds': self._state.get('lastRecoverySeconds'),
+            'nextRetryAt': float(self._state.get('nextRetryAt') or 0),
+            'lastRestart': dict(self._state.get('lastRestart') or {}),
+            'storageRetention': dict(self._state.get('storageRetention') or {}),
+            'lastError': last_error,
+            'environmentQuarantine': dict(
+                self._state.get('environmentQuarantine') or {}),
+            'launchSource': self._state.get('launchSource') or '',
+            'serverArgs': list(self._state.get('serverArgs') or []),
+            'serverEnv': dict(self._state.get('serverEnv') or {}),
+            'foreignListenerPids': foreign,
+            'workerLog': str(self.worker_log),
+            'managerLog': str(self.logs_dir / 'server-manager.log'),
+            'stateFile': str(self.state_path),
+        }
 
     def _validated_server_environment(
         self,
@@ -3251,6 +3435,7 @@ class LifecycleManager:
                prepared_execution_plan: dict | None = None,
                reset_failed_storage: bool = False,
                prepare_engine: bool = False) -> dict[str, Any]:
+        self._lifecycle_epoch += 1
         # Only an explicit start prepares the storage engine (deploy a certified
         # one, keep or refuse). Crash, planned and lease recovery never build,
         # download or swap it: the new host's admission keeps or refuses.
@@ -3467,6 +3652,7 @@ class LifecycleManager:
               _prepared_storage_plan: dict | None = None,
               _prepared_execution_plan: dict | None = None) -> dict[str, Any]:
         with self._lock:
+            self._lifecycle_epoch += 1
             if server_args is not None and not isinstance(server_args, list):
                 return {'ok': False, 'message': 'serverArgs must be a JSON array'}
             if server_env is not None and not isinstance(server_env, dict):
@@ -3587,6 +3773,7 @@ class LifecycleManager:
                 + WORKER_TERMINATE_TIMEOUT_MARGIN)
 
     def _terminate(self, status: dict[str, Any], *, timeout: float | None = None) -> tuple[bool, bool, str]:
+        self._lifecycle_epoch += 1
         if timeout is None:
             timeout = self._terminate_timeout_seconds()
         pid = status.get('pid')
@@ -3663,6 +3850,7 @@ class LifecycleManager:
 
     def stop(self, *, source: str = 'cli', keep_desired_running: bool = False) -> dict[str, Any]:
         with self._lock:
+            self._lifecycle_epoch += 1
             status = self._lock_status()
             foreign_owner = (
                 '' if status.get('running') else self._foreign_owner(status))
@@ -3723,7 +3911,8 @@ class LifecycleManager:
             else:
                 self._state['pendingWorkerExitIntent'] = {}
                 self._set_observed('conflict', message)
-            self._save()
+            # After the signal: the outcome stands even when the volume refuses it.
+            self._save_failure_record('stop outcome')
             return {
                 'ok': ok,
                 'wasRunning': was_running,
@@ -3756,6 +3945,7 @@ class LifecycleManager:
         # Every refusal is decided here, before stop; once the old worker is
         # gone the manager drives the replacement to a serving worker.
         with self._lock:
+            self._lifecycle_epoch += 1
             self._state['lastRestart'] = {
                 'source': source, 'outcome': 'started', 'startedAt': _now(),
                 'requestedAt': float(requested_at or _now()), 'uncleanCloses': []}
@@ -3940,6 +4130,45 @@ class LifecycleManager:
         return f' totalSinceRequest={time.time() - requested_at:.1f}s'
 
     def reconcile(self) -> None:
+        """One monitor tick; the worker's readiness probe runs outside the lifecycle lock.
+
+        A live worker's probe waits up to the readiness liveness contract's
+        deadline. Holding the lock through it would block ``status``,
+        ``start``, ``stop`` and ``restart`` for that long, so the tick
+        decides under the lock, releases it to probe, and re-takes it to
+        apply the verdict only if the probe ticket is still current: no
+        lifecycle operation ran meanwhile, the desired state is still
+        running, and the same worker (PID and start time) holds the instance
+        lock. Otherwise the result is logged as ``stale`` and judges nothing;
+        the next tick probes again.
+        """
+        ticket = self._reconcile_until_probe()
+        if ticket is None:
+            return
+        probe = self._http_probe(ticket['pid'])
+        with self._lock:
+            if self._probe_ticket_current(ticket):
+                probe = self._account_readiness_probe(ticket['pid'], probe, source='monitor')
+                record = probe.get('readinessProbe')
+                self._apply_worker_probe(ticket['status'], ticket['executionReady'], probe)
+            else:
+                record = self._stale_readiness_probe(ticket['pid'], probe, 'monitor')
+                logger.info('readiness probe of worker pid=%s discarded: the lifecycle changed '
+                            'while it ran', ticket['pid'])
+        self._append_readiness_probe_log(record)
+
+    def _probe_ticket_current(self, ticket: dict[str, Any]) -> bool:
+        """Whether a probe taken outside the lock still describes the managed worker."""
+        if (self._lifecycle_epoch != ticket['epoch']
+                or self._state.get('desired') != 'running'):
+            return False
+        live = self._lock_status()
+        return bool(live.get('running')
+                    and live.get('pid') == ticket['pid']
+                    and live.get('processStartTime') == ticket['processStartTime'])
+
+    def _reconcile_until_probe(self) -> dict[str, Any] | None:
+        """The locked part of a tick; a live worker's probe ticket, else None (the tick is done)."""
         with self._lock:
             self._maintain_process_logs()
             reap_children_of_previous_image()
@@ -4012,111 +4241,10 @@ class LifecycleManager:
                     return
                 self._remember_worker(status)
                 execution_ready = self._recover_execution_service()
-                probe = self._http_probe(int(status['pid']))
-                if probe.get('liveness') and probe.get('ready'):
-                    unready_since = float(self._state.get('unreadySince') or 0)
-                    if unready_since:
-                        self._state['unreadySince'] = 0.0
-                        logger.info(
-                            'worker pid=%s is ready again after %.0fs unready',
-                            status.get('pid'), max(0.0, _now() - unready_since))
-                    if not execution_ready:
-                        self._save()
-                        return
-                    recovered_from = float(self._state.get('activeFailureAt') or 0)
-                    now = _now()
-                    if recovered_from:
-                        elapsed = max(0.0, now - recovered_from)
-                        self._state['lastRecoveredAt'] = now
-                        self._state['lastRecoverySeconds'] = round(elapsed, 3)
-                        self._state['activeFailureAt'] = 0.0
-                        logger.info(
-                            'worker recovered pid=%s in %.3fs after failure',
-                            status.get('pid'), elapsed)
-                    if not self._state.get('workerReadyLoggedAt'):
-                        self._state['workerReadyLoggedAt'] = now
-                        spawned_at = float(
-                            (self._state.get('worker') or {}).get('spawnedAt')
-                            or 0)
-                        boot_elapsed = (
-                            max(0.0, now - spawned_at) if spawned_at else None)
-                        logger.info(
-                            'worker ready pid=%s source=%s%s%s',
-                            status.get('pid'),
-                            self._state.get('launchSource') or 'unknown',
-                            (f' bootTime={boot_elapsed:.1f}s'
-                             if boot_elapsed is not None else ''),
-                            self._trace_total_suffix())
-                        requested_at = getattr(self, '_trace_requested_at', None)
-                        self._record_lead_audit('restart_outcome', {
-                            'outcome': 'ready', 'pid': status.get('pid'),
-                            'source': self._state.get('launchSource') or 'unknown',
-                            'bootSeconds': (round(boot_elapsed, 1)
-                                            if boot_elapsed is not None else None),
-                            'secondsSinceRequest': (round(time.time() - requested_at, 1)
-                                                    if requested_at else None)})
-                        self._settle_runtime_suspect()
-                        self._request_pending_runtime_build()
-                        self._remember_known_good()
-                    self._state['failureHistory'] = self._recent_failure_times(now)
-                    oom_count = cgroup_oom_kill_count()
-                    if oom_count is not None:
-                        self._state['lastCgroupOomKillCount'] = oom_count
-                    self._state['consecutiveFailures'] = 0
-                    self._state['nextRetryAt'] = 0.0
-                    self._state['wedgeSince'] = 0.0
-                    self._state['lastError'] = ''
-                    self._set_observed('running')
-                    self._save()
-                    self._request_bytecode_sweep()
-                    return
-                if probe.get('liveness'):
-                    # Dependency readiness is not process liveness. Keep the
-                    # worker available to finish startup/recovery and never
-                    # feed a Sidecar outage into the wedge-restart policy.
-                    self._state['wedgeSince'] = 0.0
-                    if self._recover_generation_that_never_served(status.get('pid')):
-                        return
-                    self._note_unready_worker(
-                        status.get('pid'),
-                        str(probe.get('readinessError')
-                            or 'application readiness probe failed'))
-                    self._save()
-                    return
-                age = self._heartbeat_stale_age(int(status['pid']))
-                if age is None:
-                    self._set_observed(
-                        'degraded',
-                        str(probe.get('livenessError')
-                            or 'identity liveness failed')
-                        + '; heartbeat not stale',
-                    )
-                    self._save()
-                    return
-                first = float(self._state.get('wedgeSince') or 0)
-                if not first:
-                    self._state['wedgeSince'] = _now()
-                    self._set_observed('degraded',
-                                       f'possible wedge; heartbeat stale {age:.0f}s')
-                    self._save()
-                    return
-                if _now() - first < DEFAULT_WEDGE_STREAK:
-                    self._save()
-                    return
-                # A stale loop cannot prove its threads or pending writes are
-                # dead. FUSE/network stalls can return after several minutes;
-                # retain this generation and let its owned retries finish.
-                # Explicit stop/restart and actual process-exit recovery retain
-                # their separate authority and resource-safety boundaries.
-                error = (
-                    f'worker pid {status["pid"]} preserved during event-loop '
-                    'stall; health probes and heartbeat remain unavailable; '
-                    'waiting for in-place recovery')
-                if self._state.get('lastError') != error:
-                    logger.error('%s (heartbeat stale %.0fs)', error, age)
-                self._set_observed('degraded', error)
-                self._save()
-                return
+                return {'pid': int(status['pid']),
+                        'processStartTime': status.get('processStartTime'),
+                        'epoch': self._lifecycle_epoch,
+                        'status': status, 'executionReady': execution_ready}
             if self._launcher_is_alive():
                 if self._worker_within_boot_grace():
                     self._set_observed('starting')
@@ -4230,6 +4358,120 @@ class LifecycleManager:
             if self._storage_lease_blocks_worker(storage_lease):
                 self._defer_for_storage_lease(
                     storage_lease, resume_source='automatic-recovery')
+
+
+    def _apply_worker_probe(self, status: dict[str, Any], execution_ready: bool,
+                            probe: dict[str, Any]) -> None:
+        """Apply one current probe verdict to the live worker; called under the lifecycle lock."""
+        if probe.get('slow'):
+            # Slow is not down (readiness liveness contract): the
+            # standing verdict holds until a timeout run completes.
+            self._save()
+            return
+        if probe.get('liveness') and probe.get('ready'):
+            unready_since = float(self._state.get('unreadySince') or 0)
+            if unready_since:
+                self._state['unreadySince'] = 0.0
+                logger.info(
+                    'worker pid=%s is ready again after %.0fs unready',
+                    status.get('pid'), max(0.0, _now() - unready_since))
+            if not execution_ready:
+                self._save()
+                return
+            recovered_from = float(self._state.get('activeFailureAt') or 0)
+            now = _now()
+            if recovered_from:
+                elapsed = max(0.0, now - recovered_from)
+                self._state['lastRecoveredAt'] = now
+                self._state['lastRecoverySeconds'] = round(elapsed, 3)
+                self._state['activeFailureAt'] = 0.0
+                logger.info(
+                    'worker recovered pid=%s in %.3fs after failure',
+                    status.get('pid'), elapsed)
+            if not self._state.get('workerReadyLoggedAt'):
+                self._state['workerReadyLoggedAt'] = now
+                spawned_at = float(
+                    (self._state.get('worker') or {}).get('spawnedAt')
+                    or 0)
+                boot_elapsed = (
+                    max(0.0, now - spawned_at) if spawned_at else None)
+                logger.info(
+                    'worker ready pid=%s source=%s%s%s',
+                    status.get('pid'),
+                    self._state.get('launchSource') or 'unknown',
+                    (f' bootTime={boot_elapsed:.1f}s'
+                     if boot_elapsed is not None else ''),
+                    self._trace_total_suffix())
+                requested_at = getattr(self, '_trace_requested_at', None)
+                self._record_lead_audit('restart_outcome', {
+                    'outcome': 'ready', 'pid': status.get('pid'),
+                    'source': self._state.get('launchSource') or 'unknown',
+                    'bootSeconds': (round(boot_elapsed, 1)
+                                    if boot_elapsed is not None else None),
+                    'secondsSinceRequest': (round(time.time() - requested_at, 1)
+                                            if requested_at else None)})
+                self._settle_runtime_suspect()
+                self._request_pending_runtime_build()
+                self._remember_known_good()
+            self._state['failureHistory'] = self._recent_failure_times(now)
+            oom_count = cgroup_oom_kill_count()
+            if oom_count is not None:
+                self._state['lastCgroupOomKillCount'] = oom_count
+            self._state['consecutiveFailures'] = 0
+            self._state['nextRetryAt'] = 0.0
+            self._state['wedgeSince'] = 0.0
+            self._state['lastError'] = ''
+            self._set_observed('running')
+            self._save()
+            self._request_bytecode_sweep()
+            return
+        if probe.get('liveness'):
+            # Dependency readiness is not process liveness. Keep the
+            # worker available to finish startup/recovery and never
+            # feed a Sidecar outage into the wedge-restart policy.
+            self._state['wedgeSince'] = 0.0
+            if self._recover_generation_that_never_served(status.get('pid')):
+                return
+            self._note_unready_worker(
+                status.get('pid'),
+                str(probe.get('readinessError')
+                    or 'application readiness probe failed'))
+            self._save()
+            return
+        age = self._heartbeat_stale_age(int(status['pid']))
+        if age is None:
+            self._set_observed(
+                'degraded',
+                str(probe.get('livenessError')
+                    or 'identity liveness failed')
+                + '; heartbeat not stale',
+            )
+            self._save()
+            return
+        first = float(self._state.get('wedgeSince') or 0)
+        if not first:
+            self._state['wedgeSince'] = _now()
+            self._set_observed('degraded',
+                               f'possible wedge; heartbeat stale {age:.0f}s')
+            self._save()
+            return
+        if _now() - first < DEFAULT_WEDGE_STREAK:
+            self._save()
+            return
+        # A stale loop cannot prove its threads or pending writes are
+        # dead. FUSE/network stalls can return after several minutes;
+        # retain this generation and let its owned retries finish.
+        # Explicit stop/restart and actual process-exit recovery retain
+        # their separate authority and resource-safety boundaries.
+        error = (
+            f'worker pid {status["pid"]} preserved during event-loop '
+            'stall; health probes and heartbeat remain unavailable; '
+            'waiting for in-place recovery')
+        if self._state.get('lastError') != error:
+            logger.error('%s (heartbeat stale %.0fs)', error, age)
+        self._set_observed('degraded', error)
+        self._save()
+        return
 
     def _record_failure(
         self,

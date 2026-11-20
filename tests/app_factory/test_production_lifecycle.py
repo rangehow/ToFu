@@ -91,7 +91,7 @@ def test_production_lifecycle_runs_required_optional_and_cleanup_in_order():
 
     asyncio.run(exercise())
     assert [name for name, _ in calls] == [
-        'assets', 'boundary', 'storage', 'database', 'model-routing',
+        'assets', 'boundary', 'storage', 'model-routing', 'database',
         'imports', 'workers', 'optional', 'announce', 'shutdown',
     ]
     assert calls[6][1] == (app,)
@@ -178,7 +178,7 @@ def test_shutdown_checkpoint_skips_post_database_startup():
                 'status'] == 'interrupted'
 
     asyncio.run(exercise())
-    assert calls == ['assets', 'boundary', 'storage', 'database', 'shutdown']
+    assert calls == ['assets', 'boundary', 'storage', 'model-routing', 'database', 'shutdown']
 
 
 
@@ -294,7 +294,7 @@ def test_background_phase_failure_latches_boot_failed_and_retries():
             assert await runner.wait_done() == 'failed'
             assert app.extensions['tofu_production_lifecycle'][
                 'status'] == 'boot_failed'
-            assert calls == ['assets', 'boundary', 'storage', 'database']
+            assert calls == ['assets', 'boundary', 'storage', 'model-routing', 'database']
             # Retry while failed re-runs from the failed phase only.
             fail_database['enabled'] = False
             assert runner.request_retry() == 'started'
@@ -304,8 +304,8 @@ def test_background_phase_failure_latches_boot_failed_and_retries():
 
     asyncio.run(exercise())
     assert calls == [
-        'assets', 'boundary', 'storage', 'database',
-        'database', 'model-routing', 'imports', 'workers',
+        'assets', 'boundary', 'storage', 'model-routing', 'database',
+        'database', 'imports', 'workers',
         'shutdown',
     ]
 
@@ -380,8 +380,8 @@ def test_retryable_background_phase_failure_auto_recovers_without_operator(
     asyncio.run(exercise())
     assert calls == [
         'assets', 'boundary', 'storage',
-        'database', 'database', 'database',
-        'model-routing', 'imports', 'workers',
+        'model-routing', 'database', 'database', 'database',
+        'imports', 'workers',
         'shutdown',
     ]
 
@@ -453,7 +453,7 @@ def test_retryable_background_phase_failure_latches_after_budget_exhausted(
                 runner.snapshot()['error'])
             # Zero window: the initial attempt latches immediately.
             assert calls == [
-                'assets', 'boundary', 'storage', 'database',
+                'assets', 'boundary', 'storage', 'model-routing', 'database',
             ]
             failing['enabled'] = False
             assert runner.request_retry() == 'started'
@@ -461,8 +461,8 @@ def test_retryable_background_phase_failure_latches_after_budget_exhausted(
 
     asyncio.run(exercise())
     assert calls == [
-        'assets', 'boundary', 'storage', 'database',
-        'database', 'model-routing', 'imports', 'workers',
+        'assets', 'boundary', 'storage', 'model-routing', 'database',
+        'database', 'imports', 'workers',
         'shutdown',
     ]
 
@@ -495,7 +495,7 @@ def test_retry_window_outwaits_a_sustained_starvation_episode(monkeypatch):
             # bounded: no unbounded repair loop even with tiny backoff.
             assert database_attempts >= 3
             assert database_attempts <= 20
-            assert 'model-routing' not in calls
+            assert calls.count('model-routing') == 1
             failing['enabled'] = False
             assert runner.request_retry() == 'started'
             assert await runner.wait_done() == 'ready'
@@ -616,8 +616,8 @@ def test_server_composition_wires_required_storage_phase(monkeypatch):
     assert captured['target_app'] is app_sentinel
     steps = captured['steps']
     assert steps.start_storage is server_module._start_storage_authority_sql
-    from lib.model_routing import bootstrap_personal_model_routing
-    assert steps.bootstrap_model_routing is bootstrap_personal_model_routing
+    assert (steps.bootstrap_model_routing.func
+            is server_module._server_assembly.converge_startup_model_routing)
     assert (
         steps.validate_storage_boundary
         is server_module._validate_storage_cutover_boundary

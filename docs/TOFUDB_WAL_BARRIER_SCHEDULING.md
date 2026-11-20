@@ -114,6 +114,40 @@ previous engine (the reader saw the erased value) and passes;
 and, against a built engine, `tests/tofudb/test_wal_unacknowledged_visibility.py`
 (including a SIGKILL during the stall) and `test_wal_stall_liveness.py`.
 
+## Background writes do not delay the WAL barrier
+
+Problem (2026-11-18): production's 15-22 s storage-wide pauses line up with
+WAL barrier deadline misses and slow `stat` calls on the DolphinFS volume, and
+the engine's own background work (history promotion on the maintenance and
+overlay-drain threads, pack adoption) writes about 100 MB/s to that volume
+against about 4 MB/s of WAL. The question was whether that work queues the
+WAL write or fdatasync behind it.
+
+Decision: no engine change. Measured on scratch directories of the same
+DolphinFS volume (never the live store), nice 19, with a production-health
+guard:
+
+| Measurement | Background off | Background on |
+|---|---|---|
+| WAL emulator (100 KB pwrite + fdatasync, 23/s; 4 off legs, 2 at 31 MB/s, 2 at 104 MB/s of read+write+fsync+rename+60 s-parked-unlink segment traffic, 90 s each) fdatasync p50/p99/max | 0.98 / 3.5 / 74.4 ms (n=8,292) | 0.91 / 1.4 / 6.6 ms at 31 MB/s, 0.93 / 1.7 / 11.7 ms at 104 MB/s |
+| Same, stalls of 1 s or more | 0 | 0 |
+| Certified engine (`f9cddf19`, production tier Normal), `tofudb_load_test.py` 1x for 150 s, 5 arms without and 2 with +100 MB/s segment traffic: `wal_barrier_sync` mean | 0.07-0.12 ms in 3 arms, 1.0 and 5.2 ms in the two arms at 16:26 and 16:29 | 0.10 and 0.12 ms |
+| Same, operations of 1 s or more | 0, 0, 6 kinds (max 5.7 s), 9 kinds (max 9.6 s), 0 | 0, 0 |
+
+The only stalls came in arms with no added background traffic, and the
+16:26 one coincided with a 1.6 s `vfs_sync` plus 0.4 s `vfs_open` in
+production's rotation (`authority_hold`, 08:28:36 UTC): two engines with no
+shared file stalled together. Production's own per-second samples over 10 min
+showed WAL write 0.6-0.7 ms and acknowledgement wait about 0.45 ms whatever its
+background rate (93 vs 116 MB/s halves, Pearson -0.02 against sync time).
+The pauses are volume-side: the DolphinFS (BeeGFS) client and cluster are
+shared with other tenants and hosts, and during past pauses a plain `stat`
+from another process took 9-13 s.
+
+Alternatives rejected: pacing background writes or making them yield to a
+pending barrier (no measured contention to remove, and pacing needs a rate
+knob); moving the WAL off the volume (a backend or durability change).
+
 ## Performance anchors
 
 `wal_barrier_sync` measures each worker fsync; the `wal_barrier` component

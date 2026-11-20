@@ -361,6 +361,7 @@ def test_live_retry_preserves_task_id(monkeypatch):
         base_url = None
         extra_headers = None
         oauth = ''
+        cache_profile = ''
         protocol = 'openai'
         provider_id = 'p'
         # Real _Slot carries routing_provider_id (v2 route groups); the
@@ -371,6 +372,7 @@ def test_live_retry_preserves_task_id(monkeypatch):
         consecutive_errors = 0
         def record_success(self, *a, **k): pass
         def record_error(self, *a, **k): pass
+        def subscription_attribution(self): return {}
 
     class _Dispatcher:
         # ``slots`` mirrors the real LLMDispatcher surface — the dispatch

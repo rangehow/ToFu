@@ -71,6 +71,12 @@ def test_missing_or_unparsable_file_keeps_m17_but_not_other_queues(tmp_path, raw
     assert refusal([ALLOWED], policy=policy) is None
 
 
+def test_a_directory_at_the_policy_path_keeps_m17_instead_of_raising(tmp_path):
+    policy = load_policy(str(tmp_path))
+    assert (policy.source, policy.default_reason) == ('built-in default', 'is not a regular file')
+    _assert_refused(refusal([M17], policy=policy), source='built-in default')
+
+
 def test_valid_empty_list_lifts_bans_and_edits_apply_without_cache(tmp_path):
     path = write_policy(tmp_path / 'HOPE_QUEUE_POLICY.json')
     assert refusal([M17], policy=load_policy(str(path))) is None
@@ -103,6 +109,43 @@ def test_stdio_policy_path_is_owner_derived_not_overlay(tmp_path, monkeypatch):
     assert environment['TOFU_HOPE_QUEUE_POLICY'].endswith('/router/1/HOPE_QUEUE_POLICY.json')
     unowned = build_stdio_environment({}, prepare_directories=False)
     assert 'TOFU_HOPE_QUEUE_POLICY' not in unowned
+
+
+def _child_router_home(environment, checkout):
+    """Router policy a Tofu-code child would read when started from *checkout*."""
+    from runtime_path_policy import resolve_runtime_base
+    base = resolve_runtime_base(environment, repository_root=str(checkout), report=False)
+    return os.path.join(base, 'data', 'router', '1', 'HOPE_QUEUE_POLICY.json')
+
+
+@pytest.mark.parametrize('launch', ['run_command', 'mcp_stdio'])
+def test_tofu_child_in_a_dataless_worktree_reads_the_launchers_router_policy(
+        tmp_path, monkeypatch, launch):
+    # A Worker worktree has no data/, and the tool cache redirects
+    # XDG_DATA_HOME, so without the launcher's runtime base a child resolved
+    # <cache>/share/Tofu and silently used the built-in default policy.
+    worktree = tmp_path / 'worktree'
+    worktree.mkdir()
+    monkeypatch.delenv('TOFU_DATA_DIR', raising=False)
+    monkeypatch.delenv('XDG_DATA_HOME', raising=False)
+    monkeypatch.setenv('TOFU_MCP_CACHE_DIR', str(tmp_path / 'cache'))
+    if launch == 'run_command':
+        from lib.project_mod.run_command import _get_cmd_env
+        environment = _get_cmd_env(str(worktree), project_root=str(worktree))
+    else:
+        monkeypatch.setattr('lib.mcp.client._vendor._propagate_pool_proxy_env', lambda env: None)
+        environment = build_stdio_environment({}, prepare_directories=False)
+    assert environment['XDG_DATA_HOME'].startswith(str(tmp_path / 'cache'))
+    assert _child_router_home(environment, worktree) == policy_path(1)
+
+
+def test_mcp_operator_data_dir_is_kept(tmp_path, monkeypatch):
+    monkeypatch.setenv('TOFU_MCP_CACHE_DIR', str(tmp_path / 'cache'))
+    monkeypatch.setattr('lib.mcp.client._vendor._propagate_pool_proxy_env', lambda env: None)
+    explicit = str(tmp_path / 'other' / 'data')
+    environment = build_stdio_environment(
+        {'env': {'TOFU_DATA_DIR': explicit}}, prepare_directories=False)
+    assert environment['TOFU_DATA_DIR'] == explicit
 
 
 def _info(meta=None):

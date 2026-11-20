@@ -1,0 +1,374 @@
+{
+ "writer_model": "gpt-5.6-terra",
+ "judge_model": "gpt-5.5",
+ "judge": "lib.longform.documents.pipeline._judge_pair + lib.production.critic.blind_pairwise (both presentation orders, rubric totals decide each order)",
+ "style_rules": [
+  "paper.style.abstract-number",
+  "paper.style.intro-quantified",
+  "paper.style.caption-takeaway",
+  "paper.style.limitations-section",
+  "paper.style.intro-findings-first-person"
+ ],
+ "outlines": false,
+ "units": [
+  {
+   "id": "bf16_mechanism",
+   "source": "/mnt/your-fs"
+  },
+  {
+   "id": "parallel_paper3",
+   "source": "/mnt/your-fs"
+  },
+  {
+   "id": "C4c738e0a",
+   "source": "held-out accepted paper C4c738e0a"
+  },
+  {
+   "id": "Ccbbf91d9",
+   "source": "held-out accepted paper Ccbbf91d9"
+  },
+  {
+   "id": "C8dec6da7",
+   "source": "held-out accepted paper C8dec6da7"
+  },
+  {
+   "id": "C5c572149",
+   "source": "held-out accepted paper C5c572149"
+  },
+  {
+   "id": "Cc9ada956",
+   "source": "held-out accepted paper Cc9ada956"
+  },
+  {
+   "id": "Cf5031a4a",
+   "source": "held-out accepted paper Cf5031a4a"
+  },
+  {
+   "id": "C00af8742",
+   "source": "held-out accepted paper C00af8742"
+  },
+  {
+   "id": "C0179e95d",
+   "source": "held-out accepted paper C0179e95d"
+  },
+  {
+   "id": "C8ba4c184",
+   "source": "held-out accepted paper C8ba4c184"
+  },
+  {
+   "id": "Cd8ad1700",
+   "source": "held-out accepted paper Cd8ad1700"
+  },
+  {
+   "id": "C0822766b",
+   "source": "held-out accepted paper C0822766b"
+  },
+  {
+   "id": "C01270227",
+   "source": "held-out accepted paper C01270227"
+  },
+  {
+   "id": "C610e358c",
+   "source": "held-out accepted paper C610e358c"
+  },
+  {
+   "id": "Cfc650c98",
+   "source": "held-out accepted paper Cfc650c98"
+  },
+  {
+   "id": "C001ccd31",
+   "source": "held-out accepted paper C001ccd31"
+  },
+  {
+   "id": "C08e1805c",
+   "source": "held-out accepted paper C08e1805c"
+  },
+  {
+   "id": "C003cf5e3",
+   "source": "held-out accepted paper C003cf5e3"
+  },
+  {
+   "id": "C2c30dd3d",
+   "source": "held-out accepted paper C2c30dd3d"
+  },
+  {
+   "id": "C846d85da",
+   "source": "held-out accepted paper C846d85da"
+  },
+  {
+   "id": "C346d9621",
+   "source": "held-out accepted paper C346d9621"
+  },
+  {
+   "id": "C00802146",
+   "source": "held-out accepted paper C00802146"
+  },
+  {
+   "id": "C14be940b",
+   "source": "held-out accepted paper C14be940b"
+  },
+  {
+   "id": "Cd8504c68",
+   "source": "held-out accepted paper Cd8504c68"
+  },
+  {
+   "id": "C01b1f30e",
+   "source": "held-out accepted paper C01b1f30e"
+  }
+ ],
+ "rule_selection_units_excluded": 16,
+ "invented_numbers": {
+  "A": 0,
+  "B": 1
+ },
+ "comparisons": {
+  "B_vs_A/rule_free": {
+   "n": 26,
+   "candidate_preferred": 12,
+   "no_preference": 11,
+   "baseline_preferred": 3,
+   "sign_test_p": 0.0352,
+   "mean_score": 0.3462,
+   "mean_score_ci95": [
+    0.0769,
+    0.6154
+   ],
+   "mean_rubric_margin": 3.5,
+   "rubric_margin_ci95": [
+    0.9615,
+    6.0385
+   ]
+  },
+  "B_vs_A/rule_free/drafts_only": {
+   "n": 2,
+   "candidate_preferred": 0,
+   "no_preference": 2,
+   "baseline_preferred": 0,
+   "sign_test_p": 1.0,
+   "mean_score": 0,
+   "mean_score_ci95": [
+    0,
+    0
+   ],
+   "mean_rubric_margin": -2,
+   "rubric_margin_ci95": [
+    -3,
+    -1
+   ]
+  }
+ },
+ "per_unit": {
+  "B_vs_A/rule_free": {
+   "bf16_mechanism": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 89,
+     "baseline": 92
+    }
+   },
+   "parallel_paper3": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 80,
+     "baseline": 81
+    }
+   },
+   "C4c738e0a": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 75,
+     "baseline": 77
+    }
+   },
+   "Ccbbf91d9": {
+    "verdict": "baseline",
+    "position_bias": false,
+    "totals": {
+     "candidate": 54,
+     "baseline": 65
+    }
+   },
+   "C8dec6da7": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 58,
+     "baseline": 50
+    }
+   },
+   "C5c572149": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 70,
+     "baseline": 65
+    }
+   },
+   "Cc9ada956": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 75,
+     "baseline": 67
+    }
+   },
+   "Cf5031a4a": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 72,
+     "baseline": 67
+    }
+   },
+   "C00af8742": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 69,
+     "baseline": 57
+    }
+   },
+   "C0179e95d": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 58,
+     "baseline": 58
+    }
+   },
+   "C8ba4c184": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 62,
+     "baseline": 61
+    }
+   },
+   "Cd8ad1700": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 64,
+     "baseline": 59
+    }
+   },
+   "C0822766b": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 67,
+     "baseline": 62
+    }
+   },
+   "C01270227": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 72,
+     "baseline": 68
+    }
+   },
+   "C610e358c": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 59,
+     "baseline": 47
+    }
+   },
+   "Cfc650c98": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 69,
+     "baseline": 71
+    }
+   },
+   "C001ccd31": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 58,
+     "baseline": 46
+    }
+   },
+   "C08e1805c": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 77,
+     "baseline": 60
+    }
+   },
+   "C003cf5e3": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 71,
+     "baseline": 64
+    }
+   },
+   "C2c30dd3d": {
+    "verdict": "baseline",
+    "position_bias": false,
+    "totals": {
+     "candidate": 56,
+     "baseline": 61
+    }
+   },
+   "C846d85da": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 67,
+     "baseline": 64
+    }
+   },
+   "C346d9621": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 75,
+     "baseline": 76
+    }
+   },
+   "C00802146": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 74,
+     "baseline": 72
+    }
+   },
+   "C14be940b": {
+    "verdict": "candidate",
+    "position_bias": false,
+    "totals": {
+     "candidate": 76,
+     "baseline": 61
+    }
+   },
+   "Cd8504c68": {
+    "verdict": "baseline",
+    "position_bias": false,
+    "totals": {
+     "candidate": 66,
+     "baseline": 72
+    }
+   },
+   "C01b1f30e": {
+    "verdict": "no preference",
+    "position_bias": true,
+    "totals": {
+     "candidate": 69,
+     "baseline": 68
+    }
+   }
+  }
+ },
+ "harm_criterion": "a style rule (or the outlines) is harmful when B without it is preferred in both orders on more units than full B (style-blind judge)",
+ "harmful": []
+}

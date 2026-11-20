@@ -11,9 +11,9 @@ Entry points:
 - ``plan_transition``: the identity rule, which decides the key of each task of
   a new board from the previous board and its keys (pure).
 - ``apply_board``: fold one board write into in-memory records (pure).
-- ``record_board``: called by ``CoordinatorTaskProgress`` inside its head CAS
-  attempt, before the head write; returns the new board's keys, which the head
-  stores as ``taskKeys`` in the same CAS. Only changed tasks are read and written.
+- ``prepare_board_history`` plans keys and a history delta without writes.
+  The board head CAS publishes both. ``index_committed_history`` later
+  materializes that committed delta into the existing task records.
 - ``transcript_boards``: the board revisions the Coordinator's own transcript
   records (each ``update_task_progress`` and publishing ``todo_write`` round).
   A head written before task history has no ``taskKeys``; its first changed
@@ -23,7 +23,7 @@ Entry points:
 - ``untranslated_history_texts`` / ``attach_history_translation``: the display
   translation of tasks off the board (``progressTaskTranslation``), derived by
   the board's translation job. A task leaving the board carries the board's
-  translation of its texts (``record_board``), so only tasks that left
+  translation of its texts (``prepare_board_history``), so only tasks that left
   untranslated are sent to the translator.
 
 Dependencies: ``coordinator_progress`` (contract, head, binding scope), the
@@ -32,6 +32,7 @@ repository (transcript seed). Owner identity is an explicit parameter.
 """
 from __future__ import annotations
 
+from collections import deque
 from copy import deepcopy
 import difflib
 import hashlib
@@ -41,7 +42,7 @@ import time
 import uuid
 
 from lib.conversations.coordinator_progress import (
-    CONTRACT, POLICY, CoordinatorTaskProgress, board_from_plan, validate_progress)
+    CONTRACT, POLICY, CoordinatorTaskProgress, board_from_plan, board_from_update, validate_progress)
 from lib.log import get_logger
 from lib.storage.errors import StorageError
 
@@ -50,9 +51,6 @@ logger = get_logger(__name__)
 NAMESPACE = POLICY['historyNamespace']
 GROUPS = tuple(CONTRACT['$defs']['progressHistoryGroup']['enum'])
 PAGE_SIZE = CONTRACT['$defs']['progressHistoryPage']['properties']['tasks']['maxItems']
-_QUERY_MAX_CHARS = CONTRACT['$defs']['progressTask']['properties']['progress']['maxLength']
-_TRANSLATION_MAX_CHARS = (CONTRACT['$defs']['progressTranslation']['properties']['texts']
-                          ['items']['properties']['text']['maxLength'])
 # record.list's protocol maximum page.
 _RECORD_LIST_LIMIT = 1000
 _OPEN = frozenset({'pending', 'in_progress'})
@@ -65,7 +63,7 @@ def _digest(*parts):
 
 
 def title_key(title):
-    """Key of the first identity a title starts; the same title later continues it."""
+    """Candidate key of the first identity a title starts, not proof of a returning identity."""
     return _digest('title', title)[:32]
 
 
@@ -78,7 +76,20 @@ def scope_prefix(scope):
             + _digest(scope['projectPath'], scope['coordinatorId'], scope['bindingRevision']) + ':')
 
 
-def plan_transition(previous, previous_keys, board):
+def _returning_key(title, unavailable, before_revision, history):
+    """Restore only an unambiguous departed record named by its current title."""
+    matches = [key for key, record in history.items()
+               if record['title'] == title and record['firstSeenRevision'] <= before_revision]
+    if len(matches) != 1 or matches[0] in unavailable:
+        return None
+    key = matches[0]
+    record = history[key]
+    if 'departedRevision' in record and record['changedRevision'] <= before_revision:
+        return key
+    return None
+
+
+def plan_transition(previous, previous_keys, board, *, get_record=None, read_history=None):
     """The key of each task of ``board``, in board order (the identity rule).
 
     1. A task keeps its identity while its title is unchanged.
@@ -86,9 +97,9 @@ def plan_transition(previous, previous_keys, board):
        one task between the same unchanged neighbours was replaced by exactly
        one task, and the replaced task was still open or the new one keeps its
        finished status (a finished task is never continued by another task).
-    3. Any other task starts its title's identity, so a title that left the
-       board continues its earlier task when it returns; when that identity is
-       already on this board, the task gets a key of its own.
+    3. An otherwise unmatched title can restore its unique departed record
+       if the title still names it. An occupied title-derived key is not an
+       alias for a task that was renamed. Ambiguous returns get fresh keys.
     """
     old = list((previous or {}).get('tasks', ()))
     old_keys = list(previous_keys or ())
@@ -96,15 +107,18 @@ def plan_transition(previous, previous_keys, board):
     keys = [None] * len(new)
     slots = {}
     for index, task in enumerate(old):
-        slots.setdefault(task['title'], []).append(index)
+        slots.setdefault(task['title'], deque()).append(index)
     for index, task in enumerate(new):
         if slots.get(task['title']):
-            keys[index] = old_keys[slots[task['title']].pop(0)]
+            keys[index] = old_keys[slots[task['title']].popleft()]
     old_titles = {task['title'] for task in old}
     new_titles = {task['title'] for task in new}
-    matcher = difflib.SequenceMatcher(a=[task['title'] for task in old],
-                                      b=[task['title'] for task in new], autojunk=False)
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+    # Only a replacement that both introduces and removes titles can rename
+    # a task. Ordinary status/note changes and additions need no sequence diff.
+    candidates = (difflib.SequenceMatcher(a=[task['title'] for task in old],
+                                         b=[task['title'] for task in new], autojunk=False).get_opcodes()
+                  if old_titles - new_titles and new_titles - old_titles else ())
+    for tag, i1, i2, j1, j2 in candidates:
         if tag != 'replace':
             continue
         # Tasks that only moved are matched by title above; they are not edits.
@@ -116,13 +130,22 @@ def plan_transition(previous, previous_keys, board):
         if before['status'] in _OPEN or before['status'] == after['status']:
             keys[added[0]] = old_keys[removed[0]]
     taken = {key for key in keys if key}
-    for index, task in enumerate(new):
-        if keys[index] is None:
-            key = title_key(task['title'])
-            if key in taken:
-                key = _unique_key(task['title'], board['revision'], index)
-            keys[index] = key
-            taken.add(key)
+    history = None
+    titles = [task['title'] for task in new]
+    revision = board['revision']
+    for index, title in enumerate(titles):
+        if keys[index] is not None:
+            continue
+        base = title_key(title)
+        key = None
+        if previous is not None and read_history is not None and titles.count(title) == 1:
+            if history is None:
+                history = read_history()
+            key = _returning_key(title, taken.union(old_keys), previous['revision'], history)
+        if key is None and base not in taken and (get_record is None or get_record(base) is None):
+            key = base
+        keys[index] = key if key is not None else _unique_key(title, revision, index)
+        taken.add(keys[index])
     return keys
 
 
@@ -146,6 +169,11 @@ def _content(record, task, at):
     record['status'] = task['status']
     if 'progress' in task:
         record['progress'] = task['progress']
+    # A typed wait belongs to an open task only: a completed or cancelled one carries none.
+    if task['status'] in _OPEN and 'blocker' in task:
+        record['blocker'] = task['blocker']
+    else:
+        record.pop('blocker', None)
     if 'due' in task:
         record['due'] = task['due']
         record['dueAt'] = due_ms(task['due'])
@@ -159,8 +187,8 @@ def _translations(translation, target):
 
 
 def task_texts(record):
-    """A task's own translatable texts: its title, then its note."""
-    return list(dict.fromkeys([record['title'], *([record['progress']] if 'progress' in record else [])]))
+    """A task's own translatable texts, in display order."""
+    return list(dict.fromkeys(record[field] for field in ('title', 'progress', 'reason') if field in record))
 
 
 def _translate_record(record, target, known):
@@ -195,6 +223,7 @@ def apply_board(records, scope, previous, previous_keys, board, keys, *, touched
     """
     at, revision = board['updatedAt'], board['revision']
     changed = set()
+    before = dict(zip(previous_keys or (), (previous or {}).get('tasks', ())))
     for key, task in zip(keys, board['tasks']):
         if touched is not None and key not in touched:
             continue
@@ -211,13 +240,14 @@ def apply_board(records, scope, previous, previous_keys, board, keys, *, touched
         updated = deepcopy(record)
         updated.pop('departedAt', None)
         updated.pop('departedRevision', None)
+        updated.pop('reason', None)  # Current reasons come from the committed board, not this candidate.
         _content(updated, task, at)
-        if updated != record:
+        if updated != record or task.get('reason') != before.get(key, {}).get('reason'):
             updated.update(lastSeenAt=at, lastSeenRevision=revision, changedAt=at, changedRevision=revision)
             records[key] = updated
             changed.add(key)
     present = set(keys)
-    for key, task in zip(previous_keys or (), (previous or {}).get('tasks', ())):
+    for key, task in before.items():
         if key in present or (touched is not None and key not in touched):
             continue
         record = records.get(key)
@@ -232,6 +262,12 @@ def apply_board(records, scope, previous, previous_keys, board, keys, *, touched
             continue
         else:
             record = deepcopy(record)
+        # The removed row is from the committed previous board, not a staged history write.
+        _content(record, task, previous['updatedAt'])
+        if task['status'] == 'cancelled' and 'reason' in task:
+            record['reason'] = task['reason']
+        else:
+            record.pop('reason', None)
         record.update(lastSeenAt=previous['updatedAt'], lastSeenRevision=previous['revision'],
                       departedAt=at, departedRevision=revision, changedAt=at, changedRevision=revision)
         records[key] = record
@@ -243,7 +279,8 @@ def fold_boards(scope, boards):
     """Records and final keys of a board sequence (oldest first), folded in memory."""
     records, previous, previous_keys = {}, None, None
     for board in boards:
-        keys = plan_transition(previous, previous_keys, board)
+        keys = plan_transition(previous, previous_keys, board, get_record=records.get,
+                               read_history=lambda: records)
         apply_board(records, scope, previous, previous_keys, board, keys)
         previous, previous_keys = board, keys
     return records, previous_keys
@@ -261,8 +298,8 @@ def _json_value(value):
 def boards_from_rounds(rounds):
     """Board revisions published by ``rounds`` (tool rounds in transcript order).
 
-    An ``update_task_progress`` round names the revision its complete board
-    became; a publishing ``todo_write`` round names it in its result and leaves
+    An ``update_task_progress`` round names the revision its write became;
+    a publishing ``todo_write`` round names it in its result and leaves
     the board ``board_from_plan`` derives from the board before it. Unchanged
     writes repeat a revision and add nothing. A revision that starts again at 1
     is a new binding's board, which restarts the sequence.
@@ -283,13 +320,11 @@ def boards_from_rounds(rounds):
             content = _json_value(entry.get('toolContent'))
             if isinstance(content, dict) and content.get('changed') is True:
                 revision = content.get('revision')
-            request = arguments
         else:
             for result in entry.get('results') or ():
                 hint = result.get('coordinatorProgress') if isinstance(result, dict) else None
                 if isinstance(hint, dict):
                     revision = hint.get('revision')
-            request = None
         if type(revision) is not int or revision < 1:
             continue
         if boards and revision <= boards[-1]['revision']:
@@ -297,11 +332,16 @@ def boards_from_rounds(rounds):
                 continue
             boards = []
         try:
-            if request is None:
-                request = board_from_plan(boards[-1] if boards else None, arguments.get('todos') or [],
-                                          arguments.get('explanation') or '')
-                if request is None:
+            previous = boards[-1] if boards else None
+            if name == 'todo_write':
+                request = board_from_plan(previous, arguments.get('todos') or [], arguments.get('explanation') or '')
+            else:
+                # A patch can be replayed only onto its actual preceding revision.
+                if 'changes' in arguments and revision != (previous['revision'] + 1 if previous else 1):
                     continue
+                request = board_from_update(previous, arguments)
+            if request is None:
+                continue
             validate_progress(request, 'progressRequest')
         except (TypeError, ValueError, KeyError):
             continue
@@ -364,24 +404,9 @@ class _Records:
             after = rows[-1]['key']
 
 
-def record_board(scope, previous, previous_keys, board, *, client, read_transcript=transcript_boards,
-                 translation=None, translation_target=None):
-    """Record one board write before its head CAS; returns the keys the head stores.
-
-    ``previous`` is the board this write replaces in the same binding (None for
-    its first board) and ``previous_keys`` its stored keys. A previous board
-    without keys predates task history: the history is seeded from the
-    transcript's earlier revisions, that board and this one. When the
-    transcript cannot be read now, None leaves the head without keys, so the
-    next changed board seeds again; nothing is lost because the transcript keeps
-    every board. A conflicting record write raises ``database_conflict`` for
-    the caller's CAS loop to retry.
-
-    ``translation`` is the replaced board's display translation and
-    ``translation_target`` the reading language of this write (None without
-    auto-translate): each written task keeps its texts' translations in that
-    language, so a task leaving the board still reads translated.
-    """
+def prepare_board_history(scope, previous, previous_keys, board, *, client,
+                          read_transcript=transcript_boards, translation=None, translation_target=None):
+    """Plan keys and changed history values without publishing any records."""
     records = _Records(client, scope)
     if previous is not None and previous_keys is None:
         try:
@@ -389,31 +414,56 @@ def record_board(scope, previous, previous_keys, board, *, client, read_transcri
         except Exception:
             logger.warning('[TaskHistory] transcript of %s unreadable; history seeds at the next board write',
                            scope['coordinatorId'], exc_info=True)
-            return None
+            return None, []
         folded, keys = fold_boards(scope, [*earlier, previous, board])
         for key, value in folded.items():
             row = records.get(key)
             _carry_translation(value, row['value'].get('translation') if row else None,
                                translation, translation_target)
-            if row is None or row['value'] != value:
-                records.put(key, value, row['version'] if row else 0)
-        logger.info('[TaskHistory] seeded %d tasks of %s from %d board revisions',
-                    len(folded), scope['coordinatorId'], len(earlier) + 2)
-        return keys
-    keys = plan_transition(previous, previous_keys, board)
+        return keys, list(folded.values())
+    rows = {}
+
+    def read_key(key):
+        if key not in rows:
+            rows[key] = records.get(key)
+        return rows[key]
+
+    def read_value(key):
+        row = read_key(key)
+        return row['value'] if row is not None else None
+
+    keys = plan_transition(previous, previous_keys, board, get_record=read_value, read_history=records.all)
     before = dict(zip(previous_keys or (), (previous or {}).get('tasks', ())))
     present = set(keys)
     touched = {key for key, task in zip(keys, board['tasks']) if before.get(key) != task}
     touched.update(key for key in before if key not in present)
-    loaded, versions = {}, {}
-    for key in touched:
-        row = records.get(key)
-        if row is not None:
-            loaded[key], versions[key] = row['value'], row['version']
-    for key in apply_board(loaded, scope, previous, previous_keys, board, keys, touched=touched):
+    loaded = {key: row['value'] for key in touched if (row := read_key(key)) is not None}
+    changed = apply_board(loaded, scope, previous, previous_keys, board, keys, touched=touched)
+    for key in changed:
         _carry_translation(loaded[key], loaded[key].get('translation'), translation, translation_target)
-        records.put(key, loaded[key], versions.get(key, 0))
-    return keys
+    return keys, [loaded[key] for key in sorted(changed)]
+
+
+def _indexed(row, committed):
+    """An indexed revision wins only if newer or equal apart from display translation."""
+    if row is None:
+        return False
+    if row['changedRevision'] != committed['changedRevision']:
+        return row['changedRevision'] > committed['changedRevision']
+    return ({key: value for key, value in row.items() if key != 'translation'}
+            == {key: value for key, value in committed.items() if key != 'translation'})
+
+
+def index_committed_history(head, *, client):
+    """Materialize a committed head's delta; repeated or delayed flushes are safe."""
+    if not head or not head.get('historyDelta'):
+        return
+    records = _Records(client, head['scope'])
+    for value in head['historyDelta']:
+        row = records.get(value['key'])
+        if _indexed(row['value'] if row else None, value):
+            continue
+        records.put(value['key'], value, row['version'] if row else 0)
 
 
 def untranslated_history_texts(scope, target, *, client):
@@ -433,13 +483,13 @@ def attach_history_translation(scope, target, translations, *, client):
     """Merge ``{text: translation}`` into ``scope``'s tasks off the board; returns how many changed.
 
     Another ``target`` replaces a task's stored translation. Whitespace runs
-    collapse to one space; empty or over-long translations are skipped. A record
+    collapse to one space; empty translations are skipped. A record
     written concurrently is re-read and merged again.
     """
     accepted = {}
     for source, text in translations.items():
         normalized = ' '.join(text.split())
-        if normalized and len(normalized) <= _TRANSLATION_MAX_CHARS:
+        if normalized:
             accepted[source] = normalized
     records, changed = _Records(client, scope), 0
     for key, value in records.all().items():
@@ -480,10 +530,16 @@ def due_outcome(entry, now):
 def _entry(record, *, board=None, task=None, now):
     """The shown task: a record, overlaid by its current board task when on the board."""
     entry = {name: deepcopy(record[name]) for name in (
-        'key', 'title', 'formerTitles', 'status', 'progress', 'due', 'dueAt', 'firstSeenAt',
-        'lastSeenAt', 'changedAt', 'departedAt', 'completedAt') if name in record}
+        'key', 'title', 'formerTitles', 'status', 'progress', 'reason', 'blocker', 'due', 'dueAt',
+        'firstSeenAt', 'lastSeenAt', 'changedAt', 'departedAt', 'completedAt') if name in record}
     if task is not None:
         _content(entry, task, board['updatedAt'])
+        if 'reason' in task:
+            entry['reason'] = task['reason']
+        else:
+            entry.pop('reason', None)
+        if 'blocker' not in task:
+            entry.pop('blocker', None)
         entry.pop('departedAt', None)
         entry['lastSeenAt'] = board['updatedAt']
     elif 'translation' in record:
@@ -518,8 +574,8 @@ class CoordinatorTaskHistory:
     def read(self, *, group=None, query='', cursor=None):
         if group is not None and group not in _RANK:
             raise ValueError('group must be one of ' + ', '.join(GROUPS))
-        if not isinstance(query, str) or len(query) > _QUERY_MAX_CHARS:
-            raise ValueError(f'q has at most {_QUERY_MAX_CHARS} characters')
+        if not isinstance(query, str):
+            raise ValueError('q must be text')
         needle = ' '.join(query.split()).casefold()
         after = None
         if cursor:
@@ -527,21 +583,18 @@ class CoordinatorTaskHistory:
             if match is None or match.group(4) != _fingerprint(group, needle):
                 raise ValueError('cursor does not belong to this history query')
             after = (int(match.group(1)), -int(match.group(2)), match.group(3))
-        scope, binding, head = self.progress.current()
+        binding, head, entries, recorded = self._committed_entries()
         page = {'projectPath': self.progress.project, 'conversationId': binding['conversationId'],
-                'bindingRevision': binding['revision'], 'recorded': True,
+                'bindingRevision': binding['revision'], 'recorded': recorded,
                 'counts': {name: 0 for name in GROUPS}, 'tasks': [], 'nextCursor': None,
                 'coverage': 'complete'}
-        if scope is None:
-            return validate_progress(page, 'progressHistoryPage')
-        entries, page['recorded'] = self._entries(scope, head)
         translation = head.get('translation') if head else None
         if translation:
             page['translation'] = deepcopy(translation)
         shown_as = {item['source']: item['text'] for item in translation['texts']} if translation else {}
         if needle:
             def texts(entry):
-                written = (entry['title'], entry.get('progress', ''), *entry.get('formerTitles', ()))
+                written = (entry['title'], entry.get('progress', ''), entry.get('reason', ''), *entry.get('formerTitles', ()))
                 own = [item['text'] for item in entry.get('translation', {}).get('texts', ())]
                 return (*written, *own, *(shown_as[text] for text in written if text in shown_as))
             entries = [entry for entry in entries if any(needle in text.casefold() for text in texts(entry))]
@@ -566,10 +619,20 @@ class CoordinatorTaskHistory:
         The lead deliverables projection resolves report task titles and derives
         each completed task's automatic work report from these.
         """
-        scope, binding, head = self.progress.current()
-        if scope is None or binding.get('conversationId') != conversation_id:
-            return []
-        return self._entries(scope, head)[0]
+        return self._committed_entries(conversation_id)[2]
+
+    def _committed_entries(self, conversation_id=None):
+        for _ in range(POLICY['casAttempts']):
+            scope, binding, head = self.progress.current()
+            if scope is None or (conversation_id is not None and scope['coordinatorId'] != conversation_id):
+                return binding, None, [], True
+            entries, recorded = self._entries(scope, head)
+            # The index may advance while it is being paged. Fence it against
+            # the board revision, not independent display-translation changes.
+            current_scope, _, current = self.progress.current()
+            if scope == current_scope and (head or {}).get('board') == (current or {}).get('board'):
+                return binding, head, entries, recorded
+        raise StorageError('database_conflict', 'Task history changed while being read')
 
     def _entries(self, scope, head):
         """Every shown task and whether the history is recorded (a pre-history head is not)."""
@@ -585,7 +648,13 @@ class CoordinatorTaskHistory:
                            'firstSeenAt': board['updatedAt'], 'lastSeenAt': board['updatedAt'],
                            'changedAt': board['updatedAt']} for key, task in zip(keys, board['tasks'])}
         else:
-            shown = _Records(self.progress.client, scope).all()
+            shown = _Records(self.progress.client, scope).all() if head else {}
+            if head:
+                shown = {key: record for key, record in shown.items()
+                         if record['changedRevision'] <= board['revision']}
+                for record in head.get('historyDelta', ()):
+                    if not _indexed(shown.get(record['key']), record):
+                        shown[record['key']] = record
         on_board = dict(zip(keys or (), board['tasks'] if board else ()))
         entries = [_entry(record, board=board, task=on_board.get(key), now=now)
                    for key, record in shown.items()]

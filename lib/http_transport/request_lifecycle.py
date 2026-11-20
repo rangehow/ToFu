@@ -191,6 +191,18 @@ _BOOT_GATE_OPEN_PATHS = frozenset({
 })
 
 
+# These GET-capable handlers can write routing state (OAuth provisioning or
+# credential-hint repair). Ordinary read-only settings stay available.
+_BOOT_GATED_READ_PATHS = frozenset({
+    '/api/v1/oauth/status', '/api/v4/oauth/status',
+    '/api/v1/oauth/device-login', '/api/v4/oauth/device-login',
+    '/api/v1/adapter/oauth/status', '/api/v4/adapter/oauth/status',
+    '/api/v1/adapter/status', '/api/v4/adapter/status',
+    '/api/v1/model-routing', '/api/v4/model-routing',
+    '/api/oauth/login', '/api/oauth/callback', '/api/oauth/logout',
+})
+
+
 async def enforce_boot_gate():
     """Return a truthful 503 for API calls the unfinished boot cannot serve.
 
@@ -211,13 +223,13 @@ async def enforce_boot_gate():
     if not path.startswith('/api/') or path in _BOOT_GATE_OPEN_PATHS:
         return None
     if runner.status == 'ready' and (
-            request.method in {'GET', 'HEAD', 'OPTIONS'}
+            (request.method in {'GET', 'HEAD', 'OPTIONS'} and path not in _BOOT_GATED_READ_PATHS)
             or path in _STORAGE_WRITE_FENCE_EXEMPT_PATHS
             or (path.endswith('/decide') and path.startswith(
                 _STORAGE_WRITE_FENCE_EXEMPT_DECIDE_PREFIXES))):
         return None
     from quart.utils import run_sync
-    from lib.server.server_boot_readiness import application_boot_snapshot
+    from lib.server.server_boot_readiness import BOOT_RETRY_AFTER_SECONDS, application_boot_snapshot
     snapshot = await run_sync(application_boot_snapshot)(current_app._get_current_object())
     status = snapshot['status']
     if status == 'ready':
@@ -244,7 +256,7 @@ async def enforce_boot_gate():
         'server_booting',
         status=503,
         message='Server is still starting',
-        retryAfter=1,
+        retryAfter=BOOT_RETRY_AFTER_SECONDS,
         boot={
             'status': status,
             'currentPhase': snapshot['currentPhase'],

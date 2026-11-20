@@ -42,7 +42,8 @@ isolated writer -> immutable checkpoint -> gated refs/tofu/candidate (merged)
                   canonical workspace         refs/tofu/stable
 ```
 
-- Candidate updates are serialized and compare-and-swap guarded.
+- Candidate updates are serialized per project and compare-and-swap guarded;
+  independent projects integrate concurrently.
 - Stable moves only through explicit promotion after its own gate.
 - Candidate integration never moves canonical `HEAD`; automatic task delivery merges into current workspace bytes without advancing HEAD.
 - `reconcile-head` merges clean committed HEAD history into candidate under the same gate/CAS.
@@ -77,6 +78,7 @@ Opt-in linear mode: `concurrent writers → terminal task → immutable checkpoi
 - Tool dispatch never calls this checkpoint runtime or rewrites a result from its failure; tool calls take no workspace lease.
 - The background commit-round worker captures the whole opted-in workspace after settlement; dirty first activation needs no clean-baseline admission.
 - First settlement records `HEAD` in `refs/tofu/workspace-checkpoint-baseline` and anchors `refs/tofu/stable` before capture. Enabling alone moves no ref and cannot make export select an older isolated-mode stable ref.
+- Publication ownership is explicit. Once the baseline marker exists, linear mode owns branch and stable publication; a `refs/tofu/candidate` left by an earlier isolated workspace is inert, and publication verifies it did not move during capture. Before the marker exists, first activation adopts the initialization pair only while candidate and stable point exactly at `HEAD`; a ref naming another commit still refuses, because it describes an existing publication.
 - Alternate-index capture creates mechanical task/conversation commits under
   `refs/tofu/checkpoints/`. Branch and real index stay at the last publication
   while verification is pending, required or failed. Built-ins check conflict
@@ -247,6 +249,17 @@ deadline would reject healthy tests rather than remove the serialization.
 Specifications: `test_all_publication_gates_run_outside_repository_admission`,
 `test_workspace_registration_proceeds_while_integration_gate_runs`, and the
 existing candidate-CAS and acceptance suites.
+
+**Repository admission does not span a merge.** The integration three-way merge
+reads only two immutable commits, the candidate and the submitted checkpoint, so
+`_integrate_row` computes it outside the repository lock; the
+pre-publication revalidation and compare-and-swap reacquire that lock and
+requeue when either input moved meanwhile. On Git without `merge-tree
+--write-tree` the fallback materializes a throwaway worktree, and that
+worktree-scale work must never stall unrelated task starts, checkpoint captures
+or deliveries of the same project. A conflict is quarantined, or requeued when
+the delivery authority changed during the merge, under that final admission.
+Specification: `test_merge_computation_runs_outside_repository_admission`.
 
 **Legacy Git merges.** Problem: merges use `git merge-tree --write-tree`
 (Git 2.38; `--merge-base` 2.40) and fall back to a throwaway-worktree merge on
@@ -709,8 +722,9 @@ stage cause (`both sides created the file`, a delete, binary content, a mode cla
 Replay with the publisher onto the branch tip at each hold's first observation (last 24 h, 13
 conflict holds): 3 land with or without this change (2 `JOURNAL.md`, `test_supervisor.py`), 0
 more land, `submit_gate_910cexp.sh` now resolves but its delivery stays held by a genuine
-overlap in `run_slime.sh` line 240; the 9 add/add holds and `test_router_defaults.py` are genuine
-two-version conflicts and stay held. Alternatives rejected: Git's `union` driver (also
+overlap in `run_slime.sh` line 240; the add/add holds and `test_router_defaults.py` stay held
+(see "A file created twice with the same bytes is one file" for the add/add holds that were not
+two versions). Alternatives rejected: Git's `union` driver (also
 concatenates rewrites of the same lines, see above); merging adjacent edits (lands a change
 that depends on the other side's bytes); concatenating add/add files (two full versions of one
 script or report are not an append); similarity-based deduplication (only verbatim containment
@@ -718,6 +732,26 @@ is evidence the change already landed). Not covered: an append-only file both si
 (`git_land` merges it by the append rule; a reviewed delivery still holds it as add/add, since
 `_pending_task_paths` names created conflicts before the three-way apply). Verify
 `tests/project_mod/test_delivery_append_and_script_merges.py`.
+
+**A file created twice with the same bytes is one file (2026-11-18).** Problem: of the
+add/add holds ("task and canonical both created different content at:") in the tofu,
+knowledge and parallel coordinator histories, 30 of 80 paths held task bytes the branch had
+already held for that path since the task's baseline. 27 paths came from the managed folder's
+per-delegation snapshot (`managed_repository._record_for_workers`, "Tofu checkpoint: the folder
+contents at delegation"), 53 from another Worker's delivery; none came from a borrowed input
+snapshot (every held task's `sourceSnapshot` equals its `inputHeadSha`). parallel 1b3b958a is
+the clearest: the Worker copied its `infra/hope/*.sh` into the shared folder for Hope jobs, the
+next delegation's snapshot committed them as 100755, and its own checkpoint held the identical
+blobs as 100644, a hold on four byte-identical files. Decision: `_pending_task_paths` drops a
+created conflict whose task blob appears in `git log --raw <base>..<source> -- <path>`
+(`_held_since`): taking those bytes as the merge base, the task left the file unchanged, so
+the branch's version (mode and later edits included) stands. Different bytes stay a held
+add/add conflict. Alternatives rejected: excluding a running assignment's paths from the folder
+snapshot (the snapshot cannot know which shared-folder files a Worker copied there, and the
+same bytes also arrive through other Workers' deliveries); concatenating or preferring either
+side of two real versions. The remaining folder-snapshot holds are real two-version conflicts:
+a Worker kept editing a file after copying it into the shared folder (`.parallel_jobs/*.hope`,
+`results/**`). Verify `tests/project_mod/test_delivery_same_file_created_twice.py`.
 
 **A Worker that merged the branch delivers from the merge base.** Problem: Workers merge the
 shared branch into their worktree before saving (AGENTS.md), but the delta was always diffed
@@ -971,9 +1005,10 @@ write-after-revalidation race below remains; the input fence does not claim file
 atomicity. Specifications: `tests/project_mod/test_git_land_generated_work.py`, the original
 landing suite, and the task-delta generated-output test named above.
 
-An existing `index.lock`
-refuses with evidence: the processes holding it open (from `/proc`) mean Git is busy; none means
-an exited Git process left it, and the refusal reports its age and Git's manual recovery step.
+An existing `index.lock` held by a live process is waited out under the shared Git liveness
+window (`GIT_STALL_SECONDS`): another landing's publication is delta-sized, so its caller waits
+for the lock to disappear instead of failing and spending another model turn. A lock with no
+live holder (from `/proc`) is stale: the refusal reports its age and Git's manual recovery step.
 The tool never removes a lock itself, because Tofu's own index reservations close their
 descriptor before the rename that releases them. A lock that disappears or changes while its
 holders are inspected was busy, not stale: the landing plans again at once instead of refusing.
@@ -1238,12 +1273,18 @@ conversation, so no lane's recorded runs could answer a candidate check. The
 inherited variables also carried the server's own `TOFU_DATA_DIR`, `PORT` and
 provider credentials into test processes. Decision: the run inherits only the small declared
 set `_INHERITED` (user and host identity, the opt-in storage/native test
-fixtures), the scenario controls a test or landing sets for itself
-(`LANDING_`, `EXERCISE_`, `TOFU_TEST_SCENARIO_`), and the host's tools through
-`apply_tool_paths` (interpreter directories, bundled toolchain, user tool bins,
-system directories). Locale is `C.UTF-8`, `TZ=UTC`, and `VIRTUAL_ENV` names the
-project interpreter. Everything else is pinned by `tests/conftest.py`, whose
-code is a dependency of every record, or by the runner.
+fixtures, the black-box target selectors `TOFU_BLACKBOX_URL` and
+`TOFU_BLACKBOX_REFERENCE_URL`), the scenario controls a test or landing sets
+for itself (`LANDING_`, `EXERCISE_`, `TOFU_TEST_SCENARIO_`), and the host's
+tools through `apply_tool_paths` (interpreter directories, bundled toolchain,
+user tool bins, system directories). Locale is `C.UTF-8`, `TZ=UTC`, and
+`VIRTUAL_ENV` names the project interpreter. Everything else is pinned by
+`tests/conftest.py`, whose code is a dependency of every record, or by the
+runner. The two selectors name a server the caller started:
+`tests/blackbox/conftest.py` uses the URL verbatim and boots no in-repo server
+when it is set, so `make test TESTS="tests/blackbox"` reaches that server
+through the ordinary verification path. No other `TOFU_BLACKBOX_*` variable is
+forwarded.
 
 Alternatives rejected: excluding the known conversation variables keeps the
 launcher's credentials and partitions again on the next unrecognised name
@@ -1347,7 +1388,17 @@ symlinked test inventories use their ordinary discovery. **Alternatives rejected
 mtime-only reuse can miss changed bytes; a second import policy diverges from the
 selector; full collection for an explicit file performs unrelated work.
 
-**Measurement:** `scripts/benchmark_verification.py` checks identical reference
+**Measurement:** `lib.project_mod.verification_index.measure` is the shared
+measurement entrypoint; the private `scripts/benchmark_verification.py` CLI
+only parses arguments and renders its result. Public unit tests call the shared
+owner without importing the excluded script. Full-reference equality, zero-parse
+warm reuse and exact one-file scoped work remain mandatory in both contexts;
+this does not replace or narrow any development, domain or release gate.
+Synthetic Git fixtures verify these checks without an export, live-policy access,
+private tooling or external execution. Hosted builds and full/unisolated exports
+are not certified by those fixtures.
+
+The measurement checks identical reference
 sets on a frozen 4,513-file corpus, alternating three cold runs per implementation.
 Ordinary/full content-index cold medians were 14.328/14.092 s; full content-cache
 hits 0.148 s; a cold one-file scope 0.090 s. These measure preparation, not the
@@ -1996,45 +2047,54 @@ more than 64 rows needing action still span pages, and `hasMore` still resets th
 Specifications: `tests/project_mod/test_delivery_resume_demand.py` and the action-page
 case in `tests/storage/test_storage_application_contract.py`.
 
-**Receiver lanes: one project's capture never delays another project's publication
-(2026-11-06).** Problem: the integration worker is one thread per serving process, and it
-ran every page row itself, in global row-ID order across all owners and projects. Row work
-is volume-proportional Git with no deadline by design (`checkpoint_workspace`'s `git add -A`,
-the task-delta canonical capture, source reclamation), so one project's capture held every
-project's publication: on 2026-11-06 a parallel-project Worker's worktree (2.26 million
-untracked evaluation snapshots under `.snap_tmp/`) was captured from about 11:20 to 14:01,
-and Tofu's accepted deliveries (7509d68d among them) waited behind it. Decision: the loop
-pages exactly as before but hands each row to its project's lane
-(`lib/project_mod/delivery.py::_queue_on_project_lanes`), keyed by canonical project root,
-the domain of the repository lock that already orders a project's Git work. A lane is one
-daemon thread that runs its project's rows one at a time in arrival order (row-ID order
-within a pass) and exits when it has none; lanes of different projects run concurrently. A
+**Receiver lanes: projects publish independently; a project's rows prepare concurrently
+(2026-11-06; concurrent rows 2026-11-19).** Problem: the integration worker is one thread per
+serving process, and it ran every page row itself, in global row-ID order across all owners
+and projects. Row work is volume-proportional Git with no deadline by design
+(`checkpoint_workspace`'s `git add -A`, the task-delta canonical capture, source reclamation),
+so one project's capture held every project's publication: on 2026-11-06 a parallel-project
+Worker's worktree (2.26 million untracked evaluation snapshots under `.snap_tmp/`) was
+captured from about 11:20 to 14:01, and Tofu's accepted deliveries (7509d68d among them)
+waited behind it. Decision: the loop pages exactly as before but hands each row to its
+project's lane (`lib/project_mod/delivery.py::_queue_on_project_lanes`), keyed by canonical
+project root. A lane's driver starts every pending row on its own daemon worker and exits
+when none remain; lanes of different projects run concurrently. Rows of one project overlap,
+because their preparation is volume-bound and independent while the repository lock still
+orders each row's delta-sized publication (revalidation, byte apply, receipt) and the receipt
+generation CAS rejects a superseded row, so no row can publish over another's result. A
 queued row keeps its place and takes the newest page snapshot; a row in flight is not queued
-again, because its own receipt write is a delivery-state commit that makes the next pass
-due and wakes the loop (the existing commit hint). A row whose processing changed nothing
-waits for the loop's idle backoff, as before. Two lanes admitting the same shared ancestor
-barriers at once can refuse one of them with `workspace_busy`; a capture refused that way
-is retried by the next pass (delivery contract, "Conflict recovery"). `stop_worker` joins the loop, then drops queued
-rows (their receipts stay durable debt for the next recovery pass) and joins running lanes
-within the same budget. Other callers of `resume_pending_workspace_deliveries` (the specs)
-still process the page synchronously; only the loop passes `lanes=True`. Within a
-project a slow or doomed capture still delays that project's later rows: that order is the
-repository lock's, and the evidence capture of a denied outcome stays ("checkpoint/undo
-evidence remains" above). Alternatives rejected: a per-project storage cursor (a query
-change on both authorities for an ordering the page already gives); skipping a busy
-project's rows instead of queueing them (a project with rows on several pages would never
-reach its later pages while its first page stays due); the shared demand executor (its
-non-daemon workers are joined at interpreter exit, so a multi-hour capture would hold
-shutdown); a lane concurrency cap, capture size limit or capture deadline (knobs that limit
-work, AGENTS.md principles #3 and #5); skipping the evidence capture of denied outcomes
-(changes the evidence invariant and `test_transient_checkpoint_failure_remains_recoverable`;
-lanes already remove its cross-project cost). Known limit: the explicit integration queue
-(`process_ready_once`: candidate merge and release gates of `submit_workspace`) still runs
-on the loop, because its 660-second claim horizon assumes one claimant per process; no
-isolated-task Worker uses that queue (every live row on 2026-11-06 was `isolated-task`).
-Specifications: `tests/project_mod/test_delivery_project_lanes.py`, including
-`test_slow_capture_in_one_project_does_not_delay_another_projects_ready_row` (a capture held
-in project alpha while project beta's ready row publishes; it fails on the serial loop).
+again, because its own receipt write is a delivery-state commit that makes the next pass due
+and wakes the loop (the existing commit hint). A row whose processing changed nothing waits
+for the loop's idle backoff, as before. Reclamation backlog rows run one at a time on the
+driver, only while no delivery row waits or runs: a delivery waits behind at most the one
+reconsideration already running. Two rows admitting the same shared ancestor barriers at
+once can refuse one of them with `workspace_busy`; a capture refused that way is retried by
+the next pass (delivery contract, "Conflict recovery"). `stop_worker` joins the loop, then
+drops queued rows (their receipts stay durable debt for the next recovery pass) and joins
+running rows and lanes within the same budget. Other callers of
+`resume_pending_workspace_deliveries` (the specs) still process the page synchronously; only
+the loop passes `lanes=True`. Alternatives rejected: a per-project storage cursor (a query
+change on both authorities for an ordering the page already gives); skipping a busy project's
+rows instead of queueing them (a project with rows on several pages would never reach its
+later pages while its first page stays due); the shared demand executor (its non-daemon
+workers are joined at interpreter exit, so a multi-hour capture would hold shutdown; lane
+rows use daemon workers, as the lane always did); a lane concurrency cap, capture size limit
+or capture deadline (knobs that limit work, AGENTS.md principles #3 and #5); skipping the
+evidence capture of denied outcomes (changes the evidence invariant and
+`test_transient_checkpoint_failure_remains_recoverable`; lanes already remove its
+cross-project cost). Specifications: `tests/project_mod/test_delivery_project_lanes.py`,
+including `test_one_projects_rows_prepare_concurrently_beside_other_projects` and
+`test_slow_capture_in_one_project_does_not_delay_another_projects_ready_row`.
+
+**The candidate queue dispatches per project (2026-11-19).** `_worker_loop` claims every
+ready row and starts it on the shared demand executor (`max_workers` is idle reuse, never a
+ceiling); `process_ready_once` remains the synchronous one-row entry for specs and one-shot
+callers. The authority's claim enforces one row per project: SQL's ready predicate excludes a
+project with an integrating row, and the native engine holds a project claim key. Independent
+projects therefore run their merges (outside repository admission since 2026-11-19) and gates
+concurrently while one project's candidate stays linear. `stop_worker` waits for claimed rows
+within its budget and leaves unfinished ones to the 660-second recovery horizon. Specification:
+`test_integration_rows_of_independent_projects_run_concurrently`.
 
 Successful tasks reclaim source clones whose final bytes/index are pinned in recoverable checkpoints; uncaptured changes, conflicts, failures and durable artifacts retain recovery/undo workspaces. Python gets a lazy private prefix with readable source packages;
 pip installs stay local and new packages retain their workspace. Node package links reuse source dependencies inside a private ignored directory.

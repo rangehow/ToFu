@@ -275,6 +275,34 @@ def _fits(bucket, input_tokens, output_tokens):
     return True
 
 
+def _qualify_exhausted_main(route, main, pin, input_tokens, target, allowance, exclusions):
+    """Attach a parent dispatch allowance only to a fresh exhaustion witness."""
+    supply = route.get('_exhaustedAuxiliarySupply')
+    if not exclusions or not supply or not pin or route['providerId'] != pin:
+        return route
+    from lib.llm_dispatch.context_policy import slot_context_window
+    from lib.model_info import _clamp_route_max_tokens, _route_output_limit_key
+
+    revision, _ = supply
+    for slot, profile in main['members']:
+        # Profiles describe live authority, not the revision of an already
+        # minted Python slot. Never use new profiles to refresh its grant.
+        issued = getattr(slot, 'route_witness', None)
+        if issued is not None and issued.get('revision') != revision:
+            return route
+        window = min(slot_context_window(slot), _tokens(profile.get('contextWindow')) or 0)
+        route_key = _route_output_limit_key(
+            provider_id=profile['providerId'], offering_id=slot.route_offering_id,
+            deployment_id=slot.route_deployment_id, protocol=slot.protocol or 'openai',
+            model=slot.model)
+        allowance = min(window - input_tokens, _clamp_route_max_tokens(
+            route['modelId'], allowance, route_key=route_key,
+            declared_limit=int(slot.max_output_tokens or 0), wire_model=slot.model))
+        if allowance < target:
+            return route
+    return dict(route, _mainRecoveryOutputTokens=allowance)
+
+
 def _bucket_prices(bucket, input_tokens, output_tokens):
     prices = [_project_route_cost(profile.get('declaredPricing'),
                                   provider_id=profile['providerId'], model_id=profile['modelId'],
@@ -306,8 +334,54 @@ def _parent_route_identities(bucket, *, issued_parent=None):
     return tuple(identities)
 
 
+def _select_with_absent_legacy_main(result, task, dispatcher, profiles, *, owner, tenant,
+                                    pin, input_tokens, output_tokens, capacity_output_tokens,
+                                    excluded_routes, excluded_route_identities, prepare_dispatch):
+    """No strict main slot means no reachable price baseline, not a new grant."""
+    config = _mapping(task.get('config'))
+    model = result['modelId']
+    restrictions = (task.get('provider_id'), config.get('providerId'), config.get('provider_id'))
+    if len({value for value in restrictions if value and value != pin}) > 1:
+        return dict(result, reason='conflicting_provider_pins')
+    if config.get('model') and config['model'] != model:
+        return result
+    from lib.model_routing import OwnerBoundary, request_routing_repository
+    if request_routing_repository(task, OwnerBoundary.create(owner, tenant)) is not None:
+        # This path mints from the durable owner table, not an SDK run's
+        # private authority. Equal owner/tenant alone cannot authorize it.
+        return result
+    scope = {'pin': pin, 'legacy_provider': result['providerId']}
+    present = dispatcher.loaded_model_match(model, **scope)
+    if present is None and prepare_dispatch:
+        # Only a real, unquoted summary may trigger a configured-pool load.
+        # Quote/preflight reads do not resolve configured credentials.
+        dispatcher.initialize()
+        present = dispatcher.loaded_model_match(model, **scope)
+    if present is not False:  # Unknown or present-but-unqualified is not absent.
+        return result
+    from lib.tasks_pkg.compaction._auxiliary_route import select_auxiliary_route
+    try:
+        native = select_auxiliary_route(
+            dict(result), profiles, owner=owner, tenant=tenant,
+            input_tokens=input_tokens, output_tokens=output_tokens,
+            capacity_output_tokens=capacity_output_tokens, subscription_main=False,
+            excluded_routes=excluded_routes, excluded_route_identities=excluded_route_identities)
+    except Exception as exc:
+        logger.debug('[SummaryRoute] Legacy recovery authority unavailable: %s', type(exc).__name__)
+        return result
+    if dispatcher.loaded_model_match(model, **scope) is not False:
+        # A blocking authority read may have overlapped a picker reload.
+        return result
+    if native.get('requestOwned'):
+        return native
+    if native.get('_requestRoute'):
+        result['_requestRoute'] = native['_requestRoute']
+    return result
+
+
 def select_summary_route(task, input_tokens, output_tokens, *,
-                         capacity_output_tokens=None, excluded_routes=()):
+                         capacity_output_tokens=None, excluded_routes=(),
+                         excluded_route_identities=(), prepare_dispatch=False):
     """Return route, projected cost and optional AA selection evidence.
 
     Legacy providerId is an execution pin. requestOwned routes carry stable
@@ -376,13 +450,13 @@ def select_summary_route(task, input_tokens, output_tokens, *,
         from lib.llm_dispatch import get_dispatcher
         from lib.model_profiles import configured_model_profiles
         profiles = configured_model_profiles(owner_user_id=owner, tenant_id=tenant)
+        dispatcher = get_dispatcher()
         buckets = _authorized_buckets(
-            get_dispatcher(), profiles, owner=owner, tenant=tenant,
-            pin=pin, provider=provider)
+            dispatcher, profiles, owner=owner, tenant=tenant, pin=pin, provider=provider)
         main_keys = sorted(key for key in buckets if key[1] == model)
         if len(main_keys) != 1 and not disabled and policy != _MAIN:
             expanded = _authorized_buckets(
-                get_dispatcher(), profiles, owner=owner, tenant=tenant,
+                dispatcher, profiles, owner=owner, tenant=tenant,
                 pin=pin, provider=provider, allow_mixed_scope=True)
             expanded_keys = sorted(key for key in expanded if key[1] == model)
             if len(expanded_keys) == 1 and _parent_route_identities(
@@ -390,6 +464,13 @@ def select_summary_route(task, input_tokens, output_tokens, *,
                 buckets, main_keys = expanded, expanded_keys
         if len(main_keys) != 1:
             result['reason'] = 'main_route_unresolved'
+            if policy == _AA_CHEAPEST and issued_parent is None:
+                return _select_with_absent_legacy_main(
+                    result, task, dispatcher, profiles, owner=owner, tenant=tenant, pin=pin,
+                    input_tokens=input_tokens, output_tokens=output_tokens,
+                    capacity_output_tokens=capacity_output_tokens, excluded_routes=excluded_routes,
+                    excluded_route_identities=excluded_route_identities,
+                    prepare_dispatch=prepare_dispatch)
             return result
         main_key = main_keys[0]
         main = buckets[main_key]
@@ -426,8 +507,8 @@ def select_summary_route(task, input_tokens, output_tokens, *,
                 return result
             from lib.tasks_pkg.compaction._auxiliary_route import select_auxiliary_route
             try:
-                return select_auxiliary_route(
-                    result, profiles, owner=owner, tenant=tenant,
+                native = select_auxiliary_route(
+                    dict(result), profiles, owner=owner, tenant=tenant,
                     input_tokens=input_tokens, output_tokens=output_tokens,
                     capacity_output_tokens=capacity_output_tokens,
                     parent_offering_ids={profile['provenance']['offeringId']
@@ -435,7 +516,9 @@ def select_summary_route(task, input_tokens, output_tokens, *,
 
                     parent_route_identities=parent_identities,
                     main_cost=main_cost, main_serves_summary=main_serves_summary,
-                    excluded_routes=excluded_routes)
+                    excluded_routes=excluded_routes, excluded_route_identities=excluded_route_identities)
+                return _qualify_exhausted_main(native, main, pin, input_tokens, output_tokens,
+                                                capacity_output_tokens, excluded_route_identities)
             except Exception as exc:
                 logger.debug('[SummaryRoute] Auxiliary authority unavailable: %s',
                              type(exc).__name__)
@@ -465,15 +548,19 @@ def select_summary_route(task, input_tokens, output_tokens, *,
                 parent_offering_ids={profile['provenance']['offeringId']
                                      for _, profile in main['members']},
                 main_cost=main_cost, excluded_routes=excluded_routes,
+                excluded_route_identities=excluded_route_identities,
                 main_serves_summary=main_serves_summary)
             if native.get('requestOwned') or native.get('reason') == 'parent_route_changed':
                 return native
+            if excluded_route_identities and native.get('_exhaustedAuxiliarySupply'):
+                return _qualify_exhausted_main(native, main, pin, input_tokens, output_tokens,
+                                                capacity_output_tokens, excluded_route_identities)
             if native.get('_requestRoute'):
                 result['_requestRoute'] = native['_requestRoute']
         except Exception as exc:
             logger.debug('[SummaryRoute] Native auxiliary authority unavailable: %s',
                          type(exc).__name__)
-        if excluded_routes:
+        if excluded_routes or excluded_route_identities:
             result['reason'] = 'no_remaining_authorized_auxiliary_route'
             return result
         if main.get('nativeOnly'):

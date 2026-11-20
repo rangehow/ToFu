@@ -2,11 +2,17 @@
  * Boot identity proves replacement; server phases, never elapsed time, prove
  * progress. The retained update bridge owns one observation for its lifetime.
  */
+export interface RestartBootPhase {
+  index: number;
+  key: string;
+  label?: string;
+}
+
 export interface RestartBoot {
   status: string;
   phaseTotal?: number;
-  currentPhase?: { index: number; key: string } | null;
-  failedPhase?: { index: number; key: string } | null;
+  currentPhase?: RestartBootPhase | null;
+  failedPhase?: RestartBootPhase | null;
   error?: string | null;
 }
 export type RestartHealthVerdict =
@@ -36,6 +42,24 @@ export function restartWaitNotice(waitingForS: number, unreachableForS: number, 
   if (unreachableForS > slowAfterS) return 'unreachable';
   if (waitingForS > slowAfterS) return 'slow';
   return null;
+}
+
+/** Phase copy. The server owns the phase key and its label; a key this build
+ *  has no catalog entry for falls back to that label, never to the raw key. */
+export function restartPhaseLabel(
+  key: string,
+  serverLabel: string | null | undefined,
+  translate: (key: string) => string,
+): string {
+  if (!key) return serverLabel || '';
+  const i18nKey = `update.phase.${key}`;
+  let translated = '';
+  try {
+    translated = translate(i18nKey);
+  } catch {
+    // i18n may not be ready yet; the server label still says what is running.
+  }
+  return translated && translated !== i18nKey ? translated : (serverLabel || i18nKey);
 }
 
 /** A running phase advances only through completed predecessors. */

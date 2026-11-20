@@ -31,6 +31,7 @@ from lib.oauth.manager._state import (
     _flow_is_current,
     _flows_lock,
     _update_active_flow,
+    guard_flow_write,
 )
 
 logger = get_logger(__name__)
@@ -226,8 +227,9 @@ def stop_device_flow(provider: str) -> None:
     with _flows_lock:
         flow = _active_flows.get(provider)
         cancel = flow.get('cancel_event') if flow else None
+        if cancel is not None:
+            cancel.set()
     if cancel is not None:
-        cancel.set()
         logger.info('[OAuth] Signalled %s device flow to stop', provider)
 
 
@@ -242,7 +244,7 @@ def _device_poll_loop(provider: str, device_auth_id: str, user_code: str,
                       user_id: str = '', device_id: str = '',
                       timeout_s: int = 0) -> None:
     """Poll the device-token endpoint until authorized / timeout / cancel."""
-    from lib.oauth.token_store import OAuthExchangeError
+    from lib.oauth.token_store import OAuthExchangeError, guarded_login_write
 
     protocol = _DEVICE_PROTOCOLS[provider]
     deadline = time.time() + (timeout_s or protocol.timeout())
@@ -280,7 +282,8 @@ def _device_poll_loop(provider: str, device_auth_id: str, user_code: str,
                 return
 
             try:
-                token = protocol.redeem(result, user_id=user_id)
+                with guarded_login_write(guard_flow_write(provider, flow_id, int(user_id))):
+                    token = protocol.redeem(result, user_id=user_id)
             except OAuthExchangeError as e:
                 logger.error('[OAuth] %s device redemption failed: %s',
                              provider, e)

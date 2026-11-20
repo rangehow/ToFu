@@ -23,6 +23,21 @@ _SENTENCE_END_CHARS = frozenset(
     '。．.！!？?…～~：:；;、,，)）]】》」』”"\'`’*_>⟧')
 
 
+def _ends_in_open_link(text: str) -> bool:
+    """True when ``text`` ends inside an unclosed Markdown link/image.
+
+    A model that stops early mid-token leaves the link's ``[`` opener without
+    its ``]``; the tail then renders as a bare ``[`` and the rest of the
+    document is gone. Unlike the length-ratio floors this is structural, so it
+    holds at any output length. (Production: an EN→ZH body cleared the 45%
+    soft floor by 0.5 character while ending on ``[``, so the cut translation
+    was committed.)
+    """
+    t = (text or '').rstrip()
+    opener = t.rfind('[')
+    return opener != -1 and ']' not in t[opener:]
+
+
 def _ends_midsentence(text: str) -> bool:
     """True when ``text`` does NOT end on a sentence terminator/closer.
 

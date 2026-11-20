@@ -222,6 +222,10 @@ class ToolResultArtifactWriter:
         self._spool: Any | None = None
         self._spool_path: str | None = None
         self._spooled = False
+        # Known credentials never reach the spool file; text that may still
+        # complete one waits here (see KnownCredentialRedactor.redact_stream).
+        self._spool_redactor: Any | None = None
+        self._spool_pending = ''
         self._accepted_chars = 0
         self._accepted_bytes = 0
         self._hasher = hashlib.sha256()
@@ -298,7 +302,7 @@ class ToolResultArtifactWriter:
                 self._spill()
         else:
             try:
-                self._spool.write(text)
+                self._spool_write(text)
             except OSError as exc:
                 logger.warning('[ToolResultWriter] spool write failed: %s', exc)
                 self._degrade("disk")
@@ -408,10 +412,12 @@ class ToolResultArtifactWriter:
             spool = os.fdopen(
                 fd, "w+", encoding="utf-8", errors="strict", newline="")
             fd = None
-            for part in self._buffered:
-                spool.write(part)
-            spool.flush()
+            from lib.tool_results.credential_redaction import known_credential_redactor
+            self._spool_redactor = known_credential_redactor(owner_user_id=self.user_id)
             self._spool = spool
+            for part in self._buffered:
+                self._spool_write(part)
+            spool.flush()
             self._spool_path = path
             self._buffered = []
             self._buffered_chars = 0
@@ -435,7 +441,14 @@ class ToolResultArtifactWriter:
                     pass
             self._degrade("disk")
 
+    def _spool_write(self, text: str, *, final: bool = False) -> None:
+        safe, self._spool_pending = self._spool_redactor.redact_stream(
+            self._spool_pending, text, final=final)
+        if safe:
+            self._spool.write(safe)
+
     def _cleanup_spool(self) -> None:
+        self._spool_pending = ''
         spool = self._spool
         self._spool = None
         if spool is not None:
@@ -503,6 +516,7 @@ class ToolResultArtifactWriter:
 
     def _finalize_spilled(self, complete: bool) -> ToolResultArtifact:
         try:
+            self._spool_write('', final=True)
             self._spool.flush()
             self._spool.seek(0)
             full = self._spool.read()

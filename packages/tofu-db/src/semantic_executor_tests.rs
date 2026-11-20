@@ -668,7 +668,10 @@
             "user_id": 11,
             "command_id": "pair-command",
             "input_projection": {"content": "hello"},
-            "config": {"model": "test"},
+            "config": {"model": "test", "_conversationExecutionIdentity": {
+                "capabilities": ["schedule_manage.run.provider_probe_daily"],
+                "capabilityBinding": null,
+            }},
             "conversation_defaults": {"allowCreate": true, "title": "Pair"},
             "now": 1_000
         });
@@ -696,6 +699,30 @@
         assert_eq!(first["_needsStart"], true);
         assert_eq!(first["idempotentReplay"], false);
 
+        let private_attempt = execute(
+            &mut database,
+            &request(
+                "turn.attempt.get",
+                11,
+                json!({
+                    "attempt_id": first["attempt"]["attemptId"],
+                    "user_id": 11,
+                    "include_execution_config": true,
+                }),
+                None,
+            ),
+            1_000,
+        )
+        .unwrap();
+        assert_eq!(
+            private_attempt["config"]["_conversationExecutionIdentity"]["capabilityBinding"],
+            json!({
+                "conversationId": first["turn"]["conversationId"],
+                "turnId": first["turn"]["turnId"],
+                "attemptId": first["attempt"]["attemptId"],
+            })
+        );
+
         let replay = execute(
             &mut database,
             &request("turn.create_pair", 11, payload, Some("pair-receipt-2")),
@@ -707,6 +734,8 @@
         assert_eq!(replay["conversationRevision"], 1);
         assert_eq!(replay["idempotentReplay"], true);
 
+        let mut queued_config = private_attempt["config"].clone();
+        queued_config["_conversationExecutionIdentity"]["capabilityBinding"] = Value::Null;
         let queued = execute(
             &mut database,
             &request(
@@ -717,6 +746,7 @@
                     "user_id": 11,
                     "command_id": "queued-pair-command",
                     "input_projection": "queued hello",
+                    "config": queued_config,
                     "dispatch_mode": "conversation_executor",
                     "queue_binding": {"queueId": "queue-pair", "kind": "real", "priority": 7},
                     "conversation_defaults": {"allowCreate": true},
@@ -735,6 +765,37 @@
         assert_eq!(
             queued["queueItem"]["attemptId"],
             queued["attempt"]["attemptId"]
+        );
+
+        let read_queued_attempt = |owner, private| {
+            request(
+                "turn.attempt.get",
+                owner,
+                json!({
+                    "attempt_id": queued["attempt"]["attemptId"],
+                    "user_id": owner,
+                    "include_execution_config": private,
+                }),
+                None,
+            )
+        };
+        let bound = execute(&mut database, &read_queued_attempt(11, true), 2_001).unwrap();
+        assert_eq!(bound["config"]["_conversationExecutionIdentity"]["capabilityBinding"], json!({
+            "conversationId": "queued-pair",
+            "turnId": queued["turn"]["turnId"],
+            "attemptId": queued["attempt"]["attemptId"],
+        }));
+        let queue_list = request("queue.list", 11,
+            json!({"conv_id": "queued-pair", "user_id": 11}), None);
+        let rows = execute(&mut database, &queue_list, 2_001).unwrap();
+        assert_eq!(rows[0]["config"], bound["config"]);
+        let public = execute(&mut database, &read_queued_attempt(11, false), 2_001).unwrap();
+        assert_eq!(public["attemptId"], queued["attempt"]["attemptId"]);
+        assert!(public.get("config").is_none());
+        assert!(public.get("_config").is_none());
+        assert_eq!(
+            execute(&mut database, &read_queued_attempt(12, true), 2_001).unwrap(),
+            Value::Null,
         );
 
         let changes = execute(
@@ -784,10 +845,7 @@
         assert_eq!(snapshot_queue[0]["queueId"], "queue-pair");
         assert_eq!(snapshot_queue[0]["position"], 1);
         assert_eq!(snapshot_queue[0]["text"], "queued hello");
-        assert_eq!(
-            snapshot_queue[0]["outputTurnId"],
-            queued["turn"]["turnId"]
-        );
+        assert_eq!(snapshot_queue[0]["outputTurnId"], queued["turn"]["turnId"]);
         assert_eq!(
             snapshot_queue[0]["attemptId"],
             queued["attempt"]["attemptId"]
@@ -866,7 +924,7 @@
             json!(["queue-pair"])
         );
 
-        execute(
+        let copied_pair = execute(
             &mut database,
             &request(
                 "turn.create_pair",
@@ -875,6 +933,7 @@
                     "conversation_id": "activate-conflict",
                     "user_id": 11,
                     "command_id": "activate-conflict-live",
+                    "config": private_attempt["config"],
                     "conversation_defaults": {"allowCreate": true},
                     "now": 2_014
                 }),
@@ -883,6 +942,18 @@
             2_014,
         )
         .unwrap();
+        let copied = execute(
+            &mut database,
+            &request(
+                "turn.attempt.get",
+                11,
+                json!({"attempt_id": copied_pair["attempt"]["attemptId"], "user_id": 11, "include_execution_config": true}),
+                None,
+            ),
+            2_014,
+        )
+        .unwrap();
+        assert_eq!(copied["config"], private_attempt["config"]);
         execute(
             &mut database,
             &request(
@@ -1062,7 +1133,6 @@
             SemanticExecutionError::TurnSupersededByHuman
         );
     }
-
     #[test]
     fn turn_steer_commit_fences_the_live_window_and_replays_once() {
         let directory = tempfile::tempdir().unwrap();
@@ -8077,6 +8147,108 @@
     }
 
     #[test]
+    fn turn_resume_plan_read_returns_only_the_current_owned_settled_source_pin() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        execute(
+            &mut database,
+            &request(
+                "conversation.create",
+                11,
+                json!({"conv_id": "resume-plan", "user_id": 11, "title": "Fixture", "settings": {}}),
+                Some("resume-plan-conversation"),
+            ),
+            1_000,
+        )
+        .unwrap();
+        let mut attempts = std::collections::BTreeMap::new();
+        for status in ["failed", "interrupted", "truncated", "completed"] {
+            let turn_id = format!("turn-{status}");
+            let settled = execute(
+                &mut database,
+                &request(
+                    "turn.append_settled",
+                    11,
+                    json!({
+                        "conversation_id": "resume-plan", "user_id": 11,
+                        "command_id": turn_id, "actor": "assistant", "status": status,
+                        "turn_id": turn_id,
+                        "projection": {"content": "must not appear in pin"}
+                    }),
+                    Some(&turn_id),
+                ),
+                2_000,
+            )
+            .unwrap();
+            attempts.insert(
+                status,
+                settled["attempt"]["attemptId"].as_str().unwrap().to_owned(),
+            );
+        }
+        let snapshot = request(
+            "turn.sync.snapshot",
+            11,
+            json!({"conversation_id": "resume-plan", "user_id": 11}),
+            None,
+        );
+        let before = execute(&mut database, &snapshot, 3_000).unwrap();
+        let read = |owner, turn: &str, attempt: &str, revision: Value| {
+            request(
+                "turn.resume.plan.read",
+                owner,
+                json!({
+                    "user_id": owner, "conversation_id": "resume-plan", "turn_id": turn,
+                    "attempt_id": attempt, "projection_revision": revision
+                }),
+                None,
+            )
+        };
+        for status in ["failed", "interrupted", "truncated"] {
+            let turn_id = format!("turn-{status}");
+            let attempt_id = attempts[status].as_str();
+            assert_eq!(
+                execute(
+                    &mut database,
+                    &read(11, &turn_id, attempt_id, json!(1)),
+                    3_000
+                )
+                .unwrap(),
+                json!({
+                    "status": "source_pinned", "conversationId": "resume-plan", "turnId": turn_id,
+                    "attemptId": attempt_id, "projectionRevision": 1, "sourceStatus": status
+                })
+            );
+        }
+        for (owner, turn, attempt, revision, status) in [
+            (11, "turn-failed", "failed", 0, "stale_source"),
+            (11, "turn-failed", "truncated", 1, "stale_source"),
+            (11, "turn-completed", "completed", 1, "source_unavailable"),
+            (11, "missing", "failed", 1, "source_unavailable"),
+            (12, "turn-failed", "failed", 1, "source_unavailable"),
+        ] {
+            assert_eq!(
+                execute(
+                    &mut database,
+                    &read(owner, turn, attempts[attempt].as_str(), json!(revision)),
+                    3_000,
+                )
+                .unwrap(),
+                json!({"status": status})
+            );
+        }
+        assert_eq!(
+            execute(
+                &mut database,
+                &read(11, "turn-failed", attempts["failed"].as_str(), json!(-1)),
+                3_000,
+            )
+            .unwrap_err(),
+            SemanticExecutionError::InvalidPayload
+        );
+        assert_eq!(execute(&mut database, &snapshot, 3_000).unwrap(), before);
+    }
+
+    #[test]
     fn turn_attempt_create_is_atomic_owner_scoped_and_lost_ack_replayable() {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
@@ -8140,7 +8312,10 @@
                 "target_actor": "assistant",
                 "target_kind": "reply",
                 "expected_projection_revision": 1,
-                "config": {"temperature": 0.25}
+                "config": {"temperature": 0.25, "_conversationExecutionIdentity": {
+                    "capabilities": ["schedule_manage.run.provider_probe_daily"],
+                    "capabilityBinding": null,
+                }}
             }),
             Some("attempt-create-receipt"),
         );
@@ -8160,6 +8335,36 @@
         assert_eq!(created["streamCursor"], 1);
         assert_eq!(created["idempotentReplay"], false);
         assert_eq!(created["_needsStart"], true);
+
+        let read = request(
+            "turn.attempt.get",
+            11,
+            json!({"attempt_id": created["attempt"]["attemptId"], "user_id": 11, "include_execution_config": true}),
+            None,
+        );
+        let private_attempt = execute(&mut database, &read, 3_001).unwrap();
+        assert_eq!(private_attempt["config"]["temperature"], 0.25);
+        assert_eq!(
+            private_attempt["config"]["_conversationExecutionIdentity"]["capabilityBinding"],
+            json!({
+                "conversationId": created["turn"]["conversationId"],
+                "turnId": created["turn"]["turnId"],
+                "attemptId": created["attempt"]["attemptId"],
+            })
+        );
+        let mut stale = create.clone();
+        let mut stale_payload: Value = serde_json::from_slice(&stale.payload).unwrap();
+        stale_payload["command_id"] = json!("attempt-create-stale");
+        stale.payload = serde_json::to_vec(&stale_payload).unwrap();
+        stale.command_id = Some("attempt-create-stale".to_owned());
+        assert_eq!(
+            execute(&mut database, &stale, 3_002).unwrap_err(),
+            SemanticExecutionError::TurnProjectionStale,
+        );
+        assert_eq!(
+            execute(&mut database, &read, 3_002).unwrap(),
+            private_attempt
+        );
 
         let mut replay_request = create.clone();
         replay_request.command_id = Some("attempt-create-replay-receipt".to_owned());
@@ -8189,7 +8394,6 @@
             SemanticExecutionError::NotFound
         );
     }
-
     #[test]
     fn turn_attempt_create_regenerate_discards_later_turns_only_on_an_exact_acknowledgement() {
         let directory = tempfile::tempdir().unwrap();
@@ -9719,6 +9923,97 @@
         );
         let filtered = execute(&mut database, &filtered_list, 2_000).unwrap();
         assert_eq!(filtered.as_array().unwrap(), &documents[1_000..]);
+    }
+
+    #[test]
+    fn device_policy_lifecycle_witness_survives_removal_and_version_reuse() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut db = AuthorityDatabase::initialize(dir.path()).unwrap();
+        let node = |credential: &str, command: &str| {
+            request(
+                "record.put",
+                11,
+                json!({"namespace": "desktop.node.v1", "key": "11:n",
+                    "expected_version": 0, "value": {"owner": 11, "nodeId": "n",
+                        "credentialId": credential, "state": "active"}}),
+                Some(command),
+            )
+        };
+        let commit = |revision, witnesses, value, command: &str| {
+            request(
+                "record.device_policy_commit",
+                11,
+                json!({"owner": 11,
+                    "expected_version": revision, "nodes": witnesses, "check_only": false,
+                    "value": value}),
+                Some(command),
+            )
+        };
+        let witness = json!({"id": "n", "version": 1, "credential": "original", "active": true});
+        let mut deletion = witness.clone();
+        deletion["next"] = Value::Null;
+        let empty = json!({"owner": 11, "ceilings": {}, "defaults": {}});
+        let elevated = json!({"owner": 11, "ceilings": {"n": {"exec": true}}});
+        execute(&mut db, &node("original", "original"), 1_000).unwrap();
+        let write = commit(0, json!([witness]), elevated.clone(), "write-first");
+        assert_eq!(execute(&mut db, &write, 2_000).unwrap()["version"], 1);
+        let stale_delete = commit(0, json!([deletion]), empty.clone(), "stale-delete");
+        assert_eq!(
+            execute(&mut db, &stale_delete, 3_000).unwrap_err(),
+            SemanticExecutionError::Conflict
+        );
+        let delete = commit(1, json!([deletion]), empty.clone(), "delete");
+        assert_eq!(execute(&mut db, &delete, 4_000).unwrap()["version"], 2);
+        let late = commit(2, json!([witness]), elevated, "late");
+        assert_eq!(
+            execute(&mut db, &late, 5_000).unwrap_err(),
+            SemanticExecutionError::Conflict
+        );
+        execute(&mut db, &node("replacement", "replacement"), 6_000).unwrap();
+        assert_eq!(
+            execute(&mut db, &late, 7_000).unwrap_err(),
+            SemanticExecutionError::Conflict
+        );
+        drop(db);
+        let mut db = AuthorityDatabase::open(dir.path()).unwrap();
+        let read = request(
+            "record.get",
+            11,
+            json!({"namespace": "desktop.device_policy.v1", "key": "11"}),
+            None,
+        );
+        assert_eq!(execute(&mut db, &read, 8_000).unwrap()["value"], empty);
+        let replacement = json!({"id":"n", "version":1, "credential":"replacement", "active":true});
+        let defaults = json!({"owner":11, "ceilings":{}, "defaults":{"server":"n"}});
+        let select = commit(2, json!([replacement]), defaults.clone(), "default");
+        assert_eq!(execute(&mut db, &select, 9_000).unwrap()["version"], 3);
+        let mut check = commit(3, json!([replacement]), empty.clone(), "check");
+        let mut payload: Value = serde_json::from_slice(&check.payload).unwrap();
+        payload["check_only"] = json!(true);
+        check.payload = serde_json::to_vec(&payload).unwrap();
+        assert_eq!(execute(&mut db, &check, 10_000).unwrap()["version"], 3);
+        assert_eq!(execute(&mut db, &read, 10_001).unwrap()["value"], defaults);
+
+        let target_row = request("record.put", 11, json!({"namespace":"desktop.node.v1",
+            "key":"11:new", "expected_version":0, "value":{"owner":11,"nodeId":"new",
+                "credentialId":"target","state":"active"}}), Some("target"));
+        execute(&mut db, &target_row, 11_000).unwrap();
+        let mut retire = replacement;
+        retire["next"] = Value::Null;
+        let mut target = json!({"id":"new", "version":1, "credential":"wrong", "active":true});
+        let transferred = json!({"owner":11,"ceilings":{},"defaults":{"server":"new"}});
+        let failed = commit(3, json!([retire, target]), transferred.clone(), "bad-transfer");
+        assert_eq!(execute(&mut db, &failed, 12_000).unwrap_err(), SemanticExecutionError::Conflict);
+        let old = request("record.get", 11, json!({"namespace":"desktop.node.v1","key":"11:n"}), None);
+        assert_eq!(execute(&mut db, &old, 12_001).unwrap()["value"]["credentialId"], "replacement");
+        assert_eq!(execute(&mut db, &read, 12_002).unwrap()["value"], defaults);
+        target["credential"] = json!("target");
+        let transfer = commit(3, json!([retire, target]), transferred.clone(), "transfer");
+        assert_eq!(execute(&mut db, &transfer, 13_000).unwrap()["version"], 4);
+        drop(db);
+        let mut db = AuthorityDatabase::open(dir.path()).unwrap();
+        assert_eq!(execute(&mut db, &old, 14_000).unwrap(), Value::Null);
+        assert_eq!(execute(&mut db, &read, 14_001).unwrap()["value"], transferred);
     }
 
     #[test]

@@ -247,7 +247,6 @@ def _resolve_api_key(repository, boundary: OwnerBoundary,
                      secret_reference: str) -> str:
     from lib.model_routing.dispatch_adapter import decode_credential_secret
 
-
     try:
         plaintext = repository.resolve_secret(boundary, secret_reference)
         api_key, _oauth, _headers = decode_credential_secret(

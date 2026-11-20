@@ -1282,8 +1282,18 @@ def recover_background_commands_on_startup() -> int:
             paths = _record_paths(rdir)
             record = _read_record(rdir)
             if record is None:
-                # A writer can have created the directory but not yet
-                # atomically published record.json. Never delete that state.
+                # A launch mints this directory and publishes record.json
+                # before it starts any process. A directory without that file
+                # (only the writer's lock) is an orphan of a launch that died
+                # between those steps, not an unfinished command: never delete
+                # it, but it must not make every task's publication hold
+                # (``task_has_running_commands``) fail closed for good.
+                if not os.path.exists(paths['record']):
+                    logger.debug('[BackgroundCommand:%s] record metadata not published; '
+                                 'launch never started a command', command_id)
+                    continue
+                # The file exists but cannot be read/validated: its owner may
+                # still be a live command, so recovery stays incomplete.
                 scan_failed = True
                 logger.warning('[BackgroundCommand:%s] record metadata unreadable; '
                                'retrying recovery', command_id)

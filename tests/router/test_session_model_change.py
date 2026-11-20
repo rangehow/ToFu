@@ -84,6 +84,8 @@ def routed(worker_runtime, monkeypatch):
         mutate(row['settings'])
         return row['settings']
     monkeypatch.setattr(settings_store, 'update_conversation_settings', update)
+    # Fresh grants now read the Coordinator's stored selection at admission.
+    r.c.conversations.rows['coordinator']['settings']['workerModel'] = 'model-a'
     result = r.call('delegate_project_work', **r.args)
     assert 'error' not in result, result
     row = r.c.repo.read(result['assignment_id'])
@@ -224,7 +226,7 @@ def test_new_workers_inherit_the_routers_current_worker_model(routed):
     from lib.project_dispatch.delegation import capture_worker_policy
     # This request already delegated, so its issued policy is replayed from the
     # first grant. The new delegation must still resolve the live owner setting.
-    m.r.c.binding.worker_model = lambda path: 'model-b'
+    m.r.c.conversations.rows['coordinator']['settings']['workerModel'] = 'model-b'
     # A fresh tool assembly of the Coordinator's next round issues the policy;
     # even the replay of this request's first grant must not re-pin the old model.
     capture_worker_policy(m.r.task, m.r.task['config'], [
@@ -241,7 +243,7 @@ def test_a_coordinator_continuation_resolves_the_live_choice_not_the_frozen_one(
     _set(m)
     # The Coordinator's Worker-model setting now reads model-b (the owner's new
     # default for this Router); the continuation must not replay its frozen pin.
-    m.r.c.binding.worker_model = lambda path: 'model-b'
+    m.r.c.conversations.rows['coordinator']['settings']['workerModel'] = 'model-b'
     m.r.c.repo._load = m.r.c.repo._load  # unchanged storage
     task = {'id': 'coordinator-task', 'config': {}, '_userId': 7,
             '_coordinatorDispatchScope': {'project_path': '/project', 'binding_revision': 1,

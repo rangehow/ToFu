@@ -1,19 +1,21 @@
 // @vitest-environment jsdom
 import { expect, it, vi } from 'vitest';
 import {
-  coordinatorProgressHeadline, coordinatorProgressTally, coordinatorProgressText, createCoordinatorProgress,
+  coordinatorTaskLimit, coordinatorTaskStatus, createCoordinatorProgress,
   type CoordinatorProgressActions, type CoordinatorProgressPorts,
 } from './coordinator-progress';
+import { coordinatorProgressHeadline, coordinatorProgressTally, coordinatorProgressText } from './coordinator-progress-summary';
 import type { CoordinatorProgressBoard, CoordinatorProgressTranslation } from '../api/project-coordination.generated';
 vi.mock('../i18n', () => ({ t: (key: string, args?: Record<string, unknown>) => (args ? `${key}:${JSON.stringify(args)}` : key) }));
+const { readFileSync } = await vi.importActual<{ readFileSync(path: string, encoding: 'utf8'): string }>('node:fs');
 
 const board: CoordinatorProgressBoard = {
   revision: 2, updatedAt: Date.UTC(2026, 10, 2, 9, 5), summary: 'Two tasks moving; one finished.',
   tasks: [
-    { title: 'Summarize the article', status: 'pending', progress: 'Waiting for the link.' },
+    { title: 'Summarize the article', status: 'pending', reason: 'Link to the article.' },
     { title: 'Fix the folder dialog', status: 'completed', progress: 'Merged and verified in the browser.' },
     { title: 'Research homestays', status: 'in_progress', progress: 'Four platforms compared.' },
-    { title: 'Old spike', status: 'cancelled', progress: 'Dropped at your request.' },
+    { title: 'Old spike', status: 'cancelled', reason: 'Superseded by the new installer.' },
     { title: 'Stop the page flicker', status: 'in_progress' },
   ],
 };
@@ -22,7 +24,7 @@ const translation: CoordinatorProgressTranslation = { target: 'Chinese', texts: 
   { source: 'Two tasks moving; one finished.', text: '两项进行中，一项已完成。' },
   { source: 'Research homestays', text: '调研民宿' },
   { source: 'Four platforms compared.', text: '已比较四个平台。' },
-  { source: 'Waiting for the link.', text: '等待链接。' },
+  { source: 'Link to the article.', text: '文章链接' },
 ] };
 
 function ports(overrides: Partial<CoordinatorProgressPorts> = {}): CoordinatorProgressPorts {
@@ -38,20 +40,18 @@ it('lists one line per task behind a status glyph: in-progress work first, finis
   render({ kind: 'board', board }, actions());
   expect(card.dataset.state).toBe('board');
   expect(card.querySelector('.coordinator-progress-summary')?.textContent).toBe(board.summary);
-  expect(card.querySelector('.coordinator-progress-tally')?.textContent).toBe('coordinatorProgress.sidebar.active:{"count":2}');
+  expect(card.querySelector('.coordinator-progress-tally')?.textContent).toBe('coordinatorProgress.sidebar.active:{"count":2} · coordinatorProgress.sidebar.waiting:{"count":1}');
   const open = [...card.querySelectorAll(':scope > .coordinator-progress-body > .coordinator-progress-content > .coordinator-progress-tasks > li')];
   expect(open.map(row => [row.getAttribute('data-status'), row.querySelector('.coordinator-progress-task-title')?.textContent])).toEqual([
-    ['in_progress', 'Research homestays'], ['in_progress', 'Stop the page flicker'], ['pending', 'Summarize the article']]);
-  // Status is a glyph with an accessible name, never a text label in the line.
-  expect(open.map(row => row.querySelector('.coordinator-progress-glyph[role="img"]')?.getAttribute('aria-label'))).toEqual([
-    'coordinatorProgress.status.in_progress', 'coordinatorProgress.status.in_progress', 'coordinatorProgress.status.pending']);
-  expect(open.map(row => row.textContent)).toEqual(['Research homestaysFour platforms compared.', 'Stop the page flicker',
-    'Summarize the articleWaiting for the link.']);
+    ['in_progress', 'Research homestays'], ['in_progress', 'Stop the page flicker'], ['waiting', 'Summarize the article']]);
+  const status = (row: Element) => row.querySelector('.coordinator-progress-task-status')?.textContent;
+  expect(open.map(status)).toEqual(['coordinatorProgress.status.in_progress', 'coordinatorProgress.status.in_progress',
+    'coordinatorProgress.status.waiting']);
   const fold = card.querySelector<HTMLDetailsElement>('.coordinator-progress-finished')!;
   expect(fold.open).toBe(false);
   expect(fold.querySelector('summary')?.textContent).toBe('coordinatorProgress.finished:{"count":2}');
   expect(titles(fold)).toEqual(['Fix the folder dialog', 'Old spike']);
-  expect([...fold.querySelectorAll('.coordinator-progress-glyph')].map(glyph => glyph.getAttribute('aria-label')))
+  expect([...fold.querySelectorAll('li')].map(status))
     .toEqual(['coordinatorProgress.status.completed', 'coordinatorProgress.status.cancelled']);
   expect(card.querySelector('time')?.getAttribute('datetime')).toBe(new Date(board.updatedAt).toISOString());
   // The head is the line a folded card shows: title, state, summary, then the update time.
@@ -61,19 +61,59 @@ it('lists one line per task behind a status glyph: in-progress work first, finis
   expect(card.textContent).not.toMatch(/projectCoordination\.(workList|dependencyGraph|report)|coordinatorBudget|coordinatorPlan/);
 });
 
-it('shows only current work\'s note; any other note is its row\'s tooltip', () => {
+it('makes a recorded wait, an unexplained pending row and a cancellation readable without hover', () => {
   const { el: card, render } = createCoordinatorProgress(ports({ finishedOpen: true }));
-  render({ kind: 'board', board }, actions());
-  const row = (title: string) => [...card.querySelectorAll<HTMLElement>('.coordinator-progress-task')]
-    .find(item => item.querySelector('.coordinator-progress-task-title')?.textContent === title)!;
-  const current = row('Research homestays');
-  expect(current.title).toBe('');
-  expect(current.querySelector<HTMLElement>('.coordinator-progress-task-note')?.title).toBe('Four platforms compared.');
-  expect(row('Stop the page flicker').querySelector('.coordinator-progress-task-note')).toBeNull();
-  for (const [title, note] of [['Summarize the article', 'Waiting for the link.'], ['Fix the folder dialog', 'Merged and verified in the browser.'],
-    ['Old spike', 'Dropped at your request.']]) {
-    expect(row(title).title).toBe(note);
-    expect(row(title).querySelector('.coordinator-progress-task-note')?.textContent).toBe(note);
+  render({ kind: 'board', board: { ...board, tasks: [...board.tasks, { title: 'Not dispatched yet', status: 'pending' }] } }, actions());
+  const note = (status: string) => card.querySelector(`[data-status="${status}"] .coordinator-progress-task-note`)?.textContent;
+  expect(note('waiting')).toBe('coordinatorProgress.waitReason:{"reason":"Link to the article."}');
+  expect(note('pending')).toBe('coordinatorProgress.startUnknown');
+  expect(note('cancelled')).toBe('coordinatorProgress.cancelReason:{"reason":"Superseded by the new installer."}');
+  expect(note('in_progress')).toBe('Four platforms compared.');
+});
+
+it('reads a typed blocker as the wait, keeping a bare assignment wait to its status badge', () => {
+  const { el: card, render } = createCoordinatorProgress(ports());
+  render({ kind: 'board', board: { ...board, tasks: [
+    { title: 'Recover the backup', status: 'pending',
+      blocker: { kind: 'needs_external_resource', resource: 'the read-only snapshot',
+        check: 'a restore rehearsal passes', ownerAction: 'confirm receipt on the phone' } },
+    { title: 'Ship the folder fix', status: 'pending',
+      blocker: { kind: 'active_dispatch', assignmentId: 'assignment-1' } },
+  ] } }, actions());
+  const rows = [...card.querySelectorAll('.coordinator-progress-tasks > li')];
+  expect(rows.map(row => row.getAttribute('data-status'))).toEqual(['waiting', 'waiting']);
+  const note = (index: number) => rows[index].querySelector('.coordinator-progress-task-note')?.textContent;
+  // The model's own resource and its proving check read as one wait; an id-only wait stays in the badge.
+  expect(note(0)).toBe('coordinatorProgress.waitReason:{"reason":"the read-only snapshot — a restore rehearsal passes · confirm receipt on the phone"}');
+  expect(note(1)).toBeUndefined();
+});
+
+it('renders an unavailable resource as a limit, never a waiting badge, in both languages', () => {
+  type Blocker = NonNullable<CoordinatorProgressBoard['tasks'][number]['blocker']>;
+  const limit: Blocker = { kind: 'needs_external_resource', resource: 'the deleted archive',
+    check: 'the archive lists the missing month', unavailable: true,
+    limit: 'replay before March stays unverified' };
+  const actionable: Blocker = { kind: 'needs_external_resource', resource: 'the read-only snapshot',
+    check: 'a restore rehearsal passes', ownerAction: 'confirm receipt on the phone' };
+  expect(coordinatorTaskLimit(limit)).toBe(true);
+  expect(coordinatorTaskLimit(actionable)).toBe(false);
+  expect(coordinatorTaskStatus('pending', 'note', limit)).toBe('limited');
+  expect(coordinatorTaskStatus('pending', undefined, actionable)).toBe('waiting');
+  const { el: card, render } = createCoordinatorProgress(ports());
+  render({ kind: 'board', board: { ...board, tasks: [
+    { title: 'Replay the lost month', status: 'pending', blocker: limit },
+  ] } }, actions());
+  const row = card.querySelector('.coordinator-progress-tasks > li')!;
+  expect(row.getAttribute('data-status')).toBe('limited');
+  expect(row.querySelector('.coordinator-progress-task-status')?.textContent).toBe('coordinatorProgress.status.limited');
+  expect(row.querySelector('.coordinator-progress-task-note')?.textContent)
+    .toBe('coordinatorProgress.limitReason:{"reason":"the deleted archive — replay before March stays unverified"}');
+  // Both authored languages say limit, not waiting.
+  for (const code of ['en', 'zh']) {
+    const catalog = JSON.parse(readFileSync(`frontend/src/i18n/locales/${code}.json`, 'utf8'));
+    expect(catalog['coordinatorProgress.status.limited']).toBeTruthy();
+    expect(catalog['coordinatorProgress.limitReason']).toContain('{reason}');
+    expect(catalog['coordinatorProgress.limitReason']).not.toMatch(/wait|等待/i);
   }
 });
 
@@ -84,8 +124,8 @@ it('shows the board\'s display translation and toggles to the original as writte
   expect(card.querySelector('.coordinator-progress-summary')?.textContent).toBe('两项进行中，一项已完成。');
   expect(titles(card)).toEqual(['调研民宿', 'Stop the page flicker', 'Summarize the article', 'Fix the folder dialog', 'Old spike']);
   expect(card.querySelector('.coordinator-progress-task-note')?.textContent).toBe('已比较四个平台。');
-  const pending = [...card.querySelectorAll<HTMLElement>('.coordinator-progress-task')].find(item => item.dataset.status === 'pending')!;
-  expect(pending.title).toBe('等待链接。');
+  const pending = [...card.querySelectorAll<HTMLElement>('.coordinator-progress-task')].find(item => item.dataset.status === 'waiting')!;
+  expect(pending.querySelector('.coordinator-progress-task-note')?.textContent).toContain('文章链接');
   const toggle = visibleButtons(card).find(button => button.textContent === 'chat.bilingualOriginal')!;
   expect(toggle.getAttribute('aria-pressed')).toBe('false');
   toggle.focus();
@@ -157,7 +197,7 @@ it('folds to a head that still states the board, an empty board or an unavailabl
   render({ kind: 'board', board }, actions());
   expect(folded.open).toBe(false);
   const head = folded.querySelector('summary')!;
-  expect(head.querySelector('.coordinator-progress-tally')?.textContent).toBe('coordinatorProgress.sidebar.active:{"count":2}');
+  expect(head.querySelector('.coordinator-progress-tally')?.textContent).toBe('coordinatorProgress.sidebar.active:{"count":2} · coordinatorProgress.sidebar.waiting:{"count":1}');
   expect(head.querySelector('.coordinator-progress-summary')?.textContent).toBe(board.summary);
   for (const kind of ['empty', 'unavailable'] as const) {
     render({ kind }, actions());
@@ -181,11 +221,165 @@ it('distinguishes an empty board from an unavailable one and retries only on req
 });
 
 it('summarizes the board for the sidebar without claiming progress the board does not state', () => {
-  expect(coordinatorProgressTally(board)).toEqual({ active: 2, pending: 1, finished: 2, total: 5 });
+  expect(coordinatorProgressTally(board)).toEqual({ active: 2, pending: 0, waiting: 1, finished: 2, total: 5 });
   expect(coordinatorProgressHeadline(board)).toBe('coordinatorProgress.sidebar.active:{"count":2}');
   const done = { ...board, tasks: board.tasks.filter(task => task.status === 'completed' || task.status === 'cancelled') };
   expect(coordinatorProgressHeadline(done)).toBe('coordinatorProgress.sidebar.allDone');
-  expect(coordinatorProgressHeadline({ ...board, tasks: [{ title: 'Next', status: 'pending' }] })).toBeNull();
+  expect(coordinatorProgressHeadline({ ...board, tasks: [{ title: 'Next', status: 'pending' }] })).toBe('coordinatorProgress.sidebar.pending:{"count":1}');
   expect(coordinatorProgressHeadline({ ...board, tasks: [] })).toBeNull();
   expect(coordinatorProgressHeadline(null)).toBeNull();
+});
+
+it('labels only the board report age and never derives waiting or execution from age or a note', () => {
+  document.documentElement.lang = 'en';
+  const card = createCoordinatorProgress(ports({ now: () => board.updatedAt + 3 * 3_600_000 }));
+  const snapshot: CoordinatorProgressBoard = { ...board, tasks: [
+    { title: 'Await source', status: 'pending', reason: 'Upload the source article.' },
+    { title: 'Prepare release', status: 'pending', progress: 'Release checklist drafted.' },
+    { title: 'Compare platforms', status: 'in_progress', progress: 'Four platforms compared.' },
+  ] };
+  card.render({ kind: 'board', board: snapshot }, actions());
+  expect(card.el.querySelector('.coordinator-progress-updated')?.textContent).toContain('3 hours ago');
+  expect(card.el.querySelector('[data-status="pending"] .coordinator-progress-task-note')?.textContent)
+    .toBe('coordinatorProgress.startUnknown Release checklist drafted.');
+  expect(card.el.querySelector('[data-status="waiting"]')?.textContent).toContain('Upload the source article.');
+  expect(card.el.querySelectorAll('.coordinator-progress-task time')).toHaveLength(0);
+  card.render({ kind: 'board', board: { ...snapshot, updatedAt: board.updatedAt - 365 * 86_400_000 } }, actions());
+  expect([...card.el.querySelectorAll('.coordinator-progress-task')].map(row => row.getAttribute('data-status')))
+    .toEqual(['in_progress', 'waiting', 'pending']);
+  expect(card.el.querySelector('.coordinator-progress-updated')?.textContent).toContain('2025');
+  card.render({ kind: 'unavailable' }, actions());
+  expect(card.el.querySelector('time')).toBeNull();
+  expect(card.el.querySelectorAll('.coordinator-progress-task')).toHaveLength(0);
+});
+
+const KEY_A = 'a'.repeat(32), KEY_B = 'b'.repeat(32);
+it('distinguishes exact positive receipts from authored progress without claiming overlap coverage or completion', () => {
+  const card = createCoordinatorProgress(ports());
+  const openWorker = vi.fn();
+  const current = { ...board, tasks: [{ title: 'Linked', status: 'in_progress' as const },
+    { title: 'Manual or older request', status: 'in_progress' as const }] };
+  for (const phase of ['queued', 'active', 'awaiting_review', 'awaiting_delivery', 'delivered', 'held', 'ended', 'unknown'] as const) {
+    card.render({ kind: 'board', board: current, taskKeys: [KEY_A, KEY_B], workEvidence: {
+      scope: 'latest_request', coverage: 'unknown', requestId: 'request-b', sourceTurnId: 'owner-turn-b',
+      rows: [{ assignmentId: 'assignment-b', conversationId: 'worker-b', taskKeys: [KEY_A], phase }],
+    } }, { ...actions(), openWorker });
+    const rows = card.el.querySelectorAll('.coordinator-progress-task');
+    expect(rows[0].textContent).toContain('projectCoordination.graph.assignmentCoverage');
+    expect(rows[0].textContent).toContain(JSON.stringify({ requestId: 'request-b', sourceTurnId: 'owner-turn-b',
+      assignmentId: 'assignment-b', phase }));
+    expect(card.el.querySelector('.coordinator-progress-evidence-scope')?.textContent).toContain('"coverage":"unknown"');
+    expect(card.el.querySelector('.coordinator-progress-evidence-scope')?.textContent).toContain('"requestId":"request-b"');
+    expect(rows[0].getAttribute('data-status')).toBe('in_progress');
+    expect(rows[1].textContent).toContain('projectCoordination.graph.progressUnknown');
+    expect(rows[1].querySelector('[data-assignment-id]')).toBeNull();
+    expect(card.el.textContent).not.toMatch(/no owner|unowned/i);
+  }
+  card.el.querySelector<HTMLButtonElement>('.coordinator-progress-live-receipt button')!.click();
+  expect(openWorker).toHaveBeenCalledWith('worker-b');
+  card.invalidateEvidence();
+  expect(card.el.querySelector('[data-assignment-id]')).toBeNull();
+  expect(card.el.querySelector('.coordinator-progress-live-receipt')).toBeNull();
+  expect(card.el.querySelector('.coordinator-progress-evidence-scope')?.textContent)
+    .toBe('projectCoordination.graph.assignmentsUnavailable');
+  card.render({ kind: 'board', board: current, taskKeys: [KEY_A, KEY_B] }, actions());
+  expect(card.el.querySelector('[data-assignment-id]')).toBeNull();
+});
+
+it('shows two exact request receipts for one task without counting them or replacing authored status', () => {
+  const card = createCoordinatorProgress(ports());
+  const openWorker = vi.fn();
+  const current = { ...board, tasks: [{ title: 'Same title', status: 'pending' as const },
+    { title: 'Same title', status: 'pending' as const }] };
+  card.render({ kind: 'board', board: current, taskKeys: [KEY_A, KEY_B], workEvidence: {
+    scope: 'latest_request', coverage: 'unknown', requestId: 'request-b', sourceTurnId: 'turn-b',
+    rows: [{ assignmentId: 'assignment-b', conversationId: 'worker-b', taskKeys: [KEY_A], phase: 'active' }],
+    additionalRequests: [{ requestId: 'request-a', sourceTurnId: 'turn-a', rows: [
+      { assignmentId: 'assignment-a', conversationId: 'worker-a', taskKeys: [KEY_A], phase: 'unknown' },
+      { assignmentId: 'assignment-b', conversationId: 'duplicate-worker', taskKeys: [KEY_A], phase: 'delivered' },
+      { assignmentId: 'assignment-a', conversationId: 'duplicate-worker-a', taskKeys: [KEY_A], phase: 'active' },
+    ] }],
+  } }, { ...actions(), openWorker });
+  const rows = card.el.querySelectorAll('.coordinator-progress-task');
+  const receipts = [...rows[0].querySelectorAll<HTMLElement>('[data-assignment-id]')];
+  expect(receipts.map(receipt => [receipt.dataset.assignmentId, receipt.dataset.requestId])).toEqual([
+    ['assignment-b', 'request-b'], ['assignment-a', 'request-a'],
+  ]);
+  expect(receipts.map(receipt => JSON.parse(receipt.querySelector('code')!.textContent!))).toEqual([
+    { requestId: 'request-b', sourceTurnId: 'turn-b', assignmentId: 'assignment-b', phase: 'active' },
+    { requestId: 'request-a', sourceTurnId: 'turn-a', assignmentId: 'assignment-a', phase: 'unknown' },
+  ]);
+  expect(receipts.map(receipt => receipt.querySelector('code')!.dataset.requestId)).toEqual(['request-b', 'request-a']);
+  expect(receipts[1].textContent).toContain('projectCoordination.graph.status.unknown');
+  expect(rows[0].getAttribute('data-status')).toBe('pending');
+  expect(card.el.querySelector('.coordinator-progress-tally')?.textContent).toBe('coordinatorProgress.sidebar.pending:{"count":2}');
+  expect(rows[0].querySelector('.coordinator-progress-task-count')).toBeNull();
+  expect(rows[1].querySelector('[data-assignment-id]')).toBeNull();
+  expect(rows[1].textContent).toContain('projectCoordination.graph.progressUnknown');
+  expect(card.el.textContent).not.toMatch(/no owner|unowned/i);
+  const workerButtons = rows[0].querySelectorAll<HTMLButtonElement>('.coordinator-progress-live-receipt button');
+  workerButtons[0].click(); workerButtons[1].click();
+  expect(openWorker.mock.calls).toEqual([['worker-b'], ['worker-a']]);
+  expect(card.invalidateEvidence()).toBe(true);
+  expect(card.el.querySelector('[data-assignment-id], [data-request-id]')).toBeNull();
+  expect(card.el.querySelectorAll('.coordinator-progress-live-receipt button, .coordinator-progress-live-receipt code')).toHaveLength(0);
+  expect(card.el.querySelector('.coordinator-progress-evidence-scope')?.textContent)
+    .toBe('projectCoordination.graph.assignmentsUnavailable');
+  expect(card.el.querySelectorAll('.coordinator-progress-live-receipt')).toHaveLength(0);
+  card.repaint();
+  expect(card.el.querySelector('[data-assignment-id], [data-request-id]')).toBeNull();
+  expect(card.invalidateEvidence()).toBe(false);
+});
+
+it('states unavailable assignment data once when the board observed no receipts at all', () => {
+  const card = createCoordinatorProgress(ports());
+  const current = { ...board, tasks: [
+    { title: 'Await the source', status: 'pending' as const, reason: 'Upload the article.' },
+    { title: 'Compare platforms', status: 'in_progress' as const },
+  ] };
+  card.render({ kind: 'board', board: current, taskKeys: [KEY_A, KEY_B], workEvidence: {
+    scope: 'latest_request', coverage: 'unknown', requestId: null, sourceTurnId: null, rows: [],
+  } }, actions());
+  expect(card.el.querySelectorAll('.coordinator-progress-task')).toHaveLength(2);
+  expect(card.el.querySelectorAll('.coordinator-progress-live-receipt')).toHaveLength(0);
+  expect(card.el.textContent).not.toContain('projectCoordination.graph.progressUnknown');
+  const coverage = card.el.querySelector('.coordinator-progress-evidence-scope');
+  expect(coverage?.textContent).toContain('projectCoordination.graph.assignmentsUnavailable');
+  expect(coverage?.textContent).toContain('"requestId":null');
+  expect([...card.el.querySelectorAll('.coordinator-progress-task')].map(row => row.getAttribute('data-status')))
+    .toEqual(['in_progress', 'waiting']);
+  card.render({ kind: 'board', board: current, taskKeys: [KEY_A, KEY_B] }, actions());
+  expect(card.el.querySelectorAll('.coordinator-progress-live-receipt')).toHaveLength(0);
+  expect(card.el.textContent).toContain('projectCoordination.graph.assignmentsUnavailable');
+});
+
+it('does not claim assignment data is unavailable when the request itself was read', () => {
+  const card = createCoordinatorProgress(ports());
+  const current = { ...board, tasks: [{ title: 'Unlinked worker', status: 'in_progress' as const }] };
+  card.render({ kind: 'board', board: current, taskKeys: [KEY_A], workEvidence: {
+    scope: 'latest_request', coverage: 'unknown', requestId: 'request-b', sourceTurnId: 'turn-b', rows: [],
+  } }, actions());
+  const coverage = card.el.querySelector('.coordinator-progress-evidence-scope');
+  expect(coverage?.textContent).toContain('projectCoordination.graph.progressUnknown');
+  expect(coverage?.textContent).not.toContain('projectCoordination.graph.assignmentsUnavailable');
+  expect(coverage?.textContent).toContain('"requestId":"request-b"');
+});
+
+it('never links either request by task title or by a missing task key', () => {
+  const card = createCoordinatorProgress(ports());
+  const current = { ...board, tasks: [{ title: KEY_A, status: 'in_progress' as const }] };
+  const workEvidence = {
+    scope: 'latest_request' as const, coverage: 'unknown' as const, requestId: 'request-b', sourceTurnId: 'turn-b',
+    rows: [{ assignmentId: 'assignment-b', conversationId: 'worker-b', taskKeys: [KEY_A], phase: 'active' as const }],
+    additionalRequests: [{ requestId: 'request-a', sourceTurnId: 'turn-a', rows: [
+      { assignmentId: 'assignment-a', conversationId: 'worker-a', taskKeys: [KEY_A], phase: 'active' as const },
+    ] }],
+  };
+  for (const taskKeys of [undefined, [KEY_B], []]) {
+    card.render({ kind: 'board', board: current, taskKeys, workEvidence }, actions());
+    expect(card.el.querySelector('[data-assignment-id]')).toBeNull();
+    expect(card.el.querySelector('.coordinator-progress-task-title')?.textContent).toBe(KEY_A);
+    if (taskKeys?.length) expect(card.el.querySelector('.coordinator-progress-live-receipt')?.textContent)
+      .toBe('projectCoordination.graph.progressUnknown');
+  }
 });

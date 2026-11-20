@@ -1,0 +1,21 @@
+{
+  "schema": "newer4090-summary-receipt/v1",
+  "cohort": "newer4090-only",
+  "source": "../retained-matrix-20261119/README.md",
+  "source_lines": [55, 69],
+  "evidence_level": "retained_report_of_analyst_inventory_not_underlying_membership",
+  "reported_metadata_qualified_observations": 4090,
+  "reported_cutoff": "created_at >= 2026-11-17",
+  "timestamp_timezone": null,
+  "reported_tofu_artifact_hash_count": 3,
+  "reported_control_experimental_directories": true,
+  "reported_complete_89_task_groups": 0,
+  "exact_group_membership": null,
+  "ordinary_matched_support": null,
+  "historical_overlap": null,
+  "referenced_inventory_receipts": [
+    "takeover_inventory_raw_metadata_20261119",
+    "takeover_inventory_summary_20261119"
+  ],
+  "underlying_receipt_access": "not_available_in_this_assessment"
+}

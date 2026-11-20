@@ -334,11 +334,13 @@ def test_check_reports_without_changing_anything(shared, feature):
     assert state(shared) == before
 
 
-def test_index_lock_held_open_is_reported_busy_and_left_alone(shared, feature):
+def test_index_lock_held_open_is_reported_busy_and_left_alone(
+        shared, feature, monkeypatch):
     replace_line(feature / 'notes.txt', 2, 'line 2 from the branch')
     commit_all(feature, 'feature work')
     lock = shared / '.git' / 'index.lock'
     before = state(shared)
+    monkeypatch.setattr(land, 'PUBLISH_LOCK_WAIT_SECONDS', 0.05)
 
     with open(lock, 'w') as held, pytest.raises(land.Refused) as refused:
         land.land('feature', cwd=shared)
@@ -346,6 +348,35 @@ def test_index_lock_held_open_is_reported_busy_and_left_alone(shared, feature):
     assert f'held by process {os.getpid()}' in refused.value.reason
     assert refused.value.advice == 'Rerun when it finishes.'
     assert lock.exists() and state(shared) == before
+
+
+def test_live_index_lock_holder_is_waited_out(shared, feature, monkeypatch):
+    """Another landing's delta-sized publication is a wait, not a failure."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    replace_line(feature / 'notes.txt', 2, 'line 2 from the branch')
+    commit_all(feature, 'feature work')
+    lock = shared / '.git' / 'index.lock'
+    saw_live = threading.Event()
+    original = land._busy_lock
+
+    def observing(path):
+        result = original(path)
+        if result[1]:
+            saw_live.set()
+        return result
+
+    monkeypatch.setattr(land, '_busy_lock', observing)
+    with open(lock, 'w'):
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            landing = pool.submit(land.land, 'feature', cwd=shared)
+            assert saw_live.wait(timeout=10)
+            lock.unlink(missing_ok=True)
+            result = landing.result(timeout=30)
+
+    assert result['status'] == 'landed'
+    assert not lock.exists()
 
 
 def test_orphaned_index_lock_is_reported_stale_and_left_alone(shared, feature):

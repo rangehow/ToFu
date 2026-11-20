@@ -1,0 +1,10 @@
+{
+  "inputs_sha256": {
+    "../retained-matrix-20261119/README.md": "c93c3df7bc1f5da14ceb8d0b3b63230b73f3a1a58f3422d8097769f91acda515",
+    "assess.py": "31c50992354eaea475159d1340be4a9a620ed6830d1b042d2e5ba8389645587f",
+    "receipt.json": "9b4222ee887fab2b8f13c3257ed373ee3da3436475012735b28a63acbc185e83"
+  },
+  "ledger_sha256": "2b7d4963668a7c42903c4a4bdce596a3c1bab1dc061b32d736287906e5379a1e",
+  "schema": "newer4090-manifest/v1",
+  "scope": "aggregate_receipt_only_no_raw_tasks_no_prior_report_mutation"
+}

@@ -1,0 +1,43 @@
+{
+  "certifies_containment": false,
+  "cohort": "newer4090-only",
+  "complete_89_task_groups_reported": 0,
+  "complete_runs_required_for_ordinary_description": false,
+  "count_basis": "retained_report_of_analyst_inventory_not_underlying_membership",
+  "exact_group_count": null,
+  "exact_group_eligible_counts": null,
+  "exclusion_from_comparison": [
+    {
+      "count": 4090,
+      "reason": "underlying_metadata_membership_and_comparability_not_established",
+      "unit": "aggregate_observations_not_enumerated_rows"
+    }
+  ],
+  "historical_intersection_count": null,
+  "independently_recounted_membership": false,
+  "leaderboard": false,
+  "minimal_metadata_gap": [
+    "content_free_membership_or_auditable_aggregate_with_input_digest_and_selection_dedup_invalidation_rules",
+    "exact_harness_build_model_policy_protocol_and_arm_group_keys_with_counts",
+    "canonical_observation_identity_intersections_against_historical_cohort_and_between_groups",
+    "compatible_opaque_task_revision_trial_keys_with_nonduplicate_common_counts_and_matched_outcome_counts"
+  ],
+  "nonpoolability": [
+    "three_reported_tofu_artifact_hashes_not_mapped_to_membership",
+    "control_experimental_arms_not_resolved",
+    "exact_model_harness_build_policy_protocol_equivalence_unverified",
+    "historical_nonoverlap_unverified"
+  ],
+  "ordinary_matched_denominators": null,
+  "partition": {
+    "demonstrably_comparison_qualified": 0,
+    "demonstrably_ineligible": 0,
+    "qualification_unresolved": 4090
+  },
+  "pooling_authorized_by_evidence": false,
+  "reported_metadata_qualified_observations": 4090,
+  "sandbox_task_eligibility_or_attempts_assessed": false,
+  "schema": "newer4090-coverage-ledger/v1",
+  "valid_ordinary_comparison_established": false,
+  "valid_ordinary_comparison_impossible": false
+}

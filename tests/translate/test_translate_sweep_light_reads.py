@@ -163,3 +163,39 @@ def test_translation_state_equals_the_normalized_document(raw):
     expected = {key: normalized[key] for key in ("content", "translation") if key in normalized}
 
     assert projection_translation_state(raw) == expected
+
+
+def test_the_sweep_never_respawns_a_recorded_content_guard_refusal(sweep):
+    """0b3b0163 boot: the sweep re-ran refused turns, 122 ERROR tracebacks."""
+    client = _PagedClient()
+    # A refusal recorded by the current worker (typed reason) ...
+    client.turns[3]['projection'] = {
+        'content': 'refused reply',
+        '_translateFailed': {'reason': 'content_refused',
+                             'error': 'translation refused by content guard: verdict=wrong_language'},
+    }
+    # ... and one recorded before the typed reason existed (text only).
+    client.turns[4]['projection'] = {
+        'content': 'older refused reply',
+        '_translateFailed': {'reason': 'worker_error',
+                             'error': 'translation refused by content guard: verdict=echo'},
+    }
+    # The normalized shape, as iter_turn_translation_states_newest_first returns it.
+    client.turns[4]['projection'] = normalize_projection_document(
+        client.turns[4]['projection'])
+    client.turns[3]['projection']['_translateFailed'] = {
+        'reason': 'content_refused',
+        'error': 'translation refused by content guard: verdict=wrong_language'}
+
+    import lib.turn_lifecycle as lifecycle_mod
+    original = lifecycle_mod._turn_client
+    lifecycle_mod._turn_client = lambda write=False: client
+    try:
+        count, spawned, _derivations = sweep()
+    finally:
+        lifecycle_mod._turn_client = original
+
+    assert 'refused reply' not in [content for _turn_id, content in spawned]
+    assert 'older refused reply' not in [content for _turn_id, content in spawned]
+    assert 'failed with error' not in [content for _turn_id, content in spawned]
+    assert count == 3

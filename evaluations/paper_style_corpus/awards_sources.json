@@ -1,0 +1,3897 @@
+{
+ "compiled": "2026-11-18 by researcher sub-agents from official award pages (source_url per row)",
+ "papers": [
+  {
+   "title": "On Learning Sets of Symmetric Elements",
+   "venue": "ICML",
+   "award_year": 2020,
+   "paper_year": 2020,
+   "award": "outstanding",
+   "source_url": "https://icml.cc/virtual/2020/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Tuning-free Plug-and-Play Proximal Algorithm for Inverse Imaging Problems",
+   "venue": "ICML",
+   "award_year": 2020,
+   "paper_year": 2020,
+   "award": "outstanding",
+   "source_url": "https://icml.cc/virtual/2020/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Generative Pretraining From Pixels",
+   "venue": "ICML",
+   "award_year": 2020,
+   "paper_year": 2020,
+   "award": "honorable_mention",
+   "source_url": "https://icml.cc/virtual/2020/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Efficiently sampling functions from Gaussian process posteriors",
+   "venue": "ICML",
+   "award_year": 2020,
+   "paper_year": 2020,
+   "award": "honorable_mention",
+   "source_url": "https://icml.cc/virtual/2020/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Gaussian Process Optimization in the Bandit Settings: No Regret and Experimental Design",
+   "venue": "ICML",
+   "award_year": 2020,
+   "paper_year": 2010,
+   "award": "test_of_time",
+   "source_url": "https://icml.cc/virtual/2020/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Unbiased Gradient Estimation in Unrolled Computation Graphs with Persistent Evolution Strategies",
+   "venue": "ICML",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "outstanding",
+   "source_url": "https://icml.cc/virtual/2021/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Optimal Complexity in Decentralized Training",
+   "venue": "ICML",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "honorable_mention",
+   "source_url": "https://icml.cc/virtual/2021/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Oops I Took A Gradient: Scalable Sampling for Discrete Distributions",
+   "venue": "ICML",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "honorable_mention",
+   "source_url": "https://icml.cc/virtual/2021/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Solving high-dimensional parabolic PDEs using the tensor train format",
+   "venue": "ICML",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "honorable_mention",
+   "source_url": "https://icml.cc/virtual/2021/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Understanding self-supervised learning dynamics without contrastive pairs",
+   "venue": "ICML",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "honorable_mention",
+   "source_url": "https://icml.cc/virtual/2021/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "The Importance of Non-Markovianity in Maximum State Entropy Exploration",
+   "venue": "ICML",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://icml.cc/virtual/2022/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Solving Stackelberg Prediction Game with Least Squares Loss via Spherically Constrained Least Squares Reformulation",
+   "venue": "ICML",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://icml.cc/virtual/2022/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Privacy for Free: How does Dataset Condensation Help Privacy?",
+   "venue": "ICML",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://icml.cc/virtual/2022/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Understanding Dataset Difficulty with $\\mathcal{V}$-Usable Information",
+   "venue": "ICML",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://icml.cc/virtual/2022/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Do Differentiable Simulators Give Better Policy Gradients?",
+   "venue": "ICML",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://icml.cc/virtual/2022/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "G-Mixup: Graph Data Augmentation for Graph Classification",
+   "venue": "ICML",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://icml.cc/virtual/2022/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Learning Mixtures of Linear Dynamical Systems",
+   "venue": "ICML",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://icml.cc/virtual/2022/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Bayesian Model Selection, the Marginal Likelihood, and Generalization",
+   "venue": "ICML",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://icml.cc/virtual/2022/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Stable Conformal Prediction Sets",
+   "venue": "ICML",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://icml.cc/virtual/2022/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Causal Conceptions of Fairness and their Consequences",
+   "venue": "ICML",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://icml.cc/virtual/2022/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Minimum Cost Intervention Design for Causal Effect Identification",
+   "venue": "ICML",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "runner_up",
+   "source_url": "https://icml.cc/virtual/2022/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Active fairness auditing",
+   "venue": "ICML",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "runner_up",
+   "source_url": "https://icml.cc/virtual/2022/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Monarch: Expressive Structured Matrices for Efficient and Accurate Training",
+   "venue": "ICML",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "runner_up",
+   "source_url": "https://icml.cc/virtual/2022/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Adversarially Trained Actor Critic for Offline Reinforcement Learning",
+   "venue": "ICML",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "runner_up",
+   "source_url": "https://icml.cc/virtual/2022/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Learning inverse folding from millions of predicted structures",
+   "venue": "ICML",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "runner_up",
+   "source_url": "https://icml.cc/virtual/2022/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Poisoning Attacks Against Support Vector Machines",
+   "venue": "ICML",
+   "award_year": 2022,
+   "paper_year": 2012,
+   "award": "test_of_time",
+   "source_url": "https://icml.cc/virtual/2022/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Building high-level features using large scale unsupervised learning",
+   "venue": "ICML",
+   "award_year": 2022,
+   "paper_year": 2012,
+   "award": "test_of_time_honorable_mention",
+   "source_url": "https://icml.cc/virtual/2022/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "On causal and anticausal learning",
+   "venue": "ICML",
+   "award_year": 2022,
+   "paper_year": 2012,
+   "award": "test_of_time_honorable_mention",
+   "source_url": "https://icml.cc/virtual/2022/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Learning-Rate-Free Learning by D-Adaptation",
+   "venue": "ICML",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://icml.cc/Conferences/2023/Awards",
+   "arxiv_id": ""
+  },
+  {
+   "title": "A Watermark for Large Language Models",
+   "venue": "ICML",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://icml.cc/Conferences/2023/Awards",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Generalization on the Unseen, Logic Reasoning and Degree Curriculum",
+   "venue": "ICML",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://icml.cc/Conferences/2023/Awards",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Adapting to game trees in zero-sum imperfect information games",
+   "venue": "ICML",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://icml.cc/Conferences/2023/Awards",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Self-Repellent Random Walks on General Graphs - Achieving Minimal Sampling Variance via Nonlinear Markov Chains",
+   "venue": "ICML",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://icml.cc/Conferences/2023/Awards",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Bayesian Design Principles for Frequentist Sequential Learning",
+   "venue": "ICML",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://icml.cc/Conferences/2023/Awards",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Learning Fair Representations",
+   "venue": "ICML",
+   "award_year": 2023,
+   "paper_year": 2013,
+   "award": "test_of_time",
+   "source_url": "https://icml.cc/virtual/2023/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Stealing part of a production language model",
+   "venue": "ICML",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best",
+   "source_url": "https://icml.cc/virtual/2024/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Position: Considerations for Differentially Private Learning with Large-Scale Public Pretraining",
+   "venue": "ICML",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best",
+   "source_url": "https://icml.cc/virtual/2024/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "VideoPoet: A Large Language Model for Zero-Shot Video Generation",
+   "venue": "ICML",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best",
+   "source_url": "https://icml.cc/virtual/2024/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Genie: Generative Interactive Environments",
+   "venue": "ICML",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best",
+   "source_url": "https://icml.cc/virtual/2024/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Probabilistic Inference in Language Models via Twisted Sequential Monte Carlo",
+   "venue": "ICML",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best",
+   "source_url": "https://icml.cc/virtual/2024/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Information Complexity of Stochastic Convex Optimization: Applications to Generalization, Memorization, and Tracing",
+   "venue": "ICML",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best",
+   "source_url": "https://icml.cc/virtual/2024/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Position: Measure Dataset Diversity, Don't Just Claim It",
+   "venue": "ICML",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best",
+   "source_url": "https://icml.cc/virtual/2024/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Discrete Diffusion Modeling by Estimating the Ratios of the Data Distribution",
+   "venue": "ICML",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best",
+   "source_url": "https://icml.cc/virtual/2024/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Scaling Rectified Flow Transformers for High-Resolution Image Synthesis",
+   "venue": "ICML",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best",
+   "source_url": "https://icml.cc/virtual/2024/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Debating with More Persuasive LLMs Leads to More Truthful Answers",
+   "venue": "ICML",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best",
+   "source_url": "https://icml.cc/virtual/2024/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "DeCAF: A Deep Convolutional Activation Feature for Generic Visual Recognition",
+   "venue": "ICML",
+   "award_year": 2024,
+   "paper_year": 2014,
+   "award": "test_of_time",
+   "source_url": "https://icml.cc/virtual/2024/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Train for the Worst, Plan for the Best: Understanding Token Ordering in Masked Diffusions",
+   "venue": "ICML",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://icml.cc/virtual/2025/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Roll the dice & look before you leap: Going beyond the creative limits of next-token prediction",
+   "venue": "ICML",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://icml.cc/virtual/2025/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "CollabLLM: From Passive Responders to Active Collaborators",
+   "venue": "ICML",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://icml.cc/virtual/2025/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Score Matching with Missing Data",
+   "venue": "ICML",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://icml.cc/virtual/2025/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "The Value of Prediction in Identifying the Worst-Off",
+   "venue": "ICML",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://icml.cc/virtual/2025/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Conformal Prediction as Bayesian Quadrature",
+   "venue": "ICML",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://icml.cc/virtual/2025/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Position: The AI Conference Peer Review Crisis Demands Author Feedback and Reviewer Rewards",
+   "venue": "ICML",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding_position",
+   "source_url": "https://icml.cc/virtual/2025/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Position: AI Safety should prioritize the Future of Work",
+   "venue": "ICML",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding_position",
+   "source_url": "https://icml.cc/virtual/2025/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Batch Normalization: Accelerating Deep Network Training by Reducing Internal Covariate Shift",
+   "venue": "ICML",
+   "award_year": 2025,
+   "paper_year": 2015,
+   "award": "test_of_time",
+   "source_url": "https://icml.cc/virtual/2025/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Trust Region Policy Optimization",
+   "venue": "ICML",
+   "award_year": 2025,
+   "paper_year": 2015,
+   "award": "test_of_time_honorable_mention",
+   "source_url": "https://icml.cc/virtual/2025/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Variational Inference with Normalizing Flows",
+   "venue": "ICML",
+   "award_year": 2025,
+   "paper_year": 2015,
+   "award": "test_of_time_honorable_mention",
+   "source_url": "https://icml.cc/virtual/2025/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "The Flexibility Trap: Rethinking the Value of Arbitrary Order in Diffusion Language Models",
+   "venue": "ICML",
+   "award_year": 2026,
+   "paper_year": 2026,
+   "award": "outstanding",
+   "source_url": "https://blog.icml.cc/2026/07/05/announcing-the-icml-2026-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "High-accuracy sampling for diffusion models and log-concave distributions",
+   "venue": "ICML",
+   "award_year": 2026,
+   "paper_year": 2026,
+   "award": "outstanding",
+   "source_url": "https://icml.cc/virtual/2026/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "The Obfuscation Atlas: Mapping Where Honesty Emerges in RLVR with Deception Probes",
+   "venue": "ICML",
+   "award_year": 2026,
+   "paper_year": 2026,
+   "award": "honorable_mention",
+   "source_url": "https://blog.icml.cc/2026/07/05/announcing-the-icml-2026-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Motion Attribution for Video Generation",
+   "venue": "ICML",
+   "award_year": 2026,
+   "paper_year": 2026,
+   "award": "honorable_mention",
+   "source_url": "https://blog.icml.cc/2026/07/05/announcing-the-icml-2026-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "How much can language models memorize?",
+   "venue": "ICML",
+   "award_year": 2026,
+   "paper_year": 2026,
+   "award": "honorable_mention",
+   "source_url": "https://blog.icml.cc/2026/07/05/announcing-the-icml-2026-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "A Random Matrix Perspective on the Consistency of Diffusion Models",
+   "venue": "ICML",
+   "award_year": 2026,
+   "paper_year": 2026,
+   "award": "honorable_mention",
+   "source_url": "https://blog.icml.cc/2026/07/05/announcing-the-icml-2026-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "To Grok Grokking: Provable Grokking in Ridge Regression",
+   "venue": "ICML",
+   "award_year": 2026,
+   "paper_year": 2026,
+   "award": "honorable_mention",
+   "source_url": "https://blog.icml.cc/2026/07/05/announcing-the-icml-2026-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Position: The Alignment Community is Unintentionally Building a Censor’s Toolkit",
+   "venue": "ICML",
+   "award_year": 2026,
+   "paper_year": 2026,
+   "award": "outstanding_position",
+   "source_url": "https://blog.icml.cc/2026/07/05/announcing-the-icml-2026-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Position: AI/ML Deepfake Research is Misaligned with AI Generated Non-Consensual Intimate Imagery (AIG-NCII)",
+   "venue": "ICML",
+   "award_year": 2026,
+   "paper_year": 2026,
+   "award": "honorable_mention_position",
+   "source_url": "https://blog.icml.cc/2026/07/05/announcing-the-icml-2026-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Asynchronous Methods for Deep Reinforcement Learning",
+   "venue": "ICML",
+   "award_year": 2026,
+   "paper_year": 2016,
+   "award": "test_of_time",
+   "source_url": "https://blog.icml.cc/2026/07/05/announcing-the-icml-2026-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Language Models are Few-Shot Learners",
+   "venue": "NeurIPS",
+   "award_year": 2020,
+   "paper_year": 2020,
+   "award": "outstanding",
+   "source_url": "https://neurips.cc/virtual/2020/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Improved guarantees and a multiple-descent curve for Column Subset Selection and the Nystrom method",
+   "venue": "NeurIPS",
+   "award_year": 2020,
+   "paper_year": 2020,
+   "award": "outstanding",
+   "source_url": "https://neurips.cc/virtual/2020/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "No-Regret Learning Dynamics for Extensive-Form Correlated Equilibrium",
+   "venue": "NeurIPS",
+   "award_year": 2020,
+   "paper_year": 2020,
+   "award": "outstanding",
+   "source_url": "https://neurips.cc/virtual/2020/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Hogwild!: A Lock-Free Approach to Parallelizing Stochastic Gradient Descent",
+   "venue": "NeurIPS",
+   "award_year": 2020,
+   "paper_year": 2011,
+   "award": "test_of_time",
+   "source_url": "https://neurips.cc/virtual/2020/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "A Universal Law of Robustness via Isoperimetry",
+   "venue": "NeurIPS",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "outstanding",
+   "source_url": "https://neurips.cc/virtual/2021/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "On the Expressivity of Markov Reward",
+   "venue": "NeurIPS",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "outstanding",
+   "source_url": "https://neurips.cc/virtual/2021/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Deep Reinforcement Learning at the Edge of the Statistical Precipice",
+   "venue": "NeurIPS",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "outstanding",
+   "source_url": "https://neurips.cc/virtual/2021/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "MAUVE: Measuring the Gap Between Neural Text and Human Text using Divergence Frontiers",
+   "venue": "NeurIPS",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "outstanding",
+   "source_url": "https://neurips.cc/virtual/2021/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Continuized Accelerations of Deterministic and Stochastic Gradient Descents, and of Gossip Algorithms",
+   "venue": "NeurIPS",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "outstanding",
+   "source_url": "https://neurips.cc/virtual/2021/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Moser Flow: Divergence-based Generative Modeling on Manifolds",
+   "venue": "NeurIPS",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "outstanding",
+   "source_url": "https://neurips.cc/virtual/2021/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "ATOM3D: Tasks on Molecules in Three Dimensions",
+   "venue": "NeurIPS",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "outstanding_db",
+   "source_url": "https://neurips.cc/virtual/2021/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Reduced, Reused and Recycled: The Life of a Dataset in Machine Learning Research",
+   "venue": "NeurIPS",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "outstanding_db",
+   "source_url": "https://neurips.cc/virtual/2021/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Online Learning for Latent Dirichlet Allocation",
+   "venue": "NeurIPS",
+   "award_year": 2021,
+   "paper_year": 2010,
+   "award": "test_of_time",
+   "source_url": "https://neurips.cc/virtual/2021/awards_detail",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Is Out-of-distribution Detection Learnable?",
+   "venue": "NeurIPS",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://blog.neurips.cc/2022/11/21/announcing-the-neurips-2022-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Photorealistic Text-to-Image Diffusion Models with Deep Language Understanding",
+   "venue": "NeurIPS",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://blog.neurips.cc/2022/11/21/announcing-the-neurips-2022-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Elucidating the Design Space of Diffusion-Based Generative Models",
+   "venue": "NeurIPS",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://blog.neurips.cc/2022/11/21/announcing-the-neurips-2022-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "ProcTHOR: Large-Scale Embodied AI Using Procedural Generation",
+   "venue": "NeurIPS",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://blog.neurips.cc/2022/11/21/announcing-the-neurips-2022-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Using natural language and program abstractions to instill human inductive biases in machines",
+   "venue": "NeurIPS",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://blog.neurips.cc/2022/11/21/announcing-the-neurips-2022-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "A Neural Corpus Indexer for Document Retrieval",
+   "venue": "NeurIPS",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://blog.neurips.cc/2022/11/21/announcing-the-neurips-2022-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "High-dimensional limit theorems for SGD: Effective dynamics and critical scaling",
+   "venue": "NeurIPS",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://blog.neurips.cc/2022/11/21/announcing-the-neurips-2022-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Gradient Descent: The Ultimate Optimizer",
+   "venue": "NeurIPS",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://blog.neurips.cc/2022/11/21/announcing-the-neurips-2022-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Riemannian Score-Based Generative Modelling",
+   "venue": "NeurIPS",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://blog.neurips.cc/2022/11/21/announcing-the-neurips-2022-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Gradient Estimation with Discrete Stein Operators",
+   "venue": "NeurIPS",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://blog.neurips.cc/2022/11/21/announcing-the-neurips-2022-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "An empirical analysis of compute-optimal large language model training",
+   "venue": "NeurIPS",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://blog.neurips.cc/2022/11/21/announcing-the-neurips-2022-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Beyond neural scaling laws: beating power law scaling via data pruning",
+   "venue": "NeurIPS",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://blog.neurips.cc/2022/11/21/announcing-the-neurips-2022-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "On-Demand Sampling: Learning Optimally from Multiple Distributions",
+   "venue": "NeurIPS",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://blog.neurips.cc/2022/11/21/announcing-the-neurips-2022-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "LAION-5B: An open large-scale dataset for training next generation image-text models",
+   "venue": "NeurIPS",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding_db",
+   "source_url": "https://blog.neurips.cc/2022/11/21/announcing-the-neurips-2022-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "MineDojo: Building Open-Ended Embodied Agents with Internet-Scale Knowledge",
+   "venue": "NeurIPS",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding_db",
+   "source_url": "https://blog.neurips.cc/2022/11/21/announcing-the-neurips-2022-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "ImageNet Classification with Deep Convolutional Neural Networks",
+   "venue": "NeurIPS",
+   "award_year": 2022,
+   "paper_year": 2012,
+   "award": "test_of_time",
+   "source_url": "https://blog.neurips.cc/2022/11/21/announcing-the-neurips-2022-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Privacy Auditing with One (1) Training Run",
+   "venue": "NeurIPS",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://blog.neurips.cc/2023/12/11/announcing-the-neurips-2023-paper-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Are Emergent Abilities of Large Language Models a Mirage?",
+   "venue": "NeurIPS",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://blog.neurips.cc/2023/12/11/announcing-the-neurips-2023-paper-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Scaling Data-Constrained Language Models",
+   "venue": "NeurIPS",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "runner_up",
+   "source_url": "https://blog.neurips.cc/2023/12/11/announcing-the-neurips-2023-paper-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Direct Preference Optimization: Your Language Model is Secretly a Reward Model",
+   "venue": "NeurIPS",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "runner_up",
+   "source_url": "https://blog.neurips.cc/2023/12/11/announcing-the-neurips-2023-paper-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "ClimSim: A large multi-scale dataset for hybrid physics-ML climate emulation",
+   "venue": "NeurIPS",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding_db",
+   "source_url": "https://blog.neurips.cc/2023/12/11/announcing-the-neurips-2023-paper-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "DecodingTrust: A Comprehensive Assessment of Trustworthiness in GPT Models",
+   "venue": "NeurIPS",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding_db",
+   "source_url": "https://blog.neurips.cc/2023/12/11/announcing-the-neurips-2023-paper-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Distributed Representations of Words and Phrases and their Compositionality",
+   "venue": "NeurIPS",
+   "award_year": 2023,
+   "paper_year": 2013,
+   "award": "test_of_time",
+   "source_url": "https://blog.neurips.cc/2023/12/11/announcing-the-neurips-2023-paper-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Visual Autoregressive Modeling: Scalable Image Generation via Next-Scale Prediction",
+   "venue": "NeurIPS",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best",
+   "source_url": "https://blog.neurips.cc/2024/12/10/announcing-the-neurips-2024-best-paper-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Stochastic Taylor Derivative Estimator: Efficient amortization for arbitrary differential operators",
+   "venue": "NeurIPS",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best",
+   "source_url": "https://blog.neurips.cc/2024/12/10/announcing-the-neurips-2024-best-paper-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Not All Tokens Are What You Need for Pretraining",
+   "venue": "NeurIPS",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "runner_up",
+   "source_url": "https://blog.neurips.cc/2024/12/10/announcing-the-neurips-2024-best-paper-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Guiding a Diffusion Model with a Bad Version of Itself",
+   "venue": "NeurIPS",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "runner_up",
+   "source_url": "https://blog.neurips.cc/2024/12/10/announcing-the-neurips-2024-best-paper-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "The PRISM Alignment Dataset: What Participatory, Representative and Individualised Human Feedback Reveals About the Subjective and Multicultural Alignment of Large Language Models",
+   "venue": "NeurIPS",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding_db",
+   "source_url": "https://blog.neurips.cc/2024/12/10/announcing-the-neurips-2024-best-paper-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Generative Adversarial Nets",
+   "venue": "NeurIPS",
+   "award_year": 2024,
+   "paper_year": 2014,
+   "award": "test_of_time",
+   "source_url": "https://media.neurips.cc/Conferences/NeurIPS2024/NeurIPS2024_ToT_Press_Release.pdf",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Sequence to Sequence Learning with Neural Networks",
+   "venue": "NeurIPS",
+   "award_year": 2024,
+   "paper_year": 2014,
+   "award": "test_of_time",
+   "source_url": "https://media.neurips.cc/Conferences/NeurIPS2024/NeurIPS2024_ToT_Press_Release.pdf",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Gated Attention for Large Language Models: Non-linearity, Sparsity, and Attention-Sink-Free",
+   "venue": "NeurIPS",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "best",
+   "source_url": "https://blog.neurips.cc/2025/11/26/announcing-the-neurips-2025-best-paper-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "1000 Layer Networks for Self-Supervised RL: Scaling Depth Can Enable New Goal-Reaching Capabilities",
+   "venue": "NeurIPS",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "best",
+   "source_url": "https://blog.neurips.cc/2025/11/26/announcing-the-neurips-2025-best-paper-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Why Diffusion Models Don’t Memorize: The Role of Implicit Dynamical Regularization in Training",
+   "venue": "NeurIPS",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "best",
+   "source_url": "https://blog.neurips.cc/2025/11/26/announcing-the-neurips-2025-best-paper-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Does Reinforcement Learning Really Incentivize Reasoning Capacity in LLMs Beyond the Base Model?",
+   "venue": "NeurIPS",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "runner_up",
+   "source_url": "https://blog.neurips.cc/2025/11/26/announcing-the-neurips-2025-best-paper-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Optimal Mistake Bounds for Transductive Online Learning",
+   "venue": "NeurIPS",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "runner_up",
+   "source_url": "https://blog.neurips.cc/2025/11/26/announcing-the-neurips-2025-best-paper-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Superposition Yields Robust Neural Scaling",
+   "venue": "NeurIPS",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "runner_up",
+   "source_url": "https://blog.neurips.cc/2025/11/26/announcing-the-neurips-2025-best-paper-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Artificial Hivemind: The Open-Ended Homogeneity of Language Models (and Beyond)",
+   "venue": "NeurIPS",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding_db",
+   "source_url": "https://blog.neurips.cc/2025/11/26/announcing-the-neurips-2025-best-paper-awards/",
+   "arxiv_id": ""
+  },
+  {
+   "title": "Faster R-CNN: Towards Real-Time Object Detection with Region Proposal Networks",
+   "venue": "NeurIPS",
+   "award_year": 2025,
+   "paper_year": 2015,
+   "award": "test_of_time",
+   "source_url": "https://blog.neurips.cc/2025/11/26/announcing-the-test-of-time-paper-award-for-neurips-2025/",
+   "arxiv_id": "1506.01497"
+  },
+  {
+   "title": "Beyond Fully-Connected Layers with Quaternions: Parameterization of Hypercomplex Multiplications with 1/n Parameters",
+   "venue": "ICLR",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "outstanding",
+   "source_url": "https://news-vinai.monamedia.net/announcing-iclr-2021-outstanding-paper-awards/"
+  },
+  {
+   "title": "Complex Query Answering with Neural Link Predictors",
+   "venue": "ICLR",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "outstanding",
+   "source_url": "https://news-vinai.monamedia.net/announcing-iclr-2021-outstanding-paper-awards/"
+  },
+  {
+   "title": "EigenGame: PCA as a Nash Equilibrium",
+   "venue": "ICLR",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "outstanding",
+   "source_url": "https://news-vinai.monamedia.net/announcing-iclr-2021-outstanding-paper-awards/"
+  },
+  {
+   "title": "Learning Mesh-Based Simulation with Graph Networks",
+   "venue": "ICLR",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "outstanding",
+   "source_url": "https://news-vinai.monamedia.net/announcing-iclr-2021-outstanding-paper-awards/"
+  },
+  {
+   "title": "Neural Synthesis of Binaural Speech from Mono Audio",
+   "venue": "ICLR",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "outstanding",
+   "source_url": "https://news-vinai.monamedia.net/announcing-iclr-2021-outstanding-paper-awards/"
+  },
+  {
+   "title": "Optimal Rates for Averaged Stochastic Gradient Descent under Neural Tangent Kernel Regime",
+   "venue": "ICLR",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "outstanding",
+   "source_url": "https://news-vinai.monamedia.net/announcing-iclr-2021-outstanding-paper-awards/"
+  },
+  {
+   "title": "Rethinking Architecture Selection in Differentiable NAS",
+   "venue": "ICLR",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "outstanding",
+   "source_url": "https://news-vinai.monamedia.net/announcing-iclr-2021-outstanding-paper-awards/"
+  },
+  {
+   "title": "Score-Based Generative Modeling through Stochastic Differential Equations",
+   "venue": "ICLR",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "outstanding",
+   "source_url": "https://news-vinai.monamedia.net/announcing-iclr-2021-outstanding-paper-awards/"
+  },
+  {
+   "title": "Analytic-DPM: an Analytic Estimate of the Optimal Reverse Variance in Diffusion Probabilistic Models",
+   "venue": "ICLR",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://blog.iclr.cc/2022/04/20/announcing-the-iclr-2022-outstanding-paper-award-recipients/"
+  },
+  {
+   "title": "Hyperparameter Tuning with Renyi Differential Privacy",
+   "venue": "ICLR",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://blog.iclr.cc/2022/04/20/announcing-the-iclr-2022-outstanding-paper-award-recipients/"
+  },
+  {
+   "title": "Learning Strides in Convolutional Neural Networks",
+   "venue": "ICLR",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://blog.iclr.cc/2022/04/20/announcing-the-iclr-2022-outstanding-paper-award-recipients/"
+  },
+  {
+   "title": "Expressiveness and Approximation Properties of Graph Neural Networks",
+   "venue": "ICLR",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://blog.iclr.cc/2022/04/20/announcing-the-iclr-2022-outstanding-paper-award-recipients/"
+  },
+  {
+   "title": "Comparing Distributions by Measuring Differences that Affect Decision Making",
+   "venue": "ICLR",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://blog.iclr.cc/2022/04/20/announcing-the-iclr-2022-outstanding-paper-award-recipients/"
+  },
+  {
+   "title": "Neural Collapse Under MSE Loss: Proximity to and Dynamics on the Central Path",
+   "venue": "ICLR",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://blog.iclr.cc/2022/04/20/announcing-the-iclr-2022-outstanding-paper-award-recipients/"
+  },
+  {
+   "title": "Bootstrapped Meta-Learning",
+   "venue": "ICLR",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "outstanding",
+   "source_url": "https://blog.iclr.cc/2022/04/20/announcing-the-iclr-2022-outstanding-paper-award-recipients/"
+  },
+  {
+   "title": "Understanding over-squashing and bottlenecks on graphs via curvature",
+   "venue": "ICLR",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "honorable_mention",
+   "source_url": "https://blog.iclr.cc/2022/04/20/announcing-the-iclr-2022-outstanding-paper-award-recipients/"
+  },
+  {
+   "title": "Efficiently Modeling Long Sequences with Structured State Spaces",
+   "venue": "ICLR",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "honorable_mention",
+   "source_url": "https://blog.iclr.cc/2022/04/20/announcing-the-iclr-2022-outstanding-paper-award-recipients/"
+  },
+  {
+   "title": "PiCO: Contrastive Label Disambiguation for Partial Label Learning",
+   "venue": "ICLR",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "honorable_mention",
+   "source_url": "https://blog.iclr.cc/2022/04/20/announcing-the-iclr-2022-outstanding-paper-award-recipients/"
+  },
+  {
+   "title": "Universal Few-shot Learning of Dense Prediction Tasks with Visual Token Matching",
+   "venue": "ICLR",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://blog.iclr.cc/2023/03/21/announcing-the-iclr-2023-outstanding-paper-award-recipients/"
+  },
+  {
+   "title": "Rethinking the Expressive Power of GNNs via Graph Biconnectivity",
+   "venue": "ICLR",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://blog.iclr.cc/2023/03/21/announcing-the-iclr-2023-outstanding-paper-award-recipients/"
+  },
+  {
+   "title": "DreamFusion: Text-to-3D using 2D Diffusion",
+   "venue": "ICLR",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://blog.iclr.cc/2023/03/21/announcing-the-iclr-2023-outstanding-paper-award-recipients/"
+  },
+  {
+   "title": "Emergence of Maps in the Memories of Blind Navigation Agents",
+   "venue": "ICLR",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://blog.iclr.cc/2023/03/21/announcing-the-iclr-2023-outstanding-paper-award-recipients/"
+  },
+  {
+   "title": "Towards Understanding Ensemble, Knowledge Distillation and Self-Distillation in Deep Learning",
+   "venue": "ICLR",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "honorable_mention",
+   "source_url": "https://blog.iclr.cc/2023/03/21/announcing-the-iclr-2023-outstanding-paper-award-recipients/"
+  },
+  {
+   "title": "Mastering the Game of No-Press Diplomacy via Human-Regularized Reinforcement Learning and Planning",
+   "venue": "ICLR",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "honorable_mention",
+   "source_url": "https://blog.iclr.cc/2023/03/21/announcing-the-iclr-2023-outstanding-paper-award-recipients/"
+  },
+  {
+   "title": "On the duality between contrastive and non-contrastive self-supervised learning",
+   "venue": "ICLR",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "honorable_mention",
+   "source_url": "https://blog.iclr.cc/2023/03/21/announcing-the-iclr-2023-outstanding-paper-award-recipients/"
+  },
+  {
+   "title": "Conditional Antibody Design as 3D Equivariant Graph Translation",
+   "venue": "ICLR",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "honorable_mention",
+   "source_url": "https://blog.iclr.cc/2023/03/21/announcing-the-iclr-2023-outstanding-paper-award-recipients/"
+  },
+  {
+   "title": "Disentanglement with Biological Constraints: A Theory of Functional Cell Types",
+   "venue": "ICLR",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "honorable_mention",
+   "source_url": "https://blog.iclr.cc/2023/03/21/announcing-the-iclr-2023-outstanding-paper-award-recipients/"
+  },
+  {
+   "title": "Generalization in diffusion models arises from geometry-adaptive harmonic representations",
+   "venue": "ICLR",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://blog.iclr.cc/2024/05/06/iclr-2024-outstanding-paper-awards/"
+  },
+  {
+   "title": "Learning Interactive Real-World Simulators",
+   "venue": "ICLR",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://blog.iclr.cc/2024/05/06/iclr-2024-outstanding-paper-awards/"
+  },
+  {
+   "title": "Never Train from Scratch: Fair Comparison of Long-Sequence Models Requires Data-Driven Priors",
+   "venue": "ICLR",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://blog.iclr.cc/2024/05/06/iclr-2024-outstanding-paper-awards/"
+  },
+  {
+   "title": "Protein Discovery with Discrete Walk-Jump Sampling",
+   "venue": "ICLR",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://blog.iclr.cc/2024/05/06/iclr-2024-outstanding-paper-awards/"
+  },
+  {
+   "title": "Vision Transformers Need Registers",
+   "venue": "ICLR",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://blog.iclr.cc/2024/05/06/iclr-2024-outstanding-paper-awards/"
+  },
+  {
+   "title": "Amortizing intractable inference in large language models",
+   "venue": "ICLR",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "honorable_mention",
+   "source_url": "https://blog.iclr.cc/2024/05/06/iclr-2024-outstanding-paper-awards/"
+  },
+  {
+   "title": "Approximating Nash Equilibria in Normal-Form Games via Stochastic Optimization",
+   "venue": "ICLR",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "honorable_mention",
+   "source_url": "https://blog.iclr.cc/2024/05/06/iclr-2024-outstanding-paper-awards/"
+  },
+  {
+   "title": "Beyond Weisfeiler-Lehman: A Quantitative Framework for GNN Expressiveness",
+   "venue": "ICLR",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "honorable_mention",
+   "source_url": "https://blog.iclr.cc/2024/05/06/iclr-2024-outstanding-paper-awards/"
+  },
+  {
+   "title": "Flow Matching on General Geometries",
+   "venue": "ICLR",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "honorable_mention",
+   "source_url": "https://blog.iclr.cc/2024/05/06/iclr-2024-outstanding-paper-awards/"
+  },
+  {
+   "title": "Is ImageNet worth 1 video? Learning strong image encoders from 1 long unlabelled video",
+   "venue": "ICLR",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "honorable_mention",
+   "source_url": "https://blog.iclr.cc/2024/05/06/iclr-2024-outstanding-paper-awards/"
+  },
+  {
+   "title": "Meta Continual Learning Revisited: Implicitly Enhancing Online Hessian Approximation via Variance Reduction",
+   "venue": "ICLR",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "honorable_mention",
+   "source_url": "https://blog.iclr.cc/2024/05/06/iclr-2024-outstanding-paper-awards/"
+  },
+  {
+   "title": "Model Tells You What to Discard: Adaptive KV Cache Compression for LLMs",
+   "venue": "ICLR",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "honorable_mention",
+   "source_url": "https://blog.iclr.cc/2024/05/06/iclr-2024-outstanding-paper-awards/"
+  },
+  {
+   "title": "Proving Test Set Contamination in Black-Box Language Models",
+   "venue": "ICLR",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "honorable_mention",
+   "source_url": "https://blog.iclr.cc/2024/05/06/iclr-2024-outstanding-paper-awards/"
+  },
+  {
+   "title": "Robust agents learn causal world models",
+   "venue": "ICLR",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "honorable_mention",
+   "source_url": "https://blog.iclr.cc/2024/05/06/iclr-2024-outstanding-paper-awards/"
+  },
+  {
+   "title": "The mechanistic basis of data dependence and abrupt learning in an in-context classification task",
+   "venue": "ICLR",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "honorable_mention",
+   "source_url": "https://blog.iclr.cc/2024/05/06/iclr-2024-outstanding-paper-awards/"
+  },
+  {
+   "title": "Towards a statistical theory of data selection under weak supervision",
+   "venue": "ICLR",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "honorable_mention",
+   "source_url": "https://blog.iclr.cc/2024/05/06/iclr-2024-outstanding-paper-awards/"
+  },
+  {
+   "title": "Auto-Encoding Variational Bayes",
+   "venue": "ICLR",
+   "award_year": 2024,
+   "paper_year": 2014,
+   "award": "test_of_time",
+   "arxiv_id": "1312.6114",
+   "source_url": "https://blog.iclr.cc/2024/05/07/iclr-2024-test-of-time-award/"
+  },
+  {
+   "title": "Intriguing properties of neural networks",
+   "venue": "ICLR",
+   "award_year": 2024,
+   "paper_year": 2014,
+   "award": "runner_up",
+   "arxiv_id": "1312.6199",
+   "source_url": "https://blog.iclr.cc/2024/05/07/iclr-2024-test-of-time-award/"
+  },
+  {
+   "title": "Safety Alignment Should be Made More Than Just a Few Tokens Deep",
+   "venue": "ICLR",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://blog.iclr.cc/2025/04/22/announcing-the-outstanding-paper-awards-at-iclr-2025/"
+  },
+  {
+   "title": "Learning Dynamics of LLM Finetuning",
+   "venue": "ICLR",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://blog.iclr.cc/2025/04/22/announcing-the-outstanding-paper-awards-at-iclr-2025/"
+  },
+  {
+   "title": "AlphaEdit: Null-Space Constrained Model Editing for Language Models",
+   "venue": "ICLR",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://blog.iclr.cc/2025/04/22/announcing-the-outstanding-paper-awards-at-iclr-2025/"
+  },
+  {
+   "title": "Data Shapley in One Training Run",
+   "venue": "ICLR",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "honorable_mention",
+   "source_url": "https://blog.iclr.cc/2025/04/22/announcing-the-outstanding-paper-awards-at-iclr-2025/"
+  },
+  {
+   "title": "SAM 2: Segment Anything in Images and Videos",
+   "venue": "ICLR",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "honorable_mention",
+   "source_url": "https://blog.iclr.cc/2025/04/22/announcing-the-outstanding-paper-awards-at-iclr-2025/"
+  },
+  {
+   "title": "Faster Cascades via Speculative Decoding",
+   "venue": "ICLR",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "honorable_mention",
+   "source_url": "https://blog.iclr.cc/2025/04/22/announcing-the-outstanding-paper-awards-at-iclr-2025/"
+  },
+  {
+   "title": "Adam: A Method for Stochastic Optimization",
+   "venue": "ICLR",
+   "award_year": 2025,
+   "paper_year": 2015,
+   "award": "test_of_time",
+   "arxiv_id": "1412.6980",
+   "source_url": "https://blog.iclr.cc/2025/04/14/announcing-the-test-of-time-award-winners-from-iclr-2015/"
+  },
+  {
+   "title": "Neural Machine Translation by Jointly Learning to Align and Translate",
+   "venue": "ICLR",
+   "award_year": 2025,
+   "paper_year": 2015,
+   "award": "runner_up",
+   "arxiv_id": "1409.0473",
+   "source_url": "https://blog.iclr.cc/2025/04/14/announcing-the-test-of-time-award-winners-from-iclr-2015/"
+  },
+  {
+   "title": "Transformers are Inherently Succinct",
+   "venue": "ICLR",
+   "award_year": 2026,
+   "paper_year": 2026,
+   "award": "outstanding",
+   "source_url": "https://blog.iclr.cc/2026/04/23/announcing-the-iclr-2026-outstanding-papers/"
+  },
+  {
+   "title": "LLMs Get Lost In Multi-Turn Conversation",
+   "venue": "ICLR",
+   "award_year": 2026,
+   "paper_year": 2026,
+   "award": "outstanding",
+   "source_url": "https://blog.iclr.cc/2026/04/23/announcing-the-iclr-2026-outstanding-papers/"
+  },
+  {
+   "title": "The Polar Express: Optimal Matrix Sign Methods and their Application to the Muon Algorithm",
+   "venue": "ICLR",
+   "award_year": 2026,
+   "paper_year": 2026,
+   "award": "honorable_mention",
+   "source_url": "https://blog.iclr.cc/2026/04/23/announcing-the-iclr-2026-outstanding-papers/"
+  },
+  {
+   "title": "Unsupervised Representation Learning with Deep Convolutional Generative Adversarial Networks",
+   "venue": "ICLR",
+   "award_year": 2026,
+   "paper_year": 2016,
+   "award": "test_of_time",
+   "arxiv_id": "1511.06434",
+   "source_url": "https://blog.iclr.cc/2026/04/22/announcing-the-test-of-time-awards-from-iclr-2016/"
+  },
+  {
+   "title": "Continuous control with deep reinforcement learning",
+   "venue": "ICLR",
+   "award_year": 2026,
+   "paper_year": 2016,
+   "award": "test_of_time",
+   "arxiv_id": "1509.02971",
+   "source_url": "https://blog.iclr.cc/2026/04/22/announcing-the-test-of-time-awards-from-iclr-2016/"
+  },
+  {
+   "title": "What Do Language Models Learn and When? The Implicit Curriculum Hypothesis",
+   "venue": "COLM",
+   "award_year": 2026,
+   "paper_year": 2026,
+   "award": "outstanding",
+   "source_url": "https://colm.cc/virtual/2026/awards_detail"
+  },
+  {
+   "title": "Message Passing Enables Efficient Reasoning",
+   "venue": "COLM",
+   "award_year": 2026,
+   "paper_year": 2026,
+   "award": "outstanding",
+   "source_url": "https://colm.cc/virtual/2026/awards_detail"
+  },
+  {
+   "title": "How Can We Synthesize High-Quality Pretraining Data? A Systematic Study of Prompt Design, Generator Model, and Source Data",
+   "venue": "COLM",
+   "award_year": 2026,
+   "paper_year": 2026,
+   "award": "outstanding",
+   "source_url": "https://colm.cc/virtual/2026/awards_detail"
+  },
+  {
+   "title": "Unsupervised Learning of Probably Symmetric Deformable 3D Objects from Images in the Wild",
+   "venue": "CVPR",
+   "award_year": 2020,
+   "paper_year": 2020,
+   "award": "best",
+   "source_url": "https://tc.computer.org/tcpami/awards/cvpr-paper-awards/"
+  },
+  {
+   "title": "BSP-Net: Generating Compact Meshes via Binary Space Partitioning",
+   "venue": "CVPR",
+   "award_year": 2020,
+   "paper_year": 2020,
+   "award": "best_student",
+   "source_url": "https://tc.computer.org/tcpami/awards/cvpr-paper-awards/"
+  },
+  {
+   "title": "DeepCap: Monocular Human Performance Capture Using Weak Supervision",
+   "venue": "CVPR",
+   "award_year": 2020,
+   "paper_year": 2020,
+   "award": "honorable_mention",
+   "source_url": "https://tc.computer.org/tcpami/awards/cvpr-paper-awards/"
+  },
+  {
+   "title": "Secrets of Optical Flow Estimation and Their Principles",
+   "venue": "CVPR",
+   "award_year": 2020,
+   "paper_year": 2010,
+   "award": "test_of_time",
+   "source_url": "https://tc.computer.org/tcpami/awards/longuet-higgins-prize/"
+  },
+  {
+   "title": "GIRAFFE: Representing Scenes as Compositional Generative Neural Feature Fields",
+   "venue": "CVPR",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "best",
+   "source_url": "https://tc.computer.org/tcpami/awards/cvpr-paper-awards/"
+  },
+  {
+   "title": "Task Programming: Learning Data Efficient Behavior Representations",
+   "venue": "CVPR",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "best_student",
+   "source_url": "https://tc.computer.org/tcpami/awards/cvpr-paper-awards/"
+  },
+  {
+   "title": "Exploring Simple Siamese Representation Learning",
+   "venue": "CVPR",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "honorable_mention",
+   "source_url": "https://tc.computer.org/tcpami/awards/cvpr-paper-awards/"
+  },
+  {
+   "title": "Learning High Fidelity Depths of Dressed Humans by Watching Social Media Dance Videos",
+   "venue": "CVPR",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "honorable_mention",
+   "source_url": "https://tc.computer.org/tcpami/awards/cvpr-paper-awards/"
+  },
+  {
+   "title": "Less is More: ClipBERT for Video-and-Language Learning via Sparse Sampling",
+   "venue": "CVPR",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "honorable_mention",
+   "source_url": "https://tc.computer.org/tcpami/awards/cvpr-paper-awards/"
+  },
+  {
+   "title": "Binary TTC: A Temporal Geofence for Autonomous Navigation",
+   "venue": "CVPR",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "honorable_mention",
+   "source_url": "https://tc.computer.org/tcpami/awards/cvpr-paper-awards/"
+  },
+  {
+   "title": "Real-Time High-Resolution Background Matting",
+   "venue": "CVPR",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "honorable_mention",
+   "source_url": "https://tc.computer.org/tcpami/awards/cvpr-paper-awards/"
+  },
+  {
+   "title": "Real-time human pose recognition in parts from single depth image",
+   "venue": "CVPR",
+   "award_year": 2021,
+   "paper_year": 2011,
+   "award": "test_of_time",
+   "source_url": "https://tc.computer.org/tcpami/awards/longuet-higgins-prize/"
+  },
+  {
+   "title": "Baby talk: Understanding and generating simple image descriptions",
+   "venue": "CVPR",
+   "award_year": 2021,
+   "paper_year": 2011,
+   "award": "test_of_time",
+   "source_url": "https://tc.computer.org/tcpami/awards/longuet-higgins-prize/"
+  },
+  {
+   "title": "Learning to Solve Hard Minimal Problems",
+   "venue": "CVPR",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "best",
+   "source_url": "https://tc.computer.org/tcpami/awards/cvpr-paper-awards/"
+  },
+  {
+   "title": "EPro-PnP: Generalized End-to-End Probabilistic Perspective-n-Points for Monocular Object Pose Estimation",
+   "venue": "CVPR",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "best_student",
+   "source_url": "https://tc.computer.org/tcpami/awards/cvpr-paper-awards/"
+  },
+  {
+   "title": "Dual-Shutter Optical Vibration Sensing",
+   "venue": "CVPR",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "honorable_mention",
+   "source_url": "https://tc.computer.org/tcpami/awards/cvpr-paper-awards/"
+  },
+  {
+   "title": "Ref-NeRF: Structured View-Dependent Appearance for Neural Radiance Fields",
+   "venue": "CVPR",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "honorable_mention",
+   "source_url": "https://tc.computer.org/tcpami/awards/cvpr-paper-awards/"
+  },
+  {
+   "title": "Are We Ready for Autonomous Driving? The KITTI Vision Benchmark Suite",
+   "venue": "CVPR",
+   "award_year": 2022,
+   "paper_year": 2012,
+   "award": "test_of_time",
+   "source_url": "https://tc.computer.org/tcpami/awards/longuet-higgins-prize/"
+  },
+  {
+   "title": "Visual Programming: Compositional visual reasoning without training",
+   "venue": "CVPR",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "best",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2023/Awards"
+  },
+  {
+   "title": "Planning-oriented Autonomous Driving",
+   "venue": "CVPR",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "best",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2023/Awards"
+  },
+  {
+   "title": "DynIBaR: Neural Dynamic Image-Based Rendering",
+   "venue": "CVPR",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "honorable_mention",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2023/Awards"
+  },
+  {
+   "title": "3D Registration with Maximal Cliques",
+   "venue": "CVPR",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "best_student",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2023/Awards"
+  },
+  {
+   "title": "DreamBooth: Fine Tuning Text-to-Image Diffusion Models for Subject-Driven Generation",
+   "venue": "CVPR",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "honorable_mention",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2023/Awards"
+  },
+  {
+   "title": "Online Object Tracking: A Benchmark",
+   "venue": "CVPR",
+   "award_year": 2023,
+   "paper_year": 2013,
+   "award": "test_of_time",
+   "source_url": "https://tc.computer.org/tcpami/awards/longuet-higgins-prize/"
+  },
+  {
+   "title": "Generative Image Dynamics",
+   "venue": "CVPR",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2024/News/Awards"
+  },
+  {
+   "title": "Rich Human Feedback for Text-to-Image Generation",
+   "venue": "CVPR",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2024/News/Awards"
+  },
+  {
+   "title": "EventPS: Real-Time Photometric Stereo Using an Event Camera",
+   "venue": "CVPR",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "honorable_mention",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2024/News/Awards"
+  },
+  {
+   "title": "pixelSplat: 3D Gaussian Splats from Image Pairs for Scalable Generalizable 3D Reconstruction",
+   "venue": "CVPR",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "honorable_mention",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2024/News/Awards"
+  },
+  {
+   "title": "Mip-Splatting: Alias-free 3D Gaussian Splatting",
+   "venue": "CVPR",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best_student",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2024/News/Awards"
+  },
+  {
+   "title": "BioCLIP: A Vision Foundation Model for the Tree of Life",
+   "venue": "CVPR",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best_student",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2024/News/Awards"
+  },
+  {
+   "title": "SpiderMatch: 3D Shape Matching with Global Optimality and Geometric Consistency",
+   "venue": "CVPR",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "honorable_mention",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2024/News/Awards"
+  },
+  {
+   "title": "Image Processing GNN: Breaking Rigidity in Super-Resolution",
+   "venue": "CVPR",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "honorable_mention",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2024/News/Awards"
+  },
+  {
+   "title": "Objects as Volumes: A Stochastic Geometry View of Opaque Solids",
+   "venue": "CVPR",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "honorable_mention",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2024/News/Awards"
+  },
+  {
+   "title": "Comparing the Decision-Making Mechanisms by Transformers and CNNs via Explanation Methods",
+   "venue": "CVPR",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "honorable_mention",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2024/News/Awards"
+  },
+  {
+   "title": "Rich Feature Hierarchies for Accurate Object Detection and Semantic Segmentation",
+   "venue": "CVPR",
+   "award_year": 2024,
+   "paper_year": 2014,
+   "award": "test_of_time",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2024/News/Awards"
+  },
+  {
+   "title": "VGGT: Visual Geometry Grounded Transformer",
+   "venue": "CVPR",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "best",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2025/BestPapersDemos"
+  },
+  {
+   "title": "Neural Inverse Rendering from Propagating Light",
+   "venue": "CVPR",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "best_student",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2025/BestPapersDemos"
+  },
+  {
+   "title": "MegaSaM: Accurate, Fast and Robust Structure and Motion from Casual Dynamic Videos",
+   "venue": "CVPR",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "honorable_mention",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2025/BestPapersDemos"
+  },
+  {
+   "title": "Navigation World Models",
+   "venue": "CVPR",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "honorable_mention",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2025/BestPapersDemos"
+  },
+  {
+   "title": "Molmo and PixMo: Open Weights and Open Data for State-of-the-Art Vision-Language Models",
+   "venue": "CVPR",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "honorable_mention",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2025/BestPapersDemos"
+  },
+  {
+   "title": "3D Student Splatting and Scooping",
+   "venue": "CVPR",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "honorable_mention",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2025/BestPapersDemos"
+  },
+  {
+   "title": "Generative Multimodal Pretraining with Discrete Diffusion Timestep Tokens",
+   "venue": "CVPR",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "honorable_mention",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2025/BestPapersDemos"
+  },
+  {
+   "title": "Going Deeper with Convolutions",
+   "venue": "CVPR",
+   "award_year": 2025,
+   "paper_year": 2015,
+   "award": "test_of_time",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2025/News/TCPAMI"
+  },
+  {
+   "title": "Fully Convolutional Networks for Semantic Segmentation",
+   "venue": "CVPR",
+   "award_year": 2025,
+   "paper_year": 2015,
+   "award": "test_of_time",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2025/News/TCPAMI"
+  },
+  {
+   "title": "Efficiently Reconstructing Dynamic Scenes One D4RT at a Time",
+   "venue": "CVPR",
+   "award_year": 2026,
+   "paper_year": 2026,
+   "award": "best",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2026/News/Best_Papers"
+  },
+  {
+   "title": "Native and Compact Structured Latents for 3D Generation",
+   "venue": "CVPR",
+   "award_year": 2026,
+   "paper_year": 2026,
+   "award": "best_student",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2026/News/Best_Papers"
+  },
+  {
+   "title": "NitroGen: An Open Foundation Model for Generalist Gaming Agents",
+   "venue": "CVPR",
+   "award_year": 2026,
+   "paper_year": 2026,
+   "award": "honorable_mention",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2026/News/Best_Papers"
+  },
+  {
+   "title": "SAM 3D: 3Dfy Anything in Images",
+   "venue": "CVPR",
+   "award_year": 2026,
+   "paper_year": 2026,
+   "award": "honorable_mention",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2026/News/Best_Papers"
+  },
+  {
+   "title": "ChordEdit: One-Step Low-Energy Transport for Image Editing",
+   "venue": "CVPR",
+   "award_year": 2026,
+   "paper_year": 2026,
+   "award": "honorable_mention",
+   "source_url": "https://cvpr.thecvf.com/Conferences/2026/News/Best_Papers"
+  },
+  {
+   "title": "Deep Residual Learning for Image Recognition",
+   "venue": "CVPR",
+   "award_year": 2026,
+   "paper_year": 2016,
+   "award": "test_of_time",
+   "source_url": "https://tc.computer.org/tcpami/awards/longuet-higgins-prize/"
+  },
+  {
+   "title": "You Only Look Once: Unified, Real-Time Object Detection",
+   "venue": "CVPR",
+   "award_year": 2026,
+   "paper_year": 2016,
+   "award": "test_of_time",
+   "source_url": "https://tc.computer.org/tcpami/awards/longuet-higgins-prize/"
+  },
+  {
+   "title": "Swin Transformer: Hierarchical Vision Transformer using Shifted Windows",
+   "venue": "ICCV",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "best",
+   "source_url": "https://tc.computer.org/tcpami/awards/iccv-paper-awards/"
+  },
+  {
+   "title": "Pixel-Perfect Structure-from-Motion with Featuremetric Refinement",
+   "venue": "ICCV",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "best_student",
+   "source_url": "https://tc.computer.org/tcpami/awards/iccv-paper-awards/"
+  },
+  {
+   "title": "Mip-NeRF: A Multiscale Representation for Anti-Aliasing Neural Radiance Fields",
+   "venue": "ICCV",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "honorable_mention",
+   "source_url": "https://tc.computer.org/tcpami/awards/iccv-paper-awards/"
+  },
+  {
+   "title": "OpenGAN: Open-Set Recognition via Open Data Generation",
+   "venue": "ICCV",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "honorable_mention",
+   "source_url": "https://tc.computer.org/tcpami/awards/iccv-paper-awards/"
+  },
+  {
+   "title": "Viewing Graph Solvability via Cycle Consistency",
+   "venue": "ICCV",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "honorable_mention",
+   "source_url": "https://tc.computer.org/tcpami/awards/iccv-paper-awards/"
+  },
+  {
+   "title": "Common Objects in 3D: Large-Scale Learning and Evaluation of Real-life 3D Category Reconstruction",
+   "venue": "ICCV",
+   "award_year": 2021,
+   "paper_year": 2021,
+   "award": "honorable_mention",
+   "source_url": "https://tc.computer.org/tcpami/awards/iccv-paper-awards/"
+  },
+  {
+   "title": "ORB: An efficient alternative to SIFT or SURF",
+   "venue": "ICCV",
+   "award_year": 2021,
+   "paper_year": 2011,
+   "award": "test_of_time",
+   "source_url": "https://tc.computer.org/tcpami/awards/the-helmholtz-prize/"
+  },
+  {
+   "title": "HMDB: A large video database for human motion recognition",
+   "venue": "ICCV",
+   "award_year": 2021,
+   "paper_year": 2011,
+   "award": "test_of_time",
+   "source_url": "https://tc.computer.org/tcpami/awards/the-helmholtz-prize/"
+  },
+  {
+   "title": "DTAM: Dense tracking and mapping in real-time",
+   "venue": "ICCV",
+   "award_year": 2021,
+   "paper_year": 2011,
+   "award": "test_of_time",
+   "source_url": "https://tc.computer.org/tcpami/awards/the-helmholtz-prize/"
+  },
+  {
+   "title": "Passive Ultra-Wideband Single-Photon Imaging",
+   "venue": "ICCV",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "best",
+   "source_url": "https://iccv2023.thecvf.com/iccv2023.opening.slides-38--MTI.php"
+  },
+  {
+   "title": "Adding Conditional Control to Text-to-Image Diffusion Models",
+   "venue": "ICCV",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "best",
+   "source_url": "https://iccv2023.thecvf.com/iccv2023.opening.slides-38--MTI.php"
+  },
+  {
+   "title": "Tracking Everything Everywhere All at Once",
+   "venue": "ICCV",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "best_student",
+   "source_url": "https://tc.computer.org/tcpami/awards/iccv-paper-awards/"
+  },
+  {
+   "title": "Segment Anything",
+   "venue": "ICCV",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "honorable_mention",
+   "source_url": "https://tc.computer.org/tcpami/awards/iccv-paper-awards/"
+  },
+  {
+   "title": "Action Recognition With Improved Trajectories",
+   "venue": "ICCV",
+   "award_year": 2023,
+   "paper_year": 2013,
+   "award": "test_of_time",
+   "source_url": "https://tc.computer.org/tcpami/awards/the-helmholtz-prize/"
+  },
+  {
+   "title": "Generating Physically Stable and Buildable Brick Structures from Text",
+   "venue": "ICCV",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "best",
+   "source_url": "https://tc.computer.org/tcpami/awards/iccv-paper-awards/"
+  },
+  {
+   "title": "FlowEdit: Inversion-Free Text-Based Editing Using Pre-Trained Flow Models",
+   "venue": "ICCV",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "best_student",
+   "source_url": "https://tc.computer.org/tcpami/awards/iccv-paper-awards/"
+  },
+  {
+   "title": "Spatially-Varying Autofocus",
+   "venue": "ICCV",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "honorable_mention",
+   "source_url": "https://tc.computer.org/tcpami/awards/iccv-paper-awards/"
+  },
+  {
+   "title": "RayZer: A Self-supervised Large View Synthesis Model",
+   "venue": "ICCV",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "honorable_mention",
+   "source_url": "https://tc.computer.org/tcpami/awards/iccv-paper-awards/"
+  },
+  {
+   "title": "Delving Deep into Rectifiers: Surpassing Human-Level Performance on ImageNet Classification",
+   "venue": "ICCV",
+   "award_year": 2025,
+   "paper_year": 2015,
+   "award": "test_of_time",
+   "source_url": "https://tc.computer.org/tcpami/awards/the-helmholtz-prize/"
+  },
+  {
+   "title": "Fast R-CNN",
+   "venue": "ICCV",
+   "award_year": 2025,
+   "paper_year": 2015,
+   "award": "test_of_time",
+   "source_url": "https://tc.computer.org/tcpami/awards/the-helmholtz-prize/"
+  },
+  {
+   "title": "RAFT: Recurrent All-Pairs Field Transforms for Optical Flow",
+   "venue": "ECCV",
+   "award_year": 2020,
+   "paper_year": 2020,
+   "award": "best",
+   "source_url": "https://www.ecva.net/index.php"
+  },
+  {
+   "title": "Towards Streaming Perception",
+   "venue": "ECCV",
+   "award_year": 2020,
+   "paper_year": 2020,
+   "award": "honorable_mention",
+   "source_url": "https://www.ecva.net/index.php"
+  },
+  {
+   "title": "NeRF: Representing Scenes as Neural Radiance Fields for View Synthesis",
+   "venue": "ECCV",
+   "award_year": 2020,
+   "paper_year": 2020,
+   "award": "honorable_mention",
+   "source_url": "https://www.ecva.net/index.php"
+  },
+  {
+   "title": "Improving the Fisher Kernel for Large-Scale Image Classification",
+   "venue": "ECCV",
+   "award_year": 2020,
+   "paper_year": 2010,
+   "award": "test_of_time",
+   "source_url": "https://www.ecva.net/index.php"
+  },
+  {
+   "title": "Brief: Binary robust independent elementary features",
+   "venue": "ECCV",
+   "award_year": 2020,
+   "paper_year": 2010,
+   "award": "test_of_time",
+   "source_url": "https://www.ecva.net/index.php"
+  },
+  {
+   "title": "On the Versatile Uses of Partial Distance Correlation in Deep Learning",
+   "venue": "ECCV",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "best",
+   "source_url": "https://www.ecva.net/index.php"
+  },
+  {
+   "title": "A Level Set Theory for Neural Implicit Evolution under Explicit Flows",
+   "venue": "ECCV",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "honorable_mention",
+   "source_url": "https://www.ecva.net/index.php"
+  },
+  {
+   "title": "Pose-NDF: Modelling Human Pose Manifolds with Neural Distance Fields",
+   "venue": "ECCV",
+   "award_year": 2022,
+   "paper_year": 2022,
+   "award": "honorable_mention",
+   "source_url": "https://www.ecva.net/index.php"
+  },
+  {
+   "title": "A naturalistic open source movie for optical flow evaluation",
+   "venue": "ECCV",
+   "award_year": 2022,
+   "paper_year": 2012,
+   "award": "test_of_time",
+   "source_url": "https://www.ecva.net/index.php"
+  },
+  {
+   "title": "Indoor Segmentation and Support Inference from RGBD Images",
+   "venue": "ECCV",
+   "award_year": 2022,
+   "paper_year": 2012,
+   "award": "test_of_time",
+   "source_url": "https://www.ecva.net/index.php"
+  },
+  {
+   "title": "Minimalist Vision with Freeform Pixels",
+   "venue": "ECCV",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best",
+   "source_url": "https://eccv.ecva.net/Conferences/2024/Awards"
+  },
+  {
+   "title": "Rasterized Edge Gradients: Handling Discontinuities Differentially",
+   "venue": "ECCV",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "honorable_mention",
+   "source_url": "https://eccv.ecva.net/Conferences/2024/Awards"
+  },
+  {
+   "title": "Concept Arithmetics for Circumventing Concept Inhibition in Diffusion Models",
+   "venue": "ECCV",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "honorable_mention",
+   "source_url": "https://eccv.ecva.net/Conferences/2024/Awards"
+  },
+  {
+   "title": "LSD-SLAM: Large-Scale Direct Monocular SLAM",
+   "venue": "ECCV",
+   "award_year": 2024,
+   "paper_year": 2014,
+   "award": "test_of_time",
+   "source_url": "https://eccv.ecva.net/Conferences/2024/Awards"
+  },
+  {
+   "title": "Microsoft COCO: Common Objects in Context",
+   "venue": "ECCV",
+   "award_year": 2024,
+   "paper_year": 2014,
+   "award": "test_of_time",
+   "source_url": "https://eccv.ecva.net/Conferences/2024/Awards"
+  },
+  {
+   "title": "Do Androids Laugh at Electric Sheep? Humor “Understanding” Benchmarks from The New Yorker Caption Contest",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "best",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "What the DAAM: Interpreting Stable Diffusion Using Cross Attention",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "best",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "From Pretraining Data to Language Models to Downstream Tasks: Tracking the Trails of Political Biases Leading to Unfair NLP Models",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "best",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Backpack Language Models",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "CAME: Confidence-guided Adaptive Memory Efficient Optimization",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Causes and Cures for Interference in Multilingual Translation",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Cognitive Reframing of Negative Thoughts through Human-Language Model Interaction",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Compositional Generalization without Trees using Multiset Tagging and Latent Permutations",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Considerations for meaningful sign language machine translation based on glosses",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Dense-ATOMIC: Towards Densely-connected ATOMIC with High Knowledge Coverage and Massive Multi-hop Paths",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Dissecting Transformer Length Extrapolation via the Lens of Receptive Field Analysis",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Distilling Script Knowledge from Large Language Models for Constrained Language Planning",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Do PLMs Know and Understand Ontological Knowledge?",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Don’t Generate, Discriminate: A Proposal for Grounding Language Models to Real-World Environments",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Extrinsic Evaluation of Machine Translation Metrics",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Faithful Low-Resource Data-to-Text Generation through Cycle Training",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Generalizing Backpropagation for Gradient-Based Interpretability",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Hexatagging: Projective Dependency Parsing as Tagging",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Hybrid Transducer and Attention based Encoder-Decoder Modeling for Speech-to-Text Tasks",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Improving Pretraining Techniques for Code-Switched NLP",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Knowledge Transfer in Incremental Learning for Multilingual Neural Machine Translation",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Language model acceptability judgements are not always robust to context",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Linear Classifier: An Often-Forgotten Baseline for Text Classification",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Minding Language Models’ (Lack of) Theory of Mind: A Plug-and-Play Multi-Character Belief Tracker",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "MultiInstruct: Improving Multi-Modal Zero-Shot Learning via Instruction Tuning",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Multilingual LLMs are Better Cross-lingual In-context Learners with Alignment",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Neural Machine Translation Methods for Translating Text to Sign Language Glosses",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "NLPositionality: Characterizing Design Biases of Datasets and Models",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "PeaCoK: Persona Commonsense Knowledge for Consistent and Engaging Narratives",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "QUEST: A Retrieval Dataset of Entity-Seeking Queries with Implicit Set Operations",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Question-Answering in a Low-resourced Language: Benchmark Dataset and Models for Tigrinya",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Scaling in Cognitive Modelling: a Multilingual Approach to Human Reading Times",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "SCOTT: Self-Consistent Chain-of-Thought Distillation",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "The Mechanical Bard: An Interpretable Machine Learning Approach to Shakespearean Sonnet Generation",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "The Tail Wagging the Dog: Dataset Construction Biases of Social Bias Benchmarks",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Towards Zero-Shot Multilingual Transfer for Code-Switched Responses",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Transfer and Active Learning for Dissonance Detection: Addressing the Rare-Class Challenge",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "VisText: A Benchmark for Semantically Rich Chart Captioning",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "What’s the Meaning of Superhuman Performance in Today’s NLU?",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "WikiBio: a Semantic Resource for the Intersectional Analysis of Biographical Events",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "World-to-Words: Grounded Open Vocabulary Acquisition through Fast Mapping in Vision-Language Models",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "ByGPT5: End-to-End Style-conditioned Poetry Generation with Token-free Language Models",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "honorable_mention",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "DiffusionDB: A Large-scale Prompt Gallery Dataset for Text-to-Image Generative Models",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "honorable_mention",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "DrBERT: A Robust Pre-trained Model in French for Biomedical and Clinical domains",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "honorable_mention",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Entity Tracking in Language Models",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "honorable_mention",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Forgotten Knowledge: Examining the Citational Amnesia in NLP",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "honorable_mention",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "From Characters to Words: Hierarchical Pre-trained Language Model for Open-vocabulary Language Understanding",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "honorable_mention",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "GIFT: Graph-Induced Fine-Tuning for Multi-Party Conversation Understanding",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "honorable_mention",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Human Inspired Progressive Alignment and Comparative Learning for Grounded Word Acquisition",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "honorable_mention",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Latent Positional Information is in the Self-Attention Variance of Transformer Language Models Without Positional Embeddings",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "honorable_mention",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Revisiting non-English Text Simplification: A Unified Multilingual Benchmark",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "honorable_mention",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Synthetic Text Generation with Differential Privacy: A Simple and Practical Recipe",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "honorable_mention",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Theory-Grounded Computational Text Analysis",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "honorable_mention",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Towards Understanding Chain-of-Thought Prompting: An Empirical Study of What Matters",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "honorable_mention",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "UniCoRN: Unified Cognitive Signal ReconstructioN bridging cognitive signals and human language",
+   "venue": "ACL",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "honorable_mention",
+   "source_url": "https://2023.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Mission: Impossible Language Models",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Semisupervised Neural Proto-Language Reconstruction",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Why are Sensitive Functions Hard for Transformers?",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Natural Language Satisfiability: Exploring the Problem Distribution and Evaluating Transformer-based Language Models",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Deciphering Oracle Bone Language with Diffusion Models",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Causal Estimation of Memorisation Profiles",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Aya Model: An Instruction Finetuned Open-Access Multilingual Language Model",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "How Johnny Can Persuade LLMs to Jailbreak Them: Rethinking Persuasion to Challenge AI Safety by Humanizing LLMs",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best_special",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "DIALECTBENCH: An NLP Benchmark for Dialects, Varieties, and Closely-Related Languages",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best_special",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Having Beer after Prayer? Measuring Cultural Bias in Large Language Models",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best_special",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Latxa: An Open Language Model and Evaluation Suite for Basque",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best_special",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Dolma: an Open Corpus of Three Trillion Tokens for Language Model Pretraining Research",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best_special",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "AppWorld: A Controllable World of Apps and People for Benchmarking Interactive Coding Agents",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best_special",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "OLMo: Accelerating the Science of Language Models",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best_special",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Quantized Side Tuning: Fast and Memory-Efficient Tuning of Quantized Large Language Models",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "L-Eval: Instituting Standardized Evaluation for Long Context Language Models",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Causal-Guided Active Learning for Debiasing Large Language Models",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "CausalGym: Benchmarking causal interpretability methods on linguistic tasks",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Don’t Hallucinate, Abstain: Identifying LLM Knowledge Gaps via Multi-LLM Collaboration",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Speech Translation with Speech Foundation Models and Large Language Models: What is There and What is Missing?",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Must NLP be Extractive?",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "IRCoder: Intermediate Representations Make Language Models Robust Multilingual Code Generators",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "MultiLegalPile: A 689GB Multilingual Legal Corpus",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "PsySafe: A Comprehensive Framework for Psychological-based Attack, Defense, and Evaluation of Multi-agent System Safety",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Can Large Language Models be Good Emotional Supporter? Mitigating Preference Bias on Emotional Support Conversation",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Political Compass or Spinning Arrow? Towards More Meaningful Evaluations for Values and Opinions in Large Language Models",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Same Task, More Tokens: the Impact of Input Length on the Reasoning Performance of Large Language Models",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Do Llamas Work in English? On the Latent Language of Multilingual Transformers",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Getting Serious about Humor: Crafting Humor Datasets with Unfunny Large Language Models",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Estimating the Level of Dialectness Predicts Inter-annotator Agreement in Multi-dialect Arabic Datasets",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "G-DIG: Towards Gradient-based DIverse and hiGh-quality Instruction Data Selection for Machine Translation",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Media Framing: A typology and Survey of Computational Approaches Across Disciplines",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "SPZ: A Semantic Perturbation-based Data Augmentation Method with Zonal-Mixing for Alzheimer’s Disease Detection",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Greed is All You Need: An Evaluation of Tokenizer Inference Methods",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Language Complexity and Speech Recognition Accuracy: Orthographic Complexity Hurts, Phonological Complexity Doesn’t",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Steering Llama 2 via Contrastive Activation Addition",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "EconAgent: Large Language Model-Empowered Agents for Simulating Macroeconomic Activities",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "M4LE: A Multi-Ability Multi-Range Multi-Task Multi-Domain Long-Context Evaluation Benchmark for Large Language Models",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "CHECKWHY: Causal Fact Verification via Argument Structure",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "On Efficient and Statistical Quality Estimation for Data Annotation",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Emulated Disalignment: Safety Alignment for Large Language Models May Backfire!",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "IndicLLMSuite: A Blueprint for Creating Pre-training and Fine-Tuning Datasets for Indian Languages",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "MultiPICo: Multilingual Perspectivist Irony Corpus",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "MMToM-QA: Multimodal Theory of Mind Question Answering",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "MAP’s not dead yet: Uncovering true language model modes by conditioning away degeneracy",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "NounAtlas: Filling the Gap in Nominal Semantic Role Labeling",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "The Earth is Flat because…: Investigating LLMs’ Belief towards Misinformation via Persuasive Conversation",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Let’s Go Real Talk: Spoken Dialogue Model for Face-to-Face Conversation",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "Word Embeddings Are Steers for Language Models",
+   "venue": "ACL",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.aclweb.org/program/best_papers/"
+  },
+  {
+   "title": "A Theory of Response Sampling in LLMs: Part Descriptive and Part Prescriptive",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "best",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "Fairness through Difference Awareness: Measuring Desired Group Discrimination in LLMs",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "best",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "Language Models Resist Alignment: Evidence From Data Compression",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "best",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "Native Sparse Attention: Hardware-Aligned and Natively Trainable Sparse Attention",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "best",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "AfriMed-QA: A Pan-African, Multi-Specialty, Medical Question-Answering Benchmark Dataset",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "best_special",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "The AI Gap: How Socioeconomic Status Affects Language Technology Interactions",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "best_special",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "Are Rules Meant to be Broken? Understanding Multilingual Moral Reasoning as a Computational Pipeline with UniMoral",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "best_special",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "BRIGHTER: BRIdging the Gap in Human-Annotated Textual Emotion Recognition Datasets for 28 Languages",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "best_special",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "Palm: A Culturally Inclusive and Linguistically Diverse Dataset for Arabic LLMs",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "best_special",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "MaCP: Minimal yet Mighty Adaptation via Hierarchical Cosine Projection",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "best_special",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "Meta-rater: A Multi-dimensional Data Selection Method for Pre-training Language Models",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "best_special",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "SubLIME: Subset Selection via Rank Correlation Prediction for Data-Efficient LLM Evaluation",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "best_special",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "A New Formulation of Zipf’s Meaning-Frequency Law through Contextual Diversity",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "All That Glitters is Not Novel: Plagiarism in AI Generated Research",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "Between Circuits and Chomsky: Pre-pretraining on Formal Languages Imparts Linguistic Biases",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "Beyond N-Grams: Rethinking Evaluation Metrics and Strategies for Multilingual Abstractive Summarization",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "Bridging the Language Gaps in Large Language Models with Inference-Time Cross-Lingual Intervention",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "Byte Latent Transformer: Patches Scale Better Than Tokens",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "Capability Salience Vector: Fine-grained Alignment of Loss and Capabilities for Downstream Task Scaling Law",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "From Real to Synthetic: Synthesizing Millions of Diversified and Complicated User Instructions with Attributed Grounding",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "HALOGEN: Fantastic LLM Hallucinations and Where to Find Them",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "HateDay: Insights from a Global Hate Speech Dataset Representative of a Day on Twitter",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "IOT: Embedding Standardization Method Towards Zero Modality Gap",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "IndicSynth: A Large-Scale Multilingual Synthetic Speech Dataset for Low-Resource Indian Languages",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "LaTIM: Measuring Latent Token-to-Token Interactions in Mamba Models",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "Llama See, Llama Do: A Mechanistic Perspective on Contextual Entrainment and Distraction in LLMs",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "LLMs know their vulnerabilities: Uncover Safety Gaps through Natural Distribution Shifts",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "Mapping 1,000+ Language Models via the Log-Likelihood Vector",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "MiniLongBench: The Low-cost Long Context Understanding Benchmark for Large Language Models",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "PARME: Parallel Corpora for Low-Resourced Middle Eastern Languages",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "Past Meets Present: Creating Historical Analogy with Large Language Models",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "Pre³: Enabling Deterministic Pushdown Automata for Faster Structured LLM Generation",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "Rethinking the Role of Prompting Strategies in LLM Test-Time Scaling: A Perspective of Probability Theory",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "Revisiting Compositional Generalization Capability of Large Language Models Considering Instruction Following Ability",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "Toward Automatic Discovery of a Canine Phonetic Alphabet",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "Towards the Law of Capacity Gap in Distilling Language Models",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "Turning Trash into Treasure: Accelerating Inference of Large Language Models with Token Recycling",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "Typology-Guided Adaptation for African NLP",
+   "venue": "ACL",
+   "award_year": 2025,
+   "paper_year": 2025,
+   "award": "outstanding",
+   "source_url": "https://2025.aclweb.org/program/awards/"
+  },
+  {
+   "title": "An image speaks a thousand words, but can everyone listen? On image transcreation for cultural relevance",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Towards Robust Speech Representation Learning for Thousands of Languages",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Backward Lens: Projecting Language Model Gradients into the Vocabulary Space",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Pretraining Data Detection for Large Language Models: A Divergence-based Calibration Method",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "CoGen: Learning from Feedback with Coupled Comprehension and Generation",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Fishing for Magikarp: Automatically Detecting Under-trained Tokens in Large Language Models",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Learning to Retrieve Iteratively for In-Context Learning",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Measuring Psychological Depth in Language Models",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Do LLMs Plan Like Human Writers? Comparing Journalist Coverage of Press Releases with LLMs",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Words Worth a Thousand Pictures: Measuring and Understanding Perceptual Variability in Text-to-Image Generation",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Finding Blind Spots in Evaluator LLMs with Interpretable Checklists",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "GoldCoin: Grounding Large Language Models in Privacy Laws via Contextual Integrity Theory",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Verification and Refinement of Natural Language Explanations through LLM-Symbolic Theorem Proving",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "The Zeno’s Paradox of ‘Low-Resource’ Languages",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "When Is Multilinguality a Curse? Language Modeling for 250 High- and Low-Resource Languages",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Language Models Learn Rare Phenomena from Less Rare Phenomena: The Case of the Missing AANNs",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Fool Me Once? Contrasting Textual and Visual Explanations in a Clinical Decision-Support Setting",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Threshold-driven Pruning with Segmented Maximum Term Weights for Approximate Cluster-based Sparse Retrieval",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Learning Planning-based Reasoning by Trajectories Collection and Process Reward Synthesizing",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Are Large Language Models Capable of Generating Human-Level Narratives?",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Formality is Favored: Unraveling the Learning Preferences of Large Language Models on Data with Conflicting Knowledge",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "OATH-Frames: Characterizing Online Attitudes Towards Homelessness with LLM Assistants",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "SUPER: Evaluating Agents on Setting Up and Executing Tasks from Research Repositories",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Towards Cross-Cultural Machine Translation with Retrieval-Augmented Generation from Multilingual Knowledge Graphs",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Which questions should I answer? Salience Prediction of Inquisitive Questions",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "outstanding",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "KidLM: Advancing Language Models for Children – Early Insights and Future Directions",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best_special",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "A User-Centric Multi-Intent Benchmark for Evaluating Large Language Models",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best_special",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "What the Harm? Quantifying the Tangible Impact of Gender Bias in Machine Translation with a Human-centered Study",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best_special",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "STOP! Benchmarking Large Language Models with Sensitivity Testing on Offensive Progressions",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best_special",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Twists, Humps, and Pebbles: Multilingual Speech Recognition Models Exhibit Gender Performance Gaps",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best_special",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "DEM: Distribution Edited Model for Training with Mixed Data Distributions",
+   "venue": "EMNLP",
+   "award_year": 2024,
+   "paper_year": 2024,
+   "award": "best_special",
+   "source_url": "https://2024.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Label Words are Anchors: An Information Flow Perspective for Understanding In-Context Learning",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "best",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Faster Minimum Bayes Risk Decoding with Confidence-based Pruning",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "best",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Ignore This Title and HackAPrompt: Exposing Systemic Vulnerabilities of LLMs Through a Global Prompt Hacking Competition",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "best",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Personalized Dense Retrieval on Global Index for Voice-enabled Conversational Systems",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "best",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "LINC: A Neurosymbolic Approach for Logical Reasoning by Combining Language Models with First-Order Logic Provers",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Toward a Critical Toponymy Framework for Named Entity Recognition: A Case Study of Airbnb in New York City",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "SODA: Million-scale Dialogue Distillation with Social Commonsense Contextualization",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Incorporating Worker Perspectives into MTurk Annotation Practices for NLP",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Physician Detection of Clinical Harm in Machine Translation: Quality Estimation Aids in Reliance and Backtranslation Identifies Critical Errors",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Preserving Knowledge Invariance: Rethinking Robustness Evaluation of Open Information Extraction",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Is ChatGPT Good at Search? Investigating Large Language Models as Re-Ranking Agents",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Unraveling Feature Extraction Mechanisms in Neural Networks",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "ViPE: Visualise Pretty-much Everything",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Revisiting the Optimality of Word Lengths",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Language Model Quality Correlates with Psychometric Predictive Power in Multiple Languages",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "FedID: Federated Interactive Distillation for Large-Scale Pretraining Language Models",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Ties Matter: Meta-Evaluating Modern Metrics with Pairwise Accuracy and Tie Calibration",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Cross-Lingual Consistency of Factual Knowledge in Multilingual Language Models",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Look-back Decoding for Open-Ended Text Generation",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Text Embeddings Reveal (Almost) As Much As Text",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Understanding Compositional Data Augmentation in Typologically Diverse Morphological Inflection",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "IfQA: A Dataset for Open-domain Question Answering under Counterfactual Presuppositions",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Counter Turing Test (CT2): AI-Generated Text Detection is Not as Easy as You May Think - Introducing AI Detectability Index (ADI)",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Bridging Continuous and Discrete Spaces: Interpretable Sentence Representation Learning via Compositional Operations",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "The Sentiment Problem: A Critical Survey towards Deconstructing Sentiment Analysis",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Homophone Disambiguation Reveals Patterns of Context Mixing in Speech Transformers",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Background Summarization of Event Timelines",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Linear-Time Modeling of Linguistic Structure: An Order-Theoretic Perspective",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  },
+  {
+   "title": "Joint Dialogue Topic Segmentation and Categorization: A Case Study on Clinical Spoken Conversations",
+   "venue": "EMNLP",
+   "award_year": 2023,
+   "paper_year": 2023,
+   "award": "outstanding",
+   "source_url": "https://2023.emnlp.org/program/best_papers/"
+  }
+ ],
+ "gaps": {
+  "NeurIPS+ICML": [
+   "ICML 2021 test of time: not verified. The official ICML 2021 awards page (https://icml.cc/virtual/2021/awards_detail) lists only outstanding papers and honorable mentions. The URLs I tried for an ICML 2021 award or test-of-time page returned 404, and web search found nothing usable. No entry was added.",
+   "NeurIPS 2026: not included because the conference had not happened as of 2026-11-18. The official blog (https://blog.neurips.cc/2026/) gives the dates as Dec 6-12, 2026 in Sydney, with satellites in Atlanta and Paris Dec 9-13. https://neurips.cc/virtual/2026/awards_detail has no awards yet, and no NeurIPS 2026 test-of-time post was found.",
+   "Non-standard award labels: ICML position-track awards (2025 and 2026) are labelled 'outstanding_position' and 'honorable_mention_position'. ICML test-of-time honorable mentions (2022 and 2025) are labelled 'test_of_time_honorable_mention'. NeurIPS Datasets & Benchmarks awards are labelled 'outstanding_db' as instructed; this includes the 2024 and 2025 D&B 'Best Paper' awards. Drop or relabel these if only main-track research papers are wanted.",
+   "ICML 2023: the official awards_detail page lists only 4 of the 6 outstanding papers. 'Self-Repellent Random Walks...' and 'Bayesian Design Principles...' come from the official https://icml.cc/Conferences/2023/Awards page, which lists all six.",
+   "NeurIPS 2022: the official awards page lists all 15 papers under 'Outstanding Paper' with no track split. The blog post was used to separate them: ProcTHOR is main track, and LAION-5B and MineDojo are D&B.",
+   "Title variants: the ICML 2026 blog capitalises 'High-Accuracy Sampling for Diffusion Models and Log-Concave Distributions', but the awards page title ('High-accuracy sampling...') is used here. The ICML 2022 title keeps the page's LaTeX '$\\mathcal{V}$-Usable'. The ICML 2020 test-of-time title is as printed on the page ('Bandit Settings'), without the page's 'Test of Time:' prefix.",
+   "arXiv IDs: only Faster R-CNN (1506.01497) appeared on a page I opened; all other arxiv_id fields are empty. paper_year for test-of-time papers comes from each announcement's 'published N years ago' statement or the original venue year it names.",
+   "No second independent source was checked for most venue-years. Each list comes from one official page, plus a second official page where noted. Shared artifact with the source list and caveats: award_papers_neurips_icml_2020_2026."
+  ],
+  "ICLR+COLM+CVPR+ICCV+ECCV": [
+   "COLM 2024: no award list found. colmweb.org/2024/ has no awards section, colm.cc/virtual/2024/awards_detail is empty, and web search returned only irrelevant results. Not verified.",
+   "COLM 2025: no award list found. colmweb.org/2025/ has no awards section, colm.cc/virtual/2025/awards_detail is empty, and web search returned only irrelevant results. Not verified.",
+   "ICLR 2020: no outstanding-paper announcement found and iclr.cc/virtual/2020/awards_detail is empty. The ICLR outstanding paper program seems to have started in 2021 (not proven). ICLR test of time starts in 2024, as assigned.",
+   "ICLR 2021: the official post (iclr-conf.medium.com/announcing-iclr-2021-outstanding-paper-awards-9ae0514734ab) returned HTTP 403. The titles come from VinAI's verbatim repost, which links back to the original (secondary source). The 2021 post lists 8 Outstanding Paper winners and no honorable mentions.",
+   "ICLR test-of-time runner-ups (2024: Intriguing properties of neural networks; 2025: Neural Machine Translation by Jointly Learning to Align and Translate) are coded award='runner_up'. They are Test of Time runner-ups, not best-paper runner-ups.",
+   "CVPR 2020-2022: cvpr2022.thecvf.com was unreachable and the Wayback Machine returned HTTP 429. These years come from the IEEE CS TCPAMI official award list (tc.computer.org/tcpami/awards/cvpr-paper-awards/), not the conference site. That list may be missing best-student honorable mentions for these years.",
+   "CVPR test of time = Longuet-Higgins Prize (TCPAMI). Included from the TCPAMI list and the CVPR 2024/2025 news pages. award_year is the prize year; paper_year is the original CVPR year.",
+   "ICCV 2021/2025 and ICCV best-student/HM entries come from the TCPAMI official list (tc.computer.org/tcpami/awards/iccv-paper-awards/). The ICCV virtual award pages had no usable titles (2025 lists only Highlights; 2023 returns 404). The ICCV 2025 HM list may be incomplete.",
+   "ICCV 2023 Marr Prize (MEDIUM confidence for ControlNet): the official opening slides say 'Joint Award – 2 papers'. Only the 'Passive Ultra-Wideband Single-Photon Imaging' title could be extracted as text. 'Adding Conditional Control to Text-to-Image Diffusion Models' is on the slides' award-candidate list and is included as the second co-winner. TCPAMI lists only Passive Ultra-Wideband. Needs one more check.",
+   "ICCV test of time = Helmholtz Prize, from the TCPAMI list. ECCV test of time = Koenderink Prize, from the ECVA pages.",
+   "ECCV 2020/2022: taken from the ECVA official ECCV Awards listing (www.ecva.net/index.php). That listing has no year labels; I assigned years by the order of its sections (2024, 2022, 2020, 2018...). The 2024 section matches eccv.ecva.net/Conferences/2024/Awards. ECCV 2024 'Award Candidate' papers (not winners) are excluded.",
+   "Title wording follows each source as printed. TCPAMI sometimes changes capitalization (e.g. 'Planning-Oriented'); where the conference page was available, its wording was used. The ICCV 2021 title 'Common Objects in 3D: LargeScale…' is printed that way in TCPAMI and was normalized to 'Large-Scale'.",
+   "arXiv IDs are given only where the official page printed them (the ICLR test-of-time posts). Other IDs were not looked up.",
+   "Evidence notes are stored in artifact 'aw_iclr_cv2_award_evidence'."
+  ],
+  "ACL+EMNLP+NAACL": [
+   "Parsed (by the root agent, two researcher sub-agents for this branch were lost by the swarm) from the official pages 2023.aclweb.org/program/best_papers/, 2024.aclweb.org/program/best_papers/, 2025.aclweb.org/program/awards/, 2023.emnlp.org/program/best_papers/, 2024.emnlp.org/program/best_papers/: best, special (resource/social impact/theme), outstanding papers and honorable mentions; demo, SRW, SAC/area-chair, TACL and video awards excluded. ACL 2020-2022, ACL 2026, EMNLP 2020-2022/2025 and NAACL award lists are not included (not collected).",
+   "ACL 2023 special awards (reproduction/resource/social impact/theme) are printed in a different layout on the page and were not parsed."
+  ]
+ }
+}

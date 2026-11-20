@@ -2,9 +2,12 @@
 
 Usage: python -m evaluations.slides_bench.run_tofu <doc_id> <out_dir>
 
-The run uses the public recipe entry point ``build_deck_from_topic`` exactly
-as ``produce_slides`` does, with two benchmark-only substitutions recorded in
-``run.json``:
+The run goes through the common deliverable launcher
+(``lib/production/deliverable_launch.py``, kind ``slides``), whose model-free
+preflight checks the material file, the output folder and the Chromium
+renderer before any model call; it calls the public recipe entry point
+``build_deck_from_topic`` exactly as ``produce_slides`` does, with two
+benchmark-only substitutions recorded in ``run.json``:
 
 - model calls go through the running server's routing (``llm_bridge``),
   including the visual-QA vision calls: this process has no dispatcher, so
@@ -83,8 +86,8 @@ def _snapshot_authored_deck(out_dir: str) -> None:
 
 
 def build(doc_id: str, out_dir: str) -> dict:
+    from lib.production import deliverable_launch as dl
     doc = load_document(doc_id)
-    llm_bridge.install()
     _vision_through_bridge()
     if os.environ.get('SLIDES_BENCH_TOFU_BASELINE') == '1':
         _lift_outline_budget()
@@ -93,20 +96,29 @@ def build(doc_id: str, out_dir: str) -> dict:
     research.research_topic = _no_research
     image_gen.generate_image = _no_image
     _snapshot_authored_deck(out_dir)
-    from lib.slides.recipe import build_deck_from_topic
     os.makedirs(out_dir, exist_ok=True)
+    # The corpus material becomes a declared input file, so the common
+    # launcher's preflight checks it like any other deliverable input.
+    material = os.path.join(out_dir, 'material.md')
+    with open(material, 'w', encoding='utf-8') as fh:
+        fh.write(doc['material_for_tofu'])
+    contract = dl.load_contract({
+        'schema_version': dl.CONTRACT_SCHEMA_VERSION, 'kind': 'slides',
+        'inputs': {'material': material}, 'output_dir': out_dir,
+        'model': {'name': llm_bridge.DEFAULT_MODEL, 'endpoint': llm_bridge.ENDPOINT},
+        'parameters': {'topic': doc['title'], 'lang': doc['lang'],
+                       'max_pages': doc['pages'], 'creative_mode': 'director'}})
     started = time.time()
-    result = build_deck_from_topic(
-        doc['title'], out_dir, lang=doc['lang'], max_pages=doc['pages'],
-        model=llm_bridge.DEFAULT_MODEL, material=doc['material_for_tofu'],
-        creative_mode='director')
+    launched = dl.launch(contract, install_model_route=llm_bridge.install_model_route,
+                         infra_exceptions=(llm_bridge.ModelEndpointUnavailable,))
+    if not launched['delivered']:
+        raise RuntimeError(f'{launched["outcome"]}: {launched.get("detail")}')
+    summary = launched['summary']
     record = {
         'arm': 'tofu', 'doc_id': doc_id, 'model': llm_bridge.DEFAULT_MODEL,
         'seconds': round(time.time() - started, 1),
-        'pptx': result['pptx_path'], 'pages': result['pages'],
-        'quality': result.get('quality'),
-        'visual_qa': {k: v for k, v in (result.get('qa') or {}).items()
-                      if k in ('ran', 'reason', 'repaired', 'findings')},
+        'pptx': summary['pptx'], 'pages': summary['pages'],
+        'quality': summary['quality'], 'visual_qa': summary['visual_qa'],
         'material_chars_supplied': len(doc['material_for_tofu']),
         'source_chars': len(doc['text']),
     }

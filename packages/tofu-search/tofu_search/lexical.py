@@ -4,8 +4,11 @@ Pure Unicode tokenization and query-subject parsing; no search, provider or host
 imports. This is lexical matching, not semantic retrieval or factual validation.
 """
 
+import importlib
 import re
 import unicodedata
+
+_native = importlib.import_module('tofu_search._native_kernels').native
 
 _CJK = r'\u3400-\u4dbf\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af'
 _CJK_RUN = re.compile(f'[{_CJK}]+')
@@ -140,3 +143,14 @@ def query_subject(query: str) -> str:
               and not part.lstrip('(').startswith('-')):
             subjects.append(part)
     return ' '.join(subjects)
+
+
+# The Python bodies above are the parity oracle; the native kernels replace the
+# public names when the extension is installed.
+PYTHON_KERNELS = {'tokenize': tokenize, 'matching_text': matching_text,
+                  'subject_terms': subject_terms, 'query_subject': query_subject}
+if _native is not None:
+    tokenize = _native.tokenize
+    matching_text = _native.matching_text
+    subject_terms = _native.subject_terms
+    query_subject = _native.query_subject

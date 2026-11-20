@@ -7,6 +7,10 @@ exists instead of writing one from scratch.
                    never written.
   * ``expand``     the main file with every ``\\input``/``\\include`` inlined,
                    for reading by the judge and the writer.
+  * ``macros`` / ``expand_macros``  the paper's own macro definitions
+                   (``\\newcommand`` and keyed ``\\csname`` tables such as
+                   ``\\nm{key}``) and the text with them expanded, so judges
+                   read numbers rather than unexpanded placeholders.
   * ``sections``   numbered body sections of the expanded text, keyed by a
                    stable slug of their title.
   * ``figures``    every ``\\includegraphics`` with its caption and label.
@@ -27,7 +31,8 @@ import shutil
 from pathlib import Path
 
 __all__ = ['snapshot', 'expand', 'sections', 'figures', 'apply_edits',
-           'mark_body_end', 'unified_patch', 'tex_files', 'slug', 'reachable_tex']
+           'mark_body_end', 'unified_patch', 'tex_files', 'slug', 'reachable_tex',
+           'macros', 'expand_macros']
 
 #: Build products and pipeline output never belong to the draft's sources.
 _IGNORED = ('*.aux', '*.log', '*.fls', '*.fdb_latexmk', '*.synctex.gz', '*.blg',
@@ -72,6 +77,85 @@ def expand(root: Path, main: str, *, _seen: frozenset = frozenset()) -> str:
             return match.group(0)
         return expand(root, str(target.relative_to(root)), _seen=_seen | {target})
     return _INPUT_RE.sub(inline, text)
+
+
+_BRACED = r'\{((?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*)\}'
+_NEWCOMMAND_RE = re.compile(
+    r'\\(?:newcommand|renewcommand|providecommand|DeclareRobustCommand)\*?\s*'
+    r'(?:\{\s*\\([A-Za-z@]+)\s*\}|\\([A-Za-z@]+))\s*(?:\[(\d)\])?\s*(\[[^\]]*\])?\s*' + _BRACED)
+_DEF_RE = re.compile(r'\\(?:g|e|x)?def\s*\\([A-Za-z@]+)\s*' + _BRACED)
+_CSNAME_DEF_RE = re.compile(
+    r'\\(?:expandafter\s*)?\\(?:g|e|x)?def\s*\\csname\s*(.*?)\s*\\endcsname\s*' + _BRACED)
+_CSNAME_LOOKUP_RE = re.compile(r'\\csname\s*([^\\#]*)#1\s*\\endcsname')
+
+
+def macros(text: str) -> dict:
+    """The document's own macro definitions.
+
+    Returns ``{'commands': {name: (arity, body)}, 'tables': {csname: value},
+    'lookups': {name: prefix}}``; a one-argument command whose body looks its
+    argument up as ``\\csname <prefix>#1\\endcsname`` (the generated number
+    tables of many papers) is a lookup into ``tables``. Commands with an
+    optional default argument or a self-reference are not expanded.
+    """
+    commands, lookups = {}, {}
+    for match in _NEWCOMMAND_RE.finditer(text):
+        name = match.group(1) or match.group(2)
+        arity, default, body = int(match.group(3) or 0), match.group(4), match.group(5)
+        lookup = _CSNAME_LOOKUP_RE.search(body) if arity == 1 else None
+        if lookup:
+            lookups[name] = lookup.group(1)
+        elif not default and '\\if' not in body and not re.search(
+                r'\\' + name + r'(?![A-Za-z@])', body):
+            commands[name] = (arity, body)
+    for match in _DEF_RE.finditer(text):
+        name, body = match.group(1), match.group(2)
+        if '\\if' not in body and not re.search(r'\\' + name + r'(?![A-Za-z@])', body):
+            commands.setdefault(name, (0, body))
+    tables = {name: value for name, value in _CSNAME_DEF_RE.findall(text)}
+    return {'commands': commands, 'tables': tables, 'lookups': lookups}
+
+
+def expand_macros(text: str, defined: dict) -> str:
+    """``text`` with the document's own macros expanded (reading view only).
+
+    Every pass expands one nesting level; with no cyclic definitions the
+    nesting depth is at most the number of macros, which bounds the passes.
+    A lookup whose key the table lacks is left as written.
+    """
+    commands, tables, lookups = defined['commands'], defined['tables'], defined['lookups']
+    names = sorted(set(commands) | set(lookups), key=len, reverse=True)
+    if not names:
+        return text
+    pattern = re.compile(r'\\(' + '|'.join(map(re.escape, names)) + r')(?![A-Za-z@])'
+                         r'((?:\s*\{(?:[^{}]|\{[^{}]*\})*\})*)(\{\})?')
+
+    def replace(match):
+        name, raw_args = match.group(1), match.group(2)
+        args = re.findall(r'\{((?:[^{}]|\{[^{}]*\})*)\}', raw_args)
+        if name in lookups:
+            if not args:
+                return match.group(0)
+            key = lookups[name] + expand_macros(args[0], defined).strip()
+            if key not in tables:
+                return match.group(0)
+            rest = ''.join('{' + arg + '}' for arg in args[1:])
+            return tables[key] + rest + (match.group(3) or '')
+        arity, body = commands[name]
+        if arity == 0 and args and args[0] == '':
+            args = args[1:]   # ``\\name{}`` only ends the control word
+        if len(args) < arity:
+            return match.group(0)
+        for index in range(arity):
+            body = body.replace(f'#{index + 1}', args[index])
+        rest = ''.join('{' + arg + '}' for arg in args[arity:])
+        return body + rest
+    for _ in range(len(names) + 1):
+        expanded = pattern.sub(replace, text)
+        if expanded == text:
+            break
+        text = expanded
+    return text
 
 
 def reachable_tex(root: Path, main: str) -> set[str]:
@@ -160,14 +244,21 @@ def apply_edits(files: dict[str, str], edits: list[dict]) -> tuple[dict, list, l
 
 def mark_body_end(main_text: str, label: str, unlimited_sections: tuple[str, ...]) -> str:
     """Insert ``\\label{label}`` where the page-limited body ends."""
+    # Exact words at any heading level, in any case: ICLR's official
+    # statements are \subsection*{AI use statement}; a renamed statement
+    # ("AI Disclosure Statement") is not exempt.
     patterns = [_BODY_END_RE.pattern] + [
-        r'\\section\*?\{\s*' + re.escape(title) + r'\s*\}' for title in unlimited_sections]
+        r'(?i:\\(?:sub){0,2}section\*?\{\s*' + re.escape(title) + r'\s*\})'
+        for title in unlimited_sections]
     found = [match.start() for pattern in patterns
              for match in [re.search(pattern, main_text)] if match]
     if not found:
         found = [main_text.rfind('\\end{document}')]
     at = min(pos for pos in found if pos >= 0)
-    return main_text[:at] + f'\\label{{{label}}}\n' + main_text[at:]
+    # Attached to the last counted text, the label is set on the page where
+    # that text ends; on its own line it would move with the next heading.
+    end = len(main_text[:at].rstrip())
+    return main_text[:end] + f'\\label{{{label}}}' + main_text[end:]
 
 
 def unified_patch(original: dict[str, str], revised: dict[str, str]) -> str:

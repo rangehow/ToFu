@@ -1,14 +1,13 @@
 /* World workspace shell layout (application-shell/page-host.ts). The office HUD spans the top; below it the
- * scene fills the window (features/world/world-office.css spans it over both columns) and the application's own
- * conversation column docks over its right side: `head` holds the world's person panel header and `body`
- * either the brief or the classic transcript with its composer.
- * page-host sets data-conversation-dock; this sheet places the column and shows it only when docked. Every
- * other piece of classic chrome in .main (top bar, presence strip, the coordinators' headers) stays hidden.
+ * scene fills the window (27-world-office.css spans it over both columns) and the person panel docks over
+ * its right side: `head` holds its header and `body` its brief. The office shows no transcript, so the
+ * classic conversation column stays hidden with the rest of the classic chrome in .main (top bar, presence
+ * strip, the coordinators' headers). The world sets data-conversation-dock; this sheet places the column.
  * Below 1024px an open column takes the whole width under the HUD, so the HUD's classic switch stays visible.
  * Before the application names a workspace, html[data-landing] (index.html's pre-paint script) already shows
  * the office backdrop instead of the classic chrome. */
 body[data-workspace="world"] .sidebar,
-body[data-workspace="world"] .main > :not(#worldPageContainer):not(.chat-wrapper),
+body[data-workspace="world"] .main > :not(#worldPageContainer),
 html[data-landing="world"] body:not([data-workspace]) .sidebar,
 html[data-landing="world"] body:not([data-workspace]) .main > :not(#worldPageContainer) { display: none; }
 html[data-landing="world"] body:not([data-workspace]) .main { background: var(--world-backdrop); }
@@ -25,24 +24,12 @@ body[data-workspace="world"] .main {
   height: 100dvh;
   background: var(--world-backdrop);
 }
-body[data-workspace="world"][data-conversation-dock="brief"] .main,
-body[data-workspace="world"][data-conversation-dock="chat"] .main {
+body[data-workspace="world"][data-conversation-dock="brief"] .main {
   grid-template-columns: minmax(0, 1fr) min(44vw, 760px);
-}
-body[data-workspace="world"]:not([data-conversation-dock="chat"]) .main > .chat-wrapper { display: none; }
-/* The docked chat keeps the theme's own reading surface: classic turns are written for it, not the floor. */
-body[data-workspace="world"] .main > .chat-wrapper {
-  grid-area: body;
-  z-index: 1;
-  min-height: 0;
-  min-width: 0;
-  background: var(--bg-primary);
-  color: var(--text-primary);
 }
 
 @media (max-width: 1023px) {
-  body[data-workspace="world"][data-conversation-dock="brief"] .main,
-  body[data-workspace="world"][data-conversation-dock="chat"] .main {
+  body[data-workspace="world"][data-conversation-dock="brief"] .main {
     grid-template-columns: 0 minmax(0, 1fr);
   }
 }

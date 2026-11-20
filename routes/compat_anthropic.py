@@ -34,7 +34,7 @@ from lib.compat.anthropic import (
     build_anthropic_response, stream_anthropic_chunks,
     translate_anthropic_request,
 )
-from lib.compat._common import CompatTerminalFailure
+from lib.compat._common import CompatModelAttributionUnknown, CompatTerminalFailure
 from lib.error_envelope import BadRequest
 from lib.idempotency import idempotent_post
 from lib.ids import short_id
@@ -187,13 +187,15 @@ async def messages():
 
     try:
         out = build_anthropic_response(task, model=model)
-    except CompatTerminalFailure as exc:
+    except (CompatTerminalFailure, CompatModelAttributionUnknown) as exc:
+        cause = (exc.cause if isinstance(exc, CompatModelAttributionUnknown)
+                 else exc.verdict.cause)
         logger.warning(
             '[compat:anthropic] refusing false-success task=%s cause=%s',
-            task_log_tag(task['id']), exc.verdict.cause)
+            task_log_tag(task['id']), cause)
         return api_internal_error(
             str(exc), context='compat:anthropic', log_traceback=False,
-            error_kind=exc.verdict.cause,
+            error_kind=cause,
         )
     out['task_id'] = task['id']
     try:

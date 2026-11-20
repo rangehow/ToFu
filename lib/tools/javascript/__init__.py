@@ -173,7 +173,6 @@ class _Program:
         self.guest_seconds = 0.0
         self.guest_entry_started = None
         self.host_seconds = 0.0
-        self.memory = None
         self.store = self.w.Store(self.engine)
         try:
             # A fresh Store keeps Wasmtime's default epoch deadline, which is
@@ -753,8 +752,7 @@ class _Program:
                         'call_stages': self.stages, 'parallel_stages': self.parallel_stages,
                         'outcome': outcome, 'guest_execution_seconds': self.guest_seconds,
                         'wasm_fuel': self.limits.fuel - self.store.get_fuel(),
-                        'wasm_memory_bytes': (self.memory.data_len(self.store)
-                                              if self.memory is not None else 0)}
+                        'wasm_memory_bytes': self.memory.data_len(self.store)}
 
 
 def execute_javascript_program(source: str, *, search: Callable,
@@ -772,12 +770,14 @@ def execute_javascript_program(source: str, *, search: Callable,
         raise ProgramExecutionError('cancelled', 'JavaScript program cancelled')
     limits = limits or javascript_limits()
     program = None
+    initialized = False
     try:
         program = _Program(search=search, call=call, call_many=call_many,
                            aborted=aborted, limits=limits, result_reader=result_reader,
                            input_lister=input_lister, value_keeper=value_keeper,
                            child_settled=child_settled)
         program.initialize()
+        initialized = True
         return program.run(source)
     except Exception as exc:
         error = exc
@@ -799,9 +799,8 @@ def execute_javascript_program(source: str, *, search: Callable,
                 else:
                     error = ProgramExecutionError('runtime_trap', 'JavaScript engine trapped',
                         trap_code=trap_code.name if trap_code is not None else 'unknown')
-        if isinstance(error, ProgramExecutionError) and program is not None:
+        if isinstance(error, ProgramExecutionError) and initialized:
             # Native sidecar only: error details and guest JSON cannot mint stats.
-            # Initialization spends the same budget, so its failures carry stats too.
             error.execution_stats = program.execution_stats('error')
         if error is not exc:
             raise error from exc

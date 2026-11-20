@@ -255,6 +255,14 @@ def micro_compact(messages: list, conv_id: str = '', task: dict | None = None,
             )
         except Exception as e:
             logger.debug('[Compaction] cache_tracking not available: %s', e)
+    # On a new task the live cache tracker can have no prior sample for
+    # this invocation. A validated settled checkpoint still proves that its
+    # history is already delivered. Do not age-compound that history on R1.
+    restored_count = ((task or {}).get('config') or {}).get('_modelReplayProtectedCount')
+    if not ignore_cache_prefix and type(restored_count) is int:
+        restored_count = max(0, min(restored_count, len(messages)))
+    else:
+        restored_count = 0
     sent_count = min(sent_count, len(messages))
 
     # ── Run the L1 transform steps ─────────────────────────────────────
@@ -277,11 +285,13 @@ def micro_compact(messages: list, conv_id: str = '', task: dict | None = None,
             step_names.append('compact_cold_assistant')
 
     constants = make_constants(_c, kwargs.get('constant_overrides'))
-    cache_prefix_count, rewrite_from = sent_count, None
-    if sent_count and not dry_run:
+    cache_prefix_count, rewrite_from = max(sent_count, restored_count), None
+    if sent_count > restored_count and not dry_run:
         cache_prefix_count, rewrite_from = _sent_step_boundary(
             messages, sent_count, step_names,
             conv_id=conv_id, task=task, constants=constants)
+        if rewrite_from is not None and rewrite_from < restored_count:
+            cache_prefix_count, rewrite_from = sent_count, None
     sent_step = (copy.deepcopy(messages[rewrite_from:sent_count])
                  if rewrite_from is not None else None)
 

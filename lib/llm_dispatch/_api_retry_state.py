@@ -150,6 +150,7 @@ class DispatchRetryState:
         # and 429-equivalent cooldown cycles start the clock; gateway 5xx
         # has its own streak budget above and never starts this one.
         self._saturation_start = None
+        self._held_app_minute_limit = None
         # Logical Models this call saw rate-limited, mapped to the ordinal of
         # their latest limit, so the picker rotates to other Models first.
         self._rate_limited_models: dict[str, int] = {}
@@ -159,6 +160,9 @@ class DispatchRetryState:
         # request's first ticket, so every later attempt keeps its turn.
         self.pacing_ticket = None
         self.pacing_order = None
+        # When this request's own run of minute-limit rejections began on each
+        # (key, model) pair; bounds a budgeted request's window hold.
+        self._minute_limit_since: dict[tuple[str, str], float] = {}
 
     def record_queue_wait(self, started_monotonic: float) -> None:
         """Accumulate only explicit dispatcher backpressure waits."""
@@ -341,6 +345,15 @@ class DispatchRetryState:
         self._gateway_streak_start = None
         self._saturation_start = None
 
+    def hold_app_minute_limit(self, error):
+        """Do not count a classified same-model hold as generic 429 saturation."""
+        self._held_app_minute_limit = error
+        self._saturation_start = None
+
+    @property
+    def holding_app_minute_limit(self) -> bool:
+        return self.last_err is not None and self.last_err is self._held_app_minute_limit
+
     def saturation_exceeded(self, budget_s):
         """True when every slot has been 429-starved for > ``budget_s``.
 
@@ -355,7 +368,7 @@ class DispatchRetryState:
     def note_cooldown_cycle(self):
         """Record one pool poll with no upstream request attempt."""
         self._cooldown_cycles += 1
-        if self._saturation_start is None:
+        if self._saturation_start is None and not self.holding_app_minute_limit:
             self._saturation_start = time.monotonic()
 
     def note_quota_key(self, slot):
@@ -376,6 +389,20 @@ class DispatchRetryState:
         from ._api_errors import DispatchRateLimitedNoRoute
         self.exclude_pairs_durable.add((slot.key_name, slot.model))
         self.last_err = DispatchRateLimitedNoRoute(error)
+
+    def minute_limit_rejected_past_window(self, slot) -> bool:
+        """Note a minute-limit rejection of *slot*'s pair by this request.
+
+        True once this request's own rejections on the pair span one provider
+        window (``quota_watch.WINDOW_S``): the provider's window has rolled
+        without serving it, so holding the pair no longer pays. Independent of
+        the shared gate's run, which other requests' successes restart.
+        """
+        from .quota_watch import WINDOW_S
+        now = time.monotonic()
+        since = self._minute_limit_since.setdefault(
+            (slot.key_name, slot.model), now)
+        return now - since >= WINDOW_S
 
     def note_route_missing_model(self, model, error):
         """Durably exclude one unserved wire ID without making it the cause.

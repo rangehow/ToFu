@@ -452,3 +452,38 @@ def test_root_segment_handoff_does_not_depend_on_deliverable(monkeypatch, projec
     task = _task()
     terminal._translate_settled_turns(task)
     assert handed_off == [task['id']]
+
+
+def test_content_guard_refusal_is_recorded_once_and_logged_below_error(monkeypatch, caplog):
+    import logging
+
+    from lib.translate.errors import TranslationContentRefused
+    from lib.translate.runtime import _translate_runtime
+    import lib.translate.runtime._worker as worker
+
+    marked = []
+    monkeypatch.setattr(
+        'lib.translate.commit.mark_turn_translation_failed',
+        lambda conv, turn, *, user_id, reason, error: marked.append(
+            (conv, turn, user_id, reason, error)))
+
+    task = _translate_runtime.create(
+        user_id=7, task_id='content-refused')
+    task['convId'] = 'conv-refused'
+    task['_userId'] = 7
+    _translate_runtime.mark_running(task['id'], fields={'model': 'translator'})
+    refusal = TranslationContentRefused(
+        'wrong_language', 'source already in target', attempts=3, content_fails=2)
+
+    with caplog.at_level(logging.WARNING, logger=worker.logger.name):
+        worker._settle_error(
+            task, task['id'], refusal, 'conv-refused', 'turn-refused',
+            'msg-1', 'translatedContent', user_id=7)
+
+    # The verdict is recorded once, with its typed kind, and is a warning.
+    assert marked == [('conv-refused', 'turn-refused', 7, 'content_refused',
+                       str(refusal))]
+    assert [record.levelno for record in caplog.records] == [logging.WARNING]
+    assert all(record.exc_info is None for record in caplog.records)
+    settled = _translate_runtime.get(task['id'])
+    assert settled['status'] == 'error'

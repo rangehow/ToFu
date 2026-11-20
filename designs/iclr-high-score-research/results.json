@@ -1,0 +1,1017 @@
+{
+  "seed": 20261118,
+  "features_regex": {
+    "simple_claim": "\\b(simple|simpler|simplicity|simply)\\b",
+    "mechanism_or_alternatives": "(rul(e|es|ed|ing) out|alternative explanation|confound|controlled experiment|counterfactual|disentangl|isolat(e|es|ing) the|ablat|mechanis(m|ms|tic)|causal (effect|role|evidence|mechanism))",
+    "theory": "\\b(theorem|provabl[ey]|we prove|guarantee[sd]?|upper bound|lower bound)\\b",
+    "sota_claim": "(state[- ]of[- ]the[- ]art|\\bsota\\b|outperform)",
+    "llm_topic": "\\b(llms?|large language models?)\\b"
+  },
+  "inputs_sha256": {
+    "2023": "fac275dde32ef7b9ebeee8a8b38c0de41028b0f249cd8f2a2736cf25eb3c5120",
+    "2024": "88e6503079a92012b0aa2f84ecbb02c8ccbaebe61a7a7a0e707b30401894d6c8",
+    "2026": "3f5dd3a3b6279b8807cc2390974f2073fbb42cce7c52c8aa4a937c661a602165",
+    "2027_initial": "888a41a3a24d4208ad338438168d431bf9d1e95f5f21c12cdebd0ac11054b05c"
+  },
+  "years": {
+    "2023": {
+      "n_scored_main_track": 4916,
+      "n_decided": 3860,
+      "n_withdrawn_with_scores": 1056,
+      "accept_rate_among_decided": 0.40803108808290156,
+      "mean_rating": {
+        "accepted": 6.610600907029478,
+        "rejected": 4.654567573199958,
+        "withdrawn": 4.09073547979798
+      },
+      "auc_mean_rating_for_acceptance": 0.9635388836789275,
+      "accept_rate_by_rating_decile": [
+        {
+          "lo": 1.0,
+          "hi": 3.6666666666666665,
+          "n": 414,
+          "accept_rate": 0.0
+        },
+        {
+          "lo": 3.6666666666666665,
+          "hi": 4.333333333333333,
+          "n": 493,
+          "accept_rate": 0.004056795131845842
+        },
+        {
+          "lo": 4.333333333333333,
+          "hi": 4.75,
+          "n": 485,
+          "accept_rate": 0.012371134020618556
+        },
+        {
+          "lo": 4.75,
+          "hi": 5.25,
+          "n": 636,
+          "accept_rate": 0.0660377358490566
+        },
+        {
+          "lo": 5.25,
+          "hi": 5.5,
+          "n": 473,
+          "accept_rate": 0.12896405919661733
+        },
+        {
+          "lo": 5.5,
+          "hi": 5.75,
+          "n": 516,
+          "accept_rate": 0.32558139534883723
+        },
+        {
+          "lo": 5.75,
+          "hi": 6.25,
+          "n": 654,
+          "accept_rate": 0.6314984709480123
+        },
+        {
+          "lo": 6.25,
+          "hi": 6.5,
+          "n": 452,
+          "accept_rate": 0.8938053097345132
+        },
+        {
+          "lo": 6.5,
+          "hi": 7.0,
+          "n": 608,
+          "accept_rate": 0.9720394736842105
+        },
+        {
+          "lo": 7.0,
+          "hi": 9.333333333333334,
+          "n": 521,
+          "accept_rate": 0.9923224568138196
+        }
+      ],
+      "features": {
+        "simple_claim": {
+          "prevalence": 0.1676159479251424,
+          "z_rating_diff": 0.08662607082626826,
+          "z_rating_diff_ci95": [
+            0.0073050582195200425,
+            0.16379668363553004
+          ],
+          "z_rating_diff_area_stratified": null,
+          "accept_logodds_beyond_rating": 0.0751242686455237,
+          "accept_logodds_beyond_rating_se": 0.15960483719794422
+        },
+        "mechanism_or_alternatives": {
+          "prevalence": 0.14422294548413345,
+          "z_rating_diff": -0.02075578783656318,
+          "z_rating_diff_ci95": [
+            -0.10081035571023854,
+            0.05597171354401096
+          ],
+          "z_rating_diff_area_stratified": null,
+          "accept_logodds_beyond_rating": 0.2089371183607071,
+          "accept_logodds_beyond_rating_se": 0.16992558334352467
+        },
+        "theory": {
+          "prevalence": 0.14483319772172498,
+          "z_rating_diff": 0.2281580735365396,
+          "z_rating_diff_ci95": [
+            0.15283159231930768,
+            0.30703678196646494
+          ],
+          "z_rating_diff_area_stratified": null,
+          "accept_logodds_beyond_rating": 0.024700075524880644,
+          "accept_logodds_beyond_rating_se": 0.15944316646430262
+        },
+        "sota_claim": {
+          "prevalence": 0.4208706265256306,
+          "z_rating_diff": 0.010058182639070604,
+          "z_rating_diff_ci95": [
+            -0.045907814063183776,
+            0.06850427855092932
+          ],
+          "z_rating_diff_area_stratified": null,
+          "accept_logodds_beyond_rating": 0.15719718728346388,
+          "accept_logodds_beyond_rating_se": 0.1201505255011143
+        },
+        "llm_topic": {
+          "prevalence": 0.018917819365337672,
+          "z_rating_diff": 0.3640141329638258,
+          "z_rating_diff_ci95": [
+            0.16116133357165396,
+            0.5736446278300492
+          ],
+          "z_rating_diff_area_stratified": null,
+          "accept_logodds_beyond_rating": 0.1724333559096706,
+          "accept_logodds_beyond_rating_se": 0.4238516266912003
+        },
+        "alternatives_strict": {
+          "prevalence": 0.015866558177379985,
+          "z_rating_diff": -0.13300239921486146,
+          "z_rating_diff_ci95": [
+            -0.35639974344537356,
+            0.08512214666517658
+          ],
+          "z_rating_diff_area_stratified": null,
+          "accept_logodds_beyond_rating": 0.30635247701737356,
+          "accept_logodds_beyond_rating_se": 0.47964241229129057
+        },
+        "mechanism_word": {
+          "prevalence": 0.08930024410089504,
+          "z_rating_diff": 0.030018184275156436,
+          "z_rating_diff_ci95": [
+            -0.06440328086506128,
+            0.12791832514657117
+          ],
+          "z_rating_diff_area_stratified": null,
+          "accept_logodds_beyond_rating": -0.012832160995085657,
+          "accept_logodds_beyond_rating_se": 0.21161658743353837
+        },
+        "title_simple_claim": {
+          "prevalence": 0.011391375101708706,
+          "z_rating_diff": -0.14442489231656996,
+          "z_rating_diff_ci95": [
+            -0.39678547028181566,
+            0.13351774442548006
+          ],
+          "z_rating_diff_area_stratified": null,
+          "accept_logodds_beyond_rating": 1.295814244072074,
+          "accept_logodds_beyond_rating_se": 0.5571310168150483
+        },
+        "title_theory": {
+          "prevalence": 0.011391375101708706,
+          "z_rating_diff": 0.369733770713824,
+          "z_rating_diff_ci95": [
+            0.11830500791979445,
+            0.6229068774222091
+          ],
+          "z_rating_diff_area_stratified": null,
+          "accept_logodds_beyond_rating": 0.2702890815641218,
+          "accept_logodds_beyond_rating_se": 0.49991562481434515
+        },
+        "title_llm_topic": {
+          "prevalence": 0.006712774613506917,
+          "z_rating_diff": 0.09197129747706198,
+          "z_rating_diff_ci95": [
+            -0.29696385499891115,
+            0.45488526079080766
+          ],
+          "z_rating_diff_area_stratified": null,
+          "accept_logodds_beyond_rating": -0.469282188954174,
+          "accept_logodds_beyond_rating_se": 0.7120531648562025
+        },
+        "abstract_words": {
+          "n": 4916,
+          "spearman_with_rating": 0.0374408403897602,
+          "p": 0.008628275112735676
+        },
+        "pdf_mb": {
+          "n": 4908,
+          "spearman_with_rating": 0.09330276560977147,
+          "p": 5.2445139219558727e-11
+        },
+        "title_words": {
+          "n": 4916,
+          "spearman_with_rating": -0.023125151689748977,
+          "p": 0.10490935490272499
+        }
+      },
+      "subscore_std_coefficients_on_rating": {
+        "correctness": 0.3950510666466,
+        "technical_novelty": 0.4313407669571935,
+        "empirical_novelty": 0.187953360044344
+      },
+      "subscore_spearman_with_rating": {
+        "correctness": 0.6187149569598245,
+        "technical_novelty": 0.6700943742587302,
+        "empirical_novelty": 0.5210324213934714
+      },
+      "reviewer_agreement": {
+        "papers": 4914,
+        "mean_reviews": 3.776963776963777,
+        "icc_single_reviewer": 0.3851522845260045,
+        "icc_mean_of_k": 0.7029080988056268
+      },
+      "simulated_rereview": {
+        "papers_with_4plus_reviews": 2673,
+        "top_k": 1091,
+        "overlap_of_accept_sets": 0.6388634280476627
+      },
+      "citations": {
+        "accepted": {
+          "n": 1565,
+          "spearman_rating_vs_log_citations": 0.15283348226352658,
+          "p": 9.712245318099055e-10
+        },
+        "rejected": {
+          "n": 2253,
+          "spearman_rating_vs_log_citations": 0.20288791375099963,
+          "p": 8.32787567318706e-23
+        },
+        "all_decided": {
+          "n": 3818,
+          "spearman_rating_vs_log_citations": 0.5832466924665082,
+          "p": 0.0
+        }
+      }
+    },
+    "2024": {
+      "n_scored_main_track": 7243,
+      "n_decided": 5698,
+      "n_withdrawn_with_scores": 1545,
+      "accept_rate_among_decided": 0.3966303966303966,
+      "mean_rating": {
+        "accepted": 6.462894016013486,
+        "rejected": 4.761304329759827,
+        "withdrawn": 4.046218985976267
+      },
+      "auc_mean_rating_for_acceptance": 0.9400571179992484,
+      "accept_rate_by_rating_decile": [
+        {
+          "lo": 1.0,
+          "hi": 3.75,
+          "n": 592,
+          "accept_rate": 0.0016891891891891893
+        },
+        {
+          "lo": 3.75,
+          "hi": 4.4,
+          "n": 647,
+          "accept_rate": 0.0077279752704791345
+        },
+        {
+          "lo": 4.4,
+          "hi": 4.75,
+          "n": 593,
+          "accept_rate": 0.013490725126475547
+        },
+        {
+          "lo": 4.75,
+          "hi": 5.25,
+          "n": 1005,
+          "accept_rate": 0.06965174129353234
+        },
+        {
+          "lo": 5.25,
+          "hi": 5.5,
+          "n": 789,
+          "accept_rate": 0.1634980988593156
+        },
+        {
+          "lo": 5.5,
+          "hi": 5.75,
+          "n": 843,
+          "accept_rate": 0.36180308422301305
+        },
+        {
+          "lo": 5.75,
+          "hi": 6.0,
+          "n": 912,
+          "accept_rate": 0.6008771929824561
+        },
+        {
+          "lo": 6.0,
+          "hi": 6.5,
+          "n": 1232,
+          "accept_rate": 0.7581168831168831
+        },
+        {
+          "lo": 6.5,
+          "hi": 7.0,
+          "n": 821,
+          "accept_rate": 0.9269183922046285
+        },
+        {
+          "lo": 7.0,
+          "hi": 9.0,
+          "n": 623,
+          "accept_rate": 0.9775280898876404
+        }
+      ],
+      "features": {
+        "simple_claim": {
+          "prevalence": 0.13129918542040592,
+          "z_rating_diff": 0.04261283637149034,
+          "z_rating_diff_ci95": [
+            -0.021728508423823647,
+            0.11061803326065947
+          ],
+          "z_rating_diff_area_stratified": 0.05100258710133648,
+          "accept_logodds_beyond_rating": -0.05990447353657536,
+          "accept_logodds_beyond_rating_se": 0.12218315490187684
+        },
+        "mechanism_or_alternatives": {
+          "prevalence": 0.14441529752864835,
+          "z_rating_diff": -0.11471432351383257,
+          "z_rating_diff_ci95": [
+            -0.17662822313362858,
+            -0.0537090868901781
+          ],
+          "z_rating_diff_area_stratified": -0.10694267204435434,
+          "accept_logodds_beyond_rating": 0.004445209784814344,
+          "accept_logodds_beyond_rating_se": 0.125717830128299
+        },
+        "theory": {
+          "prevalence": 0.12246306778958994,
+          "z_rating_diff": 0.18919456044599317,
+          "z_rating_diff_ci95": [
+            0.12151267335008009,
+            0.25465325065366784
+          ],
+          "z_rating_diff_area_stratified": 0.16767566545475807,
+          "accept_logodds_beyond_rating": 0.10690317004173214,
+          "accept_logodds_beyond_rating_se": 0.12328497820052503
+        },
+        "sota_claim": {
+          "prevalence": 0.3961065856689217,
+          "z_rating_diff": 0.03432156301529326,
+          "z_rating_diff_ci95": [
+            -0.010999943024454659,
+            0.07934927788345655
+          ],
+          "z_rating_diff_area_stratified": 0.060282474051075126,
+          "accept_logodds_beyond_rating": 0.12236819225886782,
+          "accept_logodds_beyond_rating_se": 0.08714829676595899
+        },
+        "llm_topic": {
+          "prevalence": 0.14814303465414883,
+          "z_rating_diff": 0.14535869613198985,
+          "z_rating_diff_ci95": [
+            0.08526595505784207,
+            0.2073240635655917
+          ],
+          "z_rating_diff_area_stratified": 0.14316623237878706,
+          "accept_logodds_beyond_rating": 0.11646089566292223,
+          "accept_logodds_beyond_rating_se": 0.11661151389737207
+        },
+        "alternatives_strict": {
+          "prevalence": 0.018500621289520916,
+          "z_rating_diff": -0.003046510192902307,
+          "z_rating_diff_ci95": [
+            -0.16318120480081458,
+            0.15824986742182925
+          ],
+          "z_rating_diff_area_stratified": -0.16529833686968742,
+          "accept_logodds_beyond_rating": 0.20008319817555884,
+          "accept_logodds_beyond_rating_se": 0.31675607646599085
+        },
+        "mechanism_word": {
+          "prevalence": 0.09374568548943808,
+          "z_rating_diff": -0.1459135975160327,
+          "z_rating_diff_ci95": [
+            -0.22628113061217553,
+            -0.06854942179078052
+          ],
+          "z_rating_diff_area_stratified": -0.1227204977583799,
+          "accept_logodds_beyond_rating": -0.14721504973894325,
+          "accept_logodds_beyond_rating_se": 0.15178052401476919
+        },
+        "title_simple_claim": {
+          "prevalence": 0.007731602926963965,
+          "z_rating_diff": 0.05208330509536555,
+          "z_rating_diff_ci95": [
+            -0.19543568498752018,
+            0.31462319388252746
+          ],
+          "z_rating_diff_area_stratified": -0.06893704052061816,
+          "accept_logodds_beyond_rating": 0.05457813375902986,
+          "accept_logodds_beyond_rating_se": 0.4734657428270193
+        },
+        "title_theory": {
+          "prevalence": 0.011735468728427447,
+          "z_rating_diff": 0.1569106572250216,
+          "z_rating_diff_ci95": [
+            -0.04481380487520267,
+            0.36434451460899897
+          ],
+          "z_rating_diff_area_stratified": 0.03549674715020012,
+          "accept_logodds_beyond_rating": 0.10991824732153258,
+          "accept_logodds_beyond_rating_se": 0.3825236214822059
+        },
+        "title_llm_topic": {
+          "prevalence": 0.07552119287588016,
+          "z_rating_diff": 0.10333929472970924,
+          "z_rating_diff_ci95": [
+            0.014216394948450315,
+            0.18962188700343754
+          ],
+          "z_rating_diff_area_stratified": 0.11784740273076669,
+          "accept_logodds_beyond_rating": 0.025413537544458506,
+          "accept_logodds_beyond_rating_se": 0.15942919561874389
+        },
+        "abstract_words": {
+          "n": 7243,
+          "spearman_with_rating": 0.02392611596769087,
+          "p": 0.04169480795743657
+        },
+        "pdf_mb": {
+          "n": 7225,
+          "spearman_with_rating": 0.11520835493057566,
+          "p": 6.393805419739626e-23
+        },
+        "title_words": {
+          "n": 7243,
+          "spearman_with_rating": -0.028049576770321986,
+          "p": 0.01694992984147635
+        }
+      },
+      "subscore_std_coefficients_on_rating": {
+        "soundness": 0.2818846114153079,
+        "contribution": 0.5048731593765463,
+        "presentation": 0.18894683494992845
+      },
+      "subscore_spearman_with_rating": {
+        "soundness": 0.710955511883579,
+        "contribution": 0.7769404924529666,
+        "presentation": 0.5772442629247464
+      },
+      "areas": [
+        {
+          "area": "learning theory",
+          "n": 208,
+          "mean_rating": 5.7131410256410255,
+          "accept_rate_among_decided": 0.5425531914893617
+        },
+        {
+          "area": "probabilistic methods (Bayesian methods, variational inference, sampling, UQ, etc.)",
+          "n": 184,
+          "mean_rating": 5.3176630434782615,
+          "accept_rate_among_decided": 0.4171779141104294
+        },
+        {
+          "area": "generative models",
+          "n": 774,
+          "mean_rating": 5.315245478036176,
+          "accept_rate_among_decided": 0.5033557046979866
+        },
+        {
+          "area": "applications to neuroscience & cognitive science",
+          "n": 133,
+          "mean_rating": 5.306015037593985,
+          "accept_rate_among_decided": 0.44545454545454544
+        },
+        {
+          "area": "datasets and benchmarks",
+          "n": 266,
+          "mean_rating": 5.29172932330827,
+          "accept_rate_among_decided": 0.419811320754717
+        },
+        {
+          "area": "neurosymbolic & hybrid AI systems (physics-informed, logic & formal reasoning, etc.)",
+          "n": 101,
+          "mean_rating": 5.2207920792079205,
+          "accept_rate_among_decided": 0.36470588235294116
+        },
+        {
+          "area": "learning on graphs and other geometries & topologies",
+          "n": 191,
+          "mean_rating": 5.171877337322364,
+          "accept_rate_among_decided": 0.41317365269461076
+        },
+        {
+          "area": "applications to robotics, autonomy, planning",
+          "n": 175,
+          "mean_rating": 5.17,
+          "accept_rate_among_decided": 0.40425531914893614
+        },
+        {
+          "area": "causal reasoning",
+          "n": 101,
+          "mean_rating": 5.155775577557755,
+          "accept_rate_among_decided": 0.37349397590361444
+        },
+        {
+          "area": "representation learning for computer vision, audio, language, and other modalities",
+          "n": 1028,
+          "mean_rating": 5.14926347971095,
+          "accept_rate_among_decided": 0.4120805369127517
+        },
+        {
+          "area": "reinforcement learning",
+          "n": 653,
+          "mean_rating": 5.123222489608401,
+          "accept_rate_among_decided": 0.3807763401109057
+        },
+        {
+          "area": "societal considerations including fairness, safety, privacy",
+          "n": 534,
+          "mean_rating": 5.122057249866239,
+          "accept_rate_among_decided": 0.3680555555555556
+        },
+        {
+          "area": "optimization",
+          "n": 304,
+          "mean_rating": 5.1138157894736835,
+          "accept_rate_among_decided": 0.37109375
+        },
+        {
+          "area": "applications to physical sciences (physics, chemistry, biology, etc.)",
+          "n": 312,
+          "mean_rating": 5.071794871794872,
+          "accept_rate_among_decided": 0.3870967741935484
+        },
+        {
+          "area": "general machine learning (i.e., none of the above)",
+          "n": 772,
+          "mean_rating": 5.039776091783864,
+          "accept_rate_among_decided": 0.3602693602693603
+        },
+        {
+          "area": "visualization or interpretation of learned representations",
+          "n": 211,
+          "mean_rating": 5.016587677725118,
+          "accept_rate_among_decided": 0.37575757575757573
+        },
+        {
+          "area": "unsupervised, self-supervised, semi-supervised, and supervised representation learning",
+          "n": 841,
+          "mean_rating": 4.9734046769718585,
+          "accept_rate_among_decided": 0.3348694316436252
+        },
+        {
+          "area": "transfer learning, meta learning, and lifelong learning",
+          "n": 373,
+          "mean_rating": 4.921067917783736,
+          "accept_rate_among_decided": 0.33725490196078434
+        }
+      ],
+      "area_kruskal_h": 107.5192065484159,
+      "area_kruskal_p_approx": 2.2988728420900617e-14,
+      "reviewer_agreement": {
+        "papers": 7230,
+        "mean_reviews": 3.8639004149377594,
+        "icc_single_reviewer": 0.3626868943664785,
+        "icc_mean_of_k": 0.6873922734075971
+      },
+      "simulated_rereview": {
+        "papers_with_4plus_reviews": 4285,
+        "top_k": 1700,
+        "overlap_of_accept_sets": 0.6094117647058823
+      },
+      "citations": {
+        "accepted": {
+          "n": 2245,
+          "spearman_rating_vs_log_citations": 0.11488867198894934,
+          "p": 4.315381284636488e-08
+        },
+        "rejected": {
+          "n": 3398,
+          "spearman_rating_vs_log_citations": 0.2610812479204164,
+          "p": 5.751817221131061e-56
+        },
+        "all_decided": {
+          "n": 5643,
+          "spearman_rating_vs_log_citations": 0.5231123946290689,
+          "p": 0.0
+        }
+      }
+    },
+    "2026": {
+      "n_scored_main_track": 18789,
+      "n_decided": 13696,
+      "n_withdrawn_with_scores": 5093,
+      "accept_rate_among_decided": 0.3906980140186916,
+      "mean_rating": {
+        "accepted": 5.398430199962624,
+        "rejected": 3.965611857684955,
+        "withdrawn": 3.359366263685918
+      },
+      "auc_mean_rating_for_acceptance": 0.890354008966031,
+      "accept_rate_by_rating_decile": [
+        {
+          "lo": 0.0,
+          "hi": 3.0,
+          "n": 1566,
+          "accept_rate": 0.0070242656449553
+        },
+        {
+          "lo": 3.0,
+          "hi": 3.5,
+          "n": 2034,
+          "accept_rate": 0.02753195673549656
+        },
+        {
+          "lo": 3.5,
+          "hi": 4.0,
+          "n": 3341,
+          "accept_rate": 0.09368452559114038
+        },
+        {
+          "lo": 4.0,
+          "hi": 4.5,
+          "n": 4430,
+          "accept_rate": 0.19390519187358918
+        },
+        {
+          "lo": 4.5,
+          "hi": 4.5,
+          "n": 2045,
+          "accept_rate": 0.2723716381418093
+        },
+        {
+          "lo": 4.5,
+          "hi": 5.0,
+          "n": 4622,
+          "accept_rate": 0.3954997836434444
+        },
+        {
+          "lo": 5.0,
+          "hi": 5.0,
+          "n": 1855,
+          "accept_rate": 0.5390835579514824
+        },
+        {
+          "lo": 5.0,
+          "hi": 5.5,
+          "n": 3706,
+          "accept_rate": 0.6586616297895305
+        },
+        {
+          "lo": 5.5,
+          "hi": 6.0,
+          "n": 2397,
+          "accept_rate": 0.8656654151022111
+        },
+        {
+          "lo": 6.0,
+          "hi": 8.5,
+          "n": 1727,
+          "accept_rate": 0.9513607411696584
+        }
+      ],
+      "features": {
+        "simple_claim": {
+          "prevalence": 0.11708978657725265,
+          "z_rating_diff": 0.056911249201383116,
+          "z_rating_diff_ci95": [
+            0.010833334805822995,
+            0.10264487797844533
+          ],
+          "z_rating_diff_area_stratified": 0.04851606653907756,
+          "accept_logodds_beyond_rating": 0.06402052764027735,
+          "accept_logodds_beyond_rating_se": 0.073952282718437
+        },
+        "mechanism_or_alternatives": {
+          "prevalence": 0.22369471499281496,
+          "z_rating_diff": -0.0675391511753344,
+          "z_rating_diff_ci95": [
+            -0.10239013517896361,
+            -0.03396325462827317
+          ],
+          "z_rating_diff_area_stratified": -0.05485653395219344,
+          "accept_logodds_beyond_rating": 0.0730517072395702,
+          "accept_logodds_beyond_rating_se": 0.057605335355323445
+        },
+        "theory": {
+          "prevalence": 0.10585981159188887,
+          "z_rating_diff": 0.17681929476090197,
+          "z_rating_diff_ci95": [
+            0.12670773117668976,
+            0.22778989488497964
+          ],
+          "z_rating_diff_area_stratified": 0.17275344191781028,
+          "accept_logodds_beyond_rating": -0.10279720822176466,
+          "accept_logodds_beyond_rating_se": 0.07558178275478064
+        },
+        "sota_claim": {
+          "prevalence": 0.42977273936877963,
+          "z_rating_diff": 0.05968426993766082,
+          "z_rating_diff_ci95": [
+            0.0305192307077384,
+            0.0893680709049159
+          ],
+          "z_rating_diff_area_stratified": 0.0762567037411121,
+          "accept_logodds_beyond_rating": 0.07151926652225181,
+          "accept_logodds_beyond_rating_se": 0.04797459557810911
+        },
+        "llm_topic": {
+          "prevalence": 0.3504710202778221,
+          "z_rating_diff": -0.022032681111773086,
+          "z_rating_diff_ci95": [
+            -0.050639611574239525,
+            0.008826461251607918
+          ],
+          "z_rating_diff_area_stratified": -0.06923968415810838,
+          "accept_logodds_beyond_rating": 0.023282849392857213,
+          "accept_logodds_beyond_rating_se": 0.049735051935188915
+        },
+        "alternatives_strict": {
+          "prevalence": 0.01862792059183565,
+          "z_rating_diff": -0.03473675115295476,
+          "z_rating_diff_ci95": [
+            -0.13893436970627537,
+            0.06985104891124956
+          ],
+          "z_rating_diff_area_stratified": -0.0035544381406391826,
+          "accept_logodds_beyond_rating": 0.12718904417610696,
+          "accept_logodds_beyond_rating_se": 0.17262605727861652
+        },
+        "mechanism_word": {
+          "prevalence": 0.16429825961999042,
+          "z_rating_diff": -0.07104595076702674,
+          "z_rating_diff_ci95": [
+            -0.11030198011005363,
+            -0.03183461843448459
+          ],
+          "z_rating_diff_area_stratified": -0.05800599928370288,
+          "accept_logodds_beyond_rating": 0.09750423785678514,
+          "accept_logodds_beyond_rating_se": 0.06499366316982068
+        },
+        "title_simple_claim": {
+          "prevalence": 0.004683591463090106,
+          "z_rating_diff": -0.06176700539953762,
+          "z_rating_diff_ci95": [
+            -0.2948977975003803,
+            0.15686914639567753
+          ],
+          "z_rating_diff_area_stratified": -0.17906351691959146,
+          "accept_logodds_beyond_rating": 0.07235379494453587,
+          "accept_logodds_beyond_rating_se": 0.3497766019144865
+        },
+        "title_theory": {
+          "prevalence": 0.008409175581457236,
+          "z_rating_diff": 0.08982162824735013,
+          "z_rating_diff_ci95": [
+            -0.05511409442284195,
+            0.2396740128188486
+          ],
+          "z_rating_diff_area_stratified": 0.010867522987568127,
+          "accept_logodds_beyond_rating": -0.08226551212856621,
+          "accept_logodds_beyond_rating_se": 0.2437317690330355
+        },
+        "title_llm_topic": {
+          "prevalence": 0.1579115439885039,
+          "z_rating_diff": -0.09645201252161517,
+          "z_rating_diff_ci95": [
+            -0.13697893109424633,
+            -0.05893883683752373
+          ],
+          "z_rating_diff_area_stratified": -0.12584259570837844,
+          "accept_logodds_beyond_rating": 0.07415811589379741,
+          "accept_logodds_beyond_rating_se": 0.06548848334211159
+        },
+        "abstract_words": {
+          "n": 18789,
+          "spearman_with_rating": 0.05179034964179799,
+          "p": 1.1755014883729747e-12
+        },
+        "pdf_mb": {
+          "n": 0,
+          "spearman_with_rating": null,
+          "p": null
+        },
+        "title_words": {
+          "n": 18789,
+          "spearman_with_rating": -0.04384080716589478,
+          "p": 1.8004995733408672e-09
+        }
+      },
+      "subscore_std_coefficients_on_rating": {
+        "soundness": 0.30485125534448415,
+        "contribution": 0.48046005408816167,
+        "presentation": 0.19694554767791797
+      },
+      "subscore_spearman_with_rating": {
+        "soundness": 0.6919179144423205,
+        "contribution": 0.7451779396086786,
+        "presentation": 0.5604734517846987
+      },
+      "areas": [
+        {
+          "area": "learning theory",
+          "n": 486,
+          "mean_rating": 4.610043111894964,
+          "accept_rate_among_decided": 0.46534653465346537
+        },
+        {
+          "area": "probabilistic methods (Bayesian methods, variational inference, sampling, UQ, etc.)",
+          "n": 361,
+          "mean_rating": 4.358910433979686,
+          "accept_rate_among_decided": 0.38436482084690554
+        },
+        {
+          "area": "foundation or frontier models, including LLMs",
+          "n": 2530,
+          "mean_rating": 4.341874647092038,
+          "accept_rate_among_decided": 0.4419456066945607
+        },
+        {
+          "area": "generative models",
+          "n": 1591,
+          "mean_rating": 4.329562120259795,
+          "accept_rate_among_decided": 0.4349344978165939
+        },
+        {
+          "area": "applications to robotics, autonomy, planning",
+          "n": 577,
+          "mean_rating": 4.327770900387885,
+          "accept_rate_among_decided": 0.42482100238663484
+        },
+        {
+          "area": "datasets and benchmarks",
+          "n": 1484,
+          "mean_rating": 4.284148376331665,
+          "accept_rate_among_decided": 0.41415094339622643
+        },
+        {
+          "area": "applications to computer vision, audio, language, and other modalities",
+          "n": 2607,
+          "mean_rating": 4.267958061628948,
+          "accept_rate_among_decided": 0.4363095238095238
+        },
+        {
+          "area": "reinforcement learning",
+          "n": 1014,
+          "mean_rating": 4.222518080210388,
+          "accept_rate_among_decided": 0.3866498740554156
+        },
+        {
+          "area": "infrastructure, software libraries, hardware, systems, etc.",
+          "n": 168,
+          "mean_rating": 4.176190476190476,
+          "accept_rate_among_decided": 0.3283582089552239
+        },
+        {
+          "area": "causal reasoning",
+          "n": 182,
+          "mean_rating": 4.158974358974359,
+          "accept_rate_among_decided": 0.3237410071942446
+        },
+        {
+          "area": "optimization",
+          "n": 709,
+          "mean_rating": 4.157263751763047,
+          "accept_rate_among_decided": 0.3466424682395644
+        },
+        {
+          "area": "alignment, fairness, safety, privacy, and societal considerations",
+          "n": 1595,
+          "mean_rating": 4.144663382594417,
+          "accept_rate_among_decided": 0.3668690372940156
+        },
+        {
+          "area": "interpretability and explainable AI",
+          "n": 748,
+          "mean_rating": 4.07342118665648,
+          "accept_rate_among_decided": 0.3597122302158273
+        },
+        {
+          "area": "applications to neuroscience & cognitive science",
+          "n": 355,
+          "mean_rating": 4.073333333333333,
+          "accept_rate_among_decided": 0.4043321299638989
+        },
+        {
+          "area": "unsupervised, self-supervised, semi-supervised, and supervised representation learning",
+          "n": 1112,
+          "mean_rating": 4.059802158273381,
+          "accept_rate_among_decided": 0.3308641975308642
+        },
+        {
+          "area": "learning on time series and dynamical systems",
+          "n": 444,
+          "mean_rating": 4.051962676962677,
+          "accept_rate_among_decided": 0.3048780487804878
+        },
+        {
+          "area": "learning on graphs and other geometries & topologies",
+          "n": 500,
+          "mean_rating": 4.0346,
+          "accept_rate_among_decided": 0.3079019073569482
+        },
+        {
+          "area": "other topics in machine learning (i.e., none of the above)",
+          "n": 766,
+          "mean_rating": 4.00978801442248,
+          "accept_rate_among_decided": 0.30726256983240224
+        },
+        {
+          "area": "transfer learning, meta learning, and lifelong learning",
+          "n": 533,
+          "mean_rating": 3.9991869918699186,
+          "accept_rate_among_decided": 0.3155080213903743
+        },
+        {
+          "area": "neurosymbolic & hybrid AI systems (physics-informed, logic & formal reasoning, etc.)",
+          "n": 209,
+          "mean_rating": 3.9918660287081336,
+          "accept_rate_among_decided": 0.2929936305732484
+        },
+        {
+          "area": "applications to physical sciences (physics, chemistry, biology, etc.)",
+          "n": 818,
+          "mean_rating": 3.986552567237164,
+          "accept_rate_among_decided": 0.3716216216216216
+        }
+      ],
+      "area_kruskal_h": 260.69608953836655,
+      "area_kruskal_p_approx": 1.2507991404538575e-38,
+      "reviewer_agreement": {
+        "papers": 18784,
+        "mean_reviews": 3.8970932708688246,
+        "icc_single_reviewer": 0.17718427757504845,
+        "icc_mean_of_k": 0.4562841563771405
+      },
+      "simulated_rereview": {
+        "papers_with_4plus_reviews": 11311,
+        "top_k": 4419,
+        "overlap_of_accept_sets": 0.4537225616655352
+      }
+    }
+  },
+  "temporal_holdout_2024_to_2026": {
+    "label": "top-quartile mean rating within year",
+    "train_auc": 0.5790852270364202,
+    "test_auc": 0.5452862177260784,
+    "n_train": 7243,
+    "n_test": 18789,
+    "std_coefficients_non_area": {
+      "simple_claim": 0.017847927455972752,
+      "mechanism_or_alternatives": -0.0986170226763541,
+      "theory": 0.10952558901180304,
+      "sota_claim": 0.0031062191519508364,
+      "llm_topic": 0.08810139421220181,
+      "log_abstract_words": 0.05266427163956862,
+      "log_title_words": -0.045434802584147053
+    }
+  },
+  "iclr2027_initial": {
+    "n_papers_with_ratings": 40458,
+    "mean_of_paper_means": 2.0607440049528143,
+    "title_features": {
+      "simple_claim": {
+        "prevalence": 0.002471699045924168,
+        "z_rating_diff": 0.04486098049984588,
+        "z_rating_diff_ci95": [
+          -0.12858747293222306,
+          0.23110602306386646
+        ]
+      },
+      "theory": {
+        "prevalence": 0.0063769835384843545,
+        "z_rating_diff": 0.017043115038398948,
+        "z_rating_diff_ci95": [
+          -0.10798317754397474,
+          0.15154056985649733
+        ]
+      },
+      "llm_topic": {
+        "prevalence": 0.10126550991151317,
+        "z_rating_diff": -0.061455415867363604,
+        "z_rating_diff_ci95": [
+          -0.09301956593076807,
+          -0.03098375362184165
+        ]
+      }
+    },
+    "reviewer_agreement": {
+      "papers": 40122,
+      "mean_reviews": 3.1000448631673394,
+      "icc_single_reviewer": 0.15565508402312248,
+      "icc_mean_of_k": 0.3636627098486701
+    },
+    "simulated_rereview_top30pct": {
+      "papers_with_4plus_reviews": 3653,
+      "top_k": 1096,
+      "overlap_of_accept_sets": 0.4051094890510949
+    }
+  }
+}

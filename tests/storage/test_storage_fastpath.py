@@ -1327,6 +1327,10 @@ def test_candidate_dirs_are_keyed_per_data_dir(tmp_path, monkeypatch):
 
 def test_torn_shadow_tail_is_overwritten_not_trusted(front):
     front.shipper.start()
+    # The writes must follow the initial snapshot to exercise incremental WAL,
+    # not be absorbed into that snapshot before the shipper thread runs.
+    _wait_for(lambda: _shadow_manifest(front.shadow_dir) is not None,
+              label='initial shadow snapshot')
     for i in range(6):
         front.put(f'k{i}', i)
     _wait_for(lambda: _shadow_manifest(front.shadow_dir) is not None

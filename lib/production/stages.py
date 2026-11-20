@@ -243,6 +243,9 @@ def _execute_stage(stage: Stage, ctx: dict, *, index: int, total: int,
     attempts = max(1, stage.retry + 1)
     last_detail = ''
     last_errors: list = []
+    # Kept as StageFailed.__cause__ so callers can tell an infrastructure
+    # fault in the last attempt from a gate rejection.
+    last_exc: Exception | None = None
     for attempt in range(1, attempts + 1):
         if aborted():
             raise StageAborted(f'aborted in stage {stage.name!r}')
@@ -259,6 +262,7 @@ def _execute_stage(stage: Stage, ctx: dict, *, index: int, total: int,
                     f'aborted in stage {stage.name!r}') from exc
             last_detail = f'{type(exc).__name__}: {exc}'
             last_errors = []
+            last_exc = exc
             logger.warning('[Stages] %s attempt %d/%d raised: %s',
                            stage.name, attempt, attempts, exc, exc_info=True)
             continue
@@ -268,6 +272,7 @@ def _execute_stage(stage: Stage, ctx: dict, *, index: int, total: int,
         if errors:
             last_detail = 'gate rejected the artifact'
             last_errors = errors
+            last_exc = None
             logger.warning('[Stages] %s attempt %d/%d gate errors: %s',
                            stage.name, attempt, attempts, '; '.join(
                                str(item) for item in errors[:4]))
@@ -277,7 +282,8 @@ def _execute_stage(stage: Stage, ctx: dict, *, index: int, total: int,
             continue
         return artifact, round(time.time() - started, 2)
 
-    raise StageFailed(stage.name, last_detail or 'unknown failure', last_errors)
+    raise StageFailed(stage.name, last_detail or 'unknown failure',
+                      last_errors) from last_exc
 
 
 def run_stages(stages: list, ctx: dict, *, state_path: str,

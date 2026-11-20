@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from lib.tools.search import build_search_tool
+from lib.tools.search import search_tool_for_request
 from tofu_search import configure
 from tofu_search.search.vertical import (describe_domains, list_domains,
                                          travel_flyai, travel_hotel)
@@ -40,14 +40,14 @@ def _vertical_enums(tool: dict) -> list[list[str]]:
 def test_enum_is_derived_from_available_domains():
     configure(rollinggo_api_key='')
     expected = ['auto'] + list_domains() + ['off']
-    for enum in _vertical_enums(build_search_tool()):
+    for enum in _vertical_enums(search_tool_for_request()):
         assert enum == expected
 
 
 @pytest.mark.unit
 def test_every_available_domain_is_described_in_the_prose():
     configure(rollinggo_api_key='mcp_test')
-    description = build_search_tool()['function']['description']
+    description = search_tool_for_request()['function']['description']
     for entry in describe_domains():
         assert f"``{entry['domain']}``" in description, entry['domain']
 
@@ -55,10 +55,10 @@ def test_every_available_domain_is_described_in_the_prose():
 @pytest.mark.unit
 def test_travel_is_advertised_and_names_both_capabilities():
     configure(rollinggo_api_key='mcp_test')
-    tool = build_search_tool()
+    tool = search_tool_for_request()
     for enum in _vertical_enums(tool):
         assert 'travel' in enum
-    description = build_search_tool()['function']['description']
+    description = search_tool_for_request()['function']['description']
     assert 'flight' in description.lower()
     assert 'hotel' in description.lower()
 
@@ -68,7 +68,7 @@ def test_full_keyless_availability_carries_no_warning():
     """Keyless: FlyAI's bundled trial credential covers BOTH travel types, so
     the travel line must NOT carry an availability warning."""
     configure(rollinggo_api_key='')
-    description = build_search_tool()['function']['description']
+    description = search_tool_for_request()['function']['description']
     travel_line = next(line for line in description.splitlines()
                        if line.startswith('- ``travel``'))
     assert 'do NOT use' not in travel_line
@@ -81,7 +81,7 @@ def test_partial_availability_warning_still_rendered(monkeypatch):
     loses its provider, the model must be told which queries to avoid."""
     configure(rollinggo_api_key='')
     monkeypatch.setattr(travel_hotel, 'is_available', lambda cfg=None: False)
-    description = build_search_tool()['function']['description']
+    description = search_tool_for_request()['function']['description']
     travel_line = next(line for line in description.splitlines()
                        if line.startswith('- ``travel``'))
     assert 'only flight is available' in travel_line
@@ -91,7 +91,7 @@ def test_partial_availability_warning_still_rendered(monkeypatch):
 @pytest.mark.unit
 def test_no_availability_warning_once_the_key_is_present():
     configure(rollinggo_api_key='mcp_test')
-    description = build_search_tool()['function']['description']
+    description = search_tool_for_request()['function']['description']
     travel_line = next(line for line in description.splitlines()
                        if line.startswith('- ``travel``'))
     assert 'do NOT use' not in travel_line
@@ -102,11 +102,11 @@ def test_schema_is_rebuilt_per_call_not_frozen_at_import(monkeypatch):
     """Availability is PROCESS state — a rejected credential latches off
     mid-process — so caching the schema at import would lie."""
     configure(rollinggo_api_key='')
-    before = build_search_tool()['function']['description']
+    before = search_tool_for_request()['function']['description']
     assert '``travel``' in before
     # Both travel types ride the FlyAI latch: once it flips, the whole domain
     # drops out of the schema.
     monkeypatch.setattr(travel_flyai, 'is_available', lambda cfg=None: False)
-    after = build_search_tool()['function']['description']
+    after = search_tool_for_request()['function']['description']
     assert '``travel``' not in after
     assert before != after

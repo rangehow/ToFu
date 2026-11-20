@@ -64,8 +64,11 @@ def test_sidebar_reports_and_task_board_read_in_the_ui_language(page, monkeypatc
     if not card.evaluate('node => node.open'):
         card.locator('summary').first.click()
     expect(card.locator('.coordinator-progress-finished > summary')).to_contain_text(copy['finished'])
+    # The glyph is decoration: the row's visible status text names the state in the UI language.
     expect(card.locator('.coordinator-progress-task[data-status="in_progress"] .coordinator-progress-glyph')).to_have_attribute(
-        'aria-label', copy['status'])
+        'aria-hidden', 'true')
+    expect(card.locator('.coordinator-progress-task[data-status="in_progress"] .coordinator-progress-task-status')).to_have_text(
+        copy['status'])
     expect(card.get_by_role('button', name=copy['history'])).to_be_visible()
     # The finished task expands to its delivery, listed in the conversation's display translation.
     card.locator('.coordinator-progress-finished > summary').click()

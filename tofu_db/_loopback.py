@@ -13,6 +13,7 @@ import http.client
 import logging
 from pathlib import Path
 import random
+import selectors
 import socket
 import sys
 import time
@@ -35,24 +36,80 @@ def _remaining(timeout, started):
     return remaining
 
 
+def _connect_cancellable(address, timeout, cancellation, *, source_address=None):
+    # Storage admits only these loopback names. Resolve localhost locally,
+    # without a resolver call that cannot borrow the cancellation token.
+    host, port = address
+    hosts = ('::1', '127.0.0.1') if host == 'localhost' else (host,)
+    if any(host not in {'127.0.0.1', '::1'} for host in hosts):
+        raise ValueError('Cancellable connection requires a storage loopback endpoint')
+    started = time.monotonic()
+    last_error = None
+    for host in hosts:
+        family = socket.AF_INET6 if host == '::1' else socket.AF_INET
+        try:
+            return _connect_numeric((host, port), family, _remaining(timeout, started),
+                                    cancellation, source_address)
+        except OSError as exc:
+            if cancellation.cancelled:
+                raise
+            last_error = exc
+    raise last_error
+
+
+def _connect_numeric(address, family, timeout, cancellation, source_address):
+    # shutdown() is not a portable wake for an unconnected socket. Wait for
+    # connect completion and a cancellation byte on the same selector.
+    sock = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        reader, writer = socket.socketpair()
+        with reader, writer, selectors.DefaultSelector() as selector:
+            writer.setblocking(False)
+            with cancellation.bind(lambda: writer.send(b'\0')):
+                sock.setblocking(False)
+                if source_address is not None:
+                    sock.bind(source_address)
+                status = sock.connect_ex(address)
+                if status in {errno.EINPROGRESS, errno.EWOULDBLOCK, errno.EALREADY, errno.EINTR}:
+                    selector.register(sock, selectors.EVENT_WRITE)
+                    selector.register(reader, selectors.EVENT_READ)
+                    if not selector.select(timeout):
+                        raise TimeoutError('loopback connection deadline expired')
+                    if cancellation.cancelled:
+                        raise OSError('Transport request was cancelled before dispatch')
+                    status = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+                if status:
+                    raise OSError(status, 'Loopback connection failed')
+                if cancellation.cancelled:
+                    raise OSError('Transport request was cancelled before dispatch')
+                sock.settimeout(socket.getdefaulttimeout() if timeout is socket._GLOBAL_DEFAULT_TIMEOUT else timeout)
+        return sock
+    except BaseException:
+        sock.close()
+        raise
+
+
 def create_connection(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, *,
-                      source_address=None):
+                      source_address=None, cancellation=None):
     """Connect once; recover Linux loopback tuple exhaustion before dispatch.
 
     Nagle is off: a message written in more than one send never waits for the
     peer's delayed acknowledgement.
     """
     started = time.monotonic()
+    connect = socket.create_connection if cancellation is None else (
+        lambda address, timeout, **options: _connect_cancellable(
+            address, timeout, cancellation, **options))
     options = {} if source_address is None else {'source_address': source_address}
     try:
-        connection = socket.create_connection(address, timeout=timeout, **options)
+        connection = connect(address, timeout=timeout, **options)
     except OSError as error:
         if (error.errno not in _ALLOCATION_ERRORS or address[0] != '127.0.0.1'
                 or source_address is not None or sys.platform != 'linux'):
             raise
         # A different local source has an independent tuple pool. The target
         # remains exactly the admitted endpoint; no Hello/RPC has been sent.
-        connection = socket.create_connection(
+        connection = connect(
             address, timeout=_remaining(timeout, started),
             source_address=('127.0.0.2', 0),
         )

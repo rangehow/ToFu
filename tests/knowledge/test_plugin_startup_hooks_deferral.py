@@ -36,7 +36,7 @@ def hook_calls(monkeypatch):
     monkeypatch.setattr(
         enrichment, 'resume_visual_enrichment', lambda *, principal: 1)
     monkeypatch.setattr(
-        codex_catalog, 'start_codex_catalog_refresher', lambda: False)
+        codex_catalog, 'start_codex_catalog_refresher', lambda **_: False)
     monkeypatch.setattr(
         'lib.oauth.outbound.reconcile_oauth_providers', lambda: None)
     monkeypatch.setattr(

@@ -12,7 +12,6 @@ Usage in a test module::
 
 from __future__ import annotations
 
-from contextlib import contextmanager
 from pathlib import Path
 import shutil
 import uuid
@@ -20,12 +19,13 @@ import uuid
 import pytest
 
 from tests.support.process_scratch import process_scratch_directory
-from tests.support.sidecar_fixtures import installed_storage_runtime
 
 
-@contextmanager
-def _started_sqlite_sidecar():
+@pytest.fixture(scope='module')
+def _chat_sidecar_runtime():
+    """Start one real SQLite-backed Sidecar for an opted-in test module."""
     from lib.storage import StorageRuntime, StorageSupervisor
+    from lib.storage.service import install_runtime_for_test
     scratch = process_scratch_directory('chat-sidecar-')
     project_root = scratch / uuid.uuid4().hex[:8]
     project_root.mkdir(parents=True, exist_ok=True)
@@ -34,31 +34,17 @@ def _started_sqlite_sidecar():
             project_root=project_root, backend='sqlite', startup_timeout=60),
         auto_restart=False,
     )
+    install_runtime_for_test(runtime)
+    runtime.start()
     try:
-        with installed_storage_runtime(runtime):
-            runtime.start()
-            yield runtime
+        yield runtime
     finally:
+        install_runtime_for_test(None)
+        try:
+            runtime.stop()
+        except Exception:
+            pass
         shutil.rmtree(scratch, ignore_errors=True)
-
-
-@pytest.fixture(scope='module')
-def _chat_sidecar_runtime():
-    """Start one real SQLite-backed Sidecar for an opted-in test module."""
-    with _started_sqlite_sidecar() as runtime:
-        yield runtime
-
-
-@pytest.fixture
-def isolated_chat_sidecar():
-    """Give one test an empty authority of its own.
-
-    For assertions over authority-wide scans (such as boot recovery), which
-    would otherwise also observe rows earlier tests left in the module's
-    shared Sidecar.
-    """
-    with _started_sqlite_sidecar() as runtime:
-        yield runtime
 
 
 def require_authority_for_owner(request, owner: int) -> None:

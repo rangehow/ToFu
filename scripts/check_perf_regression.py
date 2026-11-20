@@ -61,26 +61,10 @@ def _by_name(report: dict) -> dict[str, dict]:
     return {w["name"]: w for w in report["workloads"]}
 
 
-def _host_speed(current: dict, baseline: dict) -> float:
-    """How much slower this host's interpreter is than the baseline's.
-
-    Both reports time the same product-free reference work
-    (``reference_ms``); dividing current times by this factor compares the
-    code, not the runner (GitHub's hosted runners differ by ~1.5x between
-    regions on identical code). Reports without it compare raw times.
-    """
-    base_ref = float(baseline.get("reference_ms") or 0)
-    now_ref = float(current.get("reference_ms") or 0)
-    if base_ref <= 0 or now_ref <= 0:
-        return 1.0
-    return now_ref / base_ref
-
-
 def compare(current: dict, baseline: dict) -> list[str]:
     problems: list[str] = []
     base = _by_name(baseline)
     now = _by_name(current)
-    speed = _host_speed(current, baseline)
     for name, base_workload in sorted(base.items()):
         if name not in now:
             problems.append(f"[{name}] workload missing from current run")
@@ -92,14 +76,10 @@ def compare(current: dict, baseline: dict) -> list[str]:
         ):
             base_value = float(base_workload[field])
             now_value = float(now[name][field])
-            # Memory peaks are allocation-deterministic; only time scales
-            # with the host.
-            scale = speed if field != "peak_kib" else 1.0
-            if now_value / scale > base_value * ratio:
-                host = f", host speed {speed:.2f}x" if scale != 1.0 else ""
+            if now_value > base_value * ratio:
                 problems.append(
                     f"[{name}] {field} regressed {base_value} -> "
-                    f"{now_value} (> {ratio}x baseline{host})"
+                    f"{now_value} (> {ratio}x baseline)"
                 )
     extra = set(now) - set(base)
     if extra:
@@ -133,12 +113,11 @@ def main() -> int:
         baseline = json.load(f)
     problems = compare(report, baseline)
     if problems:
-        print(f"perf-regression: FAILED (host speed {_host_speed(report, baseline):.2f}x)")
+        print("perf-regression: FAILED")
         print("\n".join(f"- {problem}" for problem in problems))
         return 1
     print("perf-regression: OK "
-          f"({len(report['workloads'])} workloads within ratio gates, "
-          f"host speed {_host_speed(report, baseline):.2f}x)")
+          f"({len(report['workloads'])} workloads within ratio gates)")
     return 0
 
 

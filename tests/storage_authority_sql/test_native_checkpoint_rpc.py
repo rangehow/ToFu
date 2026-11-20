@@ -103,6 +103,8 @@ def test_stale_instance_binding_never_refreshes_after_endpoint_replacement(servi
     second, fresh, new_port = serving()
     assert first.native_checkpoint.runtime_id != second.native_checkpoint.runtime_id
     client._port = second.server_address[1]
+    # Reconnect physically while retaining the negotiated checkpoint UUID.
+    client._pool.set_idle_cap_s(0.0)
     for _ in range(2):
         with pytest.raises(StorageError, match='stale'):
             call(port, 'create', parameters=binding())

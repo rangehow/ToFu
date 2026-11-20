@@ -316,6 +316,60 @@ fn replace_in_private_transaction(
 }
 
 #[test]
+fn public_metadata_contract_preserves_presentation_identity_and_nested_settlement() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+    seed(&mut database);
+    let original = physical(&database);
+    // Shared with the strict Python get_turn contract test; no projection is
+    // sent across this boundary. The distinct ID models optimistic acceptance.
+    let expected: Value = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/native_turn_metadata.json"
+    ))
+    .unwrap();
+    for (case, presentation_id, public_id) in [
+        ("normal", Some("optimistic-turn"), "optimistic-turn"),
+        ("legacy", None, "turn"),
+        ("empty", Some(""), "turn"),
+        ("forged", None, "turn"),
+    ] {
+        let mut expected = expected.clone();
+        expected["presentationId"] = json!(public_id);
+        expected["currentAttemptId"] = original["currentAttemptId"].clone(); // Seed allocates a UUID.
+        if case == "forged" {
+            // Do not scrub a forged receipt into a valid one. Public schema
+            // admission rejects the authority field; the producer retains it.
+            expected["settlement"]["coordinatorWorkerObservations"]["assignment"]["ownerUserId"] =
+                json!(11);
+        }
+        let mut document = original.clone();
+        document.insert("settlement".into(), expected["settlement"].clone());
+        document.remove("presentationId");
+        if let Some(id) = presentation_id {
+            document.insert("presentationId".into(), json!(id));
+        }
+        // Persist only into the disposable fixture so the actual semantic
+        // request goes through its normal transaction and scope admission.
+        let mut transaction = database.begin(7, 11).unwrap();
+        replace_in_private_transaction(
+            &database,
+            &mut transaction,
+            &document,
+            "metadata\u{1f}turn",
+        );
+        database.commit(transaction).unwrap();
+
+        let metadata = execute(&mut database, &query(11, Some(json!(false)))).unwrap();
+        let full = execute(&mut database, &query(11, None)).unwrap();
+        // --nocapture can stream the actual producer rows to the Python
+        // contract oracle without a second store or a native test dependency.
+        println!("TURN_METADATA_CONTRACT {case} {metadata}");
+        assert_eq!(metadata, expected, "{case}");
+        assert_eq!(metadata, without_projection(full));
+    }
+}
+
+#[test]
 fn malformed_owned_metadata_fails_closed_and_private_unknown_fields_never_escape() {
     let directory = tempfile::tempdir().unwrap();
     let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();

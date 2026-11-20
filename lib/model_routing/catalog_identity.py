@@ -65,7 +65,12 @@ def reconcile_catalog_identities(document: dict, *, access_id: str | None = None
         ref = offering['model']
         groups[(offering['provider_access_id'], ref['creator_id'], ref['model_id'])].extend(
             deployments[offering['offering_id']])
+    codex_accesses = {row['provider_access_id'] for row in document.get('provider_accesses', [])
+                      if row.get('provider_id') == 'oauth_codex'}
     for (provider_access_id, creator_id, model_id), newly_bound in groups.items():
+        # Identity evidence cannot distinguish a new grant from a revocation.
+        if provider_access_id in codex_accesses:
+            continue
         ref = {'creator_id': creator_id, 'model_id': model_id}
         all_wires = {dep['wire_model_id'] for offering in document['offerings']
                      if offering['provider_access_id'] == provider_access_id and offering.get('model') == ref

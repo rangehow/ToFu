@@ -1,4 +1,5 @@
 """Production native credentials recheck the live grant/source around refresh."""
+from lib.oauth.codex import CodexAccessTokenSnapshot
 import json
 import threading
 from dataclasses import replace
@@ -80,8 +81,7 @@ def test_personal_legacy_source_requires_existing_local_owner_boundary(monkeypat
 
 def test_outbound_account_change_is_refused_without_credentials(monkeypatch):
     from lib.oauth.outbound import resolve_oauth_request
-    monkeypatch.setattr('lib.oauth.codex.codex_get_valid_token',lambda **kwargs:'private-token')
-    monkeypatch.setattr('lib.oauth.token_store.load_token',lambda provider:{'account_id':'account-b'})
+    monkeypatch.setattr('lib.oauth.codex.codex_get_valid_token_snapshot',lambda **kwargs:CodexAccessTokenSnapshot('private-token','account-b'))
     with pytest.raises(SubscriptionCredentialUnavailableError) as error:
         resolve_oauth_request('codex',{}, {},user_id='7',expected_account_id='account-a')
     assert error.value.reason=='account_changed'
@@ -139,8 +139,9 @@ def test_production_resolver_uses_real_outbound_identity_headers(monkeypatch):
     from lib.oauth.outbound import resolve_oauth_request
     _,state,_,request,resolver,_=fixture(monkeypatch)
     monkeypatch.setattr('lib.oauth.outbound.resolve_oauth_request',resolve_oauth_request)
-    monkeypatch.setattr('lib.oauth.codex.codex_get_valid_token',lambda **kwargs:'live-fixture')
-    monkeypatch.setattr('lib.oauth.token_store.load_token',lambda provider:dict(state))
+    monkeypatch.setattr('lib.oauth.codex.codex_get_valid_token_snapshot',
+                        lambda **kwargs: CodexAccessTokenSnapshot(
+                            'live-fixture', state['account_id'], bearer_account_id=state['account_id']))
     headers=resolver(request)
     assert headers['Authorization']=='Bearer live-fixture'
     assert headers['chatgpt-account-id']=='account-a'

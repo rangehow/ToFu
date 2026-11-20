@@ -188,11 +188,23 @@ def attachments():
     return out
 
 
-def save_attachment(record):
-    """Insert or replace one attachment of this host by ``id`` (atomic, private file)."""
+def save_attachment(record, *, renew_route=False):
+    """Atomically save, optionally renewing the identity owning this authorized route."""
     record = dict(record)
 
     def change(rows):
+        if renew_route:
+            matches = [a for a in rows if isinstance(a, dict) and
+                       record['url'] in [a.get('url'), *(a.get('candidates') or [])]]
+            if len(matches) > 1:
+                raise ValueError('Pairing route belongs to multiple saved attachments')
+            if matches:
+                previous = matches[0]
+                record['id'] = previous['id']
+                routes = [previous['url'], *(previous.get('candidates') or []),
+                          *(record.get('candidates') or [])]
+                record['candidates'] = list(dict.fromkeys(
+                    route for route in routes if route != record['url']))
         rows[:] = [a for a in rows if isinstance(a, dict) and a.get('id') != record['id']]
         rows.append(record)
         return True
@@ -201,13 +213,19 @@ def save_attachment(record):
     return record
 
 
-def update_attachment(attachment_id, **fields):
-    """Change fields of one attachment; returns it, or None when absent."""
+def update_attachment(attachment_id, *, expected_secret=None, **fields):
+    """Atomically change one attachment, optionally only for its current credential."""
     found = {}
 
     def change(rows):
         for row in rows:
             if isinstance(row, dict) and row.get('id') == attachment_id:
+                if expected_secret is not None and row.get('secret') != expected_secret:
+                    return False
+                if 'url' in fields and fields['url'] != row.get('url'):
+                    routes = [row['url'], *(row.get('candidates') or [])]
+                    row['candidates'] = list(dict.fromkeys(
+                        route for route in routes if route != fields['url']))
                 row.update(fields)
                 found['row'] = dict(row)
                 return True

@@ -20,7 +20,7 @@
    * and label size (the base 54px min from --paper-switch-h stays). */
   .paper-mobile-switch-btn{font-size:var(--font-size-lg)}
 
-  /* Reader tabs (Q&A / Report / Babel) — restore roomy, tappable pills instead
+  /* Reader tabs (Q&A / Report / Review / Full-text) — restore roomy, tappable pills instead
    * of the phone's cramped 10px/6px. */
   .paper-tab-btn{padding:var(--space-3) var(--space-4);font-size:var(--font-size-md);gap:6px}
   .paper-tab-btn svg{width:15px;height:15px}
@@ -793,8 +793,6 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .paper-qa-send-btn:activ
   color:#F0E9D4;font-size:var(--font-size-xs)
 }
 [data-theme="tofu"] .paper-sel-btn:hover{background:#BB9572}
-
-/* ── Babel PDF — lantern-style lang pills ── */
 
 /* Tofu — warm kinako scrollbar tint */
 [data-theme="tofu"] .paper-qa-messages::-webkit-scrollbar-thumb,

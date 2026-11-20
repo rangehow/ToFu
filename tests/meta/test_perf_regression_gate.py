@@ -72,37 +72,3 @@ def test_committed_baseline_covers_the_real_benchmark_surface():
     for workload in workloads:
         for field in ("median_ms", "p90_ms", "peak_kib"):
             assert workload[field] > 0, (workload["name"], field)
-
-
-def test_a_uniformly_slower_host_is_not_a_regression():
-    """GitHub runners differ ~1.5x by region on identical code (eastus vs
-    westus2, 2026-11-17); the reference work scales the time gates."""
-    baseline = {**_report({"w": _BASE_WORKLOAD}), "reference_ms": 40.0}
-    current = {**_report({"w": {"median_ms": 165.0, "p90_ms": 198.0,
-                                "peak_kib": 400.0}}), "reference_ms": 66.0}
-    assert gate.compare(current, baseline) == []
-
-
-def test_a_regression_on_a_slower_host_still_fails():
-    baseline = {**_report({"w": _BASE_WORKLOAD}), "reference_ms": 40.0}
-    current = {**_report({"w": {"median_ms": 330.0, "p90_ms": 198.0,
-                                "peak_kib": 400.0}}), "reference_ms": 66.0}
-    problems = gate.compare(current, baseline)
-    assert len(problems) == 1 and "median_ms regressed" in problems[0]
-    assert "host speed 1.65x" in problems[0]
-
-
-def test_memory_peaks_are_not_scaled_by_host_speed():
-    baseline = {**_report({"w": _BASE_WORKLOAD}), "reference_ms": 40.0}
-    current = {**_report({"w": {"median_ms": 100.0, "p90_ms": 120.0,
-                                "peak_kib": 600.0}}), "reference_ms": 80.0}
-    problems = gate.compare(current, baseline)
-    assert len(problems) == 1 and "peak_kib regressed" in problems[0]
-
-
-def test_the_benchmark_and_baseline_carry_the_interpreter_reference():
-    path = os.path.join(ROOT, "benchmarks", "perf_baseline.json")
-    with open(path, encoding="utf-8") as f:
-        assert json.load(f)["reference_ms"] > 0
-    from benchmarks import task_replay_bench
-    assert task_replay_bench.run_benchmarks(scale=0.01, iterations=1)["reference_ms"] > 0

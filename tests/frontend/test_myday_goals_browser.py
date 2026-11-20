@@ -12,6 +12,7 @@ import datetime as dt
 import os
 from pathlib import Path
 import re
+from types import SimpleNamespace
 
 import pytest
 from playwright.sync_api import expect
@@ -45,6 +46,89 @@ def _open(page, size=(1280, 900)):
 
 def _row(page, text):
     return page.locator('.myday-goal .myday-goal-item', has_text=text)
+
+
+def test_today_token_costs_reprice_in_place_on_desktop_and_phone(page, monkeypatch, assert_no_js_errors):
+    from lib.conversations.repository import ConversationTurnUsage
+    from lib.daily_report import cost
+    from lib.ttl_cache import TTLCache
+
+    monkeypatch.setattr(cost, '_live_day_cache', TTLCache(ttl=0))
+
+    today = dt.date.today()
+    stamp = int(dt.datetime.now().timestamp() * 1000)
+    projection = ConversationTurnUsage(
+        metadata={'id': 'myday-pricing-fixture', 'created_at': stamp, 'updated_at': stamp},
+        message_count=1, title_fallback='', turns=[{
+            'index': 0, 'timestamp': stamp, 'model': 'qwen3.5-plus', 'usage': {
+                'input_tokens': 150_000, 'output_tokens': 32_000,
+                'cache_read_input_tokens': 70_000, 'cache_creation_input_tokens': 24_000,
+            },
+        }],
+    )
+
+    monkeypatch.setattr('lib.conversations.usage_snapshot.reconcile_day_usage', lambda **kwargs:
+                        SimpleNamespace(candidate_count=1, projections=(projection,)))
+    _open(page)
+    card = page.locator('#mydayTokenCosts details')
+    expect(card.locator('.myday-token-total')).to_contain_text('¥')
+    expect(card.locator('select')).to_have_count(0)
+    _shot(page, 'token-costs-collapsed')
+    card.locator('summary').focus()
+    card.locator('summary').press('Enter')
+    table = card.get_by_role('table', name='今日 Token 费用')
+    for label, count in [('未缓存输入', '150,000'), ('输出', '32,000'),
+                         ('缓存输入（读取）', '70,000'), ('缓存写入（输入）', '24,000')]:
+        row = table.get_by_role('row').filter(has=page.get_by_role('rowheader', name=label, exact=True))
+        expect(row).to_contain_text(count)
+    expect(card.get_by_text('缓存输出 · 未上报')).to_be_visible()
+    select = card.get_by_role('combobox', name='如果今天只用一个模型？')
+    select.select_option('qwen3.5-plus')
+    result = card.locator('output')
+    expect(result).to_contain_text('按 API 价格约')
+    original = result.inner_text()
+    select.select_option('qwen3.5-flash')
+    expect(result).not_to_have_text(original)
+    expect(select).to_have_value('qwen3.5-flash')
+    _shot(page, 'token-costs-desktop')
+
+    page.set_viewport_size({'width': 375, 'height': 812})
+    select.scroll_into_view_if_needed()
+    assert page.locator('#mydayTasksScroll').evaluate('(el) => el.scrollWidth <= el.clientWidth')
+    _shot(page, 'token-costs-mobile')
+    page.set_viewport_size({'width': 320, 'height': 740})
+    expect(select).to_have_value('qwen3.5-flash')
+    assert page.locator('#mydayTasksScroll').evaluate('(el) => el.scrollWidth <= el.clientWidth')
+
+    # Reopen with a blocked network after a true reload: owner-scoped IDB
+    # still paints the estimate, and a failure can't turn it into a zero.
+    amount = card.locator('.myday-token-total').inner_text()
+    page.wait_for_function('''() => new Promise(resolve => {
+      const request = indexedDB.open('tofu_myday_cache');
+      request.onerror = () => resolve(false);
+      request.onsuccess = () => {
+        const db = request.result;
+        const read = db.transaction('months').objectStore('months').getAll();
+        read.onsuccess = () => { resolve(read.result.some(row => row.value.today_token_costs)); db.close(); };
+        read.onerror = () => { db.close(); resolve(false); };
+      };
+    })''')
+    requests = []
+    page.route('**/api/v4/daily-report/calendar/**', lambda route: requests.append(route))
+    _open(page, size=(375, 812))
+    expect(card.locator('.myday-token-total')).to_have_text(amount)
+    expect(card.locator('summary')).to_contain_text('正在加载')
+    assert len(requests) == 1
+    requests[0].fulfill(status=200, json={'ok': True, 'data': {'conv_days': {}, 'cost_days': {}}})
+    expect(card.locator('summary')).to_contain_text('暂时无法获取')
+    expect(card.locator('.myday-token-total')).to_have_text(amount)
+    page.unroute('**/api/v4/daily-report/calendar/**')
+
+    yesterday = today - dt.timedelta(days=1)
+    if yesterday.month != today.month:
+        page.locator('#mydayCalHeader .mcal-nav').first.click()
+    page.locator(f'#mydayCalGrid .mcal-d[data-tofu-action="_mydaySelectDay({yesterday.day})"]').click()
+    expect(card).to_have_count(0)
 
 
 def test_goal_journey_survives_reload_restart_and_the_next_day(page, browser, live_server, monkeypatch,

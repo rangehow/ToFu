@@ -281,7 +281,6 @@ pub const INTEGRATION_WORKSPACE_COUNT_NAMESPACE: &str = "integration_workspace_c
 pub const INTEGRATION_EVENT_NAMESPACE: &str = "integration_event_documents";
 pub const INTEGRATION_EVENT_SEQUENCE_NAMESPACE: &str = "integration_event_sequence";
 pub const INTEGRATION_EVENT_COUNT_NAMESPACE: &str = "integration_event_counts";
-pub const MAX_INTEGRATION_STATUS_ROWS: usize = 1000;
 pub const MAX_INTEGRATION_EVENTS_PER_PROJECT: usize = 300;
 pub const MAX_INTEGRATION_STATUS_EVENTS: usize = 30;
 pub const MAX_INTEGRATION_PROJECT_ROOT_CHARACTERS: usize = 4096;
@@ -783,6 +782,7 @@ pub static EXECUTABLE_STORAGE_OPERATIONS: &[&str] = &[
     "conversation.get",
     "conversation.list",
     "conversation.metadata.update",
+    "conversation.portable_import",
     "conversation.purge",
     "conversation.restore",
     "conversation.search",
@@ -1001,6 +1001,7 @@ pub static EXECUTABLE_STORAGE_OPERATIONS: &[&str] = &[
     "raw_archive.put",
     "raw_archive.read",
     "record.delete",
+    "record.device_policy_commit",
     "record.get",
     "record.list",
     "record.put",
@@ -1100,6 +1101,7 @@ pub static EXECUTABLE_STORAGE_OPERATIONS: &[&str] = &[
     "turn.queue.cancel",
     "turn.recover",
     "turn.related.announce",
+    "turn.resume.plan.read",
     "turn.revision",
     "turn.search.backfill",
     "turn.steer.commit",

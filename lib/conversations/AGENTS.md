@@ -79,6 +79,12 @@ coordination HTTP journey and the real Coordinator browser journey.
 
 `coordinator_workers.py` adapts current-request delegation, result waiting and
 review, cancellation and paged status to ProjectDispatchService. No private executor or synthetic human input.
+`review_loops.py` owns the optional `review` of a delegation: independent
+reviewer Workers per role per round, findings back to the author through the
+ordinary follow_up owner, until every reviewer passes or an impasse is reported.
+Its record (`project.review_loop.v1`) keeps only the spec and started Workers;
+the lead's `poll` of the returned review_loop_id advances it. Verify
+`tests/project_mod/test_review_loops.py`.
 A Coordinator waits with `poll` (`poll_workers`); its wait ends by the rule every
 `poll` shares (`lib/tasks_pkg/wait_interruption.py`), and `await_workers` is the
 retired `await_project_workers` entry over the same wait.
@@ -121,7 +127,11 @@ time from their owners (report Turns with the files and board task their call's
 receipt names, report links, relayed report notices, artifact rows, and each
 completed task's automatic work report from task history), filtered and
 summarised per board task for the task board; it stores nothing, never add a
-deliverables store. `coordinator_report_links.py` keeps only links of earlier
+deliverables store. `lead_turn_facts.py` keeps each Turn's derived facts in
+process memory, kept exact by `turn.list_delta` (projection revisions,
+tombstones): a reconstructible memo, not a store ("Cost" under "Lead
+deliverables"); verify `tests/project_mod/test_lead_turn_facts.py`.
+`coordinator_report_links.py` keeps only links of earlier
 reports to tasks, never report content ("Lead deliverables" in `docs/PROJECT_COORDINATION.md`). Verify `tests/project_mod/test_lead_deliverables.py`
 and `tests/storage/test_lead_deliverables_authority.py`.
 

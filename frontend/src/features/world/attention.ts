@@ -39,7 +39,8 @@ export interface QuestionTurn {
 }
 
 /** ask_human questions in a lead's newest Turns that are still open. A blocking question is open while
- * its round awaits a human; a non-blocking one until a human Turn follows it in the same conversation. */
+ * its round awaits a human; a non-blocking one until a human Turn follows it in the same conversation.
+ * A response or supersession on the card settles either kind without needing that later Turn. */
 export function openQuestions(conversationId: string, turns: ReadonlyArray<QuestionTurn>): OpenQuestion[] {
   const open: OpenQuestion[] = [];
   for (const turn of turns) {
@@ -53,8 +54,10 @@ export function openQuestions(conversationId: string, turns: ReadonlyArray<Quest
       const answered = blocking
         ? round.status !== 'awaiting_human'
         : turns.some(later => later.actor === 'human' && later.ordinal > turn.ordinal);
-      // A lead withdrew it once the conversation settled it (the owner-question index omits it too).
-      if (answered || round.guidanceWithdrawn) continue;
+      // A lead withdrew it once the conversation settled it, or the owner confirmed its default (the
+      // owner-question index omits both too).
+      if (answered || round.guidanceResponse || round.guidanceSuperseded
+        || round.guidanceWithdrawn || round.guidanceDefaultAccepted) continue;
       open.push({
         conversationId, turnId: turn.turnId, ordinal: turn.ordinal, blocking, question, createdAt: turn.createdAt,
         guidanceId: typeof round.guidanceId === 'string' ? round.guidanceId : `${turn.turnId}:${open.length}`,

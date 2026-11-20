@@ -29,8 +29,8 @@ from typing import Any
 
 from lib.channels.bots.http import is_timeout, request_json
 from lib.channels.bots.platform import Inbound, SessionEnded, failure
-from lib.channels.model import WECHAT, QuotedMessage
-from lib.channels.wechat import protocol
+from lib.channels.model import WECHAT, QuotedAttachment, QuotedMessage
+from lib.channels.wechat import admission, files, protocol
 from lib.http_transport.interruption import RequestInterruption
 from lib.log import get_logger
 
@@ -57,9 +57,11 @@ def _quote(items: Any) -> tuple[str, QuotedMessage | None]:
         text = protocol.message_text([quoted]) if quoted else ''
         text = text or str(reference.get('title') or '').strip()
         created = (quoted or {}).get('create_time_ms')
-        copy = QuotedMessage(text=text, sent_at_ms=created if isinstance(created, int) else None) if (
-            text or quoted) else None
-        return str(reference.get('svr_id') or ''), copy
+        media = files.normalize_file(quoted)
+        attachments = (QuotedAttachment('file', media.name, media.mime_type, media.size_bytes),) if media else ()
+        copy = QuotedMessage(text=text if not media else '', attachments=attachments,
+                             sent_at_ms=created if isinstance(created, int) else None) if (text or attachments) else None
+        return str(reference.get('svr_id') or (quoted or {}).get('msg_id') or ''), copy
     return '', None
 
 
@@ -73,20 +75,25 @@ def normalize(message: Mapping[str, Any]) -> Inbound | None:
     group = str(message.get('group_id') or '')
     created = message.get('create_time_ms')
     context = str(message.get('context_token') or '')
-    reference, quoted = _quote(message.get('item_list'))
+    items = message.get('item_list') or []
+    reference, quoted = _quote(items)
+    media = tuple(file for item in items if (file := files.normalize_file(item)) is not None)
     return Inbound(kind='gid' if group else 'uid', peer=group or sender, sender=sender, sender_name=sender,
-                   message_id=str(message_id), text=protocol.message_text(message.get('item_list')),
+                   message_id=str(message_id), text=protocol.message_text([item for item in items
+                                               if not isinstance(item, Mapping) or item.get('type') != 4]),
+                   media=media,
                    sent_at_s=int(created) // 1000 if isinstance(created, int) else None,
                    reply={'contextToken': context} if context else {},
                    quote_message_id=reference, quoted=quoted)
 
 
 class WeChatTransport:
-    def __init__(self, token_source, *, api_base: str = WECHAT['apiBase'], cursor: str = '', http=request_json):
+    def __init__(self, token_source, *, api_base: str = WECHAT['apiBase'], cursor: str = '', http=request_json, cdn=files.http_request):
         self._token = token_source
         self._api = api_base.rstrip('/')
         self._cursor = cursor
         self._http = http
+        self._cdn = cdn
         self._closing = False
         self._interruption = RequestInterruption()
 
@@ -134,16 +141,46 @@ class WeChatTransport:
                 self._cursor = cursor
 
     def send(self, kind: str, peer: str, text: str, *, item_id: str,
-             reply: Mapping[str, Any]) -> dict[str, Any]:
+             reply: Mapping[str, Any], before_submit=None) -> dict[str, Any]:
         context = str(reply.get('contextToken') or '')
         if kind != 'uid' or not context:
             return failure('unsupported_target', '微信 replies only to a chat that wrote to the bot')
-        status, answer = self._http('POST', self._api + '/ilink/bot/sendmessage',
-                                    headers=protocol.bot_headers(self._token()),
+        try:
+            token = self._token()
+        except SessionEnded:
+            return failure('auth_failed', '微信 bot token unavailable')
+        return self._send_item(peer, context, item_id, {'type': 1, 'text_item': {'text': text}}, token, before_submit)
+
+    def send_attachment(self, kind: str, peer: str, path: str, *, item_id: str, reply: Mapping[str, Any], before_submit=None, before_transfer=None) -> dict:
+        context = str(reply.get('contextToken') or '')
+        if kind != 'uid' or not context:
+            return failure('unsupported_target', '微信 files require a private chat with an inbound context')
+        try:
+            token = self._token()
+        except SessionEnded:
+            return failure('auth_failed', '微信 bot token unavailable')
+        if not token:
+            return failure('auth_failed', '微信 bot token unavailable')
+        item = files.upload(self._http, self._api, token, peer, path, cdn=self._cdn, authorize=before_transfer)
+        if item.get('ok') is False:
+            return item
+        return self._send_item(peer, context, item_id, item, token, before_submit)
+
+    def download_media(self, item, path: str) -> dict:
+        return files.download(item, path, cdn=self._cdn)
+
+    def _send_item(self, peer: str, context: str, item_id: str, item: dict, token: str, before_submit=None) -> dict:
+        if not token:
+            return failure('auth_failed', '微信 bot token unavailable')
+        try:
+            status, answer = admission.request(self._http, 'POST', self._api + '/ilink/bot/sendmessage',
+                                    headers=protocol.bot_headers(token), require_object=True, authorize=before_submit,
                                     body={'msg': {'from_user_id': '', 'to_user_id': peer, 'client_id': item_id,
                                                   'message_type': 2, 'message_state': 2, 'context_token': context,
-                                                  'item_list': [{'type': 1, 'text_item': {'text': text}}]},
+                                                  'item_list': [item]},
                                           'base_info': protocol.base_info()})
+        except admission.RefusedBeforeWire as error:
+            return error.receipt
         if status in (401, 403):
             return failure('auth_failed', '微信 refused the bot token')
         if status != 200:
@@ -153,6 +190,8 @@ class WeChatTransport:
             return failure('auth_failed', '微信 ended the bot session')
         if code:
             return failure('invalid_input', f'iLink sendmessage returned {code}')
+        if item['type'] == 4 and answer.get('ret') != 0 and not answer.get('message_id'):
+            return failure('unknown', '微信 did not explicitly acknowledge the file message')
         # SendMessageResp.message_id: the server ID a quote of this message names (ref_msg.svr_id).
         return {'ok': True, 'externalId': str(answer.get('message_id') or '')}
 
@@ -192,10 +231,21 @@ class LoginTransport:
         self._inner = _polling(account)
         self._inner.run(sink)
 
-    def send(self, kind: str, peer: str, text: str, *, item_id: str, reply: Mapping[str, Any]) -> dict[str, Any]:
+    def send(self, kind: str, peer: str, text: str, *, item_id: str, reply: Mapping[str, Any], before_submit=None) -> dict[str, Any]:
         if self._inner is None:
             return failure('not_connected', 'The 微信 login is not complete')
-        return self._inner.send(kind, peer, text, item_id=item_id, reply=reply)
+        return self._inner.send(kind, peer, text, item_id=item_id, reply=reply, before_submit=before_submit)
+
+    def send_attachment(self, kind: str, peer: str, path: str, *, item_id: str, reply: Mapping[str, Any], before_submit=None, before_transfer=None) -> dict:
+        if self._inner is None:
+            return failure('not_connected', 'The 微信 login is not complete')
+        return self._inner.send_attachment(kind, peer, path, item_id=item_id, reply=reply,
+                                           before_submit=before_submit, before_transfer=before_transfer)
+
+    def download_media(self, item, path: str) -> dict:
+        if self._inner is None:
+            return {'ok': False, 'detail': '微信 login is not complete'}
+        return self._inner.download_media(item, path)
 
     def close(self) -> None:
         self._closing = True

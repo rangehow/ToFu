@@ -72,6 +72,14 @@ verification.
   removed when its assignment is delivered or discarded. Under
   heavy host load, fixed test deadlines (test bundling, bundle canary) can
   expire: rerun those failures serially before attributing them to a change.
+- Run every Rust `cargo build`/`test`/`check`/`clippy` off the production pod:
+  `python3 scripts/remote_cargo.py -C <crate dir> <cargo arguments>` (for
+  example `-C packages/tofu-db test --offline --lib turn::`) runs it as a Hope
+  CPU job on a snapshot of your checkout, uncommitted edits included, streams
+  the output and exits with cargo's status. Do not run cargo locally or choose
+  a `CARGO_TARGET_DIR`. Only `cargo fmt` and builds whose artifact the pod
+  itself executes (`serverctl_pkg.native_engine` engine preparation) stay
+  local. `docs/RUST_BUILDS.md` holds the contract and limits.
 - Use `docs/README.md` as the first-hop map to the owning module and contract;
   `docs/catalog.json` is the machine-readable documentation inventory. Change
   the authority first, then derive generated clients and bundles. Edit
@@ -188,6 +196,16 @@ Runtime facts that shortcut diagnosis:
   needs a matching engine build (`serverctl_pkg.native_engine.source_fingerprint`).
   Compare the running build with the merged source before concluding a fix
   failed.
+
+- A project's persistent toolchains (TeX Live, a Python/conda env, a CLI) live in
+  its root `tofu.toolchains.json`: location on persistent storage (never `/tmp`),
+  PATH entries, variables and the install recipe. Every `run_command` of that
+  project and every Worker gets them automatically; never source an `env.sh` or
+  install tools per task. See `docs/PROJECT_TOOLCHAINS.md`. A lead delegates work
+  whose defects a self-check misses (papers, data, claims, references) with
+  `delegate_project_work`'s `review`: independent reviewer Workers re-audit until
+  every role passes or reports an impasse, and the lead only polls the returned
+  review_loop_id. See `docs/PROJECT_COORDINATION.md`, "Review loops".
 
 # Tool and harness quality
 

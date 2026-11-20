@@ -5,6 +5,8 @@ from __future__ import annotations
 import gc
 import re
 import sqlite3
+import subprocess
+import sys
 import threading
 import time
 import weakref
@@ -132,6 +134,175 @@ def test_commit_stall_is_phase_labeled_and_triggers_bounded_restart():
         assert writer.metrics['stall_interrupts'] == 1
     finally:
         connection.release_commit.set()
+        writer.close()
+
+
+def test_writer_side_checkpoint_has_its_own_watchdog_boundary():
+    connection = _CommitStallConnection()
+    checkpoint_entered = threading.Event()
+    release_checkpoint = threading.Event()
+    connection.release_commit.set()
+    writer = _FairWriter(connection, transaction_timeout_s=0.05,
+                         stall_grace_s=0.05, hard_kill_s=0.15,
+                         watchdog_interval_s=0.05)
+    hard_exit = threading.Event()
+    writer._hard_exit = lambda _reason: hard_exit.set()
+
+    def checkpoint(_connection):
+        checkpoint_entered.set()
+        assert release_checkpoint.wait(5)
+
+    def first(_session):
+        writer._between_batches = checkpoint
+        return 'ack'
+
+    try:
+        assert writer.submit(first, 'user', time.monotonic() + 5) == 'ack'
+        assert checkpoint_entered.wait(2)
+        assert hard_exit.wait(2), 'writer-side checkpoint bypassed the watchdog'
+        assert connection.interrupts == 1
+        stall = writer.last_stall()
+        assert stall['phase'] == 'checkpoint'
+        assert stall['priority'] == 'maintenance'
+    finally:
+        release_checkpoint.set()
+        writer.close()
+
+
+_BLOCKED_WATCHDOG_DIAGNOSTIC_CHILD = '''
+import faulthandler
+import sqlite3
+import sys
+import threading
+import time
+
+from lib.storage_authority_sql.adapters import sqlite as adapter
+
+never_release = threading.Event()
+
+def blocked(*args, **kwargs):
+    print('diagnostic blocked', flush=True)
+    never_release.wait()
+
+if sys.argv[1] == 'traceback':
+    faulthandler.dump_traceback = blocked
+else:
+    adapter.logger.error = blocked
+    adapter.logger.critical = blocked
+    adapter.logger.debug = blocked
+
+connection = sqlite3.connect(':memory:', isolation_level=None, check_same_thread=False)
+writer = adapter._FairWriter(connection, transaction_timeout_s=0.1, stall_grace_s=0.05,
+                            hard_kill_s=0.2, watchdog_interval_s=0.05)
+acknowledged = threading.Event()
+
+def checkpoint(_connection):
+    acknowledged.wait()
+    print('checkpoint entered', flush=True)
+    never_release.wait()
+
+def first(_session):
+    writer._between_batches = checkpoint
+    return 'ack'
+
+assert writer.submit(first, 'user', time.monotonic() + 5) == 'ack'
+print('write acknowledged', flush=True)
+acknowledged.set()
+never_release.wait()
+'''
+
+
+@pytest.mark.parametrize('diagnostic', ['logging', 'traceback'])
+def test_stalled_checkpoint_exits_75_even_if_diagnostics_would_block(diagnostic):
+    completed = subprocess.run(
+        [sys.executable, '-c', _BLOCKED_WATCHDOG_DIAGNOSTIC_CHILD, diagnostic],
+        capture_output=True, text=True, timeout=8,
+    )
+    assert completed.stdout.splitlines() == ['write acknowledged', 'checkpoint entered']
+    assert completed.returncode == 75, completed.stderr
+
+
+@pytest.mark.parametrize('action', ['interrupt', 'hard_exit'])
+def test_checkpoint_watchdog_action_cannot_cross_into_next_write(monkeypatch, action):
+    connection = sqlite3.connect(':memory:', isolation_level=None, check_same_thread=False)
+    connection.execute('CREATE TABLE writes(value INTEGER)')
+    watchdog_sampled = threading.Event()
+    release_sample = threading.Event()
+    watchdog_finished = threading.Event()
+    release_checkpoint = threading.Event()
+    write_entered = threading.Event()
+    release_write = threading.Event()
+    hard_exits = []
+    errors = []
+    writer = _FairWriter(connection, transaction_timeout_s=0.1, stall_grace_s=0.05,
+                         hard_kill_s=0.2, watchdog_interval_s=0.05)
+
+    apply_sample = writer._apply_watchdog_sample
+
+    def pause_before_action(token, now, overrun):
+        if action == 'interrupt' or overrun > writer.watchdog_policy()['hard_kill_s']:
+            watchdog_sampled.set()
+            assert release_sample.wait(5)
+        return apply_sample(token, now, overrun)
+
+    def wait_for_next_tick(delay):
+        if watchdog_sampled.is_set():
+            watchdog_finished.set()
+        return wait(delay)
+
+    def hard_exit(reason):
+        hard_exits.append(reason)
+        watchdog_finished.set()
+
+    def next_value():
+        write_entered.set()
+        assert release_write.wait(5)
+        return 7
+
+    def checkpoint(_connection):
+        writer._between_batches = None
+        assert release_checkpoint.wait(5)
+
+    def first(_session):
+        writer._between_batches = checkpoint
+        return 'ack'
+
+    connection.create_function('next_value', 0, next_value)
+    writer._hard_exit = hard_exit
+    wait = writer._watchdog_stop.wait
+    monkeypatch.setattr(writer._watchdog_stop, 'wait', wait_for_next_tick)
+    monkeypatch.setattr(writer, '_apply_watchdog_sample', pause_before_action)
+    def next_write(session):
+        # Keep executing VM steps after the barrier; a single-row INSERT can
+        # finish without checking the interrupt flag again after the UDF.
+        session.execute('''
+            WITH RECURSIVE rows(i) AS (
+                SELECT 0 UNION ALL SELECT i + 1 FROM rows WHERE i < 1000
+            ) INSERT INTO writes SELECT CASE i WHEN 0 THEN next_value() ELSE i END FROM rows
+        ''')
+
+    follower = threading.Thread(target=_submit_in_thread, args=(writer, next_write, errors))
+    try:
+        assert writer.submit(first, 'user', time.monotonic() + 5) == 'ack'
+        assert watchdog_sampled.wait(2)
+        release_checkpoint.set()
+        follower.start()
+        assert write_entered.wait(2)
+        release_sample.set()
+        assert watchdog_finished.wait(2)
+        release_write.set()
+        follower.join(2)
+        assert not follower.is_alive()
+        assert not errors
+        assert not hard_exits
+        assert connection.execute('SELECT count(*), sum(value) FROM writes').fetchone() == (
+            1001, 500507)
+    finally:
+        release_checkpoint.set()
+        release_sample.set()
+        release_write.set()
+        if follower.ident is not None:
+            follower.join(5)
         writer.close()
 
 

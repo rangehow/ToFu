@@ -43,10 +43,13 @@ pub(crate) fn usage_row(
 ) -> Option<Value> {
     let usage = message
         .get("usage")
-        .filter(|usage| usage.as_object().is_some_and(|usage| !usage.is_empty()))?;
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let has_usage = !usage.is_empty();
     let mut row = Map::new();
     row.insert("index".to_owned(), Value::from(index));
-    row.insert("usage".to_owned(), usage.clone());
+    row.insert("usage".to_owned(), Value::Object(usage));
     if let Some(timestamp) = timestamp {
         row.insert("timestamp".to_owned(), timestamp);
     }
@@ -55,7 +58,67 @@ pub(crate) fn usage_row(
             row.insert(field.to_owned(), value.clone());
         }
     }
-    Some(Value::Object(row))
+    if let Some(rounds) = message.get("apiRounds").and_then(Value::as_array) {
+        if rounds.iter().any(|item| {
+            item.get("usage").is_some_and(Value::is_object)
+                || item.get("cost").is_some_and(Value::is_object)
+                || item
+                    .get("usageReceiptId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|s| !s.is_empty())
+                || (item
+                    .get("taskId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|s| !s.is_empty())
+                    && item
+                        .get("sourceRound")
+                        .or_else(|| item.get("round"))
+                        .and_then(Value::as_u64)
+                        .is_some_and(|n| n > 0))
+        }) {
+            let fields = [
+                "usageReceiptId",
+                "taskId",
+                "sourceRound",
+                "round",
+                "model",
+                "provider_id",
+                "providerId",
+                "accountId",
+                "subscriptionProvider",
+                "requestTimestampMs",
+                "pricingEvidence",
+                "usage",
+                "cost",
+            ];
+            let receipt_rows = rounds
+                .iter()
+                .map(|item| {
+                    Value::Object(
+                        fields
+                            .iter()
+                            .filter_map(|&field| {
+                                item.get(field)
+                                    .map(|value| (field.to_owned(), value.clone()))
+                            })
+                            .collect(),
+                    )
+                })
+                .collect();
+            let receipt_rows: Vec<Value> = receipt_rows;
+            let receipt_rows = receipt_rows
+                .into_iter()
+                .map(|mut row| {
+                    if let Some(usage) = row.get_mut("usage").and_then(Value::as_object_mut) {
+                        usage.retain(|key, _| !key.starts_with('_'));
+                    }
+                    row
+                })
+                .collect();
+            row.insert("apiRounds".to_owned(), Value::Array(receipt_rows));
+        }
+    }
+    (has_usage || row.contains_key("apiRounds")).then_some(Value::Object(row))
 }
 
 fn timed_out() -> io::Error {
@@ -389,7 +452,9 @@ mod tests {
             "assistant",
             json!({
                 "content": "x".repeat(20_000), "timestamp": 200,
-                "usage": {"prompt_tokens": 7}, "apiRounds": [{"round": 1}],
+                "usage": {"prompt_tokens": 7}, "apiRounds": [{"round": 1,
+                    "usageReceiptId": "fixture-paid-call", "cost": {"costCny": 0.02},
+                    "content": "do not project this"}],
                 "model": "model-x", "providerId": "provider-y",
             }),
             200,
@@ -414,6 +479,8 @@ mod tests {
         database.commit(write).unwrap();
         let expected = json!([
             {"index": 1, "timestamp": 200, "usage": {"prompt_tokens": 7},
+             "apiRounds": [{"round": 1, "usageReceiptId": "fixture-paid-call",
+                            "cost": {"costCny": 0.02}}],
              "model": "model-x", "providerId": "provider-y"},
             {"index": 3, "timestamp": 260, "usage": {"prompt_tokens": 11}},
         ]);

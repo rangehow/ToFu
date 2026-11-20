@@ -2,7 +2,6 @@
 from copy import deepcopy
 import json
 import re
-import uuid
 from urllib.parse import urlparse
 
 import pytest
@@ -83,17 +82,6 @@ def test_model_reasoning_edit_save_and_provider_inheritance(browser, live_server
     config = {'model': 'alpha', 'modelRef': {'creator_id': 'creator', 'model_id': 'alpha'},
               'preferredProviderId': '', 'thinkingDepth': 'max'}
     context.add_init_script('localStorage.setItem("claude_client_config", '+json.dumps(json.dumps(config))+');')
-    # Boot opens the last-active conversation, else the session server's newest
-    # one (main.js _bootRestoreActiveConv), which an earlier spec may have left.
-    # Pin boot to this spec's own conversation; the spec then starts a new one.
-    boot_cid = 'reasoning-boot-' + uuid.uuid4().hex[:10]
-    created = context.request.post(f'{live_server}/api/v4/conversations/{boot_cid}/turns/settled', data={
-        'commandId': boot_cid + '-reply', 'actor': 'assistant', 'kind': 'text',
-        'projection': {'content': 'Boot anchor', 'segments': [{'type': 'text', 'blockId': 'answer',
-                       'text': 'Boot anchor', 'terminal': True, 'deliverable': True}]},
-        'conversation': {'allowCreate': True, 'title': boot_cid, 'createdAt': 100, 'settings': {}}})
-    assert created.status == 200, created.text()
-    context.add_init_script(f"sessionStorage.setItem('tofu_activeConvId', {json.dumps(boot_cid)});")
 
     def route_request(route):
         url = urlparse(route.request.url)
@@ -130,9 +118,6 @@ def test_model_reasoning_edit_save_and_provider_inheritance(browser, live_server
     try:
         page.goto(live_server, wait_until='domcontentloaded')
         page.wait_for_function('window.TofuModules && window.TofuModules.version === 3')
-        expect(page.locator(f'#chatInner .conversation-surface[data-conversation-id="{boot_cid}"]'
-                            ' [data-turn-id]')).to_be_visible(timeout=20000)
-        page.evaluate("window.TofuModules.resolveAction('newChat')()")
         page.wait_for_selector('#presetDropdownList [data-value="alpha"]', state='attached')
         # A new conversation starts from the server default. Select the
         # synthetic model through the composer before editing its controls.
@@ -223,5 +208,4 @@ def test_model_reasoning_edit_save_and_provider_inheritance(browser, live_server
         page.screenshot(path=str(tmp_path/'reasoning-settings-failure.png'))
         raise
     finally:
-        context.request.delete(f'{live_server}/api/v4/conversations/{boot_cid}')
         context.close()

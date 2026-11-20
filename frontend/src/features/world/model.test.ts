@@ -48,13 +48,18 @@ describe('office projection on recorded live shapes', () => {
     expect(office.teams[0].workers.map(worker => [worker.id, worker.state])).toEqual([[RUNNER, 'working']]);
   });
 
-  it('marks the Watchdog with an exception only while an incident is open', () => {
-    const watchdog = (alarms: number) => tofu({
+  it('flags the Watchdog only for an owner item: its open signals are its own queue', () => {
+    // 2026-11-18: 15 open quota signals kept the Watchdog at "needs attention" while its brief listed nothing.
+    const watchdog = (questions: ReturnType<typeof openQuestions>) => tofu({
       kind: 'watchdog', key: '/watchdog', leadId: 'watchdog-conversation', name: '', team: teamPage(),
-      assignments: null, progress: null, reports: null, questions: [], alarms,
+      assignments: null, progress: null, reports: null, questions,
     });
-    expect(projectOffice(NOW, [watchdog(1)], labels).people.get('watchdog-conversation')?.emphasis).toBe('exception');
-    expect(projectOffice(NOW, [watchdog(0)], labels).people.get('watchdog-conversation')?.emphasis).toBeNull();
+    const quiet = projectOffice(NOW, [watchdog([])], labels);
+    expect(quiet.people.get('watchdog-conversation')?.emphasis).toBeNull();
+    expect(quiet.attention.counts).toMatchObject({ decisions: 0, exceptions: 0 });
+    const asking = projectOffice(NOW, [watchdog([{ conversationId: 'watchdog-conversation', turnId: 't', ordinal: 1,
+      guidanceId: 'hg_fault', blocking: true, question: 'Restart the server?', defaultText: '', createdAt: 1 }])], labels);
+    expect(asking.people.get('watchdog-conversation')?.emphasis).toBe('decision');
   });
 
   it('is busy exactly when the team row says an attempt runs, waiting when assigned but not running', () => {
@@ -83,6 +88,20 @@ describe('office projection on recorded live shapes', () => {
     const asking = projectOffice(NOW, [tofu({ questions: openQuestions(LEAD, [askTurn, toolChurnTurn]) })], labels);
     expect(asking.people.get(LEAD)?.emphasis).toBe('decision');
     expect(asking.attention.decisions.map(item => item.source.guidanceId)).toEqual(['hg_069759980950']);
+  });
+
+  it('does not flag settled cards or ordinary progress as unresolved owner action', () => {
+    const settled = { ...askTurn, projection: { toolRounds: [
+      { toolName: 'ask_human', guidanceId: 'settled', guidanceQuestion: 'Keep queued?',
+        guidanceBlocking: false, status: 'done', guidanceResponse: 'Keep queued' },
+      { toolName: 'ask_human', guidanceId: 'replaced', guidanceQuestion: 'Old question?',
+        guidanceBlocking: false, status: 'done', guidanceSuperseded: true },
+    ] } };
+    const office = projectOffice(NOW, [tofu({ questions: openQuestions(LEAD, [settled, toolChurnTurn]),
+      progress: { ...tofu().progress!, commitments: [] }, reports: reportProgress })], labels);
+    expect(office.people.get(LEAD)?.emphasis).toBeNull();
+    expect(office.attention.counts).toEqual({ decisions: 0, exceptions: 0, deliverables: 0, digests: 0 });
+    expect(office.documents[0].kind).toBe('report');
   });
 
   it('marks an exception for an overdue commitment and nothing for a lead with none', () => {

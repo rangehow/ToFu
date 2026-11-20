@@ -60,6 +60,7 @@ const runtimeActions = Object.freeze({
   _timerPollToggle,
   _timerWatcherToggle,
   _toggleConvGroup,
+  _toggleCostPopover,
   aiCompressLog,
   applyLogClean,
   cancelAutopilotMarker,
@@ -185,15 +186,6 @@ Object.assign(runtimeScope, {
   ConvCache,
   Icon,
   IconDot,
-  // Cost popover (demand-loaded ui/finish_info_rich.js) reads the finish bar's
-  // stashed build context and cache-break phrasing.
-  _CP_KEY_SVG,
-  _CP_WARN_SVG,
-  _cacheBreakCulprits,
-  _cacheBreakReason,
-  _cacheBreakState,
-  _costCtxByTurnId,
-  calcCostCny,
   CompactionHistoryState,
   ImageGenerationComposerState,
   DebugShellState,

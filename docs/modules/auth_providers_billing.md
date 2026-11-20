@@ -35,6 +35,16 @@ ProviderAccess resources, safe egress, charging, and rate limits. Identity lives
 | Rate limiting | `lib/rate_limit/rate_limit_api.py`, `rate_limit_store.py` |
 | HTTP adapters | `routes/api_v1/auth.py`, `keys.py`, `providers.py`, `oauth.py`, `billing.py` |
 
+## Personal Antigravity subscription login
+
+**Settings → Subscription Login → Antigravity** uses the [official Antigravity CLI over ACP](https://antigravity.google/docs/ide/extensions/acp), without MCP configuration, a new credential store, or a model-provider route. The current local-CLI adapter runs for the personal administrator on a POSIX host in either `open` or `private` mode; multi-user or tenant-scoped requests cannot borrow a shared OS account's login. The separate MCP connector still requires private mode. `agy` is discovered on the service PATH or in `~/.local/bin`. If the installed CLI offers browser auth, click **Sign in with Google**; `agy` launches the browser on the Tofu host. For an SSH or headless host, run `agy acp --login` there as the same OS user and complete Google's consent in the CLI, then use **Refresh status**. Sign out in `agy` with `/logout` and recheck in Tofu; Tofu cannot clear Google's keyring from Settings.
+
+**Automatic CLI preparation.** Opening the directory only checks status. Entering Antigravity detail with a missing CLI starts one same-origin owner install (`POST /api/v4/oauth/antigravity/install`), displays progress, then reports the version and path and rechecks readiness. A failed attempt offers explicit retry rather than a retry loop. `lib/oauth/subscription_cli_install.py` follows the [Google installer manifest and SHA512 scheme](https://antigravity.google/cli/install.sh): Linux/macOS amd64/arm64 (including Linux musl), download through the shared subscription network policy, no redirects to arbitrary hosts, regular-file archive member only, and atomic no-overwrite publication in `~/.local/bin`. It does not execute a remote script, modify shell profiles, elevate privileges, replace an existing file, or start Google consent. A process lock coalesces repeated requests; accepted installs settle if Settings closes. The download has a 900-second wall-clock deadline, a bounded manifest body, and temporary payload cleanup. Only the original view paints its result. This removes the manual-install hurdle from the existing ACP adapter; it does not claim CLI-free model routing is implemented. Verify with `tests/oauth/test_subscription_cli_install.py`, `tests/mcp_protocol/test_antigravity_local.py`, and `tests/frontend/test_settings_antigravity_browser.py`.
+
+**Decision.** The card uses ACP session creation to distinguish login required from missing CLI and generic failures. A check opens and retires a scratch session without sending a prompt or starting sign-in. Like Codex, the card shows a waiting state and only reports success after verification. A separate same-origin, owner-only action invokes the negotiated ACP `oauth-personal` agent method, then requires a successful `session/new`; the initial OAuth acknowledgment is not success. Cancel or closing the card aborts the browser's request and the server retires its process when it observes disconnect; behind a buffering proxy the sign-in request still expires after five minutes. Cancel does not revoke a Google grant that already completed. Readiness does not certify a subscription tier or remaining quota. The user may explicitly send one text prompt from the card under a same-origin signed-in session. The request sends only that text, takes no project path or credentials, and is not retried. The service stops the child on any observed request cancellation and limits the prompt operation to five minutes even behind a buffering proxy. The ACP handshake has a separate 30-second limit. The CLI owns any upstream spend and its own conversation history. A scratch directory, denied ACP permissions, and `--sandbox` reduce scope but do not replace OS isolation or restrictive local Antigravity policy.
+
+**Integration scope.** ACP describes the currently implemented transport, not a product restriction on direct subscription access. [CLIProxyAPI's Antigravity authentication implementation](https://github.com/router-for-me/CLIProxyAPI/blob/main/internal/auth/antigravity/auth.go) implements browser OAuth, token exchange, and account/project discovery over HTTP; it is a concrete reference for a CLI-free integration, not evidence that Tofu already supports one. Direct OAuth and model requests are valid implementation options. They must use Tofu's existing owner-scoped credential storage, callback/state validation, shared outbound network policy, and verified model registration rather than introducing a second credential or dispatch authority. The current ACP path leaves Google credentials in the CLI and does not accept a login code or API key in this card. Do not infer that direct integration is impossible or prohibited from the absence of a Tofu implementation or public API documentation.
+
 ## Identity boundary
 
 Authentication produces immutable `AuthContext`; repositories use explicit
@@ -334,7 +344,7 @@ Measurement (scratch harness, shared host, fresh processes alternating base/fix,
 ### Codex model catalogue lifecycle
 
 `lib/oauth/codex_catalog.py` keeps a private, reconstructible last-good personal
-catalogue: normalized rows, account fingerprint, and ETag, never a token. Login
+catalogue: normalized rows, account fingerprint, and ETag, never a token. The worker carries its resolved owner and tenant through every refresh and provisioning path, including cache hits, pending admission and fallback; account fingerprints remain a separate credential-switch fence. Login
 or row changes reset to three minutes; stable 200/304 responses and errors back
 off 6→12→24→48→60 minutes. Logout ends it; unauthenticated launch creates none. `codex_version.py` returns a pinned floor/last-good version without waiting for npm. One demand-driven owned worker coalesces refreshes, with a monotonic 60-second failure backoff and reset/shutdown publication fences; no executor or timer is added. Problem: cold/stale request preflight blocked on registry latency and concurrent calls duplicated work. Decision: background cache refresh; alternatives rejected: synchronous npm checks or one worker per request. Spec: `test_codex_version.py` (24 concurrent callers, one fetch).
 Measurement (synthetic, Python 3.12.13): with a 250 ms fetch delay, 30 cold resolver calls had p95 250.841 ms before and 0.218 ms after; imports/token resolution/model inference are excluded. Across 20 batches of 24 readers, all returned before fetch release with one fetch per batch; live workers/retained handles were 1/1 while blocked, 0/1 after completion, and 0/0 after joined reset. Cache I/O used warm local temporary storage, not deployment FUSE; this is not an end-to-end Codex speed claim.
@@ -647,6 +657,48 @@ and [official page-pay request signing](https://github.com/alipay/alipay-sdk-pyt
 Verify `test_alipay_admission` and `test_alipay_payment_settlement`: independent
 RSA checks, bad merchant/amount/no-order refusals, opaque wallets, same-millisecond
 orders, storage restart, concurrent delivery, committed lost ACKs and public HTTP.
+
+## Direct subscription OAuth account boundary
+
+Direct OAuth is provider-scoped, not an account inventory. Desktop subscription adapter auth files are a separate authority; their IDs do not identify direct OAuth credentials. The direct mutation endpoints reject undeclared fields rather than applying unsupported account selectors to the provider-wide credential.
+
+**Problem.** A server-side code exchange can complete after another login replaced its flow or logout cancelled it. **Decision.** Bind the final credential write to the same pending provider, owner and flow generation. This fences the local write, not the upstream grant. **Alternatives rejected.** A pre-network check alone leaves the publication race open; separate account files would introduce another credential authority.
+
+The internal `lib/oauth/accounts.py` lifecycle service stores private subscription metadata in the existing owner/tenant model-routing aggregate and encrypted token generations in its existing vault. A metadata revision fences management commands; a different, immutable secret reference fences the authorization generation. Rename and default changes do not replace a generation. Removing the default clears the selection rather than choosing another account. Generic routing projections do not advertise account records or resolve their vault references. SQL and native commit paths check staged reference existence inside the commit fence; cleanup retains references in the current aggregate. Obsolete and abandoned staged references are reclaimed by the existing orphan collector. The internal Codex account flow completes a browser PKCE exchange with exact state or polls a bound device grant. It requires the returned bearer to prove the same upstream account as its token metadata and writes only through the account lifecycle service. Python request groups and native application routes pin the exact default from their issuing routing snapshot. An aggregate without scoped account metadata keeps legacy behavior; a scoped aggregate without a default refuses the Codex route. Python checks the bound generation again at wire dispatch and treats a rejection as terminal rather than invoking the legacy refresh or rotating credentials. The admin-scoped `/api/v4/oauth/accounts` API lists Codex accounts and accepts exact revisioned management via `/commands`; `/flows/{flow_id}` reads one owner/tenant-bound flow. `contracts/oauth_accounts_v1.schema.json` owns its generated account client. Browser completion requires the code and state (paste the full callback URL in the UI); device flow uses explicit poll commands at the returned interval. Linking an account neither imports the legacy credential nor selects a default, and removing the default never falls back. The explicit `admit_supply` command can initialize a clean owner's Codex route from a fresh first-party catalog for the named account. Only observed, visible wires matching maintained official model identities gain exact account/wire grants through normal registration and revision CAS. Scoped catalog requests require server-side subscription egress: the shared route authority refuses desktop relay routes before the vault credential is read, and catalog HTTP does not follow redirects. Linkage or changing the default does not grant supply; this initial-admission command refuses to replace an existing provider. Legacy catalog reconciliation cannot rewrite scoped Codex supply. Scoped credentials require explicit reauthorization when expired or rejected (a Python or settled native HTTP 401 marks only the selected generation). Neither path retries, refreshes, or switches accounts on that rejection. Legacy singleton refresh is unchanged.
+
+### Account attribution evidence boundary
+
+**Problem.** The current default, linked account inventory, and quota observations
+cannot identify the account that served a historical Turn. Route credential IDs
+identify a routing credential, not an OAuth account. **Decision.** Do not add an
+account attribution label to Turn detail from these fields. `AccountBinding`
+retains the exact owner/tenant-scoped opaque account ID and secret generation
+privately; production native credential resolution preserves that binding across
+rename/default changes and refuses a removed generation. Returning headers from
+that resolver proves credential preparation, not HTTP send or provider return.
+The native route result pairs execution with issued route metadata; Python
+`usage._dispatch` records slot/route ancestry, not resolved account identity.
+Neither is a joined actual-use account receipt. An absent binding remains
+unknown, including legacy history. Failed bound dispatch is terminal, not
+permission to substitute the current default or another provider.
+
+`tests/oauth/test_codex_binding_evidence.py` is an executable boundary proof:
+two independently issued routes have identical route semantics/digests while
+the production resolver returns different synthetic A/B credentials, and an
+already-issued A remains A after selecting B. It covers rename, removal,
+missing default, owner refusal, cancellation, terminal failures and legacy
+metadata absence without a provider call. No headers or account subject enter
+public route metadata. This proves the existing route evidence is insufficient;
+it does **not** claim an observed HTTP request or actual upstream account use.
+
+**Alternatives rejected.** Looking up the current default/alias at render time
+rewrites history; quota availability is not execution evidence; persisting the
+selection or a credential callback alone as “actually used” mislabels a pre-send
+boundary. A future attribution field must join the exact owner-scoped binding
+to the observed execution attempt and outcome, keep missing/failed/unknown
+evidence explicit, and disclose only a safe alias rather than credential or
+personal identity data. This proof adds no receipt, scope, account picker,
+transport behavior, or runtime helper.
 
 ## Codex subscription recovery
 

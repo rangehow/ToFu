@@ -14,7 +14,10 @@ import re
 import time
 from typing import Any
 
-from lib.cost import normalize_usage, observed_cache_read, split_input_tokens
+from lib.cost import (
+    is_responses_usage, normalize_usage, observed_cache_read,
+    reported_responses_input_usage, responses_input_usage_evidence, split_input_tokens,
+)
 from lib.log import get_logger
 from lib.model_info import is_claude
 from lib.tasks_pkg.cache_tracking._state import (
@@ -274,15 +277,15 @@ def _emit_round_record(conv_id, call_num, verdict, *, ns_switch, ttl_flip,
                        wire_tool_count=None, wire_tool_name_bytes=None,
                        wire_tool_name_budget_bytes=None,
                        cold_group='', affinity='', request_identity=None, trace_id='',
-                       peer='', baseline='none'):
+                       peer='', baseline='none', responses_usage=None, cache_exchange=None):
     """Emit ONE machine-readable per-round cache-verdict record (ALWAYS, every
     round — not only on a break).
 
     THE ROOT FIX for "monitoring is insufficient": one ``[CacheRoundRecord]``
     INFO line per round carrying a JSON payload with the ``bucket`` (from the
     single-source ``classify_verdict``), the routing diff, the ttl-flip /
-    breakpoint-lost flags, the cache tokens, and whether the body was
-    byte-identical. After ONE clean deploy the real-traffic client-vs-upstream
+    breakpoint-lost flags, the cache tokens, and whether the shared prefix
+    message bytes matched. After ONE clean deploy the real-traffic client-vs-upstream
     bucket count is a ``grep [CacheRoundRecord] | aggregate_round_records`` —
     no default-OFF probe, no manual replay, no restart-to-verify. Best-effort:
     a serialization failure never disturbs the detector's return value.
@@ -297,6 +300,11 @@ def _emit_round_record(conv_id, call_num, verdict, *, ns_switch, ttl_flip,
             'routing_diff': list(ns_switch or []),
             'ttl_flip': bool(ttl_flip),
             'breakpoint_lost': bool(breakpoint_lost),
+            # Public log field, kept under this name for consumers. It means the
+            # SHARED PREFIX message bytes matched the previous round — NOT that
+            # the whole request or a full sent frame was identical. Top-level
+            # fields outside the fingerprinted prefix (max_tokens, metadata,
+            # tool_choice, ...) can differ while this is True.
             'body_identical': bool(body_identical),
             # ``body_identical=False`` used to conflate a proven mutation with
             # missing fingerprint capture.  These explicit evidence bits make
@@ -306,7 +314,7 @@ def _emit_round_record(conv_id, call_num, verdict, *, ns_switch, ttl_flip,
             'wire_changed': bool(wire_changed),
             'read_collapsed': bool(read_collapsed),
             'namespace_verified': bool(namespace_verified),
-            'cache_read': int(cache_read or 0),
+            'cache_read': int(cache_read) if cache_read is not None else None,
             'cache_write': int(cache_write or 0),
             'gap_s': round(float(elapsed or 0), 1),
             # What this round was compared against: 'live' (in-memory
@@ -314,6 +322,16 @@ def _emit_round_record(conv_id, call_num, verdict, *, ns_switch, ttl_flip,
             # start: hoisted digests, routing and gap only) or 'none'.
             'baseline': baseline,
         }
+        from lib.llm.cache_exchange import loggable_cache_exchange
+        exchange = loggable_cache_exchange(cache_exchange)
+        if exchange is not None:
+            rec['exchange'] = exchange
+        if responses_usage is not None:
+            # These are independently observed terminal counters, not the
+            # compatibility view used by billing and context policy.
+            rec['input_tokens'] = responses_usage['input_tokens']
+            rec['cache_write'] = responses_usage['cache_write']
+            rec['responses_usage_status'] = responses_usage['status']
         # The model this round ran on. Without it EVERY cost aggregation over
         #   these records has to price the whole table at one rate, which is an
         #   approximation nobody can bound: the real fleet spans two orders of
@@ -393,7 +411,7 @@ def _emit_round_record(conv_id, call_num, verdict, *, ns_switch, ttl_flip,
 
 
 def _emit_pending_l2_roi(prev, conv_id, cache_write, cache_read, usage, *,
-                         user_id, model, now):
+                         user_id, model, now, responses_usage):
     """Pair the stashed L2 'saved' half with this round's OBSERVED re-billed
     half and emit ONE structured ROI metric, then clear the stash.
 
@@ -410,15 +428,19 @@ def _emit_pending_l2_roi(prev, conv_id, cache_write, cache_read, usage, *,
     prev.pending_l2_roi = None
     _uncached_next = None
     _input_next = None
-    if usage:
+    if responses_usage is not None:
+        _input_next = responses_usage['input_tokens']
+        cache_write = responses_usage['cache_write']
+        if _input_next is not None and cache_read is not None:
+            _uncached_next = _input_next - cache_read
+    elif usage:
         try:
-            from lib.cost import split_input_tokens as _split_in
-            _uncached_next, _input_next = _split_in(usage)
+            _uncached_next, _input_next = split_input_tokens(usage)
         except Exception as _e:
             logger.debug('[CacheTrack] L2 ROI cost split failed: %s', _e)
-    _emit_l2_roi(conv_id, _roi, user_id=user_id,
-                 cache_write_rebilled=int(cache_write),
-                 cache_read_next=int(cache_read),
+    _emit_l2_roi(conv_id, _roi, user_id=user_id, following_round=True,
+                 cache_write_rebilled=cache_write,
+                 cache_read_next=cache_read,
                  cache_uncached_next=_uncached_next,
                  input_next=_input_next,
                  turn_boundary=(prev.call_count == 0),
@@ -501,6 +523,7 @@ def _round_record_context(scope, tools, model, call_count, wire_evidence, usage)
             'peer': (network_route.get('peer') or ''
                      if isinstance(network_route, dict) else ''),
             'request_identity': (usage or {}).get('_request_identity'),
+            'cache_exchange': (usage or {}).get('_cache_exchange'),
             'trace_id': (usage or {}).get('trace_id', ''),
             'wire_tool_count': wire_evidence.tool_count,
             'wire_tool_name_bytes': wire_evidence.tool_name_bytes,
@@ -519,7 +542,7 @@ def _cache_verdict_finisher(
     tool_count=None, wire_tool_count=None, wire_tool_name_bytes=None,
     wire_tool_name_budget_bytes=None,
     cold_group='', affinity='', request_identity=None, trace_id='', peer='',
-    round_baseline=None,
+    round_baseline=None, responses_usage=None, cache_exchange=None,
 ):
     """Freeze this round's evidence for consistent telemetry and returned verdicts."""
     def _finish(v, record_as=None):
@@ -551,7 +574,8 @@ def _cache_verdict_finisher(
             wire_tool_name_bytes=wire_tool_name_bytes,
             wire_tool_name_budget_bytes=wire_tool_name_budget_bytes, cold_group=cold_group,
             affinity=affinity, request_identity=request_identity, trace_id=trace_id,
-            peer=peer, baseline=round_baseline.kind)
+            peer=peer, baseline=round_baseline.kind, responses_usage=responses_usage,
+            cache_exchange=cache_exchange)
         if v:
             # Keep legacy keys and the primary ledger bucket, but never
             # discard independent evidence merely because another reason
@@ -674,6 +698,8 @@ def _unconfirmed_round_record(conv_id, prev, *, model, usage, cache_read,
                               markers) -> dict | None:
     """Return the ledger record for a round with no confirmed break, or None
     when it is a genuine ``no_break``; the detector still returns None."""
+    if cache_read is None:
+        return {'indeterminate': 'No valid provider-reported Responses cache read.'}
     # ── INDETERMINATE vs genuinely-no-break ──
     # This round paid to write a substantial prefix and read back NOTHING,
     # yet no break gate fired. That is not "the cache was reused fine" — it
@@ -714,6 +740,8 @@ def _unconfirmed_round_record(conv_id, prev, *, model, usage, cache_read,
     # A cacheable Claude round with no cache activity at all paid the base
     # input rate for its whole prompt. Like the indeterminate case it is a
     # ledger fact, not a confirmed break: the return value stays None.
+    if is_responses_usage(usage):
+        return None  # this legacy floor-only verdict is for Messages
     prompt_tokens = split_input_tokens(usage)[1]
     if uncached_round(claude=is_claude(model), call_count=prev.call_count,
                       cache_read=cache_read, cache_write=cache_write,
@@ -721,6 +749,25 @@ def _unconfirmed_round_record(conv_id, prev, *, model, usage, cache_read,
         return _report_uncached_round(
             conv_id, prev, prompt_tokens=prompt_tokens, markers=markers)
     return None
+
+
+def _metering_for_comparison(usage, responses_usage, observed_read, previous: CacheState):
+    """Separate the current observation from the read eligible for a drop verdict."""
+    input_tokens = None
+    if responses_usage is not None:
+        input_tokens = responses_usage['input_tokens']
+        cache_read = observed_read
+        cache_write = responses_usage['cache_write'] or 0
+    else:
+        normalized = normalize_usage(usage)
+        cache_read, cache_write = normalized['cache_read'], normalized['cache_write']
+    comparable_read = cache_read
+    if (previous.last_cache_read_unobserved
+            or (responses_usage is not None and previous.call_count == 0)):
+        # Neither the read before a gap nor a durable last-known read proves
+        # what an immediately preceding Responses wire actually read.
+        comparable_read = None
+    return input_tokens, cache_read, cache_write, comparable_read
 
 
 def detect_cache_break(
@@ -732,7 +779,6 @@ def detect_cache_break(
     *,
     user_id: int,
     durable: bool = True,
-
     prev_turn_cache_read: int | None = None,
     cache_prefix_hwm_sink: Callable[[int], None] | None = None,
     last_turn_cache_read_sink: Callable[[int], None] | None = None,
@@ -752,6 +798,10 @@ def detect_cache_break(
     """
     if not conv_id:
         return None
+    responses_usage = None
+    if is_responses_usage(usage):
+        responses_usage = (reported_responses_input_usage(usage)
+                           or responses_input_usage_evidence(None))
 
     now = time.time()
 
@@ -772,7 +822,8 @@ def detect_cache_break(
     _scope = _current_invocation(conv_id, user_id)
 
     durable = durable and (_scope is None or _scope.lane == 'conversation')
-    _observed_read = observed_cache_read(usage)
+    _observed_read = (responses_usage['cache_read'] if responses_usage is not None
+                      else observed_cache_read(usage))
     _is_turn_start = _scope is not None and _scope.rounds_seen == 0
     _cross_turn_prev_read = (
         (prev_turn_cache_read if prev_turn_cache_read is not None
@@ -797,17 +848,12 @@ def detect_cache_break(
         _api_first_changed = client_evidence.first_changed_prefix_index
 
         # ── Phase 2: Check API-reported cache stats ──
-        cache_read = 0
-        cache_write = 0
-        if usage:
-            _nu = normalize_usage(usage)
-            cache_read = _nu['cache_read']
-            cache_write = _nu['cache_write']
-
+        input_tokens, cache_read, cache_write, comparable_read = _metering_for_comparison(
+            usage, responses_usage, _observed_read, prev)
         prev_cache_read = prev.last_cache_read_tokens
 
         _baseline = _round_baseline(prev, now, _scope, _key, user_id, conv_id,
-                                    _wire_evidence, model, cache_read)
+                                    _wire_evidence, model, comparable_read)
         elapsed = _baseline.elapsed
 
         # Handle compaction: if compaction happened, a drop in cache_read
@@ -828,7 +874,7 @@ def detect_cache_break(
             _expected_rewrite_index = -1
         if prev.compaction_pending:
             prev.compaction_pending = False
-            if cache_read < prev_cache_read:
+            if comparable_read is not None and comparable_read < prev_cache_read:
                 logger.debug(
                     '[CacheTrack] conv=%s Expected cache drop after compaction: '
                     '%d → %d tokens',
@@ -852,7 +898,7 @@ def detect_cache_break(
         if prev.pending_l2_roi is not None:
             _emit_pending_l2_roi(
                 prev, conv_id, cache_write, cache_read, usage,
-                user_id=user_id, model=model, now=now)
+                user_id=user_id, model=model, now=now, responses_usage=responses_usage)
 
         # ── Authoritative wire-fingerprint prefix diff ──
         # `usage['_wire_fp']` is the post-translation, envelope-agnostic
@@ -871,7 +917,7 @@ def detect_cache_break(
             was_compaction=_was_compaction, expected_covers=_expected_covers,
             expected_rewrite_index=_expected_rewrite_index,
             api_first_changed=_api_first_changed, client_changes=client_changes,
-            message_count=msg_count, cache_read=cache_read,
+            message_count=msg_count, cache_read=comparable_read,
         )
         _wire_available = _wire_evidence.fingerprint is not None
         _cur_wire_routing = _wire_evidence.routing
@@ -910,14 +956,14 @@ def detect_cache_break(
         _prev_prefix_tokens = (prev.last_cache_read_tokens
                                + prev.last_cache_write_tokens)
         prev_cache_write = prev.last_cache_write_tokens
-        api_break, no_reuse, partial_no_reuse = _classify_break(
-            call_count=prev.call_count, was_compaction=_was_compaction,
-            prev_cache_read=prev_cache_read, cache_read=cache_read,
-            prev_cache_write=prev_cache_write, cache_write=cache_write,
-            prev_prefix_tokens=_prev_prefix_tokens,
-        )
+        api_break, no_reuse, partial_no_reuse = (
+            (False, False, False) if comparable_read is None else _classify_break(
+                call_count=prev.call_count, was_compaction=_was_compaction,
+                prev_cache_read=prev_cache_read, cache_read=comparable_read,
+                prev_cache_write=prev_cache_write, cache_write=cache_write,
+                prev_prefix_tokens=_prev_prefix_tokens))
         _remaining_prefix_floor_miss = (
-            _expected_covers
+            comparable_read is not None and _expected_covers
             and _expected_rewrite_index > 0
             and prev_cache_read > _MIN_CACHE_MISS_TOKENS
             and cache_read < _MIN_CACHE_MISS_TOKENS
@@ -943,7 +989,8 @@ def detect_cache_break(
         # predicate can fire (they all require call_count > 0), so this branch
         # never conflicts with the client-side / namespace verdicts below.
         turn_boundary_break = (
-            (prev.call_count == 0 or _is_turn_start)
+            comparable_read is not None
+            and (prev.call_count == 0 or _is_turn_start)
             and not _was_compaction
             and _cross_turn_prev_read > _MIN_CACHE_MISS_TOKENS
             and cache_read < _cross_turn_prev_read * 0.95
@@ -960,7 +1007,7 @@ def detect_cache_break(
             prev, client_evidence, _wire_evidence, scope=_scope,
             observed_read=_observed_read, conv_id=conv_id, user_id=user_id,
             model=model, usage=usage, now=now, cache_read=cache_read,
-            cache_write=cache_write, durable=durable,
+            cache_write=cache_write, input_tokens=input_tokens, durable=durable,
             cache_prefix_hwm_sink=cache_prefix_hwm_sink,
             last_turn_cache_read_sink=last_turn_cache_read_sink,
         )
@@ -1008,7 +1055,7 @@ def detect_cache_break(
             or not _position_known
         )
         prefix_mutation_break = (
-            _prefix_mutated
+            comparable_read is not None and _prefix_mutated
             and not _was_compaction
             and not _expected_covers
             and (cache_write >= _MIN_CACHE_MISS_TOKENS
@@ -1038,7 +1085,7 @@ def detect_cache_break(
             _wire_available, _wire_prefix_changed, _read_collapsed, client_changes,
             prefix_mutation_break, _prefix_culprits, _wire_tools_verified, _wire_system_verified,
             turn_boundary_break, _cross_turn_prev_read, prev_cache_read,
-            **_groups, round_baseline=_baseline,
+            **_groups, round_baseline=_baseline, responses_usage=responses_usage,
         )
 
         # ── Report ──
@@ -1083,7 +1130,7 @@ def detect_cache_break(
             # cache stats available) — log at debug level only.
             logger.debug(
                 '[CacheTrack] conv=%s call=%d client changes: %s '
-                '(cache_read: %d → %d, no confirmed break)',
+                '(cache_read: %d → %s, no confirmed break)',
                 conv_id, prev.call_count,
                 ', '.join(f'{k}={v}' for k, v in client_changes.items()),
                 prev_cache_read, cache_read,

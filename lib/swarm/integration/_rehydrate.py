@@ -275,7 +275,29 @@ def _rehydrate_one(sess: dict, *, resume_task: dict | None = None,
     """Serialize startup/Continue recovery without holding registry locks over I/O."""
     from lib.swarm.restart_recovery import recovery_lock
     with recovery_lock(str(sess.get('swarm_key') or '')):
-        return _rehydrate_one_locked(sess, resume_task=resume_task, tool_list=tool_list)
+        try:
+            return _rehydrate_one_locked(sess, resume_task=resume_task, tool_list=tool_list)
+        except Exception as error:
+            if resume_task is not None:
+                _record_sql_activation_failure(sess, resume_task, error)
+            raise
+
+
+def _record_sql_activation_failure(sess, task, error):
+    """Record exact failed lineage, leaving ambiguous committed binds retryable."""
+    from lib.storage.errors import StorageError
+    from lib.swarm import persistence
+
+    if not isinstance(sess, persistence.SqlSessionSnapshot) or task.get('aborted'):
+        return
+    try:
+        identity = persistence.run_identity(sess['swarm_key'], sess)
+        ambiguous = any(isinstance(exc, (StorageError, TimeoutError))
+                        for exc in (error, error.__cause__))
+        persistence.rebind_continue(identity, sess, sess['config'], task,
+                                    activation_failed=True, unbound_only=ambiguous)
+    except Exception:
+        logger.debug('[Swarm:%s] failed activation marker not admitted', sess['swarm_key'], exc_info=True)
 
 
 def _session_owner_task(sess: dict) -> str:
@@ -385,17 +407,31 @@ def _rehydrate_one_locked(sess: dict, *, resume_task: dict | None = None,
         logger.warning('[Swarm:%s] the worker job of durable attempt %s has finished; '
                        'recovering its retained session without a claim', swarm_key, owner_task_id)
 
+    from ._sql_lifecycle import admit_continue, continue_source_snapshot, matches_scope
+    source_snapshot = continue_source_snapshot(sess, resume_task) if resume_task is not None else sess
     if resume_task is not None:
         from lib.tasks_pkg.manager import task_user_id
         from lib.swarm.restart_recovery import continue_recovery_allowed
         allowed = (task_user_id(resume_task) == owner_user_id
-            and continue_recovery_allowed(sess, resume_task, user_id=owner_user_id))
+            and continue_recovery_allowed(source_snapshot, resume_task, user_id=owner_user_id))
     else:
         allowed = _recovery_allowed(sess, user_id=owner_user_id)
     if not allowed:
         logger.info('[Swarm:%s] restart stood down: stopped or unsettled '
                     'authority; retained checkpoints remain inspectable', swarm_key)
         return False
+    from lib.swarm import persistence
+    from ._sql_lifecycle import require_current_run
+    sql_identity = None
+    if isinstance(sess, persistence.SqlSessionSnapshot):
+        sql_identity = persistence.run_identity(swarm_key, sess)
+        if resume_task is not None and not matches_scope(sql_identity, resume_task,
+                resume_task.get('projectPath') or '', owner=owner_user_id):
+            return False
+        row = persistence.load_session(swarm_key, include_agents=False, required=True,
+                                       identity=sql_identity)
+        if row is None or row != {k: v for k, v in sess.items() if k != 'agents'}:
+            return False
     config = deepcopy(config)
     if 'native_execution_required' in config and type(config['native_execution_required']) is not bool:
         raise ValueError('Invalid durable native delegation binding')
@@ -523,7 +559,8 @@ def _rehydrate_one_locked(sess: dict, *, resume_task: dict | None = None,
             except Exception as e:
                 logger.debug('[Swarm:%s] rehydrate push mirror failed: %s', swarm_key, e)
 
-    agent_inbox.untombstone(swarm_key)
+    if sql_identity is None or resume_task is None:
+        agent_inbox.untombstone(swarm_key)
 
     # Resolve the settle hook through the facade package so a patched
     # ``_maybe_autocontinue`` still drives a rehydrated session's settle path.
@@ -535,7 +572,8 @@ def _rehydrate_one_locked(sess: dict, *, resume_task: dict | None = None,
         source=(config.get('parent_cfg') or {}).get('_swarmContinuationSource') or task_id,  # noqa: B008
     ):
         import lib.swarm.integration as _pkg
-        return _pkg._maybe_autocontinue(k, owner, source_id=source)
+        writer = {'expected_writer': (session.task_id, session._checkpoint_writer_epoch)} if sql_identity else {}
+        return _pkg._maybe_autocontinue(k, owner, source_id=source, **writer)
 
     from lib.swarm.integration._tools import _child_usage_rollup
     on_agent_usage = _child_usage_rollup(resume_task) if resume_task is not None else None
@@ -567,16 +605,27 @@ def _rehydrate_one_locked(sess: dict, *, resume_task: dict | None = None,
     def recovery_still_allowed():
         if resume_task is not None:
             return continue_recovery_allowed(
-                sess, resume_task, user_id=owner_user_id, allow_parent_completion=True)
+                source_snapshot, resume_task, user_id=owner_user_id, allow_parent_completion=True)
         if worker_context is not None and (
                 worker_context.cancellation_requested or worker_context.authority_lost):
             return False
         return _recovery_allowed(sess, user_id=owner_user_id)
 
+    continuation_task = resume_task
+    if sql_identity is not None and resume_task is None and sess.get('checkpoint_writer_epoch', 0):
+        parent = (sess['config'].get('parent_cfg') or {})
+        continuation_task = {'id': parent['_swarmParentTaskId'], 'config': {
+            '_turnId': parent['_swarmParentTurnId'], '_attemptId': parent['_swarmParentAttemptId']}}
+
     def before_agent_admission():
+        if sql_identity is not None and continuation_task is not None:
+            admit_continue(sql_identity, continuation_task, 'worker_start', session._checkpoint_writer_epoch)
         if not recovery_still_allowed():
             from lib.llm.llm_errors import AbortedError
             raise AbortedError('Durable recovery authority cancelled before worker admission')
+        if sql_identity is not None and continuation_task is None:
+            require_current_run(sql_identity, managed=False,
+                                checkpoint_writer_epoch=session._checkpoint_writer_epoch)
 
     if resume_task is not None:
         from lib.swarm.master import bind_assignment_context, _retained_assignment_proxy
@@ -625,10 +674,14 @@ def _rehydrate_one_locked(sess: dict, *, resume_task: dict | None = None,
         inbox_key=swarm_key,
         on_settled=_on_settled,
     )
+    if sql_identity is not None:
+        session._sql_run_identity = sql_identity
+        session._checkpoint_writer_epoch = sess.get('checkpoint_writer_epoch', 0)
     # Close the Stop/supersede window after catalog reconstruction.
     if not recovery_still_allowed():
         return False
     published = False
+    durable_config = None
     try:
         from lib.swarm.integration._state import reserve_session
         with reserve_session(swarm_key):
@@ -639,9 +692,15 @@ def _rehydrate_one_locked(sess: dict, *, resume_task: dict | None = None,
                 durable_config = _persist_config(config, config['model'],
                     config['thinking_enabled'], config['project_path'], config['parent_cfg'],
                     user_id=owner_user_id, parent_task=execution_parent, tool_catalog=all_tools)
-                persistence.save_session(swarm_key, conv_id=conv_id, task_id=task_id,
-                    specs=[spec.to_dict() for spec in specs], required=True, config=durable_config)
-                if not continue_recovery_allowed(sess, resume_task, user_id=owner_user_id):
+                if sql_identity is None:
+                    persistence.save_session(swarm_key, conv_id=conv_id, task_id=task_id,
+                        specs=[spec.to_dict() for spec in specs], required=True, config=durable_config)
+                else:
+                    durable_config['parent_cfg'].update(
+                        canonicalProjectPath=sql_identity['project_path'], _tenant_id=sql_identity['tenant_id'])
+                    session._checkpoint_writer_epoch = persistence.rebind_continue(
+                        sql_identity, sess, durable_config, resume_task)
+                if not continue_recovery_allowed(source_snapshot, resume_task, user_id=owner_user_id):
                     session.abort()
                     return False
             _set_session(swarm_key, session, task_id=task_id, reserved=True)
@@ -653,12 +712,35 @@ def _rehydrate_one_locked(sess: dict, *, resume_task: dict | None = None,
             if resume_task is not None:
                 from lib.swarm.integration._state import add_session_alias
                 add_session_alias(resume_task['id'], swarm_key)
-                if not continue_recovery_allowed(sess, resume_task, user_id=owner_user_id):
+                if not continue_recovery_allowed(source_snapshot, resume_task, user_id=owner_user_id):
                     session.abort()
                     _remove_session(swarm_key, preserve_durable=True)
                     return False
+            if sql_identity is not None:
+                current = persistence.load_session(swarm_key, required=True, include_agents=False,
+                                                   identity=sql_identity)
+                if (current is None or (resume_task is None and current != row)
+                        or (resume_task is not None and (current['config'] != durable_config
+                            or current.get('checkpoint_writer_epoch', 0) != session._checkpoint_writer_epoch))
+                        or not recovery_still_allowed()):
+                    session.abort()
+                    _remove_session(swarm_key, expected=session, preserve_durable=True)
+                    return False
+                receipt = persistence.read_lifecycle(sql_identity)
+                if receipt is not None and receipt.get('disposition') is not None:
+                    _remove_session(swarm_key, expected=session, preserve_durable=True)
+                    return False
             if resume_task is not None:
-                session.rehydrate_in_background(sess.get('agents') or [], resume_parent_stop=True)
+                if sql_identity is None:
+                    session.rehydrate_in_background(sess.get('agents') or [], resume_parent_stop=True)
+                else:
+                    admit_continue(sql_identity, resume_task, 'restore', session._checkpoint_writer_epoch)
+                    # Rebuild this lane from durable undelivered rows. Local
+                    # hints published by the retired writer cannot be input.
+                    agent_inbox.clear(swarm_key, modes=['swarm-update'])
+                    agent_inbox.untombstone(swarm_key)
+                    session.rehydrate_in_background(sess.get('agents') or [], resume_parent_stop=True,
+                        before_enqueue=lambda _: admit_continue(sql_identity, resume_task, 'enqueue', session._checkpoint_writer_epoch))
             else:
                 session.rehydrate_in_background(sess.get('agents') or [])
     except Exception as e:
@@ -668,13 +750,18 @@ def _rehydrate_one_locked(sess: dict, *, resume_task: dict | None = None,
         if resume_task is not None and resume_task.get('aborted'):
             session.abort()
         else:
-            session.suspend_for_restart()
+            from lib.swarm.scheduler import SwarmExecutorHandoffError
+            if isinstance(e, SwarmExecutorHandoffError):
+                session.suspend_after_handoff_refusal()
+            else:
+                session.suspend_for_restart()
         scheduler = getattr(session, '_scheduler', None)
         if scheduler is not None:
             scheduler.shutdown(require_quiescence=True)
         if published:
             _remove_session(swarm_key, preserve_durable=True)
-        if resume_task is not None and not resume_task.get('aborted'):
+        session.finish_failed_activation()
+        if sql_identity is None and resume_task is not None and not resume_task.get('aborted'):
             # Original work/policy plus this exact failed activation receipt;
             # later Continue must directly follow its durable failed attempt.
             from lib.swarm import persistence
@@ -703,16 +790,40 @@ def resume_swarm_for_continue(task: dict, tool_list: list) -> bool:
     from lib.tasks_pkg.manager import task_user_id
     import time
 
+    from ._sql_lifecycle import continue_source_snapshot, matches_scope
     key = swarm_key_for(task)
+
+    def load_scoped():
+        owner = task_user_id(task)
+        header = None
+        identity = None
+        if persistence.uses_sql_lifecycle():
+            header = persistence.load_session(key, required=True, include_agents=False)
+            if header is None or (header.get('config') or {}).get('user_id') != owner:
+                return None
+            identity = persistence.run_identity(key, header)
+            if not matches_scope(identity, task, task.get('projectPath') or '', owner=owner):
+                return None
+        try:
+            sess = persistence.load_session(key, required=True, identity=identity)
+            if sess is not None and continue_recovery_allowed(continue_source_snapshot(sess, task), task,
+                    user_id=owner):
+                return sess
+            return None
+        except Exception as error:
+            if header is not None:
+                _record_sql_activation_failure(persistence.SqlSessionSnapshot(header), task, error)
+            raise
+
     with recovery_lock(key):
         live = _get_session(key)
-        sess = persistence.load_session(key, required=True)
-        if sess is None or not continue_recovery_allowed(sess, task, user_id=task_user_id(task)):
+        sess = load_scoped()
+        if sess is None:
             return False
         if live is not None:
             # Stop is signal-only. Its final writes must not overwrite the new
             # activation; keep the stop handle until the old driver has exited.
-            if not getattr(live, '_aborted', False):
+            if not (getattr(live, '_aborted', False) or getattr(live, 'is_restart_suspended', False)):
                 return False
             driver = getattr(live, '_driver_thread', None)
             deadline = time.monotonic() + 30.0
@@ -726,8 +837,8 @@ def resume_swarm_for_continue(task: dict, tool_list: list) -> bool:
             if scheduler is not None and scheduler.running_count:
                 raise RuntimeError('Stopped swarm still has live workers; recovery was not launched')
             # The final checkpoint may differ from the admission row.
-            sess = persistence.load_session(key, required=True)
-            if sess is None or not continue_recovery_allowed(sess, task, user_id=task_user_id(task)):
+            sess = load_scoped()
+            if sess is None:
                 return False
             _remove_session(key, preserve_durable=True)
         return _rehydrate_one(sess, resume_task=task, tool_list=tool_list)

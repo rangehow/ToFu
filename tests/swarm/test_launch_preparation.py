@@ -139,6 +139,90 @@ def launch(monkeypatch):
         _reset_global_state(key)
 
 
+@pytest.mark.parametrize('mode, programmatic', [
+    (None, None), ('read_only', 'auto'), ('read_only', 'off'), ('full', 'on'),
+])
+def test_spawn_receipt_preserves_identity_objectives_and_orchestration(
+        launch, mode, programmatic):
+    from lib.tools.poll import POLL_WAIT_CAP_S
+
+    parent, spawn, current, _ = launch
+    if mode is not None:
+        parent['_toolOrchestration'] = {
+            'multiAgent': mode, 'compositionMode': 'parallel',
+            'programmaticCalling': programmatic,
+        }
+    objective = 'Inspect synthetic evidence 中. ' * 20
+    result = spawn([
+        {'id': 'needed', 'role': 'researcher', 'objective': objective},
+        {'id': 'optional', 'objective': 'Optional exploration',
+         'required_for_completion': False, 'depends_on': ['needed']},
+    ])
+    assert result == {
+        'status': 'async_launched', 'swarm_id': parent['id'],
+        'swarm_run_id': current().task_id, 'swarm_key': parent['id'],
+        'is_followup': False,
+        'orchestration': ({
+            'backend': 'local_swarm', 'mode': 'read_only',
+            'compositionMode': 'parallel',
+            'programmaticWorkers': programmatic == 'auto',
+        } if mode == 'read_only' else {
+            'backend': 'local_swarm', 'mode': 'standard',
+        }),
+        'agents': [
+            {'id': 'needed', 'role': 'researcher', 'objective': objective,
+             'required_for_completion': True},
+            {'id': 'optional', 'role': 'general', 'objective': 'Optional exploration',
+             'required_for_completion': False},
+        ],
+        'message': (
+            'Launched 2 agent(s) in the background. '
+            'Continue with other work — completions arrive automatically '
+            'as <swarm-update> user messages carrying the outcome. To wait, use '
+            f'poll(ids=[<returned agent ids>], wait_s={POLL_WAIT_CAP_S}); it '
+            'returns as soon as an agent finishes. No-ID poll() is a snapshot, '
+            'not a wait for all agents.'),
+    }
+    assert [spec.objective for spec in current().specs] == [
+        objective, 'Optional exploration']
+    assert current().specs[1].depends_on == ['needed']
+
+
+@pytest.mark.parametrize('include_new', [False, True])
+def test_followup_receipt_reports_only_accepted_specs_without_relaunching(
+        launch, include_new):
+    parent, spawn, current, running = launch
+    objective = 'Original synthetic objective 中. ' * 10
+    initial = spawn([{'id': 'first', 'objective': objective}])
+    assert initial['status'] == 'async_launched'
+    assert running.wait(3)
+    session = current()
+    agents = [{'id': 'duplicate', 'objective': objective}]
+    if include_new:
+        agents.append({'id': 'second', 'objective': 'Distinct follow-up',
+                       'required_for_completion': False})
+    result = spawn(agents)
+    assert result['status'] == 'async_launched'
+    assert result['is_followup'] is True
+    assert result['swarm_id'] == parent['id']
+    assert result['swarm_key'] == initial['swarm_key']
+    assert result['swarm_run_id'] == initial['swarm_run_id']
+    assert result['agents'] == ([{
+        'id': 'second', 'role': 'general', 'objective': 'Distinct follow-up',
+        'required_for_completion': False,
+    }] if include_new else [])
+    assert result['deduplicated'] == [{'id': 'duplicate', 'objective': objective[:120]}]
+    assert result['message'].startswith(
+        f'Launched {int(include_new)} agent(s) in the background. ')
+    assert result['message'].endswith(
+        ' Note: 1 spec(s) were skipped because their objective duplicates an '
+        'already-running or completed agent — see ``deduplicated`` field.')
+    assert current() is session
+    assert [spec.id for spec in session.specs] == (
+        ['first', 'second'] if include_new else ['first'])
+    assert session._scheduler.running_count == 1 + int(include_new)
+
+
 @pytest.mark.parametrize('followup', [False, True])
 def test_invalid_wave_has_typed_rejection_without_scheduler_effects(launch, followup):
     from lib.tools.result_envelope import tool_result_error

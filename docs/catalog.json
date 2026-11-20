@@ -8,6 +8,10 @@
   },
   "contracts": [
     {
+      "path": "contracts/conversation_portable_import_v1.schema.json",
+      "guard": "tests/storage/test_storage_authority_sql_contract.py::test_portable_import_candidate_contract"
+    },
+    {
       "path": "contracts/native_workspace_v1.schema.json",
       "guard": "packages/tofu-workspace/tests/workspace.rs"
     },
@@ -244,6 +248,12 @@
       "guard": "tests/model_routing/test_model_routing_contract.py"
     },
     {
+      "path": "contracts/llm_request_evidence_v1.schema.json",
+      "guard": "tests/llm/test_request_evidence_contract.py",
+      "description": "Bounded per-attempt LLM request/cache-exchange receipt shared by Python and native producers.",
+      "doc": "docs/modules/llm_io.md"
+    },
+    {
       "path": "contracts/provider_offering_recipe_v1.schema.json",
       "guard": "tests/providers/test_provider_template_recipes.py"
     },
@@ -299,9 +309,19 @@
       "guard": "tests/storage_authority_sql/test_storage_certification_gate.py"
     },
     {
+      "path": "contracts/api_v1.yaml",
+      "guard": "tests/api/test_api_v1_contract.py",
+      "generator": "scripts/gen_api_v1_contract.py"
+    },
+    {
       "path": "contracts/api_endpoint_index_v1.json",
       "guard": "tests/api/test_api_endpoint_index.py",
-      "generator": "scripts/gen_api_endpoint_index.py"
+      "generator": "packages/tofu-xtask"
+    },
+    {
+      "path": "contracts/events_v1.json",
+      "guard": "tests/events/test_events_v1_contract.py",
+      "generator": "scripts/gen_event_contract.py"
     },
     {
       "path": "contracts/config_knobs_v1.json",
@@ -326,8 +346,8 @@
       "guard": "tests/proof/test_deliverable_proof_contract.py"
     },
     {
-      "path": "contracts/experiment_credential_reservations_v1.json",
-      "guard": "tests/llm_dispatch/test_fallback_credential_reservation.py"
+      "path": "contracts/deliverable_launch_v1.schema.json",
+      "guard": "tests/production/test_deliverable_launch.py"
     },
     {
       "path": "contracts/resource_policy_v1.json",
@@ -497,9 +517,11 @@
     "docs/NETWORK.md",
     "docs/ROUTER.md",
     "docs/COMPUTE_PATROL.md",
+    "docs/RUST_BUILDS.md",
     "docs/METRICS.md",
     "docs/HARNESS_PERFORMANCE.md",
     "docs/RUST_REWRITE_EVIDENCE.md",
+    "docs/GOLDEN_DOCUMENTS.md",
     "docs/ROBUSTNESS_AUDIT_20261117.md",
     "docs/README.md",
     "docs/DEVELOPER_RUNTIME.md",
@@ -533,6 +555,7 @@
     "docs/PAPER_CITATIONS.md",
     "docs/PAPER_QUALITY.md",
     "docs/DOCUMENT_PIPELINE.md",
+    "docs/PAPER_STYLE_EVIDENCE.md",
     "docs/STORAGE_PERFORMANCE_CHARTER.md",
     "docs/TOFUDB_PIPELINE_CRITICAL_PATH.md",
     "docs/TOFUDB_PUBLICATION_LATENCY.md",
@@ -555,7 +578,8 @@
     "docs/contracts/WORKING_FACTS.md",
     "docs/contracts/TOOL_RESULT_QUERY.md",
     "docs/ANDROID_LOCAL_KERNEL.md",
-    "docs/ANDROID_KERNELS.md"
+    "docs/ANDROID_KERNELS.md",
+    "docs/PROJECT_TOOLCHAINS.md"
   ],
   "domain_maps": [
     "docs/modules/auth_providers_billing.md",
@@ -637,6 +661,7 @@
     "docs/ROOTLESS_VM_SANDBOX.md",
     "docs/PROXY_RUNTIME.md",
     "docs/runbooks/EPIC_D_SCALE_ROLLOUT_RUNBOOK.md",
+    "docs/runbooks/RETIRE_GATEWAY_KEY_R2.md",
     "docs/contracts/TRB-fastpath.md",
     "docs/contracts/COMPAT_OPENAI.md",
     "docs/contracts/COMPAT_ANTHROPIC.md"

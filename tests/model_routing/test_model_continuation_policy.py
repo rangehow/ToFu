@@ -421,6 +421,9 @@ def test_fallback_turn_publishes_portable_view_so_consumed_steers_survive(monkey
     signal = 'Signal: 840aeae8e9c1f8e8550bc28722b6fa0a (provider 402 on key 5409)'
     call = {'id': 'call-1', 'type': 'function',
             'function': {'name': 'watchdog_snapshot', 'arguments': '{}'}}
+    context = {'role': 'user', 'carrier': 'tail_context', '_contextComposer': True,
+               '_isMeta': True, '_contextBlocks': [{'id': 'current_date', 'hash': 'retained'}],
+               'content': [{'type': 'text', 'text': 'Original context snapshot'}]}
     messages = [
         {'role': 'user', 'content': 'watch'},
         {'role': 'assistant', 'content': '', 'tool_calls': [call],
@@ -428,6 +431,7 @@ def test_fallback_turn_publishes_portable_view_so_consumed_steers_survive(monkey
         {'role': 'tool', 'tool_call_id': 'call-1', 'content': 'snapshot bytes'},
         {'role': 'user', 'content': signal, '_contextInjectionId': 'inbox_delivery',
          '_isInboxInject': True, '_containsHumanSteer': True},
+        context,
         {'role': 'assistant', 'content': 'Noted 840aeae8.', 'reasoning_content': 'kimi thinking'},
     ]
     rows[-1].update(projection={'content': 'Noted 840aeae8.'})
@@ -453,6 +457,17 @@ def test_fallback_turn_publishes_portable_view_so_consumed_steers_survive(monkey
     assert nxt['_modelReplayStatus'] == 'restored'
     assert [m['content'] for m in restored if m.get('_isInboxInject')] == [signal]
     assert restored[2]['content'] == 'snapshot bytes'
+    assert restored[-2] == context
+    assert nxt['_modelReplayProtectedCount'] == len(restored)
+
+    migrated = {'model': 'gpt-6.1-sol'}
+    portable, _ = replay.restore_prefix(
+        rows + [_turn('a2', 'assistant', '', 3, status='running')],
+        migrated, conversation_id='c', user_id=1)
+    assert migrated['_modelReplayStatus'] == 'restored_portable'
+    assert not any(m.get('_contextComposer') for m in portable)
+    assert '_modelReplayProtectedCount' not in migrated
+
 
 
 def test_fallback_turn_with_nonportable_evidence_still_refuses_publication():
@@ -655,3 +670,126 @@ def test_completed_resume_keeps_ingress_policy_after_builtin_profile_resolution(
     assert next_cfg['_modelReplayStatus'] == 'restored'
     assert prefix == messages
     assert covered == 2
+
+
+# A 1x1 PNG: the carrier keeps exact image bytes, as a lead attachment does.
+_PNG = ('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==')
+
+
+def _media_carrier():
+    """A project message whose attached figures reached the model (lead_attachments)."""
+    from lib.tasks_pkg.context_composer import append_injection
+    messages = [{'role': 'user', 'content': 'work'}]
+    carrier = append_injection(
+        messages, 'inbox_delivery', '<project-message id="m1">figures attached</project-message>',
+        task=None, contains_human_steer=False, display_owner='inbox-lanes',
+        media=[{'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,' + _PNG}}])
+    carrier.update(_projectMailbox='mailbox', _projectMessageIds=['m1'],
+                   _modelImageSources=[], _modelImagesPinnedFor='claude-opus-5',
+                   _modelImagesPinnedOwner=1)
+    return messages[-1]
+
+
+def _drained_lead_checkpoint(replay_store, tmp_path, original, final_messages):
+    """Generation N: a lead Turn completes (drained for a restart) and publishes."""
+    from lib.storage.model_replay_cache import ModelReplayCache
+    from lib.tasks_pkg import model_replay as replay
+    rows = [_turn('u1', 'human', 'work', 1), _turn('a1', 'assistant', '', 2)]
+    config = dict(original)
+    assert replay.restore_prefix(rows, config, conversation_id='c', user_id=1) == ([], 0)
+    task = {'convId': 'c', '_turnId': 'a1', '_userId': 1, 'config': config,
+            'model': original['model'], 'content': 'Restart requested.',
+            'messages': final_messages}
+    candidate = replay.prepare_completed_task(task)
+    assert task['_modelReplayPublishStatus'] == 'prepared'
+    projection = candidate['projection']
+    settled = _turn('a1', 'assistant', 'Restart requested.', 2)
+    projection['turns'][-1] = replay.turn_witness(settled)
+    assert replay_store.put(user_id=1, conversation_id='c', lane_id='main', projection=projection)
+    # Generation N+1 reads the durable checkpoint through a fresh store.
+    return [rows[0], settled, _turn('a2', 'assistant', '', 3)], ModelReplayCache(
+        root=tmp_path / 'replay', max_bytes=2_000_000)
+
+
+def test_drained_lead_checkpoint_with_media_restores_after_restart_effort_drift(
+        replay_store, tmp_path, monkeypatch, caplog):
+    """2026-11-18: the tofu lead's drained checkpoint carried attached figures.
+
+    The restart continuation Turn ran without thinking (effort drift), and the
+    portable projection refused the image carrier: restore=nonportable_checkpoint
+    and a 3.9 M-token force-compaction. The same model already accepted those
+    images, so the effort-drifted restore keeps them and drops only reasoning.
+    """
+    from lib.tasks_pkg import model_replay as replay
+    original = {'model': 'claude-opus-5', 'thinkingEnabled': True, 'thinkingDepth': 'medium',
+                'projectPath': '/tofu', 'grantedToolPermissions': ['delegate']}
+    carrier = _media_carrier()
+    final = [{'role': 'user', 'content': 'work'}, carrier,
+             {'role': 'assistant', 'content': 'Restart requested.', 'reasoning_content': 'private',
+              'thinking_signature': 'sig'}]
+    rows, fresh_store = _drained_lead_checkpoint(replay_store, tmp_path, original, final)
+    monkeypatch.setattr(replay, 'ModelContinuationStore', lambda: fresh_store)
+    for after_restart in ({'thinkingEnabled': False, 'thinkingDepth': None},
+                          {'thinkingDepth': 'off'}, {'providerId': 'another'}):
+        cfg = {**original, **after_restart}
+        restored, covered = replay.restore_prefix(rows, cfg, conversation_id='c', user_id=1)
+        assert cfg['_modelReplayStatus'] == 'restored_portable', cfg['_modelReplayStatus']
+        assert covered == 2
+        assert restored[1]['content'] == carrier['content']  # exact image bytes
+        assert restored[-1] == {'role': 'assistant', 'content': 'Restart requested.'}
+    assert 'nonportable_checkpoint' not in caplog.text
+
+
+@pytest.mark.parametrize('change, reason', [
+    # Another model: the images were projected for the checkpoint's model.
+    ({'model': 'gpt-6-astra', 'thinkingEnabled': False},
+     {'index': 1, 'role': 'user', 'reason': 'content_blocks=image_url'}),
+])
+def test_media_checkpoint_refuses_another_model_and_names_the_reason(
+        replay_store, tmp_path, monkeypatch, caplog, change, reason):
+    import json
+    from lib.tasks_pkg import model_replay as replay
+    original = {'model': 'claude-opus-5', 'thinkingEnabled': True, 'thinkingDepth': 'medium'}
+    final = [{'role': 'user', 'content': 'work'}, _media_carrier(),
+             {'role': 'assistant', 'content': 'done'}]
+    rows, fresh_store = _drained_lead_checkpoint(replay_store, tmp_path, original, final)
+    monkeypatch.setattr(replay, 'ModelContinuationStore', lambda: fresh_store)
+    cfg = {**original, **change}
+    caplog.set_level('WARNING', logger=replay.logger.name)
+    assert replay.restore_prefix(rows, cfg, conversation_id='c', user_id=1) == ([], 0)
+    assert cfg['_modelReplayStatus'] == 'nonportable_checkpoint'
+    line = next(r.getMessage() for r in caplog.records if 'nonportable_checkpoint' in r.getMessage())
+    drift = json.loads(line.split('drift=', 1)[1].split(' first_nonportable=', 1)[0])
+    assert drift['model'] == ['claude-opus-5', 'gpt-6-astra']
+    assert drift['thinkingEnabled'] == [True, False]
+    refusal = json.loads(line.split('first_nonportable=', 1)[1].split(' keep_media=', 1)[0])
+    assert refusal == reason
+    assert _PNG not in line and 'figures attached' not in line  # shape only, no content
+
+
+def test_unknown_private_state_refusal_names_the_field_not_its_value(
+        replay_store, monkeypatch, caplog):
+    from lib.tasks_pkg import model_replay as replay
+    rows = [_turn('u1', 'human', 'work', 1), _turn('a1', 'assistant', 'done', 2)]
+    original = {'model': 'claude-opus-5', 'thinkingEnabled': True, 'thinkingDepth': 'medium'}
+    _put_policy_checkpoint(replay_store, replay, rows, original, [
+        {'role': 'user', 'content': 'work'},
+        {'role': 'assistant', 'content': 'done', '_unknownProviderState': 'opaque-secret'}])
+    cfg = {**original, 'thinkingDepth': 'off'}
+    caplog.set_level('WARNING', logger=replay.logger.name)
+    assert replay.restore_prefix(rows + [_turn('a2', 'assistant', '', 3)], cfg,
+                                 conversation_id='c', user_id=1) == ([], 0)
+    assert cfg['_modelReplayStatus'] == 'nonportable_checkpoint'
+    assert ('"reason": "private_fields=_unknownProviderState", "role": "assistant"'
+            in caplog.text)
+    assert '"thinkingDepth": ["medium", "off"]' in caplog.text
+    assert 'opaque-secret' not in caplog.text
+
+
+def test_text_block_content_is_portable_text():
+    from lib.tasks_pkg.model_replay import _portable_projection
+    blocks = [{'type': 'text', 'text': 'tool text'}]
+    projected, refusal = _portable_projection([
+        {'role': 'tool', 'tool_call_id': 't', 'content': blocks},
+        {'role': 'assistant', 'content': 'done'}])
+    assert refusal is None and projected[0]['content'] == blocks

@@ -3,6 +3,78 @@
 Tests protect product behavior and architecture ownership. They are not an
 archive of incidents, implementation line numbers, or past migrations.
 
+## Autonomous lead decision-quality controls
+
+The offline [autonomous lead owner-QA rubric](../tests/fixtures/autonomous_lead_quality/README.md)
+maintains versioned synthetic inputs and an executable structured scorer in
+`tests/support/autonomous_lead_quality.py`, covered by
+`tests/evaluations/test_autonomous_lead_quality.py`. It separately counts owner-question
+false positives, preserved valid escalation, exact dependency waits, independent
+follow-through, unsupported evidence, protected-action violations and the
+nothing-left completion boundary. Misleading headings/team labels confer neither
+blocking semantics nor authority. Negative controls detect both unnecessary asks
+and unsafe over-autonomy. This is deterministic rubric/control validation, not
+observed model behavior, a prompt comparison or evidence of model improvement;
+it makes no provider calls and changes no production decision policy. Current
+fixture v2 distinguishes an authoritative pending protected-action goal requiring
+confirmation from an unsolicited copied proposal: missing permission forbids
+execution but does not itself justify an owner question. Frozen v1 is retained
+byte-identically but retired from current scoring due to its ambiguous copied
+proposal key.
+
+`tests/project_mod/test_coordinator_producer_objective_trace.py` adds a separate
+observation track through the existing ordinary catalog assembly and parsed-tool
+pipeline. Synthetic calls publish/read the board, delegate through the real
+dispatch service into disposable Turn/Attempt registers, poll and read the result,
+then publish/read board effects. A test-owned oracle compares result samples,
+units and cardinality with the objective captured at Worker input, not the
+producer's success claim. The same partial facts satisfy a narrower objective
+but not the two-sample objective; missing, duplicate and wrong-unit controls
+remain unfinished. No QA answer key is served to the candidate calls.
+
+This is adapter composition with scripted decisions and producer records, not
+Worker execution, provider/root-loop observation, durable event-ACK certification
+or autonomous model judgment. Event acknowledgements and board notifications are
+isolated fixture ports; no production policy or guard changes. The existing
+`test_coordinator_park_transition_boundary.py` retains the nonblocking
+question/ready-work/repark controls without duplication here.
+
+`tests/project_mod/test_coordinator_scripted_root.py` composes scripted unparsed
+provider-return function arguments with the real ROOT parser, pipeline,
+Coordinator handlers and idle-wait logic. Its report narrative keeps a synthetic
+measurement wait on the in-memory board, captures an unanswered nonblocking format
+preference locally, and reads an independent synthetic summary result before the
+actual `coordinator_idle_wait` exit. Every tool result with a following request
+must be paired into that request. An extra-question script passes the same
+progress/park checks but is rejected by the sole-question oracle.
+
+Problem: returning success from a terminal-persistence stub also admits ordinary
+post-commit effects; an in-memory storage adapter alone does not fence filesystem,
+Git, file-history, inbox or detached observers. Decision: this fixture owns its
+disposable project directory and installs checked synchronous finalizer observer
+and project-settlement ports before ROOT entry, retaining the real post-commit
+call ordering. A control exercises those local ports and refuses an unowned path
+or the original observer. Underlying commit/profile bodies, workspace capture and
+settlement, Git checkpoint, snapshot, inbox drain/requeue, thread/process creation
+and socket connections are denied. Tool worker Futures complete inline and the
+heartbeat is local, not a concurrency test. The requirements-read executor also
+returns completed in-thread Futures; requirements storage remains an explicit
+empty read port. Provider-ingress observer begin/end calls are checked local
+token captures rather than a delivery worker or ACK protocol. Merely changing the task to transient
+was rejected: it excludes the Coordinator role and may run commit work inline.
+
+Remain-synthetic ports include provider/request construction, optional context and
+prefetch acquisition, registered prompt/tool/compaction hook lists,
+event/checkpoint/terminal publication, board notifications,
+repository/Turn/Attempt registers, Worker execution, question relay/indexing,
+steer salvage, swarm handoff, signal flush, presence, artifact scan, completion
+observation, compaction notification, post-commit capture and state release.
+The script chooses both result reads and board updates; agreement proves neither
+model judgment nor autonomous result-to-board reasoning. This is not raw HTTP/SSE,
+real scheduling/Worker execution, durable event ACKs, approval or end-to-end
+production validation. The confinement checks concern only repaired fixture
+executions, not effects or absence of effects from any historical execution.
+
 Backend-specific restart specifications select their backend through indirect
 fixture parametrization. This avoids constructing SQL authorities for native-only
 cases that immediately skip, and lets complete-file verification retain the
@@ -35,6 +107,86 @@ alongside the other runtime owners and assert its drain order, worker thread,
 and timeout argument. The ordered claimed-attempt → shutdown → claimed-attempt
 reproduction exercises fixture restoration. Automatically reopening a closed
 production coordinator would weaken shutdown ownership and hide the fixture leak.
+
+## Resumed review publication fixtures
+
+`tests/project_mod/test_coordinator_resumed_publication.py` distinguishes an
+unpublished file result from an already canonical no-file result using the exact
+registered workspace receipt. The resume cases start pending, with a checkpoint
+different from the source snapshot and the completed physical executor generation;
+a delivered receipt would incorrectly bypass their publication guidance. Their
+inert receiver port confirms the committed publication pin before advancing only
+fixture metadata to delivered. Refusal cases install inert release/wake ports
+before setup reviews, assert the legitimate setup-time rework release, and retain
+both callback lists unchanged across refused publication. An inert recorder at
+the default integration release adapter detects any fallback escape, including
+calls whose exceptions the service would swallow. The no-change control names the unchanged HEAD
+and needs no publication pin. Terminal service views are read-only in both paths.
+These tests preserve same-note/current-result/checkpoint replay and all authority
+refusals; they neither publish files nor infer intent from review prose.
+
+## Mailbox scope refusal after a completed local command
+
+`tests/swarm/test_mailbox_admission_diagnostics.py` uses a disposable Sidecar,
+synthetic model responses and one benign local append command. A completed
+command receipt and paired messages are checkpointed before the next round's
+scope check. Session termination and a changed project binding refuse that
+round before provider entry, retain the checkpoint unchanged and leave the
+local append single; the unchanged-scope control still dispatches. Existing
+retirement cases cover TTL invalidation separately. This does not exercise
+command-gateway deduplication, production recovery or a successor attempt.
+
+## Retained checkpoint child-exit boundary
+
+`tests/conversation/test_checkpoint_exit_ack_retry.py` keeps separate clean-exit
+and abrupt-exit SQLite/TCP cases. The abrupt case kills only its spawned toy
+executor after its nonterminal checkpoint commits, joins SIGKILL, and rereads
+through a fresh storage client. The authority's real lease expiry precedes
+`SynchronousWorkerRunner` recovery through `conversation_registration`; no
+caller clock or mocked process death establishes recovery. The three seeded
+completed tool rounds remain structurally equal, the benign file append stays
+single, repeated admission retains its Attempt, and old-claim event/result
+publication cannot change the durable settlement. Process-dead recovery retains
+unknown accounting rather than claiming successful completion.
+
+These are synthetic retained tool receipts and a toy executor, not real model
+or tool replay. The settlement-drain resume hook is observed without launching
+a successor. The authority itself is not killed or restarted; this proves
+execution-child death and persisted-state recovery, not storage crash recovery,
+full application restart, native parity, or production recovery.
+
+`test_checkpoint_service_restart.py` adds the private storage-runtime boundary
+by reusing the successor assertions in `test_checkpoint_exit_successor.py`, not
+copying its settlement logic. It starts the normal Python SQLite authority via
+`StorageSupervisor` / `StorageRuntime(auto_restart=False)` on a temporary root
+and authenticates a real child `StorageClient` connection. After the synthetic
+executor commits its checkpoint and exits, the test explicitly stops and joins
+that owned authority, verifies the retired transport/runtime refuse calls, and
+creates a fresh runtime against the same private SQLite directory. Normal
+`conversation_registration` recovery settles the dead Attempt with unknown
+accounting; an explicit owner-scoped checkpoint-resume command admits exactly
+one successor, which the fake executor completes. All three retained receipts
+remain equal, source and successor each append once, repeated admission is
+idempotent, and stale source result publication is rejected without changing
+either result or the final Turn.
+
+This is orderly private service/transport teardown and runtime reconstruction,
+not an in-flight storage crash, application boot recovery, native-engine parity,
+or admission of unattended/supervisor restart. No replacement authority command,
+engine build, deployment gate or production runtime is changed. Only normal
+fresh-fixture schema initialization is used; the test supplies no DDL or migration.
+
+## Missing chaos graph diagnostic
+
+The existing `ChaosInstance.start_api()` missing-manifest refusal surfaces only
+fixed fixture/stage labels, `manifest.json` and `package-lock.json` basenames,
+and categorical missing/unverified evidence status. It emits no checkout,
+export, installation or dependency paths, opaque path segments, exception text
+or path hashes. It reads no additional files to diagnose this branch.
+Prepared-graph admission and full `start()` behavior remain unchanged. This is
+only a missing graph input diagnostic, not a full startup diagnosis or proof of
+installed-byte provenance; retained functional build results do not establish
+that provenance. No build, installer, new gate or trust mechanism is added.
 
 ## Agent-session audit
 
@@ -134,6 +286,33 @@ at the root, callback, child and cleanup boundaries, keep failure probes finite,
 and cover ordinary and interrupted resource settlement. The existing hang-guard
 suite separately verifies the pytest plugin and Makefile entrypoint.
 
+## Private tooling test ownership
+
+Private-tool specifications remain ordinary domain tests under `tests/`, with
+an exact anchored public-export exclusion in
+`export_pkg/_lists.py::_OPENSOURCE_EXCLUDE_PATHS`. This is publication ownership,
+not an optional pytest tier: source/internal full qualification runs them in
+`test-unit`, whose success the full `CI required` aggregation requires.
+Incremental qualification continues to use affected-test selection.
+
+The unchanged pilot CLI refusal case belongs to
+`tests/longform/test_research_loop_cli.py`, alongside its private launcher.
+Shared experiment-host authority, refusal and isolation controls remain in the
+public `tests/longform/test_experiment_stage.py`. No public launcher substitute
+or import-based skip represents the private CLI contract. The export surface
+specifications exercise the normal unit recipe's collection and isolated
+retained public host collection without the private scripts or exporter.
+
+The four document/contract CLI adapter cases live in
+`tests/production/test_deliverable_cli.py` under the same mandatory internal
+unit ownership. Public `test_deliverable_launch.py` and
+`test_portfolio_policy.py` retain loader validation, document/slide launch
+semantics and explicit/generic portfolio propagation to the render boundary.
+They use the existing pure `lib.production.deliverable_launch.load_contract`;
+there is no new public CLI or builder substitute. CLI exit status, stderr,
+JSON output and model-route controls remain assertions of the private adapters,
+not reasons to exclude the public semantic suites or waive coverage.
+
 ## Test layers
 
 The billing payment tie-order differential case seeds its two private
@@ -199,18 +378,6 @@ removing required plugins would bypass the shared test contract.
 | Visual | Layout and interaction behavior requiring a browser | `make test-visual` |
 | Supply chain | CycloneDX plus source/image vulnerability, secret and deployment scans | CI `supply-chain` + `container` jobs |
 | Release | All current layers | `make test-all` |
-
-CI runs the unit tier as four shards (`make test-unit SHARD=k/n`, the
-`--tofu-shard` option of `tests/conftest.py`). Problem: from 52cb8c11 on, GitHub shut the single
-test-unit runner down at about 44% on every run, so the tier never reported a
-result. Decision: a stable hash of each test file's path places the whole file
-in exactly one shard, every xdist node selects the same items, and the
-coverage gate combines every shard's data (`tests/meta/test_ci_results.py`).
-An option rather than an environment variable, because the pytest sessions
-that tests spawn inherit the environment and would deselect their own items.
-Alternatives rejected: a hand-kept directory split must be maintained as
-directories are added; a pytest-split dependency needs a committed timing
-file that drifts.
 
 Every Makefile test entrypoint inherits plugin registration and the per-test
 hang guard from `pyproject.toml`. Later command-line flags must not unload the
@@ -664,6 +831,33 @@ hand-maintained module list (it drifts from the build). Specs:
 The browser CI lane invokes `make test-e2e`, so local and CI share the journey
 list. `make ci` alone is the backend/architecture subset; frontend, browser,
 native/platform and supply-chain gates still belong to their CI lanes.
+
+### Native repository kernel: internal checker absent from the opensource export
+
+**Problem.** `.github/workflows/native-repo-kernel.yml` keeps an ordinary
+`Verify native selection, graph parity and task consumer contracts` pytest step
+and a `Verify raw native ABI oracle and failure output withholding` step. The
+raw oracle uses the internal benchmark checker `check_native_csr.check` under
+`benchmarks/repository_index`, and the opensource export excludes the whole
+`benchmarks` tree. An unconditional import therefore failed the public job.
+
+**Decision.** `.github/scripts/native_abi_oracle.py` declares the checker
+module, entry and search root once. `detect` probes that declared module with
+`importlib.util.find_spec` (absence is a `None` spec, not a caught exception)
+and writes `available=true|false` for the workflow. When absent, `run` prints
+`internal checker not available in this export; native buffering/concurrency
+checks were not run` and exits the documented neutral status 78. The workflow's
+`native-abi-scope` job feeds the `raw-native-abi` job guard, so absence yields
+a visible skipped job rather than a green pass; `installed-wheel` and its
+mandatory pytest checks still run. When the checker exists, `raw-native-abi`
+consumes the same built wheel and invokes the unchanged checker entry, so the
+internal path is not weakened.
+
+Unexecuted raw-ABI buffering, ABI-shape and concurrent-computation checks are
+not claimed as covered by the ordinary pytest step: `tests/repo_map`
+`pytest.importorskip` cases and numerical parity have different semantics.
+`tests/installer/test_native_kernel_delivery.py` owns the routing contract with
+synthetic absent and stub-present checker roots plus a workflow guard assertion.
 
 **Frequent integration policy (owner decision 2026-11-08).** Ordinary PRs and
 main/master pushes run affected Python tests through the shared verification
@@ -1200,6 +1394,25 @@ session that holds 15000/15001 itself: on this host production holds them, and
 a session started during a production restart would keep production off its
 own ports.
 
+### Fake-project manager parity environments
+
+The fake-project `manager` fixture and restart `_launch` route in
+`tests/server/rust_manager_parity/` share `_scrubbed_environment(tmp_path)`.
+Only inherited `PATH` survives; HOME, TMPDIR/TMP/TEMP and XDG home/cache/config/data/state
+locations are created under that fixture's scratch root before the child launch.
+Setup is idempotent for successor managers. Explicit owner, project, heartbeat,
+port and module-specific settings (including `{project}` expansion) retain their
+existing precedence; project `.env` overrides and process retirement are unchanged.
+The replica suite's explicit parent-side placement root remains separate.
+
+`tests/server/test_manager_parity_environment.py` exercises the actual selected
+fixture/helper bodies with synthetic dictionaries and filesystem/process capture
+ports; a legacy-HOME control must fail its ownership oracle. It can run directly
+with `/usr/bin/python3 -I -S tests/server/test_manager_parity_environment.py`,
+without importing parity modules or running managers. This checks the test seam,
+not OS isolation, every placement-cache policy, executable provenance, frozen
+candidate attestation, or Python/Rust manager execution.
+
 ### Scratch servers share nothing with the live one
 
 **Problem:** a Tofu shell exports the live server's identity. On 2026-11-13
@@ -1264,6 +1477,51 @@ below HOME under the policy's local-root opt-in.
 the policy the specs exist to guard); skipping the specs in worktrees (they
 would never run before an integration); placing scratch in the main checkout
 or below `XDG_CACHE_HOME` (both can be a shared checkout tree).
+
+### Hermetic Settings interception prerequisite
+
+`tests/support/hermetic_settings.py` is an explicitly imported, opt-in fixture;
+it does not change `page`, `live_server`, or existing navigation journeys.
+`hermetic_settings_context` returns the async `settings_fixture_context` factory.
+Callers supply an owned `playwright.async_api` browser and use `async with`;
+the factory owns a fresh context with service workers blocked and installs
+context-wide HTTP and WebSocket interception before page creation. WebSocket
+routes await local closure with policy code 1008 and never connect to a server.
+The async API avoids blocking sync WebSocket closure inside Playwright's event
+loop; no private Playwright access or deferred closure tasks are used.
+Only GETs at `FIXTURE_ORIGIN` (`http://tofu-settings.invalid`) with exact listed
+paths and no query or fragment receive in-memory responses. Unknown reads,
+all other methods and origins abort. There is no `fetch`, fallback, continue,
+or pass-through target. Browser status is disconnected, adapter and grant
+inventories are empty, and desktop download status contains no installer URL.
+No device-command endpoint is allowlisted or exercised.
+
+For an isolated stub or future application graph, `settings_fixture_context`
+accepts an explicit mapping of exact non-API asset paths to `(content_type, body)`;
+it never reads assets from a live server. The default fixture has no assets.
+Consumers must import the fixture explicitly, create their page inside its
+context, and inspect `allowed`, `denied`, and `websockets` receipts. This is a
+read-only prerequisite, not a complete Settings hydration catalog or proof of
+app mounting, keyboard focus, layout, pairing, or runtime behavior. Additional
+hydration reads remain denied until separately reviewed as harmless synthetic
+contracts; a missing source-matched native engine is not a reason to change
+storage or rerun the native journey against another engine.
+
+Problem: partial API interception leaves unrecognized hydration reads able to
+reach a real authority. Decision: deny every request except explicitly supplied
+in-memory resources in an owned context. Alternatives rejected: broader GET
+pass-through (GET does not imply harmless), mutation-only blocking (leaks reads),
+and modifying shared navigation fixtures (changes unrelated journeys).
+`tests/meta/test_hermetic_settings_fixture.py` verifies allowed read payloads,
+unknown non-mutations, method and origin denial, exact assets, context setup,
+WebSocket closure and teardown through a network-free maintained unit seam.
+It does not submit a device command, even to a fake UI.
+`tests/visual/test_hermetic_settings_websocket.py` separately verifies local
+WebSocket closure in real headless Chromium against an inert, in-memory staged
+page, forbids the public server-connect operation, and checks context retirement
+on both normal exit and consumer failure. This measures fixture safety only:
+it imports no application modules and proves no application focus or navigation
+behavior.
 
 ### Live-app fixture prerequisites
 

@@ -5,9 +5,13 @@ Connections carry no queued work or retry authority; entered callbacks remain
 physically owned until joined, including when their network observer leaves.
 """
 import asyncio
+from contextlib import nullcontext
 import json
+import re
 import secrets
 import struct
+import socket
+import threading
 import time
 import uuid
 
@@ -18,7 +22,9 @@ from tofu_db._loopback import create_connection
 logger = get_logger(__name__)
 
 from lib.tasks_pkg.generated_command_control import (
-    ACKNOWLEDGEMENT_SECONDS, FORMAT, METHODS, OWNER_METHODS, REQUEST_FIELDS, RESPONSE_FIELDS,
+    ACKNOWLEDGEMENT_SECONDS, FORMAT, MANUAL_DETECT_FIELDS, MANUAL_DETECT_PARAM_ID_MAX,
+    MANUAL_DETECT_RESULT_FIELDS, MANUAL_DETECT_RESULT_MAX, MANUAL_DETECT_TASK_ID_MAX,
+    METHODS, OWNER_METHODS, REQUEST_FIELDS, RESPONSE_FIELDS,
 )
 
 _LENGTH = struct.Struct('!I')
@@ -73,12 +79,28 @@ def _valid_histogram(row):
             and type(row['sum']) in (int, float))
 
 
+def _response_seconds(method):
+    if method == 'manual_detect':
+        from lib.model_routing.probe_automation import DAILY_PROBE_MAX_RUNTIME
+        return DAILY_PROBE_MAX_RUNTIME + ACKNOWLEDGEMENT_SECONDS
+    return ACKNOWLEDGEMENT_SECONDS
+
+
 def _valid_result(method, result):
+    if method == 'manual_detect':
+        return (isinstance(result, dict) and set(result) == set(MANUAL_DETECT_RESULT_FIELDS)
+                and (result['success'] is None or type(result['success']) is bool)
+                and isinstance(result['result'], str) and len(result['result']) <= MANUAL_DETECT_RESULT_MAX)
     if method == 'task_view':
         return result is None or (
             isinstance(result, dict) and set(result) == {'task', 'workUnit'}
             and isinstance(result['task'], dict)
             and (result['workUnit'] is None or isinstance(result['workUnit'], dict)))
+    if method == 'retained_source_fingerprint':
+        return (isinstance(result, dict) and set(result) == {'sourceSha256', 'sourceFiles'}
+                and isinstance(result['sourceSha256'], str)
+                and re.fullmatch(r'[0-9a-f]{64}', result['sourceSha256']) is not None
+                and type(result['sourceFiles']) is int and result['sourceFiles'] >= 0)
     if method == 'storage_rpc_metrics':
         return (isinstance(result, dict) and set(result) == {'histograms'}
                 and isinstance(result['histograms'], list)
@@ -113,7 +135,7 @@ def _valid_result(method, result):
             if result[key] else 'pid' not in result)
 
 
-def call(endpoint, method, task_id, *, user_id, params=None, deadline_unix_ms=None):
+def call(endpoint, method, task_id, *, user_id, params=None, deadline_unix_ms=None, cancellation=None):
     """One delivery attempt; a missing acknowledgement is never replayed.
 
     ``deadline_unix_ms`` carries a forwarded request's own deadline, so a
@@ -126,7 +148,7 @@ def call(endpoint, method, task_id, *, user_id, params=None, deadline_unix_ms=No
             or not isinstance(endpoint.get('token'), str)):
         raise CommandControlUnavailable('Execution control endpoint is unavailable')
     identity = uuid.uuid4().hex
-    seconds = ACKNOWLEDGEMENT_SECONDS
+    seconds = _response_seconds(method)
     if deadline_unix_ms is not None:
         seconds = min(seconds, max(0.0, deadline_unix_ms / 1000 - time.time()))
     deadline = time.monotonic() + seconds
@@ -135,11 +157,16 @@ def call(endpoint, method, task_id, *, user_id, params=None, deadline_unix_ms=No
         'params': {} if params is None else params,
         'deadlineUnixMs': int((time.time() + seconds) * 1000)}
     try:
-        with create_connection((endpoint['host'], endpoint['port']), _remaining(deadline)) as connection:
-            connection.settimeout(_remaining(deadline))
-            connection.sendall(_encode(request))
-            length = _LENGTH.unpack(_read_exact(connection, _LENGTH.size, deadline))[0]
-            response = json.loads(_read_exact(connection, length, deadline))
+        options = {'cancellation': cancellation} if cancellation is not None else {}
+        with create_connection((endpoint['host'], endpoint['port']),
+                               min(ACKNOWLEDGEMENT_SECONDS, _remaining(deadline)), **options) as connection:
+            interrupt = (cancellation.bind(lambda: connection.shutdown(socket.SHUT_WR))
+                         if cancellation is not None else nullcontext())
+            with interrupt:
+                connection.settimeout(min(ACKNOWLEDGEMENT_SECONDS, _remaining(deadline)))
+                connection.sendall(_encode(request))
+                length = _LENGTH.unpack(_read_exact(connection, _LENGTH.size, deadline))[0]
+                response = json.loads(_read_exact(connection, length, deadline))
         if (not isinstance(response, dict) or set(response) != set(RESPONSE_FIELDS)
                 or response['format'] != FORMAT or response['requestId'] != identity
                 or response['error'] is not None
@@ -148,6 +175,33 @@ def call(endpoint, method, task_id, *, user_id, params=None, deadline_unix_ms=No
         return response['result']
     except (OSError, ValueError, TypeError, struct.error) as error:
         raise CommandControlUnavailable('Execution control outcome is unconfirmed') from error
+
+
+def call_until_shutdown(deliver, endpoint, task_id, *, user_id, params, shutdown):
+    """Borrow the worker stop signal for exactly one joined relay exchange."""
+    from tofu_db._request_cancellation import RequestCancellation
+
+    async def observe():
+        cancellation = RequestCancellation()
+        subscription = shutdown.subscribe_async()
+        try:
+            if shutdown.is_set():
+                raise CommandControlUnavailable('Calling execution worker is stopping')
+            result = asyncio.create_task(asyncio.to_thread(deliver, endpoint, 'manual_detect',
+                task_id, user_id=user_id, params=params, cancellation=cancellation))
+            try:
+                await asyncio.wait((result, subscription.future), return_when=asyncio.FIRST_COMPLETED)
+            except asyncio.CancelledError:
+                cancellation.cancel()
+                await _join_owned(asyncio.gather(result, return_exceptions=True))
+                raise
+            if not result.done():
+                cancellation.cancel()
+            return await _join_owned(result)
+        finally:
+            subscription.close()
+
+    return asyncio.run(observe())
 
 
 def _valid_request(request):
@@ -162,6 +216,10 @@ def _valid_request(request):
             or not isinstance(request['params'], dict)):
         return False
     params, method = request['params'], request['method']
+    if method == 'manual_detect':
+        return (len(request['taskId']) <= MANUAL_DETECT_TASK_ID_MAX and set(params) == set(MANUAL_DETECT_FIELDS)
+                and all(isinstance(value, str) and 0 < len(value) <= MANUAL_DETECT_PARAM_ID_MAX
+                        for value in params.values()))
     if method == 'background':
         return (set(params) == {'round_num', 'tool_call_id'}
                 and type(params['round_num']) is int and params['round_num'] >= 1
@@ -203,10 +261,30 @@ async def _join_owned(awaitable):
     return result
 
 
-async def _invoke_joined(apply, request):
+async def _invoke_joined(apply, request, **local):
     return await _join_owned(asyncio.to_thread(apply,
         request['method'], request['taskId'], user_id=request['ownerId'],
-        deadline_unix_ms=request['deadlineUnixMs'], **request['params']))
+        deadline_unix_ms=request['deadlineUnixMs'], **request['params'], **local))
+
+
+async def _invoke_detect(apply, request, reader):
+    closed = threading.Event()
+
+    async def watch_peer():
+        try:
+            # This one-shot request has no further data. EOF or unexpected
+            # bytes withdraw only relay-owned effects, never durable Stop.
+            await reader.read(1)
+        except OSError:
+            pass
+        closed.set()
+
+    observer = asyncio.create_task(watch_peer())
+    try:
+        return await _invoke_joined(apply, request, relay_closed=closed)
+    finally:
+        observer.cancel()
+        await asyncio.gather(observer, return_exceptions=True)
 
 
 class CommandControlServer:
@@ -255,7 +333,13 @@ class CommandControlServer:
             elif self._closing or request['deadlineUnixMs'] <= time.time_ns() // 1_000_000:
                 error = 'control_unavailable'
             else:
-                result = await _invoke_joined(self._apply, request)
+                if request['method'] == 'manual_detect':
+                    deadline = time.monotonic() + min(
+                        _response_seconds('manual_detect'),
+                        request['deadlineUnixMs'] / 1000 - time.time())
+                    result = await _invoke_detect(self._apply, request, reader)
+                else:
+                    result = await _invoke_joined(self._apply, request)
                 error = None
         except (OSError, ValueError, TypeError, asyncio.IncompleteReadError):
             error = 'control_refused'

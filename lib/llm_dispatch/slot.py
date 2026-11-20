@@ -151,6 +151,7 @@ class Slot:
     context_window: int = 0  # declared v2 Offering/Model limit; zero means unknown
     inference_profile: dict = field(default_factory=dict)
     route_snapshot: dict = field(default_factory=dict)
+    route_actual_pricing: dict | None = None  # Detached issued Offering rate card.
     # Compiler order inside one request-scoped group; -1 means unranked.
     route_rank: int = -1
     extra_headers: dict = field(default_factory=dict)  # provider-specific custom HTTP headers
@@ -168,6 +169,8 @@ class Slot:
                                     # compatible / openai / codex. Core
                                     # protocol support never implies public
                                     # OpenAI-only request fields.
+    codex_account_fingerprints: tuple[str, ...] = ()  # Off-wire route authority.
+    subscription_account: object = field(default=None, repr=False, compare=False)
     oauth: str = ''                 # subscription-OAuth provider for this slot:
                                     # '' = normal api_key auth (default)
                                     # 'claude' / 'codex' = resolve a live token +
@@ -284,6 +287,24 @@ class Slot:
             return 0.95  # assume good until proven otherwise
         return max(0.0, 1.0 - self.total_errors / self.total_requests)
 
+    def subscription_attribution(self) -> dict:
+        """Return the stored subscription provider and account for this slot.
+
+        Only facts this slot was issued with: an empty mapping for API-key
+        slots, ``subscription_provider`` for a subscription slot whose account
+        binding could not be resolved (an unattributable request), and both
+        keys when a specific account generation was bound.
+        """
+        if not self.oauth:
+            return {}
+        scoped = self.subscription_account
+        binding = scoped[0] if isinstance(scoped, tuple) and scoped else scoped
+        account_id = getattr(binding, 'account_id', '')
+        attribution = {'subscription_provider': self.oauth}
+        if isinstance(account_id, str) and account_id:
+            attribution['account_id'] = account_id
+        return attribution
+
     def key_stats_provider_id(self) -> str:
         """Stable owner+Provider namespace for durable credential health."""
         return key_stats_namespace(self.routing_owner_user_id,
@@ -319,6 +340,16 @@ class Slot:
         if self.route_credential_id and self.route_deployment_id:
             return f'{self.route_credential_id}:{self.route_deployment_id}'
         return self.key_name
+
+    @property
+    def cache_profile(self) -> str:
+        """Cache-timing profile dispatch passes to the cache settle gate.
+
+        The subscription OAuth provider names its upstream cache dialect
+        (``'codex'`` needs unmetered-write timing; the metered Anthropic wires
+        keep the generic window); an api_key slot has no profile.
+        """
+        return self.oauth or ''
 
     @property
     def requests_5h(self) -> int:

@@ -15,6 +15,7 @@ import { renderTurnStateInto } from './turn-render';
 import { ConversationSyncCoordinator, type ConversationSyncConnection } from './conversation-sync';
 import { createConversationEventMultiplexer } from './conversation-event-multiplexer';
 import { createTurnRenderObservations } from './turn-render-observations';
+import { createTurnStopFeedback } from './turn-stop-feedback';
 import {
   createTurnState, createTurnStore, reduceTurnState,
   type TurnEvent, type TurnState, type TurnStateUpdate, type TurnStore,
@@ -59,7 +60,19 @@ export function createConversationTurnRuntime(
     store: TurnStore;
     unsubscribe: () => void;
   }>();
-  const scheduledTerminalReleases = new WeakMap<RuntimeConversation, string>();
+  const stopFeedback = createTurnStopFeedback({
+    readState(conversation) {
+      const binding = boundConversations.get(conversation.id);
+      return binding?.conversation === conversation ? binding.store.getState() : null;
+    },
+    abortAttempt: attemptId => commands.abortAttempt(attemptId),
+    refresh: conversation => { void hydrateConversation(conversation).catch(options.onProtocolError); },
+    changed(conversation, unconfirmed) {
+      if (!options.isActive?.(conversation)) return;
+      options.updateSendButton?.();
+      if (unconfirmed) options.onStopUnconfirmed?.();
+    },
+  });
   const disposingConversations = new Set<string>();
   const renderObservations = createTurnRenderObservations(options, {
     readState: conversationId => runtimeStores.get(conversationId)?.getState() ?? null,
@@ -113,13 +126,8 @@ export function createConversationTurnRuntime(
     const currentProjection = () => currentBinding() && binding.store.getState() === state;
     options.onStateApplied?.(conversation, state, update);
     if (!currentProjection()) return;
-    let terminalSettled = false;
-    const finishingAttemptId = conversation._finishingAttemptId;
-    if (conversation._finishingStream && finishingAttemptId) {
-      const turnStatus = entityRecordValues(state.turnsById).find((turn) =>
-        turn?.currentAttemptId === finishingAttemptId)?.status;
-      terminalSettled = terminal.has(turnStatus || '');
-    }
+    const settledTargets = stopFeedback.ended(conversation, state);
+    const terminalSettled = settledTargets.length > 0;
     const active = options.isActive?.(conversation) ?? false;
     const domStale = options.isDomStale?.(conversation) ?? false;
     if (!currentProjection()) return;
@@ -143,22 +151,20 @@ export function createConversationTurnRuntime(
       // through notifyRenderedState after the actual mounted DOM commit.
     };
     const scheduleTerminalRelease = (): void => {
-      if (!terminalSettled || !finishingAttemptId) return;
-      if (scheduledTerminalReleases.get(conversation) === finishingAttemptId) return;
-      scheduledTerminalReleases.set(conversation, finishingAttemptId);
+      const targets = settledTargets.filter(target => !target.scheduled);
+      if (!targets.length) return;
+      for (const target of targets) target.scheduled = true;
       const release = (): void => {
-        if (scheduledTerminalReleases.get(conversation) !== finishingAttemptId) return;
-        scheduledTerminalReleases.delete(conversation);
-        if (!conversation._finishingStream
-            || conversation._finishingAttemptId !== finishingAttemptId) return;
-        // Reconcile once more immediately before exposing Send. Async cost,
-        // transport, and snapshot work may have repainted between settlement
-        // and the next browser frame.
-        renderActiveState(true, binding.store.getState());
-        if (!currentBinding() || !conversation._finishingStream
-            || conversation._finishingAttemptId !== finishingAttemptId) return;
-        conversation._finishingStream = false;
-        conversation._finishingAttemptId = null;
+        if (!currentBinding()) return;
+        // Reconcile again immediately before exposing Send; presentation or
+        // newer authoritative data may have changed before this frame.
+        try {
+          renderActiveState(true, binding.store.getState());
+        } finally {
+          for (const target of targets) target.scheduled = false;
+        }
+        if (!currentBinding()) return;
+        stopFeedback.discardEnded(binding.store.getState(), targets);
         options.updateSendButton?.();
       };
       if (options.deferTerminalRelease) options.deferTerminalRelease(release);
@@ -399,7 +405,7 @@ export function createConversationTurnRuntime(
     if (!binding) return;
     boundConversations.delete(conversationId);
     binding.unsubscribe();
-    scheduledTerminalReleases.delete(binding.conversation);
+    stopFeedback.dispose(binding.conversation);
     shellProjection.forget(binding.conversation);
   };
 
@@ -605,6 +611,8 @@ export function createConversationTurnRuntime(
     markCommandFailed: commands.markCommandFailed,
     abortConversation: commands.abortConversation,
     abortAttempt: commands.abortAttempt,
+    stopActiveAttempts: stopFeedback.request,
+    attemptStopState: stopFeedback.state,
     readRuntimeState,
     notifyRenderedState: renderObservations.notifyRenderedState,
     hasAuthoritativeCommand(conversationId: string, commandId: string) {

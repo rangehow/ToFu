@@ -33,9 +33,7 @@ def test_page_activation_reopens_cleanly_closed_push(browser, live_server):
         expect(badge).to_have_attribute('data-state', re.compile('^(good|ok|poor)$'), timeout=20000)
         assert len(sockets) == 1
         sockets[0].close(code=1000, reason='Forwarding connection ended')
-        # The server still answers HTTP, so a down push socket reads as
-        # reconnecting, never offline (126a84a181, docs/FRONTEND_ARCHITECTURE.md).
-        expect(badge).to_have_attribute('data-state', 'reconnecting')
+        expect(badge).to_have_attribute('data-state', 'offline')
         page.evaluate("window.dispatchEvent(new Event('pageshow'))")
         expect(badge).to_have_attribute('data-state', re.compile('^(good|ok|poor)$'))
         assert len(sockets) == 2

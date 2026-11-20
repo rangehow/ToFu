@@ -12,10 +12,11 @@ import hashlib
 import json
 import uuid
 
+from lib.agent_core.model_context_revision import model_context_revision
+
 
 from lib.storage.errors import StorageError
 from lib.storage.turn_projection_pages import TurnProjectionRevisionMoved, read_paged_turn
-from lib.agent_core.model_context_revision import model_context_revision as model_context_revision
 from lib.agent_core.model_context_limits import (
     MAX_ENTRY_BYTES, MAX_JSON_SAFE_INTEGER, MAX_MESSAGES, MAX_TURN_WITNESSES,
 )

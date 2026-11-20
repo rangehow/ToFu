@@ -126,37 +126,6 @@ pacing inside one domain such as translation (another domain-local selector);
 and measuring occupancy from the grant (refused at window boundaries in the
 loopback spec when an older, larger request reached the provider later).
 
-## Experiment-reserved credentials
-
-Fallback dispatch never selects a credential an experiment depends on.
-`contracts/experiment_credential_reservations_v1.json` declares, per gateway
-host and key tail (FRIDAY's `App:**<tail>`), which keys the experiment
-owners' launchers use; `lib/llm_dispatch/credential_reservation.py` binds
-the declaration to the dispatch context and
-`LLMDispatcher._selection_scope` removes those slots for the scoped call.
-
-Problem (2026-11-18, server generation 7d3ec336): 180 per-AppId
-minute-limit 429s on AppId …5409, 177 of them Tofu's own conversation
-traffic accepted on claude-opus-5.5 and served on kimi-k3.1-pro (or rescued
-onto gemini-3.8-flash) after a content-filter refusal — the lead
-coordinator, project Workers and the Watchdog. The parallel project's
-Paper B relays and Paper 3 E4 depend on …5409 and …4861.
-Decision: the reservation is declared data, not a rate knob. The configured
-fallback attempt, its local recovery retries, the refused attempt's own tool
-rounds that stay on the fallback model, and pool rescue dispatch inside
-`fallback_dispatch()`; a conversation's primary traffic, a resume back to
-the accepted model and a deliberate owner/lead model switch are unaffected.
-With no unreserved route left, the fallback fails as no-route rather than
-borrowing the experiment's quota. Alternatives rejected: a separate key
-pool for fallback (no such key exists); an RPM cap or key weight (a tuning
-knob that ages and still spends the experiment's window); a sticky
-"leave the throttled key" preference (still sends into it); excluding the
-keys from Tofu entirely (primary conversation traffic is unaffected).
-Executable specifications:
-`tests/llm_dispatch/test_fallback_credential_reservation.py` (including the
-7d3ec336 replay, `tests/fixtures/llm_dispatch/episode_7d3ec336_appid_5409_429s.json`)
-and `tests/tasks_pkg/test_model_refusal_fallback.py`.
-
 ## Verification
 
 The executable contract is `tests/proxy/test_unified_network.py`, plus route,
@@ -184,6 +153,11 @@ transport probes reuse the route specifications with their credential policy.
 Standalone SDKs and pre-dependency bootstrap retain their own transport lifetime;
 they must receive policy through their explicit environment/client composition
 ports, rather than importing a running application's mutable state.
+The Rust MCP client (`packages/tofu-mcp/src/network.rs`) is such a port: for
+each HTTP request it asks its Python binding for
+`network_route_candidates` and reports every attempt to
+`report_network_route`, with the same connect-only failover and no replay of
+a delivered request; without a binding it connects direct.
 A long-lived SDK session that Tofu restarts (the Feishu bot) is admitted on
 the route it actually takes before each session, waits that route's
 `RouteManager.circuit_delay` (policy circuits included) when not admitted, and

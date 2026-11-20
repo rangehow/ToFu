@@ -390,10 +390,10 @@ rebuilt. Every other witnessed field is authority-bearing and still refuses
 (`policy_changed`): permissions, project scope, tool authority and capability
 toggles, experiment flags, instructions, principal, goal mode and the interaction
 mode. Plan and Delegate now witness `interactionMode`; Standard keeps the absent
-value, so existing digests are unchanged. Media and unknown private state still
-refuse (`nonportable_checkpoint`), legacy checkpoints without a field map keep
-the route-free digest comparison, and the tool latch and goal state remain
-same-policy only. **Rejected:** refusing on reasoning (no reasoning-model
+value, so existing digests are unchanged. Text-block content is portable text.
+Unknown private state still refuses (`nonportable_checkpoint`), legacy
+checkpoints without a field map keep the route-free digest comparison, and the
+tool latch and goal state remain same-policy only. **Rejected:** refusing on reasoning (no reasoning-model
 checkpoint survives a route change, and a cold rebuild never replays foreign
 reasoning either); an allowlist of authority fields (a new witnessed field would
 silently become portable; default deny instead); keeping full signed views on
@@ -401,6 +401,56 @@ every effort change (signatures and caches are route-bound; only the same-model
 Opus effort witness keeps them). Specs:
 `tests/model_routing/test_model_continuation_policy.py`,
 `tests/project_mod/test_coordinator_replay_policy.py`.
+
+**Media across effort drift — Problem:** on 2026-11-18 the tofu lead drained
+itself for a restart and stored its checkpoint, but the restart continuation
+Turn ran without thinking (effort `medium` → none, a portable drift), and the
+portable projection refused the checkpoint: a project message had delivered two
+attached figures as `image_url` blocks (`lead_attachments.model_blocks`).
+The refusal logged nothing, and the Turn force-compacted 3.89 M tokens
+(61 s). **Decision:** media blocks (`image_url`) and their retained-source
+records (`_modelImageSources`, `_modelImagesPinnedFor/Owner`) stay portable when
+the checkpoint's field map proves the model is unchanged (drift excludes `model`
+and `modelRef`): that model already accepted those exact bytes, which were
+projected for its vision support and budgets, and only route-bound reasoning is
+stripped. The usual `tofu-media` and attachment rechecks still run. A model
+change or a legacy checkpoint without a field map still refuses media. Every
+refusal logs `restore=nonportable_checkpoint drift={field: [checkpoint,
+request]} first_nonportable={index, role, reason}`. Drift values are
+route/effort settings only. The reason names block types, private field names or
+`no_final_assistant_text`, never content. **Rejected:** dropping the images to
+restore text (silently loses evidence the model acted on); stabilising effort at
+the continuation producer (a real effort change is still drift, and media must
+survive it either way); keeping media across a model change (another model may
+lack vision or project the attachment under different budgets). Specs:
+`test_drained_lead_checkpoint_with_media_restores_after_restart_effort_drift`
+and its neighbours in `tests/model_routing/test_model_continuation_policy.py`.
+
+**Dispatch Turns inherit the conversation's effort — Problem:** on 2026-11-18 the
+Global Router's Coordinator conversation was configured `thinkingDepth=medium`,
+but its Turns alternated effort: continuations of requests delegated on 11-16 and
+11-17 (attempts `116a1630` after the restart, `d170c284`) ran with no effort, while
+owner Turns, project-message wakes (`ac641a95`, built from the conversation
+settings by `dispatch_scheduled_turn`) and continuations of the 11-18 request
+(`40582ace`) ran `medium`. A dispatch-born Turn (`TrustedDispatch.capture`:
+Coordinator continuations and timed wakes, Worker follow-ups, restart resumes of
+a dispatch Turn) took its thinking from the grant, which froze the effort of the
+attempt that issued the request (`policy.config.thinkingDepth`,
+`request_selection` `thinkingEnabled`). Each switch logged `restore=portable
+drift=thinkingDepth,thinkingEnabled`, stripped the signed reasoning and cut the
+provider cache read to 23,290 of a 296,430-token prefix. **Decision:** `capture`
+resolves thinking from the recipient conversation's settings on every new
+attempt (`session_model.apply_session_policy`, the owner of a dispatch Turn's
+model view, beside the session model override), by the composer's own rule
+(`resolve_conv_config`); only a conversation with no configured depth keeps the
+grant's. Thinking is not grant authority, so `_restored_identity` no longer fences
+it against the grant. An accepted attempt keeps the effort it was accepted with;
+an owner's change applies from the next attempt. **Rejected:** treating effort
+drift as cache-neutral (the provider re-renders the prefix and signed thinking
+is bound to its request controls); re-issuing grants when the owner changes
+effort (grants are immutable authority, and the effort is not authority).
+Specs: `test_dispatch_turns_inherit_the_conversations_configured_effort` and its
+neighbours in `tests/project_mod/test_coordinator_replay_policy.py`.
 
 **Equivalent witness spellings — Problem:** producers spell one effective policy
 differently. The browser composer states an empty system prompt, `append` mode,
@@ -465,11 +515,22 @@ never its own Turn's publication. Another protocol then omits that
 historical thinking as a counted loss, while Anthropic replays every block
 unchanged. The stored checkpoint is not modified. **Rejected:** stamping the mark
 at publication (existing checkpoints would stay broken, and a failing
-conversation never publishes again); treating unmarked thinking as optional in
-the converter (live signed reasoning of an active Turn would be dropped); a
-portable restore whenever the protocol might change (the destination is unknown
-at restore time, and same-protocol replay would lose its signatures and cache).
-Spec: `tests/conversation/test_completed_turn_reasoning.py`.
+conversation never publishes again); a portable restore whenever the protocol
+might change (the destination is unknown at restore time, and same-protocol
+replay would lose its signatures and cache).
+
+**Failed-Turn protocol switch:** a retained failed Turn is not completed and
+must never receive a fabricated completed label. Its Messages thinking signature
+cannot be executed by Responses, so `conversion.message_losses` treats only
+that source-private thinking/redaction as a reported cross-protocol reasoning
+omission, independent of Turn status. The source remains intact for native
+replay. Visible native text, canonical tool calls and exact results survive;
+unknown native execution, server tools and opaque compaction still refuse.
+This is task/tool continuity, not cryptographic reasoning continuity between
+providers. Chat's exact signed gateway representation remains a separate
+contract. Summary/compaction is not an escape hatch for unrepresentable live
+execution state. Specs: `tests/conversation/test_completed_turn_reasoning.py`
+and `tests/llm/test_failed_turn_responses_portability.py`.
 
 L1 receives an API-form working projection and replaces only cold tool/image bulk; it performs no conversation read, projection update or change notification.
 **Cloud idle L1 (owner decision 2026-11-05).** After six hours without model
@@ -553,6 +614,11 @@ L1/advanced/L2/reactive compaction carries state before budget/adoption checks; 
 **Problem:** update-driven recovery duplicates visible progress. **Decision:** restore only missing state, at most one current carrier; preserve accepted items verbatim and label the separate explanation field's origin.
 **Rejected:** per-round throttles and append-only recovery still duplicate state; hiding cards hides bad input. Specs: `tests/goals/test_checklist_context.py`.
 **Problem (2026-11-06):** live reconciliation (L1 every round, composition, round appends, dispatch admission) removed a superseded carrier from history the provider had already cached. On the Coordinator (`coordinator-1a39…`, R47 to R48) that rewrote api-form message 613 of 644: the next request read 13,920 tokens and wrote 608,412 ($3.15 instead of about $0.26). **Decision:** withdrawal belongs to prefix rewrites only (above); the protected count is the cache-tracking sent prefix L1 and advanced compaction already honor. **Alternatives rejected:** a tail retraction notice (adds tokens and contradicts nothing the newer receipt does not already supersede); keeping in-place withdrawal for small carriers (any in-place byte inside the cached prefix re-bills everything after it). Specs: `test_todo_update_after_recovery_keeps_every_sent_byte`, `test_prefix_rewrites_still_withdraw_the_stale_carrier`.
+
+At a task boundary, a policy-compatible completed model checkpoint supplies
+an L1 protection floor until the live request history catches up. Ordinary L1
+can still compact the new suffix. Explicit rewrites and the existing cloud
+idle policy can reopen the prefix.
 
 **Problem:** repeated composition reparses unchanged gateway receipts, while
 message/list identity cannot prove that a receipt survived clipping or call
@@ -852,6 +918,30 @@ installing an incomplete summary invents success. Specs:
 slot recovery across repeated 429/503 responses, source preservation, exact quote
 identity, accounting, accepted compaction receipts and Stop during provider cooldown.
 
+**Unsent summary route refusals.** A known bad secret, invalid
+endpoint, or a billing stop between plan and slot admission must not strand a
+required compaction when another authorized route can run it. The dispatcher
+reports selection exhaustion as a typed, zero-send route failure. On an
+unquoted default-policy summary, a candidate-local mint refusal or zero-send
+slot refusal excludes only the exact deployment/credential witness and asks the
+same owner compiler to rank the remaining routes at the same authority revision.
+Such checks are bounded by the initial authorized witness supply, not by the
+separate summary dispatch-attempt bound. They produce a safe refusal log, not a
+transport-attempt receipt. Otherwise a refused alias could use the entire
+transport allowance before an authorized route even sees the request. If
+recompilation proves that no auxiliary witness remains usable at the same
+revision, a verified original parent group may summarize once under its
+original pin and strict model. Its reachable slots must fit the composed input
+and summary output; the request is clamped to their common allowance. Missing
+supply evidence, stale witnesses, quotes, owner/storage failures, cancellation,
+and uncertain or observed provider work cannot authorize this fallback. The
+original input, economic policy and joined cleanup still apply; masked key
+hints never grant or reject a route. Recovery usage is priced from the actual
+selected slot's issued Offering card at observed usage, not an estimate for the
+parent group or a model-table substitute. Missing exact pricing stays unknown.
+Specs:
+`tests/compaction/test_summary_route_preparation.py`.
+
 ### Credential-outage robustness and authentic failed-attempt settlement
 **Problem.** When the owning subscription's shared credential cannot be read
 (`LocalRequestPreparationError` wrapping `SubscriptionCredentialUnavailableError`,
@@ -886,7 +976,10 @@ invariants for live/transient tasks:
    when a summary cannot run and the conversation exceeds the usable window.
    The dispatch-guard trigger grants no additional permission. Live/transient
    bounded tasks keep their no-lossy-recovery discipline; the proactive
-   `working_set` pass keeps its summary-only economic path.
+   `working_set` pass keeps its summary-only economic path. Head truncation
+   scans eligible units once and publishes the retained projection once, rather
+   than rescanning protected rows and shifting the list on every drop. The
+   protected floor, oldest-first order and whole-tool-round semantics are unchanged.
 3. A failed `working_set`/`window`/`dispatch_guard` attempt settles as one
    terminal `compaction_done` whose receipt carries `status='failed'` and the real
    `outcomeReason`, bridging the live phase row through the existing reactive

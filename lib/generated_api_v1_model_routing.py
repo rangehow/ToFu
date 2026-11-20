@@ -229,11 +229,17 @@ OPENAPI_SCHEMAS = {'CatpawLocalImportApplyResponse': {'additionalProperties': Fa
                                    'required': ['model_routing', 'revision'],
                                    'type': 'object'},
  'ModelRoutingDocument': {'$ref': '#/$defs/__document'},
- 'ModelRoutingPutRequest': {'additionalProperties': False,
-                            'properties': {'expected_revision': {'$ref': '#/components/schemas/Revision'},
-                                           'model_routing': {'$ref': '#/components/schemas/ModelRoutingDocument'}},
-                            'required': ['expected_revision', 'model_routing'],
-                            'type': 'object'},
+ 'ModelRoutingPutRequest': {'anyOf': [{'additionalProperties': False,
+                                       'properties': {'expected_revision': {'$ref': '#/components/schemas/Revision'},
+                                                      'model_routing': {'$ref': '#/components/schemas/ModelRoutingDocument'}},
+                                       'required': ['expected_revision', 'model_routing'],
+                                       'type': 'object'},
+                                      {'additionalProperties': False,
+                                       'properties': {'codex_registration_enabled': {'type': 'boolean'},
+                                                      'expected_revision': {'$ref': '#/components/schemas/Revision'}},
+                                       'required': ['expected_revision',
+                                                    'codex_registration_enabled'],
+                                       'type': 'object'}]},
  'ProbeCellTarget': {'additionalProperties': False,
                      'properties': {'connection_id': {'maxLength': 256,
                                                       'minLength': 1,
@@ -535,6 +541,14 @@ EXTERNAL_DEFS = {'__document': {'$defs': {'capabilities': {'items': {'$ref': '#/
                                            'maxItems': 64,
                                            'type': 'array',
                                            'uniqueItems': True},
+                          'codexAccountWireGrant': {'additionalProperties': False,
+                                                    'properties': {'creator_id': {'const': 'openai'},
+                                                                   'model_id': {'$ref': '#/$defs/identifier'},
+                                                                   'wire_model_id': {'$ref': '#/$defs/identifier'}},
+                                                    'required': ['creator_id',
+                                                                 'model_id',
+                                                                 'wire_model_id'],
+                                                    'type': 'object'},
                           'connection': {'additionalProperties': False,
                                          'properties': {'adapter': {'$ref': '#/$defs/desktopAdapter'},
                                                         'base_url': {'maxLength': 2048,
@@ -583,7 +597,36 @@ EXTERNAL_DEFS = {'__document': {'$defs': {'capabilities': {'items': {'$ref': '#/
                                       'required': ['creator_id', 'name'],
                                       'type': 'object'},
                           'credentialAuthorization': {'additionalProperties': False,
-                                                      'properties': {'connection_ids': {'$ref': '#/$defs/identifierList'},
+                                                      'properties': {'codex_account_grants': {'additionalProperties': {'items': {'$ref': '#/$defs/codexAccountWireGrant'},
+                                                                                                                       'type': 'array',
+                                                                                                                       'uniqueItems': True},
+                                                                                              'description': 'Server-issued '
+                                                                                                             'managed '
+                                                                                                             'Codex '
+                                                                                                             'grants '
+                                                                                                             'keyed '
+                                                                                                             'by '
+                                                                                                             'the '
+                                                                                                             'exact '
+                                                                                                             'bearer '
+                                                                                                             'account '
+                                                                                                             'fingerprint. '
+                                                                                                             'Each '
+                                                                                                             'row '
+                                                                                                             'grants '
+                                                                                                             'only '
+                                                                                                             'one '
+                                                                                                             'exact '
+                                                                                                             'wire; '
+                                                                                                             'manual '
+                                                                                                             'grants '
+                                                                                                             'and '
+                                                                                                             'revocations '
+                                                                                                             'are '
+                                                                                                             'independent.',
+                                                                                              'propertyNames': {'pattern': '^[0-9a-f]{64}$'},
+                                                                                              'type': 'object'},
+                                                                     'connection_ids': {'$ref': '#/$defs/identifierList'},
                                                                      'models': {'items': {'$ref': '#/$defs/wireGrant'},
                                                                                 'type': 'array',
                                                                                 'uniqueItems': True}},
@@ -810,6 +853,25 @@ EXTERNAL_DEFS = {'__document': {'$defs': {'capabilities': {'items': {'$ref': '#/
                                                                                                                 'omitted']},
                                                                                            'effort_field': {'enum': ['effort',
                                                                                                                      'reasoning_effort']},
+                                                                                           'effort_knowledge': {'const': 'undocumented',
+                                                                                                                'description': 'Creator '
+                                                                                                                               'reasoning '
+                                                                                                                               'exists '
+                                                                                                                               'but '
+                                                                                                                               'its '
+                                                                                                                               'effort '
+                                                                                                                               'ladder '
+                                                                                                                               'and '
+                                                                                                                               'default '
+                                                                                                                               'are '
+                                                                                                                               'not '
+                                                                                                                               'documented; '
+                                                                                                                               'only '
+                                                                                                                               'implicit '
+                                                                                                                               'default '
+                                                                                                                               'execution '
+                                                                                                                               'is '
+                                                                                                                               'known.'},
                                                                                            'effort_map': {'additionalProperties': {'maxLength': 64,
                                                                                                                                    'minLength': 1,
                                                                                                                                    'pattern': '^[A-Za-z0-9_.-]+$',
@@ -1350,6 +1412,18 @@ EXTERNAL_DEFS = {'__document': {'$defs': {'capabilities': {'items': {'$ref': '#/
                                                          'rpm': {'minimum': 0, 'type': 'integer'},
                                                          'tpm': {'minimum': 0, 'type': 'integer'}},
                                           'type': 'object'},
+                          'revocationHistoryEntry': {'additionalProperties': False,
+                                                     'properties': {'creator_id': {'$ref': '#/$defs/identifier'},
+                                                                    'credential_id': {'$ref': '#/$defs/identifier'},
+                                                                    'excluded_wire_model_ids': {'$ref': '#/$defs/identifierList'},
+                                                                    'model_id': {'$ref': '#/$defs/identifier'},
+                                                                    'model_revoked': {'type': 'boolean'}},
+                                                     'required': ['credential_id',
+                                                                  'creator_id',
+                                                                  'model_id',
+                                                                  'model_revoked',
+                                                                  'excluded_wire_model_ids'],
+                                                     'type': 'object'},
                           'wireGrant': {'additionalProperties': False,
                                         'properties': {'creator_id': {'$ref': '#/$defs/identifier'},
                                                        'excluded_wire_model_ids': {'items': {'$ref': '#/$defs/identifier'},
@@ -1361,7 +1435,45 @@ EXTERNAL_DEFS = {'__document': {'$defs': {'capabilities': {'items': {'$ref': '#/
                 '$id': 'https://tofu.local/contracts/model_routing_v2.schema.json',
                 '$schema': 'https://json-schema.org/draft/2020-12/schema',
                 'additionalProperties': False,
-                'properties': {'connections': {'items': {'$ref': '#/$defs/connection'},
+                'properties': {'codex_seen_history': {'description': 'Retained owner-scoped Codex '
+                                                                     'observations; absent history '
+                                                                     'is not proof of freshness.',
+                                                      'items': {'additionalProperties': False,
+                                                                'properties': {'account_fingerprint': {'pattern': '^[0-9a-f]{64}$',
+                                                                                                       'type': 'string'},
+                                                                               'complete': {'type': 'boolean'},
+                                                                               'credential_id': {'minLength': 1,
+                                                                                                 'type': 'string'},
+                                                                               'models': {'items': {'additionalProperties': False,
+                                                                                                    'properties': {'creator_id': {'minLength': 1,
+                                                                                                                                  'type': 'string'},
+                                                                                                                   'model_id': {'minLength': 1,
+                                                                                                                                'type': 'string'}},
+                                                                                                    'required': ['creator_id',
+                                                                                                                 'model_id'],
+                                                                                                    'type': 'object'},
+                                                                                          'type': 'array',
+                                                                                          'uniqueItems': True},
+                                                                               'pending_wire_model_ids': {'items': {'minLength': 1,
+                                                                                                                    'type': 'string'},
+                                                                                                          'type': 'array',
+                                                                                                          'uniqueItems': True},
+                                                                               'provider_access_id': {'minLength': 1,
+                                                                                                      'type': 'string'},
+                                                                               'wire_model_ids': {'items': {'minLength': 1,
+                                                                                                            'type': 'string'},
+                                                                                                  'type': 'array',
+                                                                                                  'uniqueItems': True}},
+                                                                'required': ['provider_access_id',
+                                                                             'credential_id',
+                                                                             'account_fingerprint',
+                                                                             'complete',
+                                                                             'wire_model_ids',
+                                                                             'models',
+                                                                             'pending_wire_model_ids'],
+                                                                'type': 'object'},
+                                                      'type': 'array'},
+                               'connections': {'items': {'$ref': '#/$defs/connection'},
                                                'type': 'array'},
                                'contract_version': {'const': 'tofu.model-routing/v2'},
                                'creators': {'items': {'$ref': '#/$defs/creator'}, 'type': 'array'},
@@ -1377,7 +1489,12 @@ EXTERNAL_DEFS = {'__document': {'$defs': {'capabilities': {'items': {'$ref': '#/
                                                      'type': 'array'},
                                'providers': {'items': {'$ref': '#/$defs/provider'},
                                              'type': 'array'},
-                               'revision': {'minimum': 0, 'type': 'integer'}},
+                               'revision': {'minimum': 0, 'type': 'integer'},
+                               'revocation_history': {'description': 'Owner-scoped retained model '
+                                                                     'and wire revocations, '
+                                                                     'including removed entities.',
+                                                      'items': {'$ref': '#/$defs/revocationHistoryEntry'},
+                                                      'type': 'array'}},
                 'required': ['contract_version',
                              'revision',
                              'creators',
@@ -1394,6 +1511,12 @@ EXTERNAL_DEFS = {'__document': {'$defs': {'capabilities': {'items': {'$ref': '#/
                   'maxItems': 64,
                   'type': 'array',
                   'uniqueItems': True},
+ 'codexAccountWireGrant': {'additionalProperties': False,
+                           'properties': {'creator_id': {'const': 'openai'},
+                                          'model_id': {'$ref': '#/$defs/identifier'},
+                                          'wire_model_id': {'$ref': '#/$defs/identifier'}},
+                           'required': ['creator_id', 'model_id', 'wire_model_id'],
+                           'type': 'object'},
  'connection': {'additionalProperties': False,
                 'properties': {'adapter': {'$ref': '#/$defs/desktopAdapter'},
                                'base_url': {'maxLength': 2048, 'minLength': 1, 'type': 'string'},
@@ -1430,7 +1553,27 @@ EXTERNAL_DEFS = {'__document': {'$defs': {'capabilities': {'items': {'$ref': '#/
              'required': ['creator_id', 'name'],
              'type': 'object'},
  'credentialAuthorization': {'additionalProperties': False,
-                             'properties': {'connection_ids': {'$ref': '#/$defs/identifierList'},
+                             'properties': {'codex_account_grants': {'additionalProperties': {'items': {'$ref': '#/$defs/codexAccountWireGrant'},
+                                                                                              'type': 'array',
+                                                                                              'uniqueItems': True},
+                                                                     'description': 'Server-issued '
+                                                                                    'managed Codex '
+                                                                                    'grants keyed '
+                                                                                    'by the exact '
+                                                                                    'bearer '
+                                                                                    'account '
+                                                                                    'fingerprint. '
+                                                                                    'Each row '
+                                                                                    'grants only '
+                                                                                    'one exact '
+                                                                                    'wire; manual '
+                                                                                    'grants and '
+                                                                                    'revocations '
+                                                                                    'are '
+                                                                                    'independent.',
+                                                                     'propertyNames': {'pattern': '^[0-9a-f]{64}$'},
+                                                                     'type': 'object'},
+                                            'connection_ids': {'$ref': '#/$defs/identifierList'},
                                             'models': {'items': {'$ref': '#/$defs/wireGrant'},
                                                        'type': 'array',
                                                        'uniqueItems': True}},
@@ -1573,6 +1716,25 @@ EXTERNAL_DEFS = {'__document': {'$defs': {'capabilities': {'items': {'$ref': '#/
                                                                                        'omitted']},
                                                                   'effort_field': {'enum': ['effort',
                                                                                             'reasoning_effort']},
+                                                                  'effort_knowledge': {'const': 'undocumented',
+                                                                                       'description': 'Creator '
+                                                                                                      'reasoning '
+                                                                                                      'exists '
+                                                                                                      'but '
+                                                                                                      'its '
+                                                                                                      'effort '
+                                                                                                      'ladder '
+                                                                                                      'and '
+                                                                                                      'default '
+                                                                                                      'are '
+                                                                                                      'not '
+                                                                                                      'documented; '
+                                                                                                      'only '
+                                                                                                      'implicit '
+                                                                                                      'default '
+                                                                                                      'execution '
+                                                                                                      'is '
+                                                                                                      'known.'},
                                                                   'effort_map': {'additionalProperties': {'maxLength': 64,
                                                                                                           'minLength': 1,
                                                                                                           'pattern': '^[A-Za-z0-9_.-]+$',
@@ -1951,6 +2113,18 @@ EXTERNAL_DEFS = {'__document': {'$defs': {'capabilities': {'items': {'$ref': '#/
                                 'rpm': {'minimum': 0, 'type': 'integer'},
                                 'tpm': {'minimum': 0, 'type': 'integer'}},
                  'type': 'object'},
+ 'revocationHistoryEntry': {'additionalProperties': False,
+                            'properties': {'creator_id': {'$ref': '#/$defs/identifier'},
+                                           'credential_id': {'$ref': '#/$defs/identifier'},
+                                           'excluded_wire_model_ids': {'$ref': '#/$defs/identifierList'},
+                                           'model_id': {'$ref': '#/$defs/identifier'},
+                                           'model_revoked': {'type': 'boolean'}},
+                            'required': ['credential_id',
+                                         'creator_id',
+                                         'model_id',
+                                         'model_revoked',
+                                         'excluded_wire_model_ids'],
+                            'type': 'object'},
  'wireGrant': {'additionalProperties': False,
                'properties': {'creator_id': {'$ref': '#/$defs/identifier'},
                               'excluded_wire_model_ids': {'items': {'$ref': '#/$defs/identifier'},

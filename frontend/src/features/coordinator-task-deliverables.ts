@@ -19,12 +19,14 @@ import type { LeadDeliverable, LeadDeliverablePage } from '../api/project-coordi
 import { appendDeliverables } from './lead-deliverables/model';
 import { deliverableRow } from './lead-deliverables/rows';
 import type { DeliverableOpener } from './lead-deliverables/open';
-import './lead-deliverables/lead-deliverables.css';
+import '../styles/application/36-lead-deliverables.css';
 
 export const OTHER_TASKS = 'other';
 
 export interface TaskDeliverablesPorts {
   read(query: { task?: string; cursor?: string }, signal: AbortSignal): Promise<LeadDeliverablePage>;
+  /** A newer board revision can move a task or create an automatic board note. */
+  subscribeBoard?(changed: () => void): () => void;
   /** Project push frames and reconnects; returns the release. */
   subscribe(changed: (frame: { kind?: unknown; conversationId?: unknown }) => void): () => void;
   conversationId: string;
@@ -34,11 +36,7 @@ export interface TaskDeliverablesPorts {
   now?(): number;
 }
 
-export interface TaskDeliverableSummary {
-  key: string; title: string; count: number; latestAt: number;
-  /** The title's display translation (from the task's history), when there is one. */
-  translation?: { title: string };
-}
+export type TaskDeliverableSummary = LeadDeliverablePage['tasks'][number];
 
 export interface TaskDeliverables {
   /** Items of a task key (or OTHER_TASKS) from the latest summary; 0 before it loads. */
@@ -47,6 +45,8 @@ export interface TaskDeliverables {
   tasks(): readonly TaskDeliverableSummary[];
   expanded(key: string): boolean;
   toggle(key: string): void;
+  /** Start reading a key's list before it is opened (pointer or keyboard approach). */
+  prefetch(key: string): void;
   /** The retained list region of an expanded key. */
   region(key: string): HTMLElement;
   destroy(): void;
@@ -55,11 +55,17 @@ export interface TaskDeliverables {
 interface TaskList {
   items: LeadDeliverable[];
   cursor: string | null;
+  firstCursor: string | null | undefined;
+  cursorEnd: string | null;
   state: 'idle' | 'loading' | 'ok' | 'error';
   flight: AbortController | null;
   again: boolean;
   region: HTMLElement;
 }
+
+/* The latest summary of each project's lead, so a board mounted again (a project switch back)
+ * paints its counts at once while its fresh summary reads. One entry per project. */
+const lastSummaries = new Map<string, { conversationId: string; tasks: TaskDeliverableSummary[]; otherCount: number }>();
 
 async function defaultOpener(): Promise<DeliverableOpener> {
   const module = await import('./lead-deliverables/open');
@@ -70,8 +76,11 @@ export function createTaskDeliverables(ports: TaskDeliverablesPorts, changed: ()
   const now = ports.now || (() => Date.now());
   let opener: Promise<DeliverableOpener> | null = null;
   const openerPort = () => (opener ??= (ports.opener || defaultOpener)());
-  let summary: TaskDeliverableSummary[] = [];
-  let otherCount = 0;
+  const remembered = lastSummaries.get(ports.projectPath);
+  const resumed = remembered?.conversationId === ports.conversationId ? remembered : undefined;
+  let summary: TaskDeliverableSummary[] = resumed ? resumed.tasks : [];
+  let byKey = new Map(summary.map(task => [task.key, task]));
+  let otherCount = resumed ? resumed.otherCount : 0;
   let summaryFlight: AbortController | null = null;
   let alive = true;
   const lists = new Map<string, TaskList>();
@@ -81,7 +90,9 @@ export function createTaskDeliverables(ports: TaskDeliverablesPorts, changed: ()
     const next = JSON.stringify([page.tasks, page.otherCount]);
     if (next === JSON.stringify([summary, otherCount])) return;
     summary = page.tasks.map(task => ({ ...task }));
+    byKey = new Map(summary.map(task => [task.key, task]));
     otherCount = page.otherCount;
+    lastSummaries.set(ports.projectPath, { conversationId: ports.conversationId, tasks: summary, otherCount });
     changed();
   }
 
@@ -107,7 +118,8 @@ export function createTaskDeliverables(ports: TaskDeliverablesPorts, changed: ()
       region.className = 'coordinator-task-deliverables';
       region.dataset.task = key;
       region.setAttribute('role', 'region');
-      entry = { items: [], cursor: null, state: 'idle', flight: null, again: false, region };
+      entry = { items: [], cursor: null, firstCursor: undefined, cursorEnd: null,
+        state: 'idle', flight: null, again: false, region };
       lists.set(key, entry);
     }
     return entry;
@@ -129,11 +141,31 @@ export function createTaskDeliverables(ports: TaskDeliverablesPorts, changed: ()
       if (!alive || entry.flight !== controller) return;
       if (first) {
         // A re-read first page keeps the older pages already shown; item keys never move.
-        if (!entry.items.length) entry.cursor = page.nextCursor;
-        entry.items = appendDeliverables(page.items, entry.items);
+        if (entry.firstCursor === undefined || entry.firstCursor !== page.nextCursor) {
+          entry.cursor = page.nextCursor;
+          entry.cursorEnd = page.items.at(-1)?.id ?? null;
+        }
+        entry.firstCursor = page.nextCursor;
+        const summary = page.tasks.find(task => task.key === key);
+        const pageTail = page.nextCursor ? page.items.at(-1)?.createdAt : undefined;
+        // A synthetic note can disappear on reopen or be replaced by a linked delivery.
+        // Retain one outside the refreshed interval only if the summary doesn't supersede it.
+        const older = entry.items.filter(item => item.kind !== 'completion' || (summary && !summary.hasDeliveryReport
+          && pageTail !== undefined && item.createdAt <= pageTail));
+        const retainedIds = new Set([...page.items, ...older].map(item => item.id));
+        if (entry.cursorEnd && !retainedIds.has(entry.cursorEnd)) {
+          // Removing a completion anchor must not move its continuation beyond retained older rows.
+          const end = entry.items.findIndex(item => item.id === entry.cursorEnd);
+          entry.cursorEnd = entry.items.slice(0, end).reverse().find(item => retainedIds.has(item.id))?.id ?? null;
+        }
+        entry.items = appendDeliverables(page.items, older);
       } else {
-        entry.items = appendDeliverables(entry.items, page.items);
+        // A refreshed head can leave retained older rows beyond this continuation's interval.
+        const end = entry.items.findIndex(item => item.id === entry.cursorEnd) + 1;
+        const throughPage = appendDeliverables(entry.items.slice(0, end), page.items);
+        entry.items = appendDeliverables(throughPage, entry.items.slice(end));
         entry.cursor = page.nextCursor;
+        entry.cursorEnd = page.items.at(-1)?.id ?? entry.cursorEnd;
       }
       entry.state = 'ok';
       adoptSummary(page);
@@ -157,7 +189,7 @@ export function createTaskDeliverables(ports: TaskDeliverablesPorts, changed: ()
     const rows = entry.region.querySelector<HTMLOListElement>(':scope > .coordinator-task-deliverables__list')
       ?? Object.assign(document.createElement('ol'), { className: 'coordinator-task-deliverables__list' });
     for (const node of rows.querySelectorAll<HTMLLIElement>(':scope > .lead-deliverable')) {
-      keep.set(node.dataset.deliverableId || '', node);
+      if (!node.dataset.deliverableId?.startsWith('completion:')) keep.set(node.dataset.deliverableId || '', node);
     }
     rows.replaceChildren(...entry.items.map(item => keep.get(item.id) || deliverableRow(item, {
       opener: openerPort, now,
@@ -181,12 +213,23 @@ export function createTaskDeliverables(ports: TaskDeliverablesPorts, changed: ()
     entry.region.replaceChildren(rows, ...(status.textContent ? [status] : []), ...controls);
   }
 
+  function refresh() {
+    void readSummary();
+    for (const key of open) void load(key, true);
+    // A list read ahead but not open is stale now: its opening reads it again.
+    for (const [key, entry] of lists) if (!open.has(key) && (entry.flight || entry.state === 'ok')) {
+      entry.flight?.abort();
+      entry.flight = null;
+      entry.again = false;
+      entry.state = 'idle';
+    }
+  }
   const release = ports.subscribe(frame => {
     if (frame && frame.kind !== undefined && (frame.kind !== 'lead_deliverable'
         || frame.conversationId !== ports.conversationId)) return;
-    void readSummary();
-    for (const key of open) void load(key, true);
+    refresh();
   });
+  const releaseBoard = ports.subscribeBoard?.(refresh);
   // Rows are kept across paints, so a language switch rebuilds the open lists in the new language.
   const relabel = () => {
     for (const key of open) {
@@ -198,7 +241,7 @@ export function createTaskDeliverables(ports: TaskDeliverablesPorts, changed: ()
   void readSummary();
 
   return {
-    count: key => (key === OTHER_TASKS ? otherCount : summary.find(task => task.key === key)?.count ?? 0),
+    count: key => (key === OTHER_TASKS ? otherCount : byKey.get(key)?.count ?? 0),
     tasks: () => summary,
     expanded: key => open.has(key),
     toggle(key) {
@@ -211,10 +254,15 @@ export function createTaskDeliverables(ports: TaskDeliverablesPorts, changed: ()
       }
       changed();
     },
+    prefetch(key) {
+      const entry = list(key);
+      if (entry.state === 'idle') void load(key, true);
+    },
     region: key => list(key).region,
     destroy() {
       alive = false;
       release();
+      releaseBoard?.();
       window.removeEventListener('tofu:language-change', relabel);
       summaryFlight?.abort();
       for (const entry of lists.values()) entry.flight?.abort();

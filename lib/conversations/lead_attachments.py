@@ -244,18 +244,36 @@ def _read_conversation_image(task: dict, reference: str) -> tuple[bytes, str]:
     return resolved['raw'], filename
 
 
-def _ingest(data: bytes, name: str, *, owner: int, sender: str) -> dict:
-    """Store bytes once as a retained attachment, exactly as received channel files are."""
-    from lib.media_attachments import ingest_received_file
-    if not data:
-        raise AttachmentRefused(f'{name} is empty')
-    with tempfile.TemporaryDirectory(prefix='tofu-lead-attachment-') as scratch:
-        path = os.path.join(scratch, 'original')
+def _media_ref(reference: str, *, owner: int, retain: bool) -> dict:
+    from lib.media_attachments import resolve_client_refs
+    attachment_id = reference[len(_MEDIA_PREFIX):]
+    found = resolve_client_refs([{'attachmentId': attachment_id}], user_id=owner, retain=retain)
+    if not found:
+        raise AttachmentRefused(f'{reference} is not one of the owner\u2019s attachments')
+    return found[0]
+
+
+def _stage(task: dict, owner: int, references: list[str], scratch: str) -> list[tuple[str, str | None]]:
+    """Check all references without retention; spool the exact bytes that passed the checks."""
+    from lib.attachments import canonical_image_ref
+    staged = []
+    for index, item in enumerate(references):
+        reference = item.strip()
+        if reference.startswith(_MEDIA_PREFIX):
+            _media_ref(reference, owner=owner, retain=False)
+            staged.append((reference, None))
+            continue
+        if canonical_image_ref(reference):
+            data, name = _read_conversation_image(task, reference)
+        else:
+            data, name = _read_workspace_file(task, reference)
+        if not data:
+            raise AttachmentRefused(f'{name} is empty')
+        path = os.path.join(scratch, str(index))
         with open(path, 'wb') as stream:
             stream.write(data)
-        return ingest_received_file(
-            path, name, mimetypes.guess_type(name)[0] or '', user_id=owner,
-            origin={'origin': 'agent_message', 'senderConversation': sender})
+        staged.append((name, path))
+    return staged
 
 
 def admit(task: dict, owner: int, references: Any) -> list[dict]:
@@ -269,28 +287,23 @@ def admit(task: dict, owner: int, references: Any) -> list[dict]:
     if not isinstance(references, list) or not all(isinstance(item, str) and item.strip()
                                                     for item in references):
         raise AttachmentRefused('attachments must be a list of non-empty file references')
-    from lib.attachments import canonical_image_ref
-    from lib.media_attachments import resolve_client_refs
+    from lib.media_attachments import ingest_received_file
     sender = str(task.get('convId') or '')
-    records: list[dict] = []
-    for reference in (item.strip() for item in references):
-        if reference.startswith(_MEDIA_PREFIX):
-            attachment_id = reference[len(_MEDIA_PREFIX):]
-            found = resolve_client_refs([{'attachmentId': attachment_id}], user_id=owner, retain=True)
-            if not found:
-                raise AttachmentRefused(f'{reference} is not one of the owner\u2019s attachments')
-            ref = found[0]
-        elif canonical_image_ref(reference):
-            data, name = _read_conversation_image(task, reference)
-            ref = _ingest(data, name, owner=owner, sender=sender)
-        else:
-            data, name = _read_workspace_file(task, reference)
-            ref = _ingest(data, name, owner=owner, sender=sender)
-        record = _record(ref)
-        if all(record['attachmentId'] != kept['attachmentId'] for kept in records):
-            records.append(record)
+    records: dict[str, dict] = {}
+    with tempfile.TemporaryDirectory(prefix='tofu-lead-attachment-') as scratch:
+        staged = _stage(task, owner, references, scratch)
+        for name, path in staged:
+            if path is None:
+                # Do not assume ownership/availability survived preflight.
+                ref = _media_ref(name, owner=owner, retain=True)
+            else:
+                ref = ingest_received_file(
+                    path, name, mimetypes.guess_type(name)[0] or '', user_id=owner,
+                    origin={'origin': 'agent_message', 'senderConversation': sender})
+            record = _record(ref)
+            records.setdefault(record['attachmentId'], record)
     logger.info('[LeadAttachments] admitted %d attachment(s) conv=%s', len(records), sender)
-    return records
+    return list(records.values())
 
 
 def turn_attachments(records: Any, *, owner: int) -> list[dict]:

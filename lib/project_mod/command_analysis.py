@@ -37,7 +37,7 @@ from lib.project_mod.command_structure import (
     control_structure,
     parse_shell_structure,
 )
-from lib.project_mod.dangerous_patterns import DANGEROUS_PATTERNS
+from lib.project_mod.config import DANGEROUS_PATTERNS
 
 logger = get_logger(__name__)
 

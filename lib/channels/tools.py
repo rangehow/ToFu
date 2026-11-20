@@ -287,6 +287,18 @@ def execute(name: str, args: dict[str, Any], task: dict[str, Any]) -> dict[str, 
     return result
 
 
+def _wechat_status_note(item: dict[str, Any]) -> str:
+    lookup = json.dumps({'item_id': item['id']})
+    return (f'Read channel_outbox({lookup}) for this record in any state, including after it leaves '
+            'the active queue. The default channel_outbox list contains active items only; an empty '
+            'list is not delivery evidence. queued/draft is not proof of acceptance; failed means the '
+            'recorded send failed; unknown/delivery_unconfirmed means the outcome is unconfirmed. '
+            'sent/acceptance_unverified is recorded sent, not complete-message acceptance proof; '
+            'text/caption acceptance is unverified. An attachment confirmation=provider_ack means '
+            'iLink accepted that file message only, not its caption and not handset delivery. '
+            'Handset delivery is unknown; check the chat before requesting a new send.')
+
+
 def _execute(name: str, args: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]:
     owner, conversation_id, _, authority = _authorize(name, args, task)
     turn_id = str(task.get('_turnId') or (task.get('config') or {}).get('_turnId') or '')
@@ -297,13 +309,12 @@ def _execute(name: str, args: dict[str, Any], task: dict[str, Any]) -> dict[str,
     if name == 'channel_read':
         return _read(owner, args)
     if name == 'channel_send':
-        files, carried = [], False
+        files, channel = [], ThreadKey.parse(args.get('thread')).channel
         if args.get('attachments') is not None:
             from lib.channels import attachments
-            from lib.channels.model import CHANNEL_TRAITS
             # A platform without files gets each one named in the text (channel protocol P5).
-            carried = bool(CHANNEL_TRAITS[ThreadKey.parse(args.get('thread')).channel].get('attachments'))
-            files = attachments.from_tool(task, owner, conversation_id, args['attachments'], carried=carried)
+            files = attachments.from_tool(task, owner, conversation_id, args['attachments'],
+                                          carried=channel == 'dx', generic_file=channel == 'wechat')
         item = outbox.enqueue(
             owner, args.get('thread'), args.get('text'), idempotency_key=args.get('idempotency_key'),
             reply_to=args.get('reply_to'), attachments=files,
@@ -312,7 +323,9 @@ def _execute(name: str, args: dict[str, Any], task: dict[str, Any]) -> dict[str,
             needs_approval=args.get('needs_approval') is True)
         result = {'item': service.outbox_item_view(owner, item.id),
                   'note': 'queued/draft is not proof of delivery; read channel_outbox for the outcome'}
-        if files and carried:
+        if channel == 'wechat':
+            result['note'] = _wechat_status_note(result['item'])
+        if files and channel == 'dx':
             from lib.channels.renditions import preview_plan
             result['previews'] = preview_plan(files)
         return result
@@ -331,7 +344,9 @@ def _execute(name: str, args: dict[str, Any], task: dict[str, Any]) -> dict[str,
         return {'thread': service.unsubscribe(owner, args.get('thread'), args.get('conversation_id'))}
     if name == 'channel_outbox':
         if args.get('item_id'):
-            return {'item': service.outbox_item_view(owner, args['item_id'])}
+            item = service.outbox_item_view(owner, args['item_id'])
+            return {'item': item, **({'note': _wechat_status_note(item)}
+                                    if item['thread'].startswith('wechat:') else {})}
         items = service.outbox_page(owner, thread=args.get('thread'))['items']
         if authority is not None and authority.reviewing:
             from lib.channels.assistant import command_chats

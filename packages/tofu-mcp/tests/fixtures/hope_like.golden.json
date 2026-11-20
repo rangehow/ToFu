@@ -1,0 +1,1036 @@
+{
+ "calls": [
+  {
+   "tool": "get_job",
+   "arguments": {
+    "hope_run_id": "x",
+    "limit": "3"
+   },
+   "meta": null,
+   "result": {
+    "text": "state: RUNNING\nqueue: root.h800_elastic",
+    "tool_result": {
+     "image_contents": [],
+     "structured_json": null,
+     "document_text": "state: RUNNING\nqueue: root.h800_elastic",
+     "document_error": null,
+     "is_error": false,
+     "content_blocks": [
+      {
+       "type": "text",
+       "sourceOrdinal": 0,
+       "text": "state: RUNNING\nqueue: root.h800_elastic"
+      }
+     ],
+     "retention_error": null
+    }
+   }
+  },
+  {
+   "tool": "structured",
+   "arguments": {},
+   "meta": null,
+   "result": {
+    "text": "summary line\n\n[Structured result]\n{\"next\": null, \"ok\": true, \"rows\": [1, 2.5, \"三\"]}",
+    "tool_result": {
+     "image_contents": [],
+     "structured_json": "{\"next\": null, \"ok\": true, \"rows\": [1, 2.5, \"三\"]}",
+     "document_text": "summary line\n\n[Structured result]\n{\"next\": null, \"ok\": true, \"rows\": [1, 2.5, \"三\"]}",
+     "document_error": null,
+     "is_error": false,
+     "content_blocks": [
+      {
+       "type": "text",
+       "sourceOrdinal": 0,
+       "text": "summary line"
+      }
+     ],
+     "retention_error": null
+    }
+   }
+  },
+  {
+   "tool": "duplicate_json",
+   "arguments": {},
+   "meta": null,
+   "result": {
+    "text": "{\"b\":1,\"a\":[1,2]}",
+    "tool_result": {
+     "image_contents": [],
+     "structured_json": "{\"a\": [1, 2], \"b\": 1}",
+     "document_text": "{\"b\":1,\"a\":[1,2]}",
+     "document_error": null,
+     "is_error": false,
+     "content_blocks": [
+      {
+       "type": "text",
+       "sourceOrdinal": 0,
+       "text": "{\"b\":1,\"a\":[1,2]}"
+      }
+     ],
+     "retention_error": null
+    }
+   }
+  },
+  {
+   "tool": "media",
+   "arguments": {},
+   "meta": null,
+   "result": {
+    "text": "chart follows\n[image content]\n[image content unavailable: unsupported MIME type]\nfile body\n[resource content unavailable: unsupported binary resource]\n[Resource: https://example.invalid/doc]\n[audio content]",
+    "tool_result": {
+     "image_contents": [
+      {
+       "mimeType": "image/png",
+       "sourceOrdinal": 1,
+       "data": "iVBORw0KGgo="
+      },
+      {
+       "mimeType": "image/tiff",
+       "sourceOrdinal": 2,
+       "status": "unavailable",
+       "reason": "unsupported_mime"
+      }
+     ],
+     "structured_json": null,
+     "document_text": "chart follows\n[image content]\n[image content unavailable: unsupported MIME type]\nfile body\n[resource content unavailable: unsupported binary resource]\n[Resource: https://example.invalid/doc]\n[audio content]",
+     "document_error": null,
+     "is_error": false,
+     "content_blocks": [
+      {
+       "type": "text",
+       "sourceOrdinal": 0,
+       "text": "chart follows"
+      },
+      {
+       "type": "image",
+       "sourceOrdinal": 1,
+       "mediaOrdinal": 1
+      },
+      {
+       "type": "image",
+       "sourceOrdinal": 2,
+       "mediaOrdinal": 2
+      },
+      {
+       "type": "resource",
+       "sourceOrdinal": 3,
+       "text": "file body",
+       "uri": "file:///tmp/a.txt"
+      },
+      {
+       "type": "resource",
+       "sourceOrdinal": 4,
+       "uri": "file:///tmp/b.bin",
+       "status": "unavailable",
+       "reason": "unsupported_resource_blob"
+      },
+      {
+       "type": "resource_link",
+       "sourceOrdinal": 5,
+       "uri": "https://example.invalid/doc"
+      },
+      {
+       "type": "audio",
+       "sourceOrdinal": 6
+      }
+     ],
+     "retention_error": null
+    }
+   }
+  },
+  {
+   "tool": "tool_error",
+   "arguments": {},
+   "meta": null,
+   "result": {
+    "text": "MCP Error: job not found",
+    "tool_result": {
+     "image_contents": [],
+     "structured_json": null,
+     "document_text": "MCP Error: job not found",
+     "document_error": null,
+     "is_error": true,
+     "content_blocks": [
+      {
+       "type": "text",
+       "sourceOrdinal": 0,
+       "text": "job not found"
+      }
+     ],
+     "retention_error": null
+    }
+   }
+  },
+  {
+   "tool": "peer_error",
+   "arguments": {},
+   "meta": null,
+   "error": "error"
+  },
+  {
+   "tool": "catalog_write",
+   "arguments": {
+    "operation": "noop"
+   },
+   "meta": null,
+   "result": {
+    "text": "{\"ok\": true}",
+    "tool_result": {
+     "image_contents": [],
+     "structured_json": "{\"ok\": true}",
+     "document_text": "{\"ok\": true}",
+     "document_error": null,
+     "is_error": false,
+     "content_blocks": [
+      {
+       "type": "text",
+       "sourceOrdinal": 0,
+       "text": "{\"ok\": true}"
+      }
+     ],
+     "retention_error": null
+    }
+   }
+  },
+  {
+   "tool": "sheet_get_range_data",
+   "arguments": {},
+   "meta": null,
+   "result": {
+    "text": "A1=1",
+    "tool_result": {
+     "image_contents": [],
+     "structured_json": null,
+     "document_text": "A1=1",
+     "document_error": null,
+     "is_error": false,
+     "content_blocks": [
+      {
+       "type": "text",
+       "sourceOrdinal": 0,
+       "text": "A1=1"
+      }
+     ],
+     "retention_error": null
+    }
+   }
+  },
+  {
+   "tool": "submit_job",
+   "arguments": {
+    "workdir": "/nonexistent",
+    "queue": "root.hldy_training_cluster.your-user.h910c_m17_public"
+   },
+   "meta": {
+    "tofu/project": "/p"
+   },
+   "result": {
+    "text": "{\"ok\": false, \"error_code\": \"queue_off_limits\", \"stage\": \"queue_policy\", \"error\": \"Queue root.hldy_training_cluster.your-user.h910c_m17_public is off-limits by entry 'm17' of the built-in default (owner policy /nonexistent/HOPE_QUEUE_POLICY.json is missing): queue admin 杨睿 asked for release; owner decision (since 2026-11-13T11:01+08:00). No job was submitted; choose another queue in the .hope config.\", \"policy_path\": \"/nonexistent/HOPE_QUEUE_POLICY.json\", \"policy_source\": \"built-in default\", \"submitted\": false, \"retryable\": false, \"safe_to_retry\": false, \"queue\": \"root.hldy_training_cluster.your-user.h910c_m17_public\", \"policy_entry\": {\"id\": \"m17\", \"queue\": \"root.hldy_training_cluster.your-user.h910c_m17_public\", \"since\": \"2026-11-13T11:01+08:00\", \"reason\": \"queue admin 杨睿 asked for release; owner decision\"}}",
+    "tool_result": {
+     "image_contents": [],
+     "structured_json": {
+      "ok": false,
+      "error_code": "queue_off_limits",
+      "stage": "queue_policy",
+      "error": "Queue root.hldy_training_cluster.your-user.h910c_m17_public is off-limits by entry 'm17' of the built-in default (owner policy /nonexistent/HOPE_QUEUE_POLICY.json is missing): queue admin 杨睿 asked for release; owner decision (since 2026-11-13T11:01+08:00). No job was submitted; choose another queue in the .hope config.",
+      "policy_path": "/nonexistent/HOPE_QUEUE_POLICY.json",
+      "policy_source": "built-in default",
+      "submitted": false,
+      "retryable": false,
+      "safe_to_retry": false,
+      "queue": "root.hldy_training_cluster.your-user.h910c_m17_public",
+      "policy_entry": {
+       "id": "m17",
+       "queue": "root.hldy_training_cluster.your-user.h910c_m17_public",
+       "since": "2026-11-13T11:01+08:00",
+       "reason": "queue admin 杨睿 asked for release; owner decision"
+      }
+     },
+     "document_text": null,
+     "document_error": null,
+     "is_error": true,
+     "content_blocks": [],
+     "retention_error": null
+    }
+   }
+  },
+  {
+   "tool": "catalog_write",
+   "arguments": {
+    "operation": "codelab_create",
+    "body": {
+     "queue": "root.hldy_training_cluster.your-user.h910c_m17_public"
+    }
+   },
+   "meta": null,
+   "result": {
+    "text": "{\"ok\": false, \"error_code\": \"queue_off_limits\", \"stage\": \"queue_policy\", \"error\": \"Queue root.hldy_training_cluster.your-user.h910c_m17_public is off-limits by entry 'm17' of the built-in default (owner policy /nonexistent/HOPE_QUEUE_POLICY.json is missing): queue admin 杨睿 asked for release; owner decision (since 2026-11-13T11:01+08:00). No job was submitted; choose another queue in the .hope config.\", \"policy_path\": \"/nonexistent/HOPE_QUEUE_POLICY.json\", \"policy_source\": \"built-in default\", \"submitted\": false, \"retryable\": false, \"safe_to_retry\": false, \"queue\": \"root.hldy_training_cluster.your-user.h910c_m17_public\", \"policy_entry\": {\"id\": \"m17\", \"queue\": \"root.hldy_training_cluster.your-user.h910c_m17_public\", \"since\": \"2026-11-13T11:01+08:00\", \"reason\": \"queue admin 杨睿 asked for release; owner decision\"}}",
+    "tool_result": {
+     "image_contents": [],
+     "structured_json": {
+      "ok": false,
+      "error_code": "queue_off_limits",
+      "stage": "queue_policy",
+      "error": "Queue root.hldy_training_cluster.your-user.h910c_m17_public is off-limits by entry 'm17' of the built-in default (owner policy /nonexistent/HOPE_QUEUE_POLICY.json is missing): queue admin 杨睿 asked for release; owner decision (since 2026-11-13T11:01+08:00). No job was submitted; choose another queue in the .hope config.",
+      "policy_path": "/nonexistent/HOPE_QUEUE_POLICY.json",
+      "policy_source": "built-in default",
+      "submitted": false,
+      "retryable": false,
+      "safe_to_retry": false,
+      "queue": "root.hldy_training_cluster.your-user.h910c_m17_public",
+      "policy_entry": {
+       "id": "m17",
+       "queue": "root.hldy_training_cluster.your-user.h910c_m17_public",
+       "since": "2026-11-13T11:01+08:00",
+       "reason": "queue admin 杨睿 asked for release; owner decision"
+      }
+     },
+     "document_text": null,
+     "document_error": null,
+     "is_error": true,
+     "content_blocks": [],
+     "retention_error": null
+    }
+   }
+  },
+  {
+   "tool": "confirm_rerun",
+   "arguments": {
+    "hope_conf": ""
+   },
+   "meta": null,
+   "result": {
+    "text": "{\"ok\": false, \"error_code\": \"queue_policy_unresolved\", \"stage\": \"queue_policy\", \"error\": \"This submission does not carry its .hope body, so its queue cannot be checked against entries 'm17' of the built-in default (owner policy /nonexistent/HOPE_QUEUE_POLICY.json is missing). No job was submitted; submit with the .hope body (submit_job, or a rerun/clone with hopeConf).\", \"policy_path\": \"/nonexistent/HOPE_QUEUE_POLICY.json\", \"policy_source\": \"built-in default\", \"submitted\": false, \"retryable\": false, \"safe_to_retry\": false}",
+    "tool_result": {
+     "image_contents": [],
+     "structured_json": {
+      "ok": false,
+      "error_code": "queue_policy_unresolved",
+      "stage": "queue_policy",
+      "error": "This submission does not carry its .hope body, so its queue cannot be checked against entries 'm17' of the built-in default (owner policy /nonexistent/HOPE_QUEUE_POLICY.json is missing). No job was submitted; submit with the .hope body (submit_job, or a rerun/clone with hopeConf).",
+      "policy_path": "/nonexistent/HOPE_QUEUE_POLICY.json",
+      "policy_source": "built-in default",
+      "submitted": false,
+      "retryable": false,
+      "safe_to_retry": false
+     },
+     "document_text": null,
+     "document_error": null,
+     "is_error": true,
+     "content_blocks": [],
+     "retention_error": null
+    }
+   }
+  },
+  {
+   "tool": "crash",
+   "arguments": {},
+   "meta": null,
+   "result": {
+    "text": "after restart",
+    "tool_result": {
+     "image_contents": [],
+     "structured_json": null,
+     "document_text": "after restart",
+     "document_error": null,
+     "is_error": false,
+     "content_blocks": [
+      {
+       "type": "text",
+       "sourceOrdinal": 0,
+       "text": "after restart"
+      }
+     ],
+     "retention_error": null
+    }
+   }
+  }
+ ],
+ "tool_index_rows": [
+  [
+   "mcp__hope__catalog_write",
+   {
+    "server_name": "hope",
+    "tool_name": "catalog_write",
+    "namespaced_name": "mcp__hope__catalog_write",
+    "description": "",
+    "input_schema": {
+     "type": "object",
+     "properties": {
+      "operation": {
+       "type": "string"
+      },
+      "body": {
+       "type": "object"
+      }
+     }
+    },
+    "openai_def": {
+     "type": "function",
+     "function": {
+      "name": "mcp__hope__catalog_write",
+      "description": "[MCP:hope] MCP tool: catalog_write",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "operation": {
+         "type": "string"
+        },
+        "body": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "read_only_hint": false,
+    "annotations": {
+     "readOnlyHint": false,
+     "destructiveHint": false,
+     "idempotentHint": false,
+     "openWorldHint": false
+    },
+    "output_schema": {},
+    "meta": {},
+    "schema_hash": "sha256:616f5c74a58537955a2bfb9016fd22f6fdbe5557ea9d2d8597dcfa1f86886ff9",
+    "catalog_version": "cat-7"
+   },
+   false
+  ],
+  [
+   "mcp__hope__confirm_rerun",
+   {
+    "server_name": "hope",
+    "tool_name": "confirm_rerun",
+    "namespaced_name": "mcp__hope__confirm_rerun",
+    "description": "Rerun",
+    "input_schema": {
+     "type": "object",
+     "properties": {
+      "hope_conf": {
+       "type": "string"
+      }
+     }
+    },
+    "openai_def": {
+     "type": "function",
+     "function": {
+      "name": "mcp__hope__confirm_rerun",
+      "description": "[MCP:hope] Rerun",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "hope_conf": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    },
+    "read_only_hint": false,
+    "annotations": {
+     "readOnlyHint": false,
+     "destructiveHint": false,
+     "idempotentHint": false,
+     "openWorldHint": false
+    },
+    "output_schema": {},
+    "meta": {},
+    "schema_hash": "sha256:f2c9b0a84a4f057e76c337161e827d21073436391f8b826a4d5548a8ef66cd20",
+    "catalog_version": "cat-7"
+   },
+   false
+  ],
+  [
+   "mcp__hope__crash",
+   {
+    "server_name": "hope",
+    "tool_name": "crash",
+    "namespaced_name": "mcp__hope__crash",
+    "description": "",
+    "input_schema": {
+     "type": "object"
+    },
+    "openai_def": {
+     "type": "function",
+     "function": {
+      "name": "mcp__hope__crash",
+      "description": "[MCP:hope] MCP tool: crash",
+      "parameters": {
+       "type": "object"
+      }
+     }
+    },
+    "read_only_hint": true,
+    "annotations": {
+     "readOnlyHint": true,
+     "destructiveHint": false,
+     "idempotentHint": false,
+     "openWorldHint": false
+    },
+    "output_schema": {},
+    "meta": {},
+    "schema_hash": "sha256:5f460ad7a1a94efab4543f6dea037435001f53a5c2cb346dc5e2ce7aa01f209c",
+    "catalog_version": "cat-7"
+   },
+   false
+  ],
+  [
+   "mcp__hope__crash_write",
+   {
+    "server_name": "hope",
+    "tool_name": "crash_write",
+    "namespaced_name": "mcp__hope__crash_write",
+    "description": "",
+    "input_schema": {
+     "type": "object"
+    },
+    "openai_def": {
+     "type": "function",
+     "function": {
+      "name": "mcp__hope__crash_write",
+      "description": "[MCP:hope] MCP tool: crash_write",
+      "parameters": {
+       "type": "object"
+      }
+     }
+    },
+    "read_only_hint": false,
+    "annotations": {
+     "readOnlyHint": false,
+     "destructiveHint": false,
+     "idempotentHint": false,
+     "openWorldHint": false
+    },
+    "output_schema": {},
+    "meta": {},
+    "schema_hash": "sha256:2ebd108f14509a74fd4437b0933735334eb9093448c203cee684e11a91b29739",
+    "catalog_version": "cat-7"
+   },
+   false
+  ],
+  [
+   "mcp__hope__duplicate_json",
+   {
+    "server_name": "hope",
+    "tool_name": "duplicate_json",
+    "namespaced_name": "mcp__hope__duplicate_json",
+    "description": "",
+    "input_schema": {
+     "type": "object"
+    },
+    "openai_def": {
+     "type": "function",
+     "function": {
+      "name": "mcp__hope__duplicate_json",
+      "description": "[MCP:hope] MCP tool: duplicate_json",
+      "parameters": {
+       "type": "object"
+      }
+     }
+    },
+    "read_only_hint": false,
+    "annotations": {
+     "readOnlyHint": false,
+     "destructiveHint": false,
+     "idempotentHint": false,
+     "openWorldHint": false
+    },
+    "output_schema": {},
+    "meta": {},
+    "schema_hash": "sha256:658658386c73a457da1241869d4a18eceb00a0c5ae078547c7b4e79454c121b3",
+    "catalog_version": "cat-7"
+   },
+   false
+  ],
+  [
+   "mcp__hope__echo",
+   {
+    "server_name": "hope",
+    "tool_name": "echo",
+    "namespaced_name": "mcp__hope__echo",
+    "description": "",
+    "input_schema": {
+     "type": "object",
+     "properties": {
+      "n": {
+       "type": "integer"
+      },
+      "f": {
+       "type": "number"
+      },
+      "flag": {
+       "type": "boolean"
+      },
+      "tags": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      }
+     }
+    },
+    "openai_def": {
+     "type": "function",
+     "function": {
+      "name": "mcp__hope__echo",
+      "description": "[MCP:hope] MCP tool: echo",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "n": {
+         "type": "integer"
+        },
+        "f": {
+         "type": "number"
+        },
+        "flag": {
+         "type": "boolean"
+        },
+        "tags": {
+         "type": "array",
+         "items": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     }
+    },
+    "read_only_hint": false,
+    "annotations": {
+     "readOnlyHint": false,
+     "destructiveHint": false,
+     "idempotentHint": false,
+     "openWorldHint": false
+    },
+    "output_schema": {},
+    "meta": {},
+    "schema_hash": "sha256:02c48522a58e358a9961cd03c1b736b6d2d0e436a78307cd9a8b62b62990dd87",
+    "catalog_version": "cat-7"
+   },
+   false
+  ],
+  [
+   "mcp__hope__get_job",
+   {
+    "server_name": "hope",
+    "tool_name": "get_job",
+    "namespaced_name": "mcp__hope__get_job",
+    "description": "Read one job",
+    "input_schema": {
+     "type": "object",
+     "properties": {
+      "hope_run_id": {
+       "type": "string"
+      },
+      "limit": {
+       "type": "integer"
+      },
+      "verbose": {
+       "type": "boolean"
+      },
+      "ids": {
+       "type": "array",
+       "items": {
+        "type": "integer"
+       }
+      }
+     }
+    },
+    "openai_def": {
+     "type": "function",
+     "function": {
+      "name": "mcp__hope__get_job",
+      "description": "[MCP:hope] Read one job",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "hope_run_id": {
+         "type": "string"
+        },
+        "limit": {
+         "type": "integer"
+        },
+        "verbose": {
+         "type": "boolean"
+        },
+        "ids": {
+         "type": "array",
+         "items": {
+          "type": "integer"
+         }
+        }
+       }
+      }
+     }
+    },
+    "read_only_hint": true,
+    "annotations": {
+     "readOnlyHint": true,
+     "destructiveHint": false,
+     "idempotentHint": false,
+     "openWorldHint": false
+    },
+    "output_schema": {},
+    "meta": {},
+    "schema_hash": "sha256:33709acee524ef9e8185ab4dd99e0f672afb1e7ac5c2ff69897cca7c4bc806b9",
+    "catalog_version": "cat-7"
+   },
+   false
+  ],
+  [
+   "mcp__hope__hang",
+   {
+    "server_name": "hope",
+    "tool_name": "hang",
+    "namespaced_name": "mcp__hope__hang",
+    "description": "",
+    "input_schema": {
+     "type": "object"
+    },
+    "openai_def": {
+     "type": "function",
+     "function": {
+      "name": "mcp__hope__hang",
+      "description": "[MCP:hope] MCP tool: hang",
+      "parameters": {
+       "type": "object"
+      }
+     }
+    },
+    "read_only_hint": false,
+    "annotations": {
+     "readOnlyHint": false,
+     "destructiveHint": false,
+     "idempotentHint": false,
+     "openWorldHint": false
+    },
+    "output_schema": {},
+    "meta": {},
+    "schema_hash": "sha256:ce3730b1b63ed1af7ee038e1e3d41d549e16654f59271759154ec4c2f2ca41b5",
+    "catalog_version": "cat-7"
+   },
+   false
+  ],
+  [
+   "mcp__hope__large",
+   {
+    "server_name": "hope",
+    "tool_name": "large",
+    "namespaced_name": "mcp__hope__large",
+    "description": "",
+    "input_schema": {
+     "type": "object"
+    },
+    "openai_def": {
+     "type": "function",
+     "function": {
+      "name": "mcp__hope__large",
+      "description": "[MCP:hope] MCP tool: large",
+      "parameters": {
+       "type": "object"
+      }
+     }
+    },
+    "read_only_hint": false,
+    "annotations": {
+     "readOnlyHint": false,
+     "destructiveHint": false,
+     "idempotentHint": false,
+     "openWorldHint": false
+    },
+    "output_schema": {},
+    "meta": {},
+    "schema_hash": "sha256:29612abef1cbe4a6724fe7b06440a0a95ed9cb4d2324dda1dde432f8c945c4f9",
+    "catalog_version": "cat-7"
+   },
+   false
+  ],
+  [
+   "mcp__hope__media",
+   {
+    "server_name": "hope",
+    "tool_name": "media",
+    "namespaced_name": "mcp__hope__media",
+    "description": "",
+    "input_schema": {
+     "type": "object"
+    },
+    "openai_def": {
+     "type": "function",
+     "function": {
+      "name": "mcp__hope__media",
+      "description": "[MCP:hope] MCP tool: media",
+      "parameters": {
+       "type": "object"
+      }
+     }
+    },
+    "read_only_hint": false,
+    "annotations": {
+     "readOnlyHint": false,
+     "destructiveHint": false,
+     "idempotentHint": false,
+     "openWorldHint": false
+    },
+    "output_schema": {},
+    "meta": {},
+    "schema_hash": "sha256:62322297d80f5b71a6dfe6bd7616bb1c11e3938d2ffbec72829108a44bb96e69",
+    "catalog_version": "cat-7"
+   },
+   false
+  ],
+  [
+   "mcp__hope__peer_error",
+   {
+    "server_name": "hope",
+    "tool_name": "peer_error",
+    "namespaced_name": "mcp__hope__peer_error",
+    "description": "",
+    "input_schema": {
+     "type": "object"
+    },
+    "openai_def": {
+     "type": "function",
+     "function": {
+      "name": "mcp__hope__peer_error",
+      "description": "[MCP:hope] MCP tool: peer_error",
+      "parameters": {
+       "type": "object"
+      }
+     }
+    },
+    "read_only_hint": false,
+    "annotations": {
+     "readOnlyHint": false,
+     "destructiveHint": false,
+     "idempotentHint": false,
+     "openWorldHint": false
+    },
+    "output_schema": {},
+    "meta": {},
+    "schema_hash": "sha256:ee0ec00a29d6ad75089fbf7065f51849df9f80a4e3ea63b6459388649c0f265b",
+    "catalog_version": "cat-7"
+   },
+   false
+  ],
+  [
+   "mcp__hope__sheet_get_range_data",
+   {
+    "server_name": "hope",
+    "tool_name": "sheet.get_range_data",
+    "namespaced_name": "mcp__hope__sheet_get_range_data",
+    "description": "Provider-unsafe name",
+    "input_schema": {
+     "type": "object"
+    },
+    "openai_def": {
+     "type": "function",
+     "function": {
+      "name": "mcp__hope__sheet_get_range_data",
+      "description": "[MCP:hope] Provider-unsafe name",
+      "parameters": {
+       "type": "object"
+      }
+     }
+    },
+    "read_only_hint": false,
+    "annotations": {
+     "readOnlyHint": false,
+     "destructiveHint": false,
+     "idempotentHint": false,
+     "openWorldHint": false
+    },
+    "output_schema": {},
+    "meta": {},
+    "schema_hash": "sha256:d1ccd2cf101e657ba8e8725808e2d82caf1515ae87c8708b8a6bf7d9198bf22e",
+    "catalog_version": "cat-7"
+   },
+   false
+  ],
+  [
+   "mcp__hope__structured",
+   {
+    "server_name": "hope",
+    "tool_name": "structured",
+    "namespaced_name": "mcp__hope__structured",
+    "description": "Structured echo",
+    "input_schema": {
+     "type": "object"
+    },
+    "openai_def": {
+     "type": "function",
+     "function": {
+      "name": "mcp__hope__structured",
+      "description": "[MCP:hope] Structured echo",
+      "parameters": {
+       "type": "object"
+      }
+     }
+    },
+    "read_only_hint": false,
+    "annotations": {
+     "readOnlyHint": false,
+     "destructiveHint": false,
+     "idempotentHint": false,
+     "openWorldHint": false
+    },
+    "output_schema": {
+     "type": "object"
+    },
+    "meta": {},
+    "schema_hash": "sha256:cab094786a1fd984c1274bac8a87f5f2dbe431656a9ea89caa60b5d5dd0e0ffb",
+    "catalog_version": "cat-7"
+   },
+   false
+  ],
+  [
+   "mcp__hope__submit_job",
+   {
+    "server_name": "hope",
+    "tool_name": "submit_job",
+    "namespaced_name": "mcp__hope__submit_job",
+    "description": "Submit a Hope job",
+    "input_schema": {
+     "type": "object",
+     "properties": {
+      "workdir": {
+       "type": "string"
+      },
+      "usergroup": {
+       "type": "string"
+      },
+      "queue": {
+       "type": "string"
+      },
+      "extra": {
+       "type": "object"
+      }
+     }
+    },
+    "openai_def": {
+     "type": "function",
+     "function": {
+      "name": "mcp__hope__submit_job",
+      "description": "[MCP:hope] Submit a Hope job",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "workdir": {
+         "type": "string"
+        },
+        "usergroup": {
+         "type": "string"
+        },
+        "queue": {
+         "type": "string"
+        },
+        "extra": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    },
+    "read_only_hint": false,
+    "annotations": {
+     "readOnlyHint": false,
+     "destructiveHint": false,
+     "idempotentHint": false,
+     "openWorldHint": false
+    },
+    "output_schema": {},
+    "meta": {
+     "tofu/queue-policy": {
+      "version": 1
+     }
+    },
+    "schema_hash": "sha256:263d8f17bdeb931fe122dea212feda94ec5ac303ec50481749ace87a1ace71ff",
+    "catalog_version": "cat-7"
+   },
+   false
+  ],
+  [
+   "mcp__hope__tool_error",
+   {
+    "server_name": "hope",
+    "tool_name": "tool_error",
+    "namespaced_name": "mcp__hope__tool_error",
+    "description": "",
+    "input_schema": {
+     "type": "object"
+    },
+    "openai_def": {
+     "type": "function",
+     "function": {
+      "name": "mcp__hope__tool_error",
+      "description": "[MCP:hope] MCP tool: tool_error",
+      "parameters": {
+       "type": "object"
+      }
+     }
+    },
+    "read_only_hint": false,
+    "annotations": {
+     "readOnlyHint": false,
+     "destructiveHint": false,
+     "idempotentHint": false,
+     "openWorldHint": false
+    },
+    "output_schema": {},
+    "meta": {},
+    "schema_hash": "sha256:946be5697c00c51cb42ffa2995c4859fe2549b9cc6565da6f4b0baa820a5043c",
+    "catalog_version": "cat-7"
+   },
+   false
+  ],
+  [
+   "mcp__hope__watch_job",
+   {
+    "server_name": "hope",
+    "tool_name": "hope_watch_job",
+    "namespaced_name": "mcp__hope__watch_job",
+    "description": "Wait for a job",
+    "input_schema": {
+     "type": "object",
+     "properties": {
+      "timeout_sec": {
+       "type": "integer",
+       "maximum": 600
+      }
+     }
+    },
+    "openai_def": {
+     "type": "function",
+     "function": {
+      "name": "mcp__hope__watch_job",
+      "description": "[MCP:hope] Wait for a job",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "timeout_sec": {
+         "type": "integer",
+         "maximum": 600
+        }
+       }
+      }
+     }
+    },
+    "read_only_hint": true,
+    "annotations": {
+     "readOnlyHint": true,
+     "destructiveHint": false,
+     "idempotentHint": false,
+     "openWorldHint": false
+    },
+    "output_schema": {},
+    "meta": {},
+    "schema_hash": "sha256:869496559442269be9de15dc882f466d594f68f25e71f82e53542dc0c61ac072",
+    "catalog_version": "cat-7"
+   },
+   false
+  ]
+ ]
+}

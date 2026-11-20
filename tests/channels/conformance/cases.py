@@ -261,8 +261,11 @@ def accepted_confirmation(d: Driver) -> None:
     expired SSO ticket."""
     d.connect()
     thread, other = sorted(d.send_threads(), key=str)
-    if 'file' not in d.descriptor['identities'][d.host.identity_for(thread)]['attachments']:
+    file = d.descriptor['identities'][d.host.identity_for(thread)]['attachments'].get('file')
+    if not file:
         raise NotApplicable('the platform carries no files natively')
+    if file.get('confirmation') == 'ack':
+        raise NotApplicable('the provider ACK settles the file; no thread history is available')
     for each in (thread, other):
         d.prepare_send(each)
     faults = record_outbox_faults(d.env)

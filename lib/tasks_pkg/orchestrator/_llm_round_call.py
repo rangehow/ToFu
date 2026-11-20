@@ -69,6 +69,7 @@ def run_llm_call_with_fallback(
     max_tokens: int,
     on_request_usage: Callable[[Any], None] | None = None,
     on_admission_denied: Callable[[Any], None] | None = None,
+    request_model_decision=None,
 ) -> str:
     """Execute this round's LLM call with fallback + deferred flush.
 
@@ -116,6 +117,7 @@ def run_llm_call_with_fallback(
             messages, rs.preset, rs.thinking_enabled,
             rs.accumulated_usage, rs.api_rounds,
             on_tool_call_ready=stream_acc.on_tool_call_ready,
+            request_model_decision=request_model_decision,
         )
         rs.assistant_msg = llm_result['assistant_msg']
         rs.last_finish_reason = llm_result['finish_reason']

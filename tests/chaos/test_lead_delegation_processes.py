@@ -194,7 +194,9 @@ def test_a_lead_woken_by_a_notice_starts_steers_and_accepts_a_worker_and_revocat
     title = f'Report on the delegated file [chaos turn={wake}]'
     owner_turn = chaos.provider.script([
         fp.tool('update_task_progress', {'summary': 'I will report at the promised time.',
-                                         'tasks': [{'title': title, 'status': 'pending', 'due': due}]}),
+                                         'tasks': [{'title': title, 'status': 'pending', 'due': due,
+                                                    'blocker': {'kind': 'next_action',
+                                                                'action': 'Write the report on the delegated file'}}]}),
         fp.text('Recorded. [END_TURN: done]')])
     owner_text = f'Come back to me at the due time. [chaos turn={owner_turn}]'
     chaos.client.create_turn(lead, owner_text, workspace=project, first=False)

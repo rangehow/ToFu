@@ -1367,7 +1367,7 @@ def test_storage_fenced_worker_is_escalated_once_and_its_recovery_logged(
     }
     probe = {'value': unready}
     monkeypatch.setattr(
-        manager, '_http_probe', lambda _pid: dict(probe['value']))
+        manager, '_http_probe', lambda _pid, **_k: dict(probe['value']))
     monkeypatch.setattr(manager._native_storage, 'record', lambda: {
         'state': 'failed',
         'error': '6 storage crashes/failed starts within 600s (limit 5)'})
@@ -1439,7 +1439,7 @@ def test_live_but_unready_worker_degrades_without_wedge_restart(
         'readinessState': 'starting',
         'storageState': 'restarting',
     }
-    monkeypatch.setattr(manager, '_http_probe', lambda _pid: dict(probe))
+    monkeypatch.setattr(manager, '_http_probe', lambda _pid, **_k: dict(probe))
     monkeypatch.setattr(
         manager, '_heartbeat_stale_age',
         lambda _pid: sm.DEFAULT_WEDGE_STALE + 1000)
@@ -1522,7 +1522,7 @@ def test_reconcile_never_recycles_a_healthy_worker_whose_rss_reads_enormous(
     monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: True)
     monkeypatch.setattr(sm, 'cgroup_oom_kill_count', lambda: 7)
     manager = sm.LifecycleManager(str(project))
-    monkeypatch.setattr(manager, '_http_probe', lambda _pid: {
+    monkeypatch.setattr(manager, '_http_probe', lambda _pid, **_k: {
         'health': True, 'liveness': True, 'ready': True, 'scheme': 'http'})
     monkeypatch.setattr(manager, '_terminate', lambda *_a, **_k: pytest.fail(
         'memory must never terminate a healthy worker'))
@@ -3175,3 +3175,343 @@ def test_serverctl_process_roundtrip(tmp_path, entry):
                 os.kill(int(status['pid']), signal.SIGKILL)
             except OSError:
                 pass
+
+
+# ── Readiness liveness contract (docs/modules/infra_runtime.md) ──────────────
+# 2026-11-18 15:26-15:29: /api/ready answered in 2-3.5 s; the old 2 s probe
+# read every such answer as a failure and the manager counted the slow worker
+# as down ("is live but not ready ... timed out").
+
+
+class _DelayedReadiness:
+    """A loopback worker whose every answer takes ``delay`` seconds (or never comes)."""
+
+    def __init__(self, delay: float | None, pid: int = 4321):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        import threading
+        self.paths: list[str] = []
+        release = self.release = threading.Event()
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *_a):
+                pass
+
+            def do_GET(self):  # noqa: N802 - http.server API
+                outer.paths.append(self.path)
+                if delay is None:
+                    release.wait(30)
+                    return
+                time.sleep(delay)
+                body = json.dumps({'ok': True, 'ready': True, 'pid': pid, 'state': 'ready',
+                                   'storage': {'ready': True, 'state': 'ready'}}).encode()
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        self.server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        self.server.daemon_threads = True
+        self.port = self.server.server_address[1]
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+
+    def __enter__(self):
+        self.thread.start()
+        return self
+
+    def __exit__(self, *_exc):
+        self.release.set()
+        self.server.shutdown()
+        self.server.server_close()
+
+
+@pytest.mark.parametrize('delay', [2.2, 3.4])
+def test_a_two_to_three_and_a_half_second_answer_is_answered_not_an_outage(delay):
+    with _DelayedReadiness(delay) as worker:
+        probe = sm.probe_application_readiness(worker.port, 4321)
+
+    assert (probe['outcome'], probe['liveness'], probe['ready']) == (sm.ANSWERED, True, True)
+    assert delay <= probe['latencySeconds'] < sm.READINESS_PROBE_DEADLINE_SECONDS
+    assert worker.paths == ['/api/ready']
+
+
+def test_a_hung_worker_times_out_once_without_a_second_endpoint_or_scheme():
+    with _DelayedReadiness(None) as worker:
+        probe = sm.probe_application_readiness(worker.port, 4321, timeout=0.3)
+
+    assert (probe['outcome'], probe['liveness'], probe['ready']) == (sm.TIMEOUT, False, False)
+    assert 0.3 <= probe['latencySeconds'] < 2.0
+    assert worker.paths == ['/api/ready']
+    assert 'no answer within 0.3 s' in probe['livenessError']
+
+
+def test_a_refused_port_is_unanswered():
+    probe = sm.probe_application_readiness(_free_port(), 4321, timeout=1.0)
+    assert (probe['outcome'], probe['liveness']) == (sm.UNANSWERED, False)
+
+
+def _contract_manager(tmp_path, monkeypatch, outcomes):
+    """A manager whose real ``_http_probe`` accounting sees scripted probe outcomes."""
+    project = _project(tmp_path)
+    live = _status(project, running=True, pid=4321)
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: live)
+    monkeypatch.setattr(sm, 'port_accepts', lambda *_a, **_k: True)
+    monkeypatch.setattr(sm, 'listener_pids', lambda _p: [4321])
+    manager = sm.LifecycleManager(str(project))
+    monkeypatch.setattr(manager._native_storage, 'record', lambda: {'state': 'ready'})
+    import serverctl_pkg.native_storage_service as native_storage
+    monkeypatch.setattr(native_storage, 'host_matches', lambda _record: True)
+    monkeypatch.setattr(manager, '_recover_execution_service', lambda: True)
+    monkeypatch.setattr(manager, '_heartbeat_stale_age', lambda _pid: None)
+    monkeypatch.setattr(manager, '_terminate', lambda *_a, **_k: pytest.fail('a probe verdict never terminates'))
+    monkeypatch.setattr(manager, '_spawn', lambda *_a, **_k: pytest.fail('a live worker is never replaced'))
+    deadline = sm.READINESS_PROBE_DEADLINE_SECONDS
+    shapes = {
+        sm.TIMEOUT: {'liveness': False, 'ready': False, 'outcome': sm.TIMEOUT, 'latencySeconds': deadline,
+                     'livenessError': f'http readiness probe gave no answer within {deadline:g} s'},
+        sm.UNANSWERED: {'liveness': False, 'ready': False, 'outcome': sm.UNANSWERED, 'latencySeconds': 0.001,
+                        'livenessError': 'http readiness probe failed: [Errno 111] Connection refused'},
+    }
+    script = iter(outcomes)
+
+    def scripted(*_a, **_k):
+        return {'scheme': 'http', 'readinessError': '', 'deadlineSeconds': deadline, **shapes[next(script)]}
+    monkeypatch.setattr(sm, 'probe_application_readiness', scripted)
+    manager._state.update(desired='running', observed='running', lastError='')
+    return manager, project
+
+
+def test_timeouts_shorter_than_the_run_keep_a_slow_worker_running(tmp_path, monkeypatch, caplog):
+    run = sm.READINESS_TIMEOUT_RUN
+    manager, project = _contract_manager(tmp_path, monkeypatch, [sm.TIMEOUT] * (run - 1))
+
+    with caplog.at_level(logging.INFO, logger='server_manager'):
+        for _ in range(run - 1):
+            manager.reconcile()
+            assert manager._state['observed'] == 'running'
+
+    assert not manager._state.get('unreadySince')
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert manager._state['readinessProbe']['consecutiveTimeouts'] == run - 1
+    assert manager._state['readinessProbe']['verdict'] == 'slow'
+    lines = [json.loads(line) for line in (project / 'logs' / sm.READINESS_PROBE_LOG).read_text().splitlines()]
+    assert [(r['outcome'], r['consecutiveTimeouts']) for r in lines] == [
+        (sm.TIMEOUT, n) for n in range(1, run)]
+    assert all(r['latencySeconds'] == sm.READINESS_PROBE_DEADLINE_SECONDS and r['pid'] == 4321 for r in lines)
+
+
+def test_the_contract_run_of_timeouts_counts_a_hung_worker_down_without_restarting_it(
+        tmp_path, monkeypatch, caplog):
+    run = sm.READINESS_TIMEOUT_RUN
+    manager, _ = _contract_manager(tmp_path, monkeypatch, [sm.TIMEOUT] * (run + 1))
+
+    with caplog.at_level(logging.INFO, logger='server_manager'):
+        observed = []
+        for _ in range(run + 1):
+            manager.reconcile()
+            observed.append(manager._state['observed'])
+
+    # Down on the run's last probe: within READINESS_TIMEOUT_RUN probes of the first unanswered one.
+    assert observed == ['running'] * (run - 1) + ['degraded'] * 2
+    assert f'{run + 1} consecutive probes gave no answer' in manager._state['lastError']
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert errors == [f'worker pid=4321 gave no readiness answer: readiness probe unanswered: {run} consecutive '
+                      f'probes gave no answer within {sm.READINESS_PROBE_DEADLINE_SECONDS:g} s']
+    assert not any('is live but not ready' in r.getMessage() for r in caplog.records)
+    assert manager._state['worker']['pid'] == 4321
+
+
+def test_a_refused_probe_is_down_at_once(tmp_path, monkeypatch):
+    manager, _ = _contract_manager(tmp_path, monkeypatch, [sm.UNANSWERED])
+    manager.reconcile()
+    assert manager._state['observed'] == 'degraded'
+    assert manager._state['readinessProbe']['verdict'] == 'down'
+
+
+def test_status_reports_a_slow_worker_by_the_standing_verdict_with_its_latency(tmp_path, monkeypatch):
+    manager, _ = _contract_manager(tmp_path, monkeypatch, [sm.TIMEOUT])
+    monkeypatch.setattr(manager._execution, 'readiness_error', lambda *_a: '')
+
+    status = manager.status(probe_health=True)
+
+    assert (status['observed'], status['liveness'], status['ready']) == ('running', True, True)
+    assert status['readinessProbe']['latencySeconds'] == sm.READINESS_PROBE_DEADLINE_SECONDS
+    assert status['readinessProbe']['consecutiveTimeouts'] == 1
+
+
+# ── Readiness probes run outside the lifecycle lock ─────────────────────────
+
+
+class _HeldProbe:
+    """A readiness probe that blocks until released; records whether the lifecycle lock was held."""
+
+    def __init__(self, manager, answer):
+        import threading
+        self.manager, self.answer = manager, answer
+        self.entered, self.release = threading.Event(), threading.Event()
+        self.lock_held_during_probe: list[bool] = []
+
+    def __call__(self, port, pid, **_kwargs):
+        # RLock._is_owned is private; acquiring from this thread proves nobody else holds it.
+        free = self.manager._lock.acquire(blocking=False)
+        if free:
+            self.manager._lock.release()
+        self.lock_held_during_probe.append(not free)
+        self.entered.set()
+        assert self.release.wait(30), 'test never released the probe'
+        return dict(self.answer)
+
+
+_READY_ANSWER = {'health': True, 'liveness': True, 'ready': True, 'scheme': 'http', 'outcome': 'answered',
+                 'latencySeconds': 3.4, 'deadlineSeconds': 10.0, 'livenessError': '', 'readinessError': ''}
+_HUNG_ANSWER = {'health': False, 'liveness': False, 'ready': False, 'scheme': None, 'outcome': 'timeout',
+                'latencySeconds': 10.0, 'deadlineSeconds': 10.0,
+                'livenessError': 'http readiness probe gave no answer within 10 s', 'readinessError': ''}
+
+
+def _held_probe_manager(tmp_path, monkeypatch, answer):
+    manager, project = _contract_manager(tmp_path, monkeypatch, [])
+    held = _HeldProbe(manager, answer)
+    monkeypatch.setattr(sm, 'probe_application_readiness', held)
+    return manager, project, held
+
+
+def _in_thread(target):
+    import threading
+    outcome = {}
+
+    def run():
+        try:
+            outcome['value'] = target()
+        except BaseException as exc:  # noqa: BLE001 - surfaced by the test
+            outcome['error'] = exc
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    return thread, outcome
+
+
+def _probe_log(project):
+    path = project / 'logs' / sm.READINESS_PROBE_LOG
+    return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+
+def test_a_monitor_probe_never_holds_the_lifecycle_lock(tmp_path, monkeypatch):
+    manager, project, held = _held_probe_manager(tmp_path, monkeypatch, _READY_ANSWER)
+    manager._state.update(observed='degraded', unreadySince=9000.0, lastError='earlier')
+    tick, outcome = _in_thread(manager.reconcile)
+    assert held.entered.wait(10)
+
+    started = time.monotonic()
+    snapshot = manager.status()  # takes the lifecycle lock while the probe waits
+    assert time.monotonic() - started < 2.0
+    assert snapshot['lastError'] == 'earlier'  # the manager's record, before the probe settles
+
+    held.release.set()
+    tick.join(10)
+    assert not tick.is_alive() and 'error' not in outcome
+    assert held.lock_held_during_probe == [False]
+    # Nothing intervened: the probe's verdict applies, with its latency recorded.
+    assert manager._state['observed'] == 'running'
+    assert manager._state['readinessProbe']['latencySeconds'] == 3.4
+    assert [(r['verdict'], r['latencySeconds']) for r in _probe_log(project)] == [('up', 3.4)]
+
+
+@pytest.mark.parametrize('answer', [_READY_ANSWER, _HUNG_ANSWER], ids=['ready', 'hung'])
+def test_a_restart_while_the_monitor_probes_discards_the_stale_verdict(tmp_path, monkeypatch, answer):
+    manager, project, held = _held_probe_manager(tmp_path, monkeypatch, answer)
+    manager._state['readinessProbe'] = {'pid': 4321, 'consecutiveTimeouts': sm.READINESS_TIMEOUT_RUN - 1}
+    tick, outcome = _in_thread(manager.reconcile)
+    assert held.entered.wait(10)
+
+    started = time.monotonic()
+    refused = manager.restart(server_args='not-a-list', source='test')  # a lifecycle operation, refused early
+    assert time.monotonic() - started < 2.0
+    assert refused['ok'] is False
+    observed_after_restart = manager._state['observed']
+
+    held.release.set()
+    tick.join(10)
+    assert not tick.is_alive() and 'error' not in outcome
+    # The verdict described a lifecycle that no longer exists: it judges nothing, not even the timeout run.
+    assert manager._state['observed'] == observed_after_restart
+    assert manager._state['readinessProbe'] == {'pid': 4321, 'consecutiveTimeouts': sm.READINESS_TIMEOUT_RUN - 1}
+    assert [r['verdict'] for r in _probe_log(project)] == ['stale']
+    assert _probe_log(project)[0]['latencySeconds'] == answer['latencySeconds']
+
+
+def test_a_stop_while_the_monitor_probes_is_not_undone_by_its_answer(tmp_path, monkeypatch):
+    manager, project, held = _held_probe_manager(tmp_path, monkeypatch, _READY_ANSWER)
+    terminated = []
+    monkeypatch.setattr(manager, '_terminate', lambda status, **_k: (terminated.append(status['pid']), (True, False, 'stopped'))[1])
+    monkeypatch.setattr(manager, '_stop_resident_services', lambda: None)
+    tick, outcome = _in_thread(manager.reconcile)
+    assert held.entered.wait(10)
+
+    started = time.monotonic()
+    result = manager.stop(source='test')
+    assert time.monotonic() - started < 2.0
+    assert result['ok'] is True and terminated == [4321]
+
+    held.release.set()
+    tick.join(10)
+    assert not tick.is_alive() and 'error' not in outcome
+    assert (manager._state['desired'], manager._state['observed']) == ('stopped', 'stopped')
+    assert [r['verdict'] for r in _probe_log(project)] == ['stale']
+
+
+def test_a_replaced_worker_never_inherits_a_probe_of_its_predecessor(tmp_path, monkeypatch):
+    manager, project, held = _held_probe_manager(tmp_path, monkeypatch, _HUNG_ANSWER)
+    manager._state['readinessProbe'] = {'pid': 4321, 'consecutiveTimeouts': sm.READINESS_TIMEOUT_RUN - 1}
+    tick, outcome = _in_thread(manager.reconcile)
+    assert held.entered.wait(10)
+    successor = _status(project, running=True, pid=5555)
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: successor)
+
+    held.release.set()
+    tick.join(10)
+    assert not tick.is_alive() and 'error' not in outcome
+    assert manager._state['observed'] == 'running'
+    assert [r['verdict'] for r in _probe_log(project)] == ['stale']
+
+
+def test_a_timeout_run_belongs_to_one_worker_pid(tmp_path, monkeypatch):
+    manager, _ = _contract_manager(tmp_path, monkeypatch, [sm.TIMEOUT])
+    manager._state['readinessProbe'] = {'pid': 999, 'consecutiveTimeouts': sm.READINESS_TIMEOUT_RUN - 1}
+    manager.reconcile()
+    assert manager._state['readinessProbe']['consecutiveTimeouts'] == 1
+    assert manager._state['observed'] == 'running'
+
+
+def test_concurrent_live_status_probes_proceed_while_the_monitor_probe_waits(tmp_path, monkeypatch):
+    manager, project, held = _held_probe_manager(tmp_path, monkeypatch, _HUNG_ANSWER)
+    monkeypatch.setattr(manager._execution, 'readiness_error', lambda *_a: '')
+    tick, outcome = _in_thread(manager.reconcile)
+    assert held.entered.wait(10)
+    monkeypatch.setattr(sm, 'probe_application_readiness', lambda *_a, **_k: dict(_READY_ANSWER))
+
+    started = time.monotonic()
+    snapshots = [manager.status(probe_health=True) for _ in range(3)]
+    assert time.monotonic() - started < 2.0
+    assert all(s['ready'] is True and s['readinessProbe']['source'] == 'status' for s in snapshots)
+
+    held.release.set()
+    tick.join(10)
+    assert not tick.is_alive() and 'error' not in outcome
+    assert sorted(r['source'] for r in _probe_log(project)) == ['monitor', 'status', 'status', 'status']
+
+
+def test_a_status_probe_spanning_a_lifecycle_change_reports_no_live_verdict(tmp_path, monkeypatch):
+    manager, project, held = _held_probe_manager(tmp_path, monkeypatch, _READY_ANSWER)
+    call, outcome = _in_thread(lambda: manager.status(probe_health=True))
+    assert held.entered.wait(10)
+    successor = _status(project, running=True, pid=5555)
+    monkeypatch.setattr(sm, 'read_lock_status', lambda _p, _server_env=None: successor)
+    monkeypatch.setattr(sm, 'listener_pids', lambda _p: [5555])
+    with manager._lock:
+        manager._lifecycle_epoch += 1  # what a spawn does
+
+    held.release.set()
+    call.join(10)
+    assert 'error' not in outcome
+    assert outcome['value']['pid'] == 5555 and outcome['value']['ready'] is None
+    assert [r['verdict'] for r in _probe_log(project)] == ['stale']

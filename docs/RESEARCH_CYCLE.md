@@ -60,6 +60,29 @@ scientific support. Current hypothesis/protocol and evidence digests invalidate
 stale claims. Manuscript scientific snapshots must remain current independently
 of compilation byte digests.
 
+The preparation boundary is the existing experiment-result application followed
+by workspace readiness (`action.apply_action_result` → `program.readiness`, also
+returned by workspace saves). A retained successful result for another job does
+not settle an active job in the same run: provider-scoped job identity must
+match. Until that job settles, receipts remain observed history, not eligible
+run artifacts, regardless of a proposed `passed` status. This is aggregate-run
+admission, not exact-job scientific provenance: after all active jobs settle,
+completed receipts from every job in that run can supply science and artifact
+references. `remote_job_id` records an observed reference; it does not filter the
+run's scientific evidence. In particular, A's status-only completion can expose
+B's retained science as run evidence without proving that A produced it. Distinct
+opposing A/B outcomes remain inconclusive rather than selecting A's conclusion.
+`run_evidence` is only an evidence-presence gate, not manuscript completion or
+proof of exact-job attribution. Claim traceability, reported-observation audits,
+current manuscript science and server-verified compilation remain separate gates;
+projects must additionally verify producer-to-artifact attribution and source
+authenticity before treating aggregate evidence as a particular job's result.
+The inert local progression specification, including status-only A and distinct
+opposing A/B payloads and references, is
+`tests/research/test_research_preparation_progression.py`. Changing admission to
+filter solely by `remote_job_id` was not chosen: the existing run reducer supports
+multiple jobs, and that filter would silently discard their retained evidence.
+
 Saved manuscript sources compile through the shared paper-build scheduler.
 Only server-verified owner/source/artifact evidence can write a passing
 compilation result; workspace PUT and model/tool output cannot supply it.

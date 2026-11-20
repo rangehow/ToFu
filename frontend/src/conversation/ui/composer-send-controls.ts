@@ -6,11 +6,14 @@
  * Send when idle) and keeps the text-draft listener scoped to its input.
  */
 
+import { iconHtml } from '../../icons';
+
 export interface ComposerSendControlLabels {
   readonly send: string;
   readonly sendTitle: string;
   readonly stop: string;
   readonly stopping: string;
+  readonly stopRefresh?: string;
 }
 
 export interface ComposerSendControlsInput {
@@ -32,12 +35,9 @@ export interface ComposerSendControlsInput {
 export interface ComposerSendControlsState {
   readonly busy: boolean;
   readonly hasDraft: boolean;
-  readonly splitControls: boolean;
 }
 
 const SEND_BUTTON_ID = 'sendBtn';
-const STOP_BUTTON_ID = 'composerStopBtn';
-const SPLIT_CLASS = 'composer-dual-actions';
 
 const SEND_ICON = '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 12L20 12"/><path d="M13 5l7 7-7 7"/></svg>';
 const STOP_ICON = '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
@@ -116,35 +116,23 @@ function showStop(
   button: HTMLButtonElement,
   input: ComposerSendControlsInput,
 ): void {
-  const label = input.stopping ? input.labels.stopping : input.labels.stop;
-  const separateClass = button.id === STOP_BUTTON_ID ? ' composer-stop-btn' : '';
+  const refreshLabel = input.stopping && input.labels.stopRefresh;
+  const label = input.stopping
+    ? refreshLabel ? `${input.labels.stopping} · ${refreshLabel}` : input.labels.stopping
+    : input.labels.stop;
   button.hidden = false;
-  setButtonState(button, input.stopping
-    ? 'send-btn stop-btn is-stopping' + separateClass
-    : 'send-btn stop-btn' + separateClass, input.stopping ? 'progress' : '');
+  setButtonState(button, input.stopping ? 'send-btn stop-btn is-stopping' : 'send-btn stop-btn',
+    input.stopping ? (refreshLabel ? 'pointer' : 'progress') : '');
   if (button.getAttribute('aria-busy') !== String(input.stopping)) {
     button.setAttribute('aria-busy', String(input.stopping));
   }
   setAccessibleLabel(button, label, label);
   setButtonMarkup(
     button,
-    (input.stopping ? STOPPING_ICON : STOP_ICON)
+    (refreshLabel ? iconHtml('refresh', 16) : input.stopping ? STOPPING_ICON : STOP_ICON)
       + queueBadge(input.queueCount),
   );
   button.onclick = input.onStop;
-}
-
-function hideSeparateStop(
-  document: Document,
-  sendButton: HTMLButtonElement,
-): void {
-  const stopButton = buttonById(document, STOP_BUTTON_ID);
-  if (stopButton) {
-    if (!stopButton.hidden) stopButton.hidden = true;
-    stopButton.onclick = null;
-  }
-  const actions = sendButton.parentElement;
-  if (actions?.classList.contains(SPLIT_CLASS)) actions.classList.remove(SPLIT_CLASS);
 }
 
 /** Project authoritative composer state onto its click and touch controls. */
@@ -157,12 +145,9 @@ export function updateComposerSendControls(
     || input.hasAttachmentDraft;
   const sendButton = buttonById(input.document, SEND_BUTTON_ID);
   bindDraftRefresh(input);
-  if (!sendButton) return { busy, hasDraft, splitControls: false };
+  if (!sendButton) return { busy, hasDraft };
 
-  /* One control, one state: a live turn never coexists with a Send affordance
-   * (queueing a follow-up mid-turn stays on the Enter key path). Any separate
-   * stop button left by an older runtime is always retired. */
-  hideSeparateStop(input.document, sendButton);
+  /* A live turn never coexists with Send; Enter queues a follow-up. */
   if (busy) showStop(sendButton, input);
   else showSend(sendButton, input);
   // Keep Stop available for an existing turn; only new submissions are fenced.
@@ -171,5 +156,5 @@ export function updateComposerSendControls(
   if (sendButton.disabled && input.blockedLabel) {
     setAccessibleLabel(sendButton, input.blockedLabel, input.blockedLabel);
   }
-  return { busy, hasDraft, splitControls: false };
+  return { busy, hasDraft };
 }

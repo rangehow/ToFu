@@ -148,7 +148,7 @@ def enqueue(owner: int, thread: str, text: str, *, idempotency_key: str,
             origin: dict[str, str], reply_to: str | None = None,
             attachments: list[dict[str, Any]] | None = None, authority: str = 'owner',
             review: frozenset[str] | None = None, needs_approval: bool = False,
-            store: ChannelStore | None = None) -> OutboxItem:
+            store: ChannelStore | None = None, required_binding: list | None = None) -> OutboxItem:
     """Record one outbound message; ``attachments`` are admitted records (``lib.channels.attachments``),
     named in the text instead where the platform carries no files.
 
@@ -170,6 +170,8 @@ def enqueue(owner: int, thread: str, text: str, *, idempotency_key: str,
     account = store.account(key.channel)
     if not account or not account.get('enabled') or not account.get('identity'):
         raise ChannelError('account_unavailable', 'The channel account is not enabled')
+    if attachments and key.channel == 'wechat' and key.kind != 'uid':
+        raise ChannelError('unsupported_target', 'Personal 微信 supports file sends only in private chats')
     reply_external = None
     if reply_to:
         if not CHANNEL_TRAITS[key.channel]['quoteReply']:
@@ -196,6 +198,10 @@ def enqueue(owner: int, thread: str, text: str, *, idempotency_key: str,
         item.extra['decision'] = {'kind': 'queued', 'by': decided_by, 'atMs': created,
                                   'turnId': str(origin.get('turnId') or '')}
     _place_attachments(item, key.channel, attachments)
+    if key.channel == 'wechat' and (attachments or required_binding is not None):
+        item.extra['attachmentBinding'] = required_binding if required_binding is not None else attachment_binding(account)
+        item.extra['trackPartSubmission'] = True
+        item.extra.setdefault('attachments', [])
     # Everything for other people is audited; the command chat is the owner's own.
     stored, new = store.create_outbox_item(item, audit=not command)
     from lib.channels.attachments import identities
@@ -233,13 +239,16 @@ def _announce_draft(store: ChannelStore, item: OutboxItem) -> None:
     chat, else 大象's; without a live one the draft waits in Settings only.
     """
     from lib.channels.assistant import draft_notice_text, notice_command_chat
-    command_chat = notice_command_chat(store, ThreadKey.parse(item.thread).channel)
-    if not command_chat:
+    channel = ThreadKey.parse(item.thread).channel
+    command_chat = notice_command_chat(store, channel)
+    binding = item.extra.get('attachmentBinding')
+    if (not command_chat or (channel == 'wechat' and item.extra.get('attachments') and not binding)
+            or (binding and ThreadKey.parse(command_chat).channel != channel)):
         return
     title = (store.thread(ThreadKey.parse(item.thread)) or {}).get('title') or ''
     try:
         enqueue(store.owner, command_chat, draft_notice_text(item, title),
-                idempotency_key='draft-notice:' + item.id, store=store, authority='nonhuman',
+                idempotency_key='draft-notice:' + item.id, store=store, authority='nonhuman', required_binding=binding,
                 origin={'kind': 'draft_notice', 'conversationId': str(item.origin.get('conversationId') or ''),
                         'turnId': str(item.origin.get('turnId') or '')})
     except ChannelError as error:
@@ -328,7 +337,19 @@ def confirm_echo(store: ChannelStore, item_id: str, *, external_id: str, client_
                             client_id=item.client_id)
 
 
-def sent_message(store: ChannelStore, marker: str, message_id: str
+def acknowledged_wechat_part(store: ChannelStore, thread: ThreadKey, message_id: str) -> str | None:
+    """A durable ACK is usable before its secondary quote index is published."""
+    for item in store.active_outbox(thread):
+        if not item.extra.get('trackPartSubmission'):
+            continue
+        for index, part in enumerate(_parts(item), start=_TEXT):
+            if part.get('state') == 'sent' and part.get('externalId') == message_id:
+                return item.id if index == _TEXT else part_marker(item.id, index)
+    # A concurrent writer may have published the index and retired the row.
+    return store.echo_item(thread.channel, external_id=message_id)
+
+
+def sent_message(store: ChannelStore, marker: str, message_id: str, *, thread: ThreadKey
                  ) -> tuple[str, tuple[tuple[str, str], ...], int | None] | None:
     """``(text, attachments, sent at)`` of the platform message an echo registry entry names (P16).
 
@@ -338,7 +359,7 @@ def sent_message(store: ChannelStore, marker: str, message_id: str
     """
     item_id, _, part = str(marker or '').partition(_PART_SEPARATOR)
     item, _ = store.outbox_item(item_id) if item_id and item_id != ROBOT_ECHO else (None, 0)
-    if item is None:
+    if item is None or item.thread != str(thread):
         return None
     sent_at = item.attempt_at_ms or item.updated_at_ms or None
     if part.isdigit():
@@ -478,9 +499,26 @@ def _defer(store: ChannelStore, item_id: str, code: str, retry_after_ms: int | N
     return item
 
 
+def _unbound_file_text(store: ChannelStore, item: OutboxItem) -> bool:
+    # Old originals embedded the filename fallback directly into their text.
+    if item.extra.get('degradedAttachments') or item.origin.get('kind') == 'attachment_notice':
+        return True
+    if item.origin.get('kind') == 'draft_notice':
+        source, _ = store.outbox_item(item.idempotency_key.removeprefix('draft-notice:'))
+        return source is None or bool(source.extra.get('attachments') or source.extra.get('degradedAttachments'))
+    return False
+
+
 def _send(store: ChannelStore, item: OutboxItem, sender: OutboxSender) -> OutboxItem:
-    if item.extra.get('attachments'):
+    if item.extra.get('attachments') or item.extra.get('trackPartSubmission'):
         return _send_parts(store, item, sender)
+    if item.thread.startswith('wechat:') and _unbound_file_text(store, item):
+        def refuse(current):
+            if current.state != 'queued':
+                return None
+            current.state, current.error = 'failed', 'unsupported_target'
+            return current
+        return _transition(store, item.id, refuse)
     item = _transition(store, item.id, _claim)
     if item.state != 'sending':
         return item
@@ -529,7 +567,7 @@ def _send(store: ChannelStore, item: OutboxItem, sender: OutboxSender) -> Outbox
 
 def _reconcile(store: ChannelStore, item: OutboxItem, sender: OutboxSender) -> OutboxItem:
     """Search thread history since the attempt for the item's marker or client ID."""
-    if item.extra.get('attachments'):
+    if item.extra.get('attachments') or item.extra.get('trackPartSubmission'):
         return _reconcile_parts(store, item, sender)
     if item.extra.get('textChunks'):
         return _reconcile_chunks(store, item, sender)
@@ -816,6 +854,8 @@ def _blocks(item: OutboxItem) -> bool:
     the provider accepted are never resent, so an item that only awaits their
     confirmation lets the thread move on.
     """
+    if item.state == 'unknown' and item.error == 'delivery_unconfirmed':
+        return False  # retained for the owner, but never retried and never blocks a later item
     return not item.extra.get('attachments') or any(_unsent(part) for part in _parts(item))
 
 
@@ -824,6 +864,8 @@ def _outcome(item: OutboxItem) -> tuple[str, str | None]:
     parts = _parts(item)
     unsent = [part for part in parts if _unsent(part)]
     if unsent:
+        if ThreadKey.parse(item.thread).channel == 'wechat':
+            return 'unknown', 'delivery_unconfirmed'
         return 'unknown', str(unsent[0].get('error') or 'unknown')
     waiting = {part.get('error') for part in parts if part.get('state') == 'pending'}
     if waiting:
@@ -836,12 +878,13 @@ def _outcome(item: OutboxItem) -> tuple[str, str | None]:
     return 'sent', None
 
 
-def _settle(store: ChannelStore, item_id: str) -> OutboxItem:
+def _settle(store: ChannelStore, item_id: str, *, claim: str | None = None) -> OutboxItem:
     moved: list[bool] = []
 
     def change(current):
         moved.clear()
-        if current.state not in ('sending', 'unknown'):
+        if current.state not in ('sending', 'unknown') or (
+                claim is not None and current.extra.get('partClaim') != claim):
             return None
         state, error = _outcome(current)
         if (state, error) == (current.state, current.error):
@@ -856,7 +899,7 @@ def _settle(store: ChannelStore, item_id: str) -> OutboxItem:
                        'never resent, read again every pass', item.id, item.error)
     if moved and item.state == 'failed':
         _announce_attachment_failure(store, item)
-    if item.state == 'failed' or (item.state == 'unknown' and _blocks(item)) or unconfirmed:
+    if item.state == 'failed' or (item.state == 'unknown' and _blocks(item)) or unconfirmed or (moved and item.error == 'delivery_unconfirmed'):
         # Failed and unknown sends become Router Watchdog signals (docs/ROUTER.md R7). An item
         # that only awaits confirmation of accepted parts becomes one when its next pass cannot
         # confirm them.
@@ -884,9 +927,22 @@ def attachment_failure_text(item: OutboxItem, thread_title: str) -> str:
         if record.get('state') == 'failed':
             code = str(record.get('error') or 'failed')
             reason = _PART_FAILURE_REASONS.get(code)
+            if item.thread.startswith('wechat:') and reason:
+                reason = reason.replace('大象', '微信')
             lines.append(f'- {record["name"]}：{reason}（{code}）' if reason else f'- {record["name"]}：{code}')
     lines.append('可以让 Tofu 重新发送这些文件；发件箱里也能看到这条消息的每个附件状态。')
     return '\n'.join(lines)
+
+
+def attachment_binding(account: dict) -> list:
+    """Credential name is the immutable login generation; never put its value in the outbox."""
+    return [account.get('appId'), (account.get('identity') or {}).get('uid'),
+            (account.get('credential') or {}).get('name'), account.get('apiBaseUrl')]
+
+
+def _attachment_binding_matches(account: dict, item: OutboxItem) -> bool:
+    binding = attachment_binding(account)
+    return all(binding[:3]) and item.extra.get('attachmentBinding') == binding
 
 
 def _announce_attachment_failure(store: ChannelStore, item: OutboxItem) -> None:
@@ -900,15 +956,19 @@ def _announce_attachment_failure(store: ChannelStore, item: OutboxItem) -> None:
     if not any(record.get('state') == 'failed' for record in item.extra.get('attachments') or ()):
         return
     key = ThreadKey.parse(item.thread)
+    account = store.account(key.channel) or {}
+    if key.channel == 'wechat' and (not item.extra.get('attachmentBinding') or account.get('login') or not _attachment_binding_matches(account, item)):
+        return  # expose in the outbox only; don't send filenames under a replacement identity
     from lib.channels.assistant import notice_command_chat
-    target = item.thread if is_command_chat(key, store.account(key.channel)) \
+    target = item.thread if is_command_chat(key, account) \
         else notice_command_chat(store, key.channel)
-    if not target:
+    if not target or (key.channel == 'wechat' and ThreadKey.parse(target).channel != 'wechat'):
         return
     title = (store.thread(key) or {}).get('title') or ''
     try:
         enqueue(store.owner, target, attachment_failure_text(item, title),
                 idempotency_key='attachment-notice:' + item.id, store=store, authority='nonhuman',
+                required_binding=item.extra.get('attachmentBinding') if key.channel == 'wechat' else None,
                 origin={'kind': 'attachment_notice', 'conversationId': str(item.origin.get('conversationId') or ''),
                         'turnId': str(item.origin.get('turnId') or '')})
     except ChannelError as error:
@@ -997,7 +1057,7 @@ def _prepare(store: ChannelStore, item: OutboxItem, scratch: str) -> tuple[Outbo
     for index, record in enumerate(records):
         if record.get('renditionOf') is not None:
             continue
-        wants_copies = (first and os.path.splitext(record['name'])[1].lower().lstrip('.') in RENDITION_SOURCES
+        wants_copies = (ThreadKey.parse(item.thread).channel == 'dx' and first and os.path.splitext(record['name'])[1].lower().lstrip('.') in RENDITION_SOURCES
                         ) or index in pending_copies
         if not (_unsent(record) or wants_copies):
             continue
@@ -1091,44 +1151,65 @@ def _with_notes(store: ChannelStore, item: OutboxItem, text: str) -> str:
 def _attempt(call: Callable[[], dict[str, Any]], item_id: str) -> dict[str, Any]:
     try:
         return call()
+    except StorageError:
+        raise  # a durable boundary failure must not become a transport result
     except Exception as error:
         logger.warning('[Channels] outbox send outcome unknown item=%s: %s', item_id, type(error).__name__)
         return {'ok': False, 'error': {'code': 'unknown', 'message': type(error).__name__}}
 
 
-def _record_result(store: ChannelStore, item_id: str, index: int, result: dict[str, Any]) -> OutboxItem:
+def _record_result(store: ChannelStore, item_id: str, index: int, result: dict[str, Any], *, claim=None) -> OutboxItem:
     """Note one part's send result; an echo that already confirmed the part wins."""
     code = str((result.get('error') or {}).get('code') or '')
     external_id = str(result.get('externalId') or '') or None
     client_id = str(result.get('clientId') or '') or None
 
     def change(current):
-        if current.state != 'sending':
+        if current.state != 'sending' or current.extra.get('partClaim') != claim:
             return None
         part = dict(current.extra.get('textPart') or {'state': 'pending'}) if index == _TEXT \
             else dict(current.extra['attachments'][index])
         if part.get('state') != 'pending' or part.get('acked'):
             return None
         if result.get('ok'):
-            # The text is sent once accepted; an attachment once the thread shows it.
+            # An attachment needs history unless its capability explicitly settles on a send ACK.
+            from lib.channels.protocol.contract import adapter_descriptor
+            descriptor = adapter_descriptor(ThreadKey.parse(current.thread).channel)
+            ack = any(identity['attachments'].get(part.get('kind'), {}).get('confirmation') == 'ack'
+                      for identity in descriptor['identities'].values())
             part.update(externalId=external_id, clientId=client_id, error=None)
-            part.update({'state': 'sent'} if index == _TEXT else {'acked': True})
+            part.update({'state': 'sent'} if index == _TEXT or ack else {'acked': True})
+            if ack and index != _TEXT:
+                part['confirmation'] = 'provider_ack'
         elif code in DEFINITE_SEND_FAILURES:
             part.update(state='failed', error=code)
         elif code in DEFERRED_SEND_CODES:
+            part.pop('submission', None)
             part.update(error=code)  # definitely not sent: the next attempt sends it, no lookup first
+            if claim is not None:
+                current.state, current.error = 'queued', code
+                current.extra.pop('partClaim', None)
+                _, retry = _deferral(result)
+                if retry:
+                    current.extra['notBeforeMs'] = now_ms() + retry
         else:
             part.update(attempted=True, clientId=client_id or part.get('clientId'), error=code or 'unknown')
         if index == _TEXT:
             current.extra['textPart'] = part
             current.client_id = client_id or current.client_id
+            if part['state'] == 'failed' and current.extra.get('trackPartSubmission'):
+                for record in current.extra['attachments']:
+                    if _unsent(record) and not record.get('submission'):
+                        record.update(state='failed', error=_NOT_SENT)
             if part['state'] == 'sent':
                 current.external_id = external_id
         else:
             current.extra['attachments'][index] = part
         return current
     item = _transition(store, item_id, change)
-    if result.get('ok'):
+    saved = _parts(item)[index + 1]
+    if result.get('ok') and saved.get('externalId') == external_id and (
+            saved.get('state') == 'sent' or saved.get('acked')):
         marker = item_id if index == _TEXT else part_marker(item_id, index)
         store.remember_echo(ThreadKey.parse(item.thread).channel, marker, external_id=external_id,
                             client_id=client_id)
@@ -1237,29 +1318,84 @@ def _apply_history(store: ChannelStore, item_id: str, history: list[ChannelEvent
     return item
 
 
+def _begin_part_submission(store: ChannelStore, item_id: str, index: int, claim: str) -> bool:
+    """Durably mark possible provider submission before crossing the wire boundary."""
+    from uuid import uuid4
+    nonce = uuid4().hex
+
+    def change(current):
+        if current.state != 'sending' or current.extra.get('partClaim') != claim:
+            return None
+        part = (current.extra.setdefault('textPart', {'state': 'pending'}) if index == _TEXT
+                else current.extra['attachments'][index])
+        if not _unsent(part) or part.get('submission'):
+            return None
+        part['submission'] = nonce
+        return current
+
+    current = _transition(store, item_id, change)
+    return _parts(current)[index + 1].get('submission') == nonce
+
+
+def _send_one_part(store, item, sender, thread, index, text, path, marker):
+    if item.extra.get('trackPartSubmission'):
+        return sender.send_bound_part(item, text, path, marker=marker,
+                                      submitting=lambda: _begin_part_submission(store, item.id, index, item.extra['partClaim']))
+    if path is None:
+        return sender.send(thread, text, marker=marker, reply_to_external_id=item.extra.get('replyToExternalId'))
+    return sender.send_attachment(thread, path, kind=item.extra['attachments'][index]['kind'], marker=marker)
+
+
+def _refuse_unsubmitted_parts(store: ChannelStore, item_id: str) -> OutboxItem:
+    def change(current):
+        if current.state != 'sending':
+            return None
+        current.extra.setdefault('textPart', {'state': 'pending'})
+        for part in _parts(current):
+            if _unsent(part) and not part.get('submission'):
+                part.update(state='failed', error='unsupported_target')
+        return current
+    _transition(store, item_id, change)
+    return _settle(store, item_id)
+
+
 def _send_parts(store: ChannelStore, item: OutboxItem, sender: OutboxSender) -> OutboxItem:
     """Send an item's parts in order, each at most once unless its outcome is unknown."""
-    item = _transition(store, item.id, _claim)
-    if item.state != 'sending':
+    from uuid import uuid4
+    claim = uuid4().hex if item.extra.get('trackPartSubmission') else None
+
+    def acquire(current):
+        claimed = _claim(current)
+        if claimed is not None and claim is not None:
+            claimed.extra['partClaim'] = claim
+        return claimed
+
+    item = _transition(store, item.id, acquire)
+    if item.state != 'sending' or item.extra.get('partClaim') != claim:
         return item
     thread = ThreadKey.parse(item.thread)
+    if thread.channel == 'wechat':
+        account = store.account(thread.channel) or {}
+        if account.get('login') or not _attachment_binding_matches(account, item):
+            return _refuse_unsubmitted_parts(store, item.id)
     with tempfile.TemporaryDirectory(prefix='tofu-outbox-') as scratch:
         item, files = _prepare(store, item, scratch)
         text = _with_notes(store, item, _delivery_text(store, item))
         for index in item.extra['partOrder']:
             item, _ = store.outbox_item(item.id)
-            if item.state != 'sending':
+            if item.state != 'sending' or item.extra.get('partClaim') != claim:
                 return item
             if index == _TEXT:
                 if not _unsent(item.extra.get('textPart') or {'state': 'pending'}):
                     continue
-                result = _attempt(lambda: sender.send(
-                    thread, text, marker=item.id,
-                    reply_to_external_id=item.extra.get('replyToExternalId')), item.id)
-                item = _record_result(store, item.id, _TEXT, result)
+                result = _attempt(lambda: _send_one_part(store, item, sender, thread, _TEXT, text, None, item.id),
+                                  item.id)
+                item = _record_result(store, item.id, _TEXT, result, claim=claim)
+                if item.state == 'sending' and item.extra.get('partClaim') != claim:
+                    return item
                 deferral = _deferral(result)
                 if deferral is not None:
-                    return _defer(store, item.id, *deferral)
+                    return item if claim is not None else _defer(store, item.id, *deferral)
                 part = item.extra.get('textPart') or {}
                 if part.get('state') == 'failed':
                     item = _abandon(store, item.id)
@@ -1270,12 +1406,12 @@ def _send_parts(store: ChannelStore, item: OutboxItem, sender: OutboxSender) -> 
             record = item.extra['attachments'][index]
             if not _unsent(record) or index not in files:
                 continue
-            result = _attempt(lambda: sender.send_attachment(
-                thread, files[index], kind=record['kind'], marker=part_marker(item.id, index)), item.id)
-            item = _record_result(store, item.id, index, result)
+            result = _attempt(lambda: _send_one_part(store, item, sender, thread, index, text, files[index],
+                                                     part_marker(item.id, index)), item.id)
+            item = _record_result(store, item.id, index, result, claim=claim)
             deferral = _deferral(result)
             if deferral is not None:
-                return _defer(store, item.id, *deferral)
+                return item if claim is not None else _defer(store, item.id, *deferral)
             if _unsent(item.extra['attachments'][index]):
                 break  # unknown: reconcile before anything else of this item
         else:
@@ -1286,7 +1422,7 @@ def _send_parts(store: ChannelStore, item: OutboxItem, sender: OutboxSender) -> 
                 except Exception as error:
                     logger.warning('[Channels] attachment confirmation deferred item=%s: %s', item.id,
                                    type(error).__name__)
-    return _settle(store, item.id)
+    return _settle(store, item.id, claim=claim)
 
 
 def _confirmation_read_failed(store: ChannelStore, item_id: str) -> OutboxItem:
@@ -1312,6 +1448,32 @@ def _confirmation_read_failed(store: ChannelStore, item_id: str) -> OutboxItem:
 
 def _reconcile_parts(store: ChannelStore, item: OutboxItem, sender: OutboxSender) -> OutboxItem:
     """Find an in-flight item's parts in the thread history; send again only what is absent."""
+    if ThreadKey.parse(item.thread).channel == 'wechat':
+        # The host ownership lock is held; the queue scan is only a hint.
+        item, _ = store.outbox_item(item.id)
+        if item.state not in ('sending', 'unknown'):
+            return item
+        if not item.extra.get('trackPartSubmission'):
+            # Older in-flight records lack a submission boundary: never assume absence.
+            return _settle(store, item.id) if item.state == 'sending' else item
+        for index, part in enumerate(_parts(item), start=_TEXT):
+            if part.get('state') == 'sent':
+                store.remember_echo('wechat', item.id if index == _TEXT else part_marker(item.id, index),
+                                    external_id=part.get('externalId'), client_id=part.get('clientId'))
+        pending = [part for part in _parts(item) if _unsent(part)]
+        if not pending or any(part.get('submission') or part.get('attempted') for part in pending):
+            return _settle(store, item.id) if item.state == 'sending' else item
+
+        def resume(current):
+            if (current.state not in ('sending', 'unknown') or
+                    current.extra.get('partClaim') != item.extra.get('partClaim') or any(
+                    p.get('submission') or p.get('attempted') for p in _parts(current) if _unsent(p))):
+                return None
+            current.state, current.error = 'queued', None
+            current.extra.pop('partClaim', None)
+            current.queued_at_ms = current.queued_at_ms or now_ms()
+            return current
+        return _transition(store, item.id, resume)
     try:
         history, floor = _history(sender, item)
     except Exception as error:
@@ -1329,7 +1491,7 @@ def _reconcile_parts(store: ChannelStore, item: OutboxItem, sender: OutboxSender
     return item if item.state == 'queued' else _settle(store, item.id)
 
 
-def execute(owner: int, sender: OutboxSender, *, channel: str,
+def _execute_pass(owner: int, sender: OutboxSender, *, channel: str,
             store: ChannelStore | None = None) -> int:
     """One executor pass over ``channel``'s items; returns how many reached ``sent``."""
     store = store or ChannelStore(owner)
@@ -1359,6 +1521,29 @@ def execute(owner: int, sender: OutboxSender, *, channel: str,
             if item.state in ('sending', 'unknown') and _blocks(item):
                 break  # this thread waits for reconciliation; other threads continue
     return sent
+
+
+def execute(owner: int, sender: OutboxSender, *, channel: str,
+            store: ChannelStore | None = None) -> int:
+    """Only a released host claim is recoverable, even across executor processes."""
+    if channel != 'wechat':
+        return _execute_pass(owner, sender, channel=channel, store=store)
+    from lib.project_mod.file_lock import lock
+    from lib.runtime.runtime_paths import data_root
+
+    store = store or ChannelStore(owner)
+    directory = os.path.join(data_root(), 'channel-executors')
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    fd = os.open(os.path.join(directory, f'wechat-{store.owner}.lock'),
+                 os.O_CREAT | os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+    try:
+        try:
+            lock(fd, shared=False, blocking=False)
+        except BlockingIOError:
+            return 0  # a live executor owns this account, not an expired lease
+        return _execute_pass(owner, sender, channel=channel, store=store)
+    finally:
+        os.close(fd)
 
 
 __all__ = ['DEFERRED_SEND_CODES', 'DEFINITE_SEND_FAILURES', 'OutboxSender', 'ROBOT_ECHO', 'approve', 'confirm_echo',

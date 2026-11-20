@@ -17,6 +17,7 @@ from routes.paper_pkg import _assets_review as _assets_review_routes  # noqa: F4
 from routes.paper_pkg import _deepen_notes as _deepen_note_routes  # noqa: F401
 from routes.paper_pkg import _library as _library_routes  # noqa: F401
 from routes.paper_pkg import _pdf as _pdf_routes  # noqa: F401
+from routes.paper_pkg import _pdf_translation as _pdf_translation_routes  # noqa: F401
 from routes.paper_pkg import _podcast as _podcast_routes  # noqa: F401
 from routes.paper_pkg import _qa_translate as _qa_translate_routes  # noqa: F401
 from routes.paper_pkg import _recommend as _recommend_routes  # noqa: F401

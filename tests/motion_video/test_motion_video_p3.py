@@ -913,10 +913,9 @@ def test_scene_author_abort_stops_queued_admission(monkeypatch, tmp_path):
     from lib.motion_video.engine import run_motion_task
     from lib.motion_video._template import render_scene_html
 
-    import contextlib
-    import lib.production.concurrency as concurrency
-
     _fake_media(monkeypatch)
+    monkeypatch.setenv('TOFU_PRODUCTION_LLM_FANOUT', '2')
+    monkeypatch.setenv('TOFU_PRODUCTION_IMAGE_FANOUT', '2')
     calls = []
     lock = threading.Lock()
     both_started = threading.Event()
@@ -928,39 +927,13 @@ def test_scene_author_abort_stops_queued_admission(monkeypatch, tmp_path):
     task = _scenes_only_task(tmp_path, scenes)
     task['scene_author'] = True
 
-    # Admission is eager (no fan-out window), so the Stop is placed at the
-    # executor seam: it lands after the second admission, once both admitted
-    # authors are running, and before the dispatcher's next stop check.
-    real_executor = concurrency.production_executor
-
-    @contextlib.contextmanager
-    def stop_after_two_admissions(*, name, **kwargs):
-        with real_executor(name=name, **kwargs) as pool:
-            if name != 'motion-scene-author':
-                yield pool
-                return
-            admitted = []
-
-            class _Pool:
-                def submit(self, *args, **submit_kwargs):
-                    future = pool.submit(*args, **submit_kwargs)
-                    admitted.append(future)
-                    if len(admitted) == 2:
-                        assert both_started.wait(5)
-                        task['abort_event'].set()
-                    return future
-
-            yield _Pool()
-
-    monkeypatch.setattr(concurrency, 'production_executor',
-                        stop_after_two_admissions)
-
     def aborting_author(sc, scene_dir, **kwargs):
         with lock:
             calls.append(sc['id'])
             if len(calls) == 2:
+                task['abort_event'].set()
                 both_started.set()
-        assert both_started.wait(5)
+        assert both_started.wait(2)
         return {
             'ok': True,
             'html': render_scene_html(

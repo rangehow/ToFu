@@ -497,6 +497,172 @@ class TestRequestConversion:
 # ──────────────────────────────────────────────────────────────
 
 class TestSSETranslation:
+    @pytest.mark.parametrize(('upstream', 'exact', 'states'), [
+        pytest.param({'input_tokens': 100}, (100, None, None), ('observed', 'missing', 'missing'),
+                     id='details-missing'),
+        pytest.param({'input_tokens': 100, 'input_tokens_details': None}, (100, None, None),
+                     ('observed', 'null', 'null'), id='details-null'),
+        pytest.param({'input_tokens': 100, 'input_tokens_details': []}, (100, None, None),
+                     ('observed', 'invalid', 'invalid'), id='details-invalid'),
+        pytest.param({'input_tokens': 100, 'input_tokens_details': {}}, (100, None, None),
+                     ('observed', 'missing', 'missing'), id='read-missing'),
+        pytest.param({'input_tokens': 100, 'input_tokens_details': {'cached_tokens': None}},
+                     (100, None, None), ('observed', 'null', 'missing'), id='read-null'),
+        pytest.param({'input_tokens': 0, 'input_tokens_details': {'cached_tokens': 0}},
+                     (0, 0, None), ('observed', 'observed', 'missing'), id='zero'),
+        pytest.param({'input_tokens': 100, 'input_tokens_details': {'cached_tokens': 100}},
+                     (100, 100, None), ('observed', 'observed', 'missing'), id='fully-cached'),
+        pytest.param({'input_tokens': 100, 'input_tokens_details': {'cached_tokens': 101}},
+                     (100, None, None), ('observed', 'invalid', 'missing'), id='read-above-total'),
+        pytest.param({'input_tokens': 100, 'input_tokens_details': {'cache_write_tokens': 101}},
+                     (100, None, None), ('observed', 'missing', 'invalid'), id='write-above-total'),
+        pytest.param({'input_tokens': 100, 'input_tokens_details': {'cached_tokens': -1}},
+                     (100, None, None), ('observed', 'invalid', 'missing'), id='negative'),
+        pytest.param({'input_tokens': 100, 'input_tokens_details': {'cached_tokens': True}},
+                     (100, None, None), ('observed', 'invalid', 'missing'), id='boolean'),
+        pytest.param({'input_tokens': 100, 'input_tokens_details': {'cached_tokens': '9'}},
+                     (100, None, None), ('observed', 'invalid', 'missing'), id='not-a-wire-integer'),
+        pytest.param({'input_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 1}},
+                     (None, None, None), ('missing', 'unverified', 'unverified'), id='total-unreported'),
+        pytest.param({'input_tokens': None, 'input_tokens_details': {'cache_write_tokens': 0}},
+                     (None, None, None), ('null', 'missing', 'unverified'), id='total-null'),
+        pytest.param({'input_tokens': 100, 'cached_tokens': 80, 'prompt_tokens': 999,
+                      'input_tokens_details': {'cache_write_tokens': 17}},
+                     (100, None, 17), ('observed', 'missing', 'observed'), id='write-not-read-or-alias'),
+    ])
+    def test_terminal_responses_usage_preserves_exact_input_counter_evidence(self, upstream, exact, states):
+        from lib.cost import observed_cache_read, reported_responses_input_usage
+
+        upstream = {**upstream, 'output_tokens': 7}
+        acc = _acc(ResponsesSSETranslator())
+        _feed(acc, [_text('answer'), _completed(upstream)])
+        result = acc.finalize()
+        assert result.is_verified_complete
+        usage = result.usage
+        fields = ('input_tokens', 'cache_read', 'cache_write')
+        expected = {**dict(zip(fields, exact)), 'status': dict(zip(fields, states))}
+        assert reported_responses_input_usage(usage) == expected
+        read = expected['cache_read']
+        assert observed_cache_read(usage) == read
+        # Canonical aliases and displayed prompt totals cannot supply original
+        # protocol evidence even if copied in by a later consumer.
+        assert observed_cache_read({**usage, 'cache_read_tokens': 11}) == read
+        nonstream = responses_response_to_openai({
+            'status': 'completed', 'output': [], 'usage': upstream,
+        })
+        assert reported_responses_input_usage(nonstream['usage']) == expected
+
+    def test_individually_bounded_responses_counts_need_not_partition_input(self):
+        from lib.cost import reported_responses_input_usage
+
+        acc = _acc(ResponsesSSETranslator())
+        _feed(acc, [_text('answer'), _completed({
+            'input_tokens': 100, 'output_tokens': 5,
+            'input_tokens_details': {'cached_tokens': 100, 'cache_write_tokens': 100},
+        })])
+        assert reported_responses_input_usage(acc.finalize().usage) == {
+            'input_tokens': 100, 'cache_read': 100, 'cache_write': 100,
+            'status': dict.fromkeys(('input_tokens', 'cache_read', 'cache_write'), 'observed'),
+        }
+
+    def test_invalid_original_counter_does_not_change_compatibility_usage(self):
+        from lib.cost import normalize_usage, observed_cache_read, split_input_tokens
+        from lib.llm_dispatch.cache_settle import codex_cache_write_pending
+
+        acc = _acc(ResponsesSSETranslator())
+        _feed(acc, [_text('answer'), _completed({
+            'input_tokens': 8_000, 'output_tokens': 5,
+            'input_tokens_details': {'cached_tokens': '7500'},
+        })])
+        usage = acc.finalize().usage
+        assert observed_cache_read(usage) is None  # not an original wire integer
+        assert normalize_usage(usage)['cache_read'] == 7_500
+        assert split_input_tokens(usage) == (500, 8_000)
+        assert not codex_cache_write_pending(usage)
+
+    @pytest.mark.parametrize(('terminal', 'state'), [
+        ('missing-completion', None), ('missing-usage', 'missing'),
+        ('null-usage', 'null'), ('invalid-usage', 'invalid'),
+    ])
+    def test_progress_usage_does_not_supply_terminal_evidence(self, terminal, state):
+        from lib.cost import reported_responses_input_usage
+
+        acc = _acc(ResponsesSSETranslator())
+        events = [{'type': 'response.in_progress', 'response': {'usage': {
+            'input_tokens': 100, 'input_tokens_details': {'cached_tokens': 80},
+        }}}, _text('answer')]
+        if terminal != 'missing-completion':
+            event = {'type': 'response.completed', 'response': {'output': []}}
+            if terminal != 'missing-usage':
+                event['response']['usage'] = None if terminal == 'null-usage' else []
+            events.append(event)
+        _feed(acc, events)
+        result = acc.finalize()
+        assert result.is_verified_complete is (state is not None)
+        receipt = reported_responses_input_usage(result.usage)
+        if state is None:
+            assert receipt is None
+        else:
+            fields = ('input_tokens', 'cache_read', 'cache_write')
+            assert receipt == {**dict.fromkeys(fields), 'status': dict.fromkeys(fields, state)}
+        assert 'prompt_tokens' not in result.usage
+
+    @pytest.mark.parametrize('failure', ['malformed', 'eof'])
+    def test_broken_responses_attempt_does_not_become_a_read_predecessor(self, failure, monkeypatch):
+        from lib.cost import normalize_usage
+        from lib.tasks_pkg.cache_tracking import _persist
+        from lib.tasks_pkg.cache_tracking._state import cache_tracking_scope, cleanup_cache_state
+        from lib.tasks_pkg.orchestrator._cache_round_accounting import stamp_round_cache_accounting
+        from lib.task_replay.task_result_checkpoint_contract import (
+            TASK_LAST_TURN_CACHE_READ_CANDIDATE_FIELD,
+        )
+
+        task = {'id': f'broken-fixture-{failure}', 'convId': f'fixture-{failure}', '_userId': 7}
+        messages = [{'role': 'user', 'content': 'fixture'}]
+
+        def stream(read, *, fail=None):
+            acc = _acc(ResponsesSSETranslator())
+            if fail == 'malformed':
+                acc.feed_line('data: {invalid-json}')
+            _feed(acc, [_text('answer')])
+            if fail != 'eof':
+                _feed(acc, [_completed({
+                    'input_tokens': 40_000, 'output_tokens': 5,
+                    'input_tokens_details': {'cached_tokens': read},
+                })])
+            result = acc.finalize()
+            result.usage['_dispatch'] = {'protocol': 'responses'}
+            return result
+
+        def stamp(index, result):
+            # Keep public round accounting separate from the baseline sink.
+            rows = [{'round': n + 1} for n in range(index + 1)]
+            stamp_round_cache_accounting(
+                task, round_num=index, tid='fixture', model='fixture-model',
+                tools=[], usage=result.usage, assistant_msg=result.message,
+                api_rounds=rows, messages=messages)
+            return rows[-1]
+
+        # Isolate the test lane from any conversation storage while still
+        # exercising guarded task-result staging and the actual SSE parser.
+        monkeypatch.setattr(_persist, 'read_last_turn_cache_read', lambda *a, **k: 0)
+        monkeypatch.setattr(_persist, 'read_cache_baseline', lambda *a, **k: None)
+        monkeypatch.setattr(_persist, 'read_persisted_boundary', lambda *a, **k: 0)
+        try:
+            with cache_tracking_scope(task):
+                stamp(0, stream(32_000))
+                rejected = stream(0, fail=failure)
+                assert not rejected.is_verified_complete
+                assert normalize_usage(rejected.usage)['cache_read'] == 0
+                if failure == 'malformed':
+                    assert rejected.usage['prompt_tokens'] == 40_000  # still billable evidence
+                assert 'cacheBreak' not in stamp(1, rejected)
+                assert task[TASK_LAST_TURN_CACHE_READ_CANDIDATE_FIELD] == 32_000
+                assert 'cacheBreak' in stamp(2, stream(0))  # verified predecessor
+                assert task[TASK_LAST_TURN_CACHE_READ_CANDIDATE_FIELD] == 0
+        finally:
+            cleanup_cache_state(task['convId'], user_id=7)
+
     def test_text_stream_and_usage_with_cached_tokens(self):
         acc = _acc(ResponsesSSETranslator(model='deepseek-v4-flash'))
         _feed(acc, [
@@ -1146,6 +1312,10 @@ class TestFromResponses:
             'prompt_tokens_details': {
                 'cached_tokens': 0, 'cache_write_tokens': 3},
             'completion_tokens_details': {'reasoning_tokens': 2},
+            '_wire_responses_input_usage': {
+                'input_tokens': None, 'cache_read': None, 'cache_write': None,
+                'status': dict.fromkeys(('input_tokens', 'cache_read', 'cache_write'), 'invalid'),
+            },
         }
 
     def test_incomplete_max_tokens_finish_length(self):

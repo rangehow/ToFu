@@ -8,6 +8,7 @@ an in-process dict keyed by owner and date.
 
 import copy
 import datetime as _dt
+import hashlib
 import os
 import re
 import threading
@@ -21,6 +22,7 @@ from lib.json_store import (
     update_json_atomic,
 )
 from lib.log import get_logger
+from lib.tool_results import credential_redaction
 
 logger = get_logger(__name__)
 
@@ -132,7 +134,35 @@ def _normalize_report(report):
     return report
 
 
-def _prepare_payload(date_str, report_data):
+# Reports summarise transcripts through an LLM, which copies keys it saw
+# (a stored report held a full ``sk-`` key in a quick-action prefill). Known
+# credentials become their label; a bare provider key shape becomes a
+# non-reversible fingerprint. The 16-character floor keeps placeholders such
+# as ``sk-xxx`` and words such as ``sk-learn`` intact.
+_PROVIDER_KEY_SHAPE = re.compile(r'(?<![A-Za-z0-9_-])sk-[A-Za-z0-9_-]{16,}')
+
+
+def _fingerprint_key(match):
+    digest = hashlib.sha256(match.group(0).encode('utf-8')).hexdigest()[:12]
+    return f'[redacted credential: sk-key sha256:{digest}]'
+
+
+def _without_key_shapes(value):
+    if isinstance(value, str):
+        return _PROVIDER_KEY_SHAPE.sub(_fingerprint_key, value)
+    if isinstance(value, dict):
+        return {key: _without_key_shapes(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_without_key_shapes(item) for item in value]
+    return value
+
+
+def _credential_redactor(owner_id):
+    # Resolved before the report's file lock: a rebuild may read storage.
+    return credential_redaction.known_credential_redactor(owner_user_id=owner_id)
+
+
+def _prepare_payload(date_str, report_data, redactor):
     if not isinstance(report_data, dict):
         raise TypeError('daily report payload must be a dict')
     payload = report_data
@@ -140,7 +170,7 @@ def _prepare_payload(date_str, report_data):
     payload['generated_at'] = int(time.time() * 1000)
     for key in ('ok', 'error'):
         payload.pop(key, None)
-    return payload
+    return _without_key_shapes(redactor.redact_value(payload))
 
 
 def _invalidate_calendar(date_str, *, owner_user_id):
@@ -177,12 +207,13 @@ def _save_report(date_str, report_data, *, owner_user_id):
     path = _report_path(date_str, owner_user_id=owner_id)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     candidate = copy.deepcopy(report_data)
+    redactor = _credential_redactor(owner_id)
 
     def _replace(_current):
-        return _prepare_payload(date_str, candidate)
+        return _prepare_payload(date_str, candidate, redactor)
 
     payload = update_json_atomic(
-        path, _replace, default=None, strict=True, indent=2)
+        path, _replace, default=None, strict=True, indent=2, mode=0o600)
     _log_saved(date_str, payload, owner_user_id=owner_id)
     return payload
 
@@ -197,6 +228,7 @@ def _save_generated_report(date_str, report_data, *, owner_user_id):
     owner_id = _owner_id(owner_user_id, context='daily report generated save')
     path = _report_path(date_str, owner_user_id=owner_id)
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    redactor = _credential_redactor(owner_id)
 
     def _merge_latest(current):
         candidate = copy.deepcopy(report_data)
@@ -207,10 +239,10 @@ def _save_generated_report(date_str, report_data, *, owner_user_id):
             # Local import avoids storage.py <-> todos.py import recursion.
             from .todos import _merge_manual_state
             _merge_manual_state(candidate, current)
-        return _prepare_payload(date_str, candidate)
+        return _prepare_payload(date_str, candidate, redactor)
 
     payload = update_json_atomic(
-        path, _merge_latest, default=None, strict=True, indent=2)
+        path, _merge_latest, default=None, strict=True, indent=2, mode=0o600)
     _log_saved(date_str, payload, owner_user_id=owner_id)
     return payload
 
@@ -225,6 +257,7 @@ def _update_report(date_str, mutator, *, owner_user_id, default=None):
     owner_id = _owner_id(owner_user_id, context='daily report update')
     path = _report_path(date_str, owner_user_id=owner_id)
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    redactor = _credential_redactor(owner_id)
 
     def _mutate(current):
         if current is not None and not isinstance(current, dict):
@@ -234,10 +267,11 @@ def _update_report(date_str, mutator, *, owner_user_id, default=None):
         updated = mutator(working)
         if updated is None:
             return None
-        return _prepare_payload(date_str, updated)
+        return _prepare_payload(date_str, updated, redactor)
 
     payload = update_json_atomic(
-        path, _mutate, default=copy.deepcopy(default), strict=True, indent=2)
+        path, _mutate, default=copy.deepcopy(default), strict=True, indent=2,
+        mode=0o600)
     if payload is not None:
         _log_saved(date_str, payload, owner_user_id=owner_id)
     return payload

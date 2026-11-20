@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "conversation.portable_import normalized command",
+  "description": "Insert-only passive chat publication. For each original referenced by a newly inserted chat, supply either a staged attachment or an exact verified existing original, never both. A staged digest unexpectedly present in storage or a verified identity that no longer matches refuses the entire transaction. Only newly created staged IDs appear in retained_document_ids.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["user_id", "chats"],
+  "properties": {
+    "user_id": { "$ref": "#/$defs/owner" },
+    "chats": { "type": "array", "items": { "$ref": "#/$defs/chat" } },
+    "documents": { "type": "array", "items": { "$ref": "#/$defs/staged" }, "default": [] },
+    "verified_originals": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/digest" },
+      "additionalProperties": { "$ref": "#/$defs/verified" },
+      "default": {}
+    }
+  },
+  "$defs": {
+    "owner": { "type": "integer", "minimum": 1 },
+    "identity": { "type": "string", "minLength": 1, "maxLength": 128, "not": { "pattern": "[^A-Za-z0-9_-]" } },
+    "digest": { "type": "string", "minLength": 64, "maxLength": 64, "not": { "pattern": "[^a-f0-9]" } },
+    "chat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["conversation_id", "source_id", "source_conversation_id", "source_revision", "content_hash", "title", "messages"],
+      "properties": {
+        "conversation_id": { "$ref": "#/$defs/identity" },
+        "source_id": { "$ref": "#/$defs/identity" },
+        "source_conversation_id": { "$ref": "#/$defs/identity" },
+        "source_revision": { "type": "integer", "minimum": 0 },
+        "content_hash": { "$ref": "#/$defs/digest" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "project_label": { "type": "string", "default": "" },
+        "messages": { "type": "array", "items": { "$ref": "#/$defs/message" } }
+      }
+    },
+    "message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "text"],
+      "properties": {
+        "role": { "enum": ["user", "assistant"] },
+        "text": { "type": "string" },
+        "turnId": { "$ref": "#/$defs/identity" },
+        "messageId": { "$ref": "#/$defs/identity" },
+        "originals": { "type": "array", "items": { "$ref": "#/$defs/digest" }, "default": [] }
+      }
+    },
+    "staged": {
+      "description": "The envelope owner must equal the batch owner. The envelope ID must equal document.id. Original digests and document IDs must be unique across staged and verified candidates.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["user_id", "document_id", "document"],
+      "properties": {
+        "user_id": { "$ref": "#/$defs/owner" },
+        "document_id": { "$ref": "#/$defs/identity" },
+        "document": {
+          "description": "An ordinary validated Knowledge create document, restricted to original-only attachment metadata.",
+          "type": "object",
+          "required": ["id", "sha256", "scope", "chunks", "chunk_count", "assets", "name", "stored_name", "kind", "size_bytes", "method", "text_chars", "created_at", "updated_at"],
+          "properties": {
+            "id": { "$ref": "#/$defs/identity" },
+            "sha256": { "$ref": "#/$defs/digest" },
+            "scope": { "const": "attachment" },
+            "chunks": { "const": [] },
+            "chunk_count": { "const": 0 },
+            "assets": { "const": [] }
+          }
+        }
+      }
+    },
+    "verified": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["document_id", "stored_name"],
+      "properties": {
+        "document_id": { "$ref": "#/$defs/identity" },
+        "stored_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "not": { "anyOf": [{ "enum": [".", ".."] }, { "pattern": "[/\\\\\\u0000]" }] }
+        }
+      }
+    }
+  }
+}

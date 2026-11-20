@@ -29,7 +29,7 @@ import { createFoldersEndpoints } from '../../api/endpoint-registry/folders';
 import { conversationSyncApi } from '../../api/conversation-sync.generated';
 import type { ProjectDispatchHistoryRow } from '../../api/project-dispatch.generated';
 import type {
-  CoordinatorConversationPage, CoordinatorProgressState, CoordinatorReportState,
+  CoordinatorConversationPage, CoordinatorProgressState, CoordinatorReportState, LeadDeliverablePage,
 } from '../../api/project-coordination.generated';
 import { CONVERSATION_DOM_WINDOW_BATCH_TURNS } from '../../conversation/ui/surface-windowing';
 import { CONVERSATION_CATALOG_REFRESH_DELAY_MS } from '../../conversation/application/conversation-catalog-revision-gate';
@@ -51,7 +51,9 @@ export interface LiveTeam {
   reports: SourceState<CoordinatorReportState>;
   questions: SourceState<ReadonlyArray<OpenQuestion>>;
 }
-export interface PushFrame { channel?: unknown; type?: unknown; convId?: unknown; kind?: unknown; projectKey?: unknown }
+export interface PushFrame {
+  channel?: unknown; type?: unknown; convId?: unknown; kind?: unknown; projectKey?: unknown; conversationId?: unknown;
+}
 export type PushChannel = 'notify' | 'project' | 'office';
 /** The application's push owner: channel subscriptions, connection state and reconnect signal. */
 export interface PushPort {
@@ -61,7 +63,17 @@ export interface PushPort {
 }
 /** `loading`: the teams are still being discovered, or the first office facts read has not answered. */
 export interface LiveState { teams: LiveTeam[]; started: boolean; error: string; facts: FactsView | null; loading: boolean }
-export interface WorldLive { state: LiveState; start(): Promise<void>; refreshAll(): void; stop(): void }
+/** One conversation's deliverables projection (GET /api/v4/project/coordination/deliverables), and the project
+ * channel's `lead_deliverable` hint naming the conversation that has a new one ('' after a push reconnect: any). */
+export interface DeliverablesSource {
+  read(conversationId: string, projectPath: string, cursor: string | null, signal: AbortSignal): Promise<LeadDeliverablePage>;
+  subscribe(changed: (conversationId: string) => void): () => void;
+}
+export interface WorldLive {
+  state: LiveState; start(): Promise<void>; refreshAll(): void; stop(): void;
+  /** Absent where the office has no deliverables projection (a recorded fixture without one). */
+  deliverables?: DeliverablesSource;
+}
 
 interface FolderItem { id: string; name: string; color?: string; order?: number; projectPath?: string; projectPaths?: string[] }
 
@@ -115,6 +127,7 @@ export function createWorldLive(onChange: () => void, push: PushPort | null): Wo
   const rowReads = new Map<string, { again: boolean }>();
   const hinted = new Map<LiveTeam, { timer: number; lead: boolean }>();
   const releases: Array<() => void> = [];
+  const deliverableListeners = new Set<(conversationId: string) => void>();
 
   const readers: { [K in SourceName]: (team: LiveTeam, signal: AbortSignal) => Promise<NonNullable<LiveTeam[K]['value']>> } = {
     team: (team, signal) => project.workerConversations(team.key, undefined, signal),
@@ -298,6 +311,10 @@ export function createWorldLive(onChange: () => void, push: PushPort | null): Wo
         if (frame?.type === 'conv_changed' && typeof frame.convId === 'string') route(frame.convId);
       }));
       releases.push(push.subscribe('project', frame => {
+        if (frame?.kind === 'lead_deliverable' && typeof frame.conversationId === 'string') {
+          for (const listener of deliverableListeners) listener(frame.conversationId);
+          return;
+        }
         const source: SourceName | null = frame?.kind === 'coordinator_report' ? 'reports'
           : frame?.kind === 'coordinator_progress' ? 'progress' : null;
         const team = source && typeof frame.projectKey === 'string'
@@ -314,6 +331,7 @@ export function createWorldLive(onChange: () => void, push: PushPort | null): Wo
         factsSupported = true;
         readFacts();
         for (const team of state.teams) refreshTeam(team);
+        for (const listener of deliverableListeners) listener('');
       }));
     }
     readFacts();
@@ -357,8 +375,17 @@ export function createWorldLive(onChange: () => void, push: PushPort | null): Wo
   return {
     state, start,
     refreshAll: () => { for (const team of state.teams) refreshTeam(team); },
+    deliverables: {
+      read: (conversationId, projectPath, cursor, signal) =>
+        project.leadDeliverables(conversationId, projectPath, cursor ? { cursor } : {}, signal),
+      subscribe(changed) {
+        deliverableListeners.add(changed);
+        return () => { deliverableListeners.delete(changed); };
+      },
+    },
     stop: () => {
       lifetime.abort();
+      deliverableListeners.clear();
       for (const release of releases.splice(0)) release();
       for (const entry of hinted.values()) window.clearTimeout(entry.timer);
       hinted.clear();

@@ -36,11 +36,11 @@ def test_router_ceiling_is_the_coordinator_ceiling_plus_router_and_channel_names
     assert ROUTER_TOOLS == COORDINATOR_TOOLS | ROUTER_ONLY_TOOLS | CHANNEL_TOOLS
     assert {'route_to_project', 'get_router_projects', 'router_instruction_create',
             'router_instruction_list', 'router_instruction_cancel', 'router_portfolio',
-            'owner_settings', 'router_project', 'repair_project',
+            'owner_settings', 'router_project',
             # The Global Router broadcast (R13, lead audit recommendation 4, 2026-11-18).
             'broadcast_project_message'} == ROUTER_ONLY_TOOLS
     # Every lead restarts under the owner's full grant (owner decision 2026-11-18, R9).
-    assert 'restart_server' in COORDINATOR_TOOLS
+    assert {'restart_server', 'repair_project'} <= COORDINATOR_TOOLS
     assert {'channel_send', 'channel_read', 'channel_threads', 'channel_configure_thread',
             'channel_subscribe', 'channel_unsubscribe', 'channel_outbox',
             'channel_outbox_approve'} == CHANNEL_TOOLS
@@ -161,9 +161,11 @@ def test_registry_adds_router_schemas_only_for_the_router(home, monkeypatch):
     project = {tool['function']['name'] for tool in _build_coordinator(SimpleNamespace(
         cfg={}, owner_user_id=OWNER, conv_id='router', project_path='/work/project'))}
     assert ROUTER_ONLY_TOOLS <= router and not ROUTER_ONLY_TOOLS & project
-    assert 'delegate_project_work' in project and 'delegate_project_work' in router
+    assert {'delegate_project_work', 'repair_project'} <= project & router
 
 
 def test_workers_never_receive_router_tools():
     from lib.project_dispatch.repository import CONTRACT
-    assert ROUTER_ONLY_TOOLS <= set(CONTRACT['workerDeniedTools'])
+    from lib.router.watchdog.policy import WATCHDOG_TOOLS
+    assert ROUTER_ONLY_TOOLS | {'repair_project'} <= set(CONTRACT['workerDeniedTools'])
+    assert 'repair_project' not in WATCHDOG_TOOLS

@@ -1,8 +1,30 @@
 # Conversations & Project Brain
 
+[Selected-chat portability](../SELECTED_CHAT_PORTABILITY.md) shares the complete
+transcript reader and publishes passive history through a single selected-authority
+command. Its synthetic runbook and [offline archive reader](../SELECTED_CHAT_ARCHIVE_VIEW.md)
+do not require production activation or grant Continue authority.
+
 Project coordination has a separate binding owner (`lib/conversations/project_coordination.py`), not Board dispatch. Its [schema](../../contracts/project_coordination_v1.schema.json) owns binding CAS and availability. [PROJECT_COORDINATION.md](../PROJECT_COORDINATION.md) owns passive messages and explicit-human bounded dispatch and pinned publication; [RETAINED_AGENTS.md](../RETAINED_AGENTS.md) owns child steering. Binding starts no execution. The sidebar opens ordinary Coordinator chat directly; its task graph projects assignment dependencies and worker execution separately from delivery. A secondary lazy dialog retains management controls. The dispatch-only Coordinator delegates the current accepted human request into independent workers through ProjectDispatchService, waits without model polling and reviews exact results/checkpoints; it never executes task work itself. Frozen source capability and finite aggregate Worker allowances belong to `lib/project_dispatch/delegation.py`; arbitrary synthetic input cannot mint grants. `lib/project_dispatch/continuation.py` may derive finite system-principal Coordinator grants from the original issued policy after durable results or restart, sharing the same ordinary executor and accounting; explicit report-backed completion stops them. Navigation never silently reassigns removed/rebound targets; project rename requires explicit rebinding. Guard: `tests/project_mod/test_project_coordination.py`.
 
 Consultation authority is `lib/project_dispatch/*` and [project_dispatch_v1.schema.json](../../contracts/project_dispatch_v1.schema.json), separate from this read model. A current revision-bound human source grants one bounded system/chat, unattended execution via the existing command → turn/attempt → task owners. Physical-attempt accounting conserves tokens/requests and uses nonce-bound settlement; unknown paid usage fails closed. Consultation has no tools; explicit file profiles admit only scoped first-party read/write/edit with durable tool caps. Paid compaction, translation, opaque programs and children stay closed. The separate `project` profile derives bounded worker grants from the live human Coordinator request and uses ordinary tools in owned isolated workspaces. Coordinator review is explicitly labeled; verified publication reuses existing integration gates. Legacy linked rework needs a fresh human grant. Acceptance is not publication; `/publish` pins the checkpoint and existing `origin.delivery` alone proves delivery. New versioned grants retry through existing lane-idle/startup hooks; Stop withdraws authority durably, legacy grants never auto-upgrade. Exact `commandId` GET spends nothing. Persistence uses individually bounded documents under an atomic project-head CAS, with version-fenced legacy migration and no lifetime assignment ceiling. Eight CAS attempts and 64 requests/512 tools per grant remain; no eviction or new idle worker. Bounded P2 and version-pinned completed-result dependencies (up to eight backward references) are implemented; readiness belongs to `lib/project_dispatch/dependencies.py`, not Board. Post-ACK cross-lane wake reuses birth gates; pinned withdrawal distinguishes revocation/signal/terminal Stop. Finite responsibility reuses automation with aggregate debits; declared shared versions return exact untrusted DATA and require actual delivery for adoption. Authorities/guards: [PROJECT_COORDINATION.md](../PROJECT_COORDINATION.md). Passive bounded history pages preserve every assignment; aggregate-only allowance reads remain outstanding. Offline/static/native-fixture evidence is not deployment proof.
+
+### Point result settlement visibility
+
+`ProjectDispatchService._view` reads the Attempt before the Turn on point
+result/settlement reads. Terminal status and the final Turn projection commit
+together; reading the Turn first could combine its pre-settlement body/revision
+with a newly completed Attempt. Completion between the ordered reads may
+conservatively leave the view running, never promote a partial body to completed.
+Identity, revocation and semantic-result-revision fences remain unchanged.
+This is not an atomic snapshot against later settled-result edits and does not
+reconstruct a historical review pin from the current answer. No retry or
+text-completeness heuristic is added.
+
+Specification: `tests/project_mod/test_coordinator_result_settlement.py` uses
+ordinary isolated SQLite terminal recording at both read boundaries and
+synthetic Coordinator controls for stale pins, evidence, failure and immutable
+loop outcomes. It does not establish the cause of a production judgment.
 
 Project Brain is a signal-driven, owner-scoped read model for project work. It
 does not ask a model to maintain coordination state and it never dispatches,
@@ -196,7 +218,9 @@ An ordinary write reads only the records that name its paths, through the path i
 names the path is removed when found, a retired record removes its own markers, and a
 record that cannot be read keeps them: on the FUSE volume an open racing the record's
 `os.replace` can fail with ENOENT, and the radar never waits on a lock to tell that
-from absence), plus its own atomic record write. A writer marks
+from absence), plus its own atomic record write. That rewrite holds a per-record
+lock only: one conversation's volume-bound rewrite never delays another
+conversation's write signal or the terminal settlement that waits for it. A writer marks
 the paths it writes and, at a task's first write in a checkout, every path it recorded,
 so a record written before the index existed is found once its conversation writes
 again; landing still scans every record. Edits that bypass the write tools and the

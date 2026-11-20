@@ -9,6 +9,7 @@ from lib.llm.stream_result import (
     ensure_provider_stream_result,
 )
 from .factory import get_dispatcher
+import asyncio
 import logging
 import time
 
@@ -17,7 +18,10 @@ from ._api_failures import DispatchFailurePolicy, _notify_retry
 from lib.log import get_logger
 
 from lib.llm.diagnostic_timing import timed_call, timed_call_with_fields, timed_stage
-from lib.llm_dispatch._api_budget import _gateway_outage_budget_secs, _raise_dispatch_exhausted, _saturation_budget_secs, _saturation_escalate, _validate_429_attempt_budget
+from lib.llm_dispatch._api_budget import (
+    _gateway_outage_budget_secs, _raise_dispatch_exhausted, _saturation_budget_secs,
+    _saturation_escalate, _unix_time_ns, _validate_429_attempt_budget,
+)
 from lib.llm_dispatch._api_contention import _admit_or_defer_shared_contention, _admit_or_defer_shared_contention_async, _paced_acall, _paced_call
 from ._api_retry_state import DispatchRetryState as _StreamRetryState, _cycling_can_ever_serve, responses_state_bound_pairs
 from lib.llm_dispatch._api_stream_state import _adapt_stream_body_for_slot, _first_output_callbacks, _settle_stream_result, _sleep_and_record_queue_wait
@@ -345,6 +349,7 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                     on_waiting=None,
                     max_429_attempts: int | None = None,
                     defer_on_shared_contention: bool = False,
+                    keep_model_on_app_minute_limit: bool = False,
                     owner_user_id: int | None = None,
                     model_budget_admit=None,
                     attempt_timeout=None,
@@ -358,6 +363,8 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
     may use the caller's explicit upstream-response budget. ``strict_model``
     keeps rotation inside the requested model, while ``avoid_pairs`` is a
     best-effort preference that relaxes rather than falsely reporting no slot.
+    An unbudgeted, cancellable strict conversation can opt to keep its model
+    on an AppId minute limit, without bypassing provider pacing or admission.
     Waiting callbacks are liveness-only; retry callbacks represent a real
     failed request, and attempt-restart fences any partial streamed text.
     ``attempt_timeout`` / ``first_byte_timeout`` are the caller's own hard
@@ -390,7 +397,10 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
         state, dispatcher, capability=capability, strict_model=strict_model,
         max_429_attempts=max_429_attempts, owner_user_id=owner_user_id,
         log_prefix=log_prefix, on_retry=on_retry, restart=_fire_attempt_restart,
-        attempt_observer=attempt_observer)
+        attempt_observer=attempt_observer,
+        keep_model_on_app_minute_limit=(keep_model_on_app_minute_limit
+                                        and callable(abort_check)
+                                        and not defer_on_shared_contention))
 
     # Detect if it's a pre-built body or raw messages
     is_body = isinstance(body_or_messages, dict) and 'messages' in body_or_messages
@@ -503,7 +513,8 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                     _est_tok,
                     abort_check=abort_check,
                     log_prefix=tag,
-                    cache_profile=slot.oauth or '',
+                    cache_profile=(getattr(slot, 'cache_profile', '')
+                                   or getattr(slot, 'oauth', '') or ''),
                 )
             except ImportError as _cs_err:
                 logger.debug(
@@ -527,6 +538,7 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
 
         # Only attempt failures enter provider retry and health policy.
         try:
+            attempt_started_ns = _unix_time_ns()
             t0 = time.time()
             (ttft_value, _on_thinking_wrapper,
              _on_content_wrapper,
@@ -553,6 +565,8 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                     base_url=slot.base_url or None,
                     extra_headers=slot.extra_headers or None,
                     oauth=slot.oauth or '',
+                    **({'codex_account_fingerprints': slot.codex_account_fingerprints}
+                       if getattr(slot, 'codex_account_fingerprints', ()) else {}),
                     adapter=slot.adapter or None,
                     on_thinking=_on_thinking_wrapper,
                     on_content=_on_content_wrapper,
@@ -588,7 +602,7 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
             state=state, cache_conv_id=_cache_conv_id, tag=tag,
             dispatcher=dispatcher, admitted_at=admitted_at,
             stream_result=stream_result,
-            route_trace=attempt_observer.route_trace)
+            route_trace=attempt_observer.route_trace, attempt_started_ns=attempt_started_ns)
         if stream_result.is_verified_complete:
             state.credential_outage.note_success(slot)
         state.route_unavailable.note_success(slot)
@@ -614,6 +628,49 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                               capability=capability, prefer_model=prefer_model,
                               first_err=state.first_bad_request_err,
                               what='dispatch_stream')
+
+
+def _release_unclaimed_pick(pick) -> None:
+    if not pick.cancelled() and pick.exception() is None and pick.result()[0] is not None:
+        pick.result()[0].release()
+
+
+def _pick_with_affinity(dispatcher, conv_id, selection):
+    # Conversation affinity and the pick decision are thread-local
+    # (conv_affinity), not context variables, so they cross threads by hand.
+    from lib.llm_dispatch import conv_affinity
+    previous = conv_affinity.get_conv_affinity()
+    conv_affinity.set_conv_affinity(conv_id)
+    conv_affinity.set_pick_decision(None)
+    try:
+        return (dispatcher.pick_and_reserve(**selection),
+                conv_affinity.get_pick_decision())
+    finally:
+        conv_affinity.set_conv_affinity(previous)
+
+
+async def _pick_off_loop(dispatcher, **selection):
+    """``pick_and_reserve`` on a worker thread, never on the event loop.
+
+    A pick stats and may re-read the key-stats store and reads durable quota
+    alerts; on the shared volume one slow read stalled every request served by
+    the loop. The thread inherits this context (provider pin, key-admission
+    and quota-watch scopes) and this thread's conversation affinity; the pick
+    decision it records comes back to this thread. A caller cancelled while
+    the thread still runs never receives its slot, so the reservation is
+    returned when it lands.
+    """
+    from lib.llm_dispatch import conv_affinity
+    pick = asyncio.ensure_future(asyncio.to_thread(
+        _pick_with_affinity, dispatcher, conv_affinity.get_conv_affinity(), selection))
+    try:
+        slot, decision = await asyncio.shield(pick)
+    except asyncio.CancelledError:
+        pick.add_done_callback(_release_unclaimed_pick)
+        raise
+    if decision is not None:
+        conv_affinity.set_pick_decision(decision)
+    return slot
 
 
 async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
@@ -772,8 +829,8 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
 
         pick_started = time.monotonic()
         rotation = state.rotation_models()
-        slot = dispatcher.pick_and_reserve(
-            capability=capability, prefer_model=prefer_model,
+        slot = await _pick_off_loop(
+            dispatcher, capability=capability, prefer_model=prefer_model,
             exclude_models=state.eff_exclude_models(),
             exclude_keys=state.eff_exclude_keys(),
             exclude_pairs=state.eff_exclude_pairs(),
@@ -869,7 +926,8 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
                 await async_settle_before_send(
                     _cache_conv_id, estimate_prefix_tokens(body),
                     abort_check=abort_check, log_prefix=tag,
-                    cache_profile=slot.oauth or '')
+                    cache_profile=(getattr(slot, 'cache_profile', '')
+                                   or getattr(slot, 'oauth', '') or ''))
             except ImportError as _cs_err:
                 logger.debug(
                     '%s cache-settle (async) unavailable: %s', tag, _cs_err)
@@ -891,6 +949,7 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
 
         # Only attempt failures enter provider retry and health policy.
         try:
+            attempt_started_ns = _unix_time_ns()
             t0 = time.time()
             (ttft_value, _on_thinking_wrapper, _on_content_wrapper,
              _on_tool_call_ready_wrapper) = _first_output_callbacks(
@@ -905,6 +964,8 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
                 base_url=slot.base_url or None,
                 extra_headers=slot.extra_headers or None,
                 oauth=slot.oauth or '',
+                **({'codex_account_fingerprints': slot.codex_account_fingerprints}
+                   if getattr(slot, 'codex_account_fingerprints', ()) else {}),
                 adapter=slot.adapter or None,
                 on_thinking=_on_thinking_wrapper,
                 on_content=_on_content_wrapper,
@@ -932,7 +993,7 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
             slot, usage, latency=latency, ttft=ttft_value[0], state=state,
             cache_conv_id=_cache_conv_id, tag=tag, dispatcher=dispatcher,
             admitted_at=admitted_at, stream_result=stream_result,
-            route_trace=attempt_observer.route_trace)
+            route_trace=attempt_observer.route_trace, attempt_started_ns=attempt_started_ns)
         if stream_result.is_verified_complete:
             state.credential_outage.note_success(slot)
         state.route_unavailable.note_success(slot)

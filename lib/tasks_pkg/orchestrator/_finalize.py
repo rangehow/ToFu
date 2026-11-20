@@ -1567,6 +1567,9 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
         tool_call_happened=tool_call_happened, round_num=round_num, model=model,
         assistant_msg=assistant_msg, messages=messages)
 
+    from lib.tasks_pkg.workspace_reference_delivery import append_workspace_output_links
+    append_workspace_output_links(task, finish_reason=last_finish_reason)
+
     done_evt = build_done_event(
         task,
         cfg=cfg,

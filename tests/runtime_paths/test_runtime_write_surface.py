@@ -3,8 +3,8 @@
 ``runtime_path_policy.get_runtime_base()`` is the one startup decision for
 data, logs and uploads ("Writable path selection" in
 docs/modules/infra_runtime.md). Reconstructible state follows it as well: the
-storage-boundary scan cache, the tool caches that MCP launchers and commands
-share, persisted oversized tool results, the desktop diagnostics inbox and the
+storage-boundary scan cache, the tool caches under the common MCP and command
+cache root, persisted oversized tool results, the desktop diagnostics inbox and the
 compat temporary directory.
 
 * Normal server: the base is the checkout, so each path stays the
@@ -177,9 +177,11 @@ def test_explicit_tool_cache_directory_still_wins(
     runtime_base({'TOFU_DATA_DIR': str(tmp_path / 'kernel')}, SOURCE_ROOT)
     override = tmp_path / 'operator-cache'
     monkeypatch.setenv('TOFU_MCP_CACHE_DIR', str(override))
-    for environment in _tool_environments(tmp_path / 'workspace', prepare=False):
-        assert environment['UV_CACHE_DIR'] == str(override / 'uv')
-        assert environment['UV_TOOL_DIR'] == str(override / 'share' / 'uv' / 'tools')
+    launcher, command = _tool_environments(tmp_path / 'workspace', prepare=False)
+    assert launcher['UV_CACHE_DIR'] == str(override / 'uv')
+    assert command['UV_CACHE_DIR'] == str(override / 'uv-commands')
+    assert launcher['UV_TOOL_DIR'] == command['UV_TOOL_DIR'] == str(
+        override / 'share' / 'uv' / 'tools')
 
 
 def test_normal_server_tool_caches_stay_in_the_checkout_data_directory(
@@ -188,14 +190,14 @@ def test_normal_server_tool_caches_stay_in_the_checkout_data_directory(
     from lib.project_mod import run_command
 
     assert str(runtime_base({'TOFU_DATA_LAYOUT': 'intree'}, SOURCE_ROOT)) == SOURCE_ROOT
-    # The defaults every earlier release computed from the module locations.
+    # Both tool families preserve their checkout-relative cache root.
     launcher_default = os.path.join(os.path.abspath(os.path.join(
         os.path.dirname(_vendor.__file__), '..', '..', '..')), 'data', 'mcp-cache')
     command_default = os.path.join(os.path.dirname(os.path.dirname(
         os.path.dirname(run_command.__file__))), 'data', 'mcp-cache')
     launcher, command = _tool_environments(tmp_path / 'workspace', prepare=False)
     assert launcher['UV_CACHE_DIR'] == os.path.join(launcher_default, 'uv')
-    assert command['UV_CACHE_DIR'] == os.path.join(command_default, 'uv')
+    assert command['UV_CACHE_DIR'] == os.path.join(command_default, 'uv-commands')
     assert launcher['XDG_DATA_HOME'] == command['XDG_DATA_HOME'] == os.path.join(
         launcher_default, 'share')
 

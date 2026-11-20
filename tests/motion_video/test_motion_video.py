@@ -670,6 +670,29 @@ def test_probe_env_reports_issues(monkeypatch):
     assert len(result['issues']) >= 4  # node / hyperframes / ffmpeg / chrome
 
 
+def test_ensure_ffmpeg_installs_the_pinned_wheel(monkeypatch):
+    """The release bootstrap requests the pinned wheel, not pip's latest: a
+    newer FFmpeg can remove an option the extractor still passes."""
+    seen = {}
+
+    class _Done:
+        returncode = 0
+        stderr = ''
+
+    def fake_run(argv, **_kwargs):
+        seen['argv'] = argv
+        return _Done()
+
+    monkeypatch.setattr(menv, 'ffmpeg_bin', lambda: '')
+    monkeypatch.setattr(menv.subprocess, 'run', fake_run)
+    monkeypatch.setattr('serverctl_pkg.runtime_replica.authoritative_interpreter',
+                        lambda: '/usr/bin/python3')
+    monkeypatch.setattr('serverctl_pkg.runtime_replica.source_package_directories',
+                        lambda: [])
+    assert menv.ensure_ffmpeg() == ''
+    assert f'imageio-ffmpeg=={menv.PINNED_IMAGEIO_FFMPEG}' in seen['argv']
+
+
 # ══════════════════════════════════════════════════════════
 #  P2: narration (TTS) + mux
 # ══════════════════════════════════════════════════════════

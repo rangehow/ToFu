@@ -94,7 +94,7 @@ def test_route_background_owners_are_role_scoped(monkeypatch):
         lambda: calls.append('oauth-reconcile'))
     monkeypatch.setattr(
         codex_catalog, 'start_codex_catalog_refresher',
-        lambda: calls.append('codex') or True)
+        lambda **_: calls.append('codex') or True)
     monkeypatch.setattr(
         enrichment, 'resume_visual_enrichment',
         lambda *, principal: calls.append('enrichment') or 1)
@@ -109,7 +109,7 @@ def test_route_background_owners_are_role_scoped(monkeypatch):
     api_app = App()
     assert background_services.start_registered_background_services(
         api_app, process_role='api') == 1
-    assert calls == ['oauth-reconcile', 'codex']
+    assert calls == ['codex']
 
     calls.clear()
     scheduler_app = App()
@@ -181,7 +181,7 @@ def test_distributed_api_role_does_not_start_ownerless_codex_catalog(
         lambda: calls.append('oauth-reconcile'))
     monkeypatch.setattr(
         codex_catalog, 'start_codex_catalog_refresher',
-        lambda: calls.append('codex') or True)
+        lambda **_: calls.append('codex') or True)
 
     class App:
         def __init__(self):

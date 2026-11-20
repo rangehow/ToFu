@@ -152,6 +152,10 @@ FIFO references, per-socket latest-value positions and priority control lanes.
 Verify `test_push_frame_spool.py`, `test_push_latest_value.py`
 and the server Push lifecycle/socket tests; no temporary range becomes durable
 replay authority or a count/byte admission quota.
+`push_front_door.py` is the Python peer of the Rust front door's push bridge:
+one mirror subscriber per owner inside `PushHub`, publications forwarded as
+local-socket bytes. Verify `test_push_front_door.py` and
+`tests/blackbox/test_blackbox_push*.py` against both servers.
 
 native_image owns one explicit loop-bound pinned archive or installed executable
 image across principals. Installed images retain complete runtime self checks;

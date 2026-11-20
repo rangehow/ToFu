@@ -132,14 +132,12 @@ def _admit_or_defer_shared_contention(
     return time.monotonic()
 
 
-def _log_admission_wait(log_prefix, started, gates, opened) -> None:
-    """One INFO record per admission that met an armed gate.
-
-    An admission that met no armed gate did not wait and is not recorded.
-    """
+def _log_admission_wait(log_prefix, started, gates, opened, *, state) -> None:
+    """Record waits; repeated same-model minute-limit probes use DEBUG."""
     if not gates:
         return
-    logger.info('%s [Dispatch] shared-contention admission wait %.2fs on %s '
+    log = logger.debug if getattr(state, 'holding_app_minute_limit', False) else logger.info
+    log('%s [Dispatch] shared-contention admission wait %.2fs on %s '
                 '(%s)', log_prefix, time.monotonic() - started,
                 ', '.join(f'{provider}/{credential or "*"}:{model}'
                           for provider, credential, model in gates),
@@ -236,7 +234,7 @@ def _wait_for_shared_contention_admission(
                 sleep_fn(delay_s)
         if opened or admitted:
             break
-    _log_admission_wait(log_prefix, started, gates, opened)
+    _log_admission_wait(log_prefix, started, gates, opened, state=state)
 
 
 async def _wait_for_shared_contention_admission_async(
@@ -270,7 +268,7 @@ async def _wait_for_shared_contention_admission_async(
                 state.record_queue_wait(wait_started)
         if opened or admitted:
             break
-    _log_admission_wait(log_prefix, started, gates, opened)
+    _log_admission_wait(log_prefix, started, gates, opened, state=state)
 
 
 async def _admit_or_defer_shared_contention_async(
@@ -342,9 +340,10 @@ def _pace_send_now(dispatcher, slot, state) -> None:
         raise DispatchSharedContentionDeferred(retry_after_s=delay_s)
 
 
-def _log_paced_wait(log_prefix, ticket, started) -> None:
+def _log_paced_wait(log_prefix, ticket, started, *, state) -> None:
     provider, credential, model = ticket.lane
-    logger.info('%s [Dispatch] paced send waited %.2fs for the provider window '
+    log = logger.debug if getattr(state, 'holding_app_minute_limit', False) else logger.info
+    log('%s [Dispatch] paced send waited %.2fs for the provider window '
                 'on %s/%s:%s', log_prefix, time.monotonic() - started,
                 provider, credential, model)
 
@@ -365,7 +364,7 @@ def _wait_for_paced_send(ticket, *, state, abort_check, log_prefix) -> None:
         ticket.cancel()
         raise
     if waited:
-        _log_paced_wait(log_prefix, ticket, started)
+        _log_paced_wait(log_prefix, ticket, started, state=state)
 
 
 async def _wait_for_paced_send_async(ticket, *, state, abort_check,
@@ -385,7 +384,7 @@ async def _wait_for_paced_send_async(ticket, *, state, abort_check,
         ticket.cancel()
         raise
     if waited:
-        _log_paced_wait(log_prefix, ticket, started)
+        _log_paced_wait(log_prefix, ticket, started, state=state)
 
 
 def _paced_call(state, call, *args, **kwargs):

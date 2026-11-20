@@ -11,11 +11,21 @@ Authority by API surface:
 
 - **v4 / conversation-sync / events / domain schemas**: the YAML/JSON files
   here are canonical; generated clients and fixtures are outputs.
-- **product domain metadata**: handler `@api_meta` declarations remain the
-  authority for projected product routes (`lib/openapi/AGENTS.md`). Their
-  source directory name does not select the release major.
-  `api_endpoint_index_v1.json` derives the complete first-party HTTP/WebSocket
-  mount from production registration; its version identifies the index schema.
+- **HTTP surface**: `api_v1.yaml` is canonical for every registered
+  first-party HTTP/WebSocket operation (OpenAPI operation plus its
+  `x-tofu-route` record). Handler `@api_meta` declarations implement it and
+  `scripts/gen_api_v1_contract.py` rejects drift in either direction
+  (`lib/openapi/AGENTS.md`). A handler's source directory name does not select
+  the release major. `api_endpoint_index_v1.json` is derived from `api_v1.yaml`
+  by `tofu-xtask contracts` (`make contracts`); the `v1` in both names
+  identifies the document schema.
+- **events**: `events_v1.json` is canonical for stream events, phases and push
+  frames; `lib/agent_core/events.py` implements it (`gen_event_contract.py`
+  checks). The clients derived from `api_v1.yaml`, `events_v1.json` and
+  `storage_operations_v1.json` are rendered by `packages/tofu-xtask`
+  (`make contracts`; `make contracts-check` rejects stale outputs).
+- **storage operations**: `storage_operations_v1.json` is authored; the sidecar
+  registry implements it (`gen_storage_operation_catalog.py` checks).
 - **environment knobs**: `config_knobs_v1.json` is the complete inventory of
   env configuration reads. Adding or renaming an env read requires updating
   it via `python3 scripts/check_config_knobs.py --rescan` in the same change;

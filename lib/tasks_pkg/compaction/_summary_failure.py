@@ -88,7 +88,7 @@ def classify_summary_failure(error: BaseException, *, provider_completed=False) 
     """
     from lib.llm.llm_errors import PermissionError_, RateLimitError, RetryableAPIError
     from lib.llm.stream_result import UnverifiedProviderStreamError
-    from lib.llm_dispatch._api_errors import DispatchNoAdmissibleSlot, DispatchRateLimitBudgetExceeded
+    from lib.llm_dispatch._api_errors import DispatchNoCapableSlot, DispatchRateLimitBudgetExceeded
     from lib.model_routing.domain import ModelRoutingError
     from lib.tasks_pkg.compaction._layer2._summary_transport import IncompleteSummaryError
 
@@ -97,7 +97,7 @@ def classify_summary_failure(error: BaseException, *, provider_completed=False) 
         return {'code': 'summary_incomplete'}
     if provider_completed:
         return result
-    if isinstance(error, DispatchNoAdmissibleSlot):
+    if isinstance(error, DispatchNoCapableSlot):
         return {'code': 'summary_route_unavailable', 'attempts': 0}
     if isinstance(error, ModelRoutingError):
         return {'code': 'summary_route_revalidation_failed'

@@ -1,10 +1,12 @@
 /** Lazy My Day composition and feature entry. */
 import '../runtime/myday-presenters.generated.js';
-import './myday-panel.css';
-import './myday-goals.css';
+import '../styles/application/16-my-day-goals.css';
+import '../styles/application/16-my-day-token-costs.css';
+import { createDayTokenCostDisclosure } from './myday/token-costs';
 import { featureRegistry } from '../feature-registry';
 import { t } from '../i18n';
 import { invokeFeatureEntry, type FeatureCallable } from '../runtime-bridge';
+import { getRuntimeService } from '../runtime/app-runtime.js';
 import {
   createMyDayGoalBoard,
   type MyDayBoardElement,
@@ -21,6 +23,7 @@ type MyDayBindings = Window & {
   Api?: { daily?: MyDayGoalApi };
   MyDayPanelPresentation?: MyDayPanelPresentation;
   MyDayGoalBoard?: MyDayGoalBoard;
+  MyDayTokenCosts?: ReturnType<typeof createDayTokenCostDisclosure>;
 };
 
 function bindings(): MyDayBindings {
@@ -37,6 +40,14 @@ function presentation(): MyDayPanelPresentation {
   const owner = bindings().MyDayPanelPresentation;
   if (!owner) throw new Error('My Day panel presentation is not ready');
   return owner;
+}
+
+/* The empty state shows the one shipped mascot; its URL and cache-bust token
+   live in core/brand_logo.js, so this entry never spells out a logo path. */
+function brandLogoAttrs(size: number): string {
+  const helper = getRuntimeService('brandLogoImgAttrs');
+  if (typeof helper !== 'function') throw new Error('brand mascot helper is not ready');
+  return (helper as (size: number) => string)(size);
 }
 
 async function prepareMyDayRuntime(): Promise<void> {
@@ -65,8 +76,13 @@ bindings().MyDayGoalBoard = createMyDayGoalBoard({
   element: (id: MyDayBoardElement) => document.getElementById(id),
   renderCalendar: () => presentation().renderCalendar(),
   showToday: () => presentation().showToday(),
+  brandLogoAttrs,
   warn: (message, detail) => console.warn(message, detail),
 });
+
+bindings().MyDayTokenCosts = createDayTokenCostDisclosure(
+  () => document.getElementById('mydayTokenCosts'),
+);
 
 export async function invoke(
   name: string,

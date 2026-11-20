@@ -57,6 +57,9 @@ def _load_json_document(data: bytes) -> Any:
 class PostgresSession:
     backend = 'postgres'
 
+    def utf8_bytes_sql(self, column: str) -> str:
+        return f"convert_to({column}, 'UTF8')"
+
     def __init__(
         self,
         connection: psycopg.Connection[DictRow],
@@ -341,6 +344,7 @@ class PostgresBackend(Backend):
         *,
         readonly: bool,
         retries: int,
+        consistent_snapshot: bool = False,
         transaction_timeout_s: float | None = None,
         replay_safe: bool = False,
     ) -> Any:
@@ -370,10 +374,13 @@ class PostgresBackend(Backend):
                     # Psycopg opens a transaction before the first statement
                     # when autocommit is disabled. Sending BEGIN explicitly
                     # therefore emits PostgreSQL's "already a transaction"
-                    # warning on every RPC. Read transactions only need their
-                    # access mode declared before catalog work begins.
+                    # warning on every RPC. Set transaction characteristics
+                    # before the SELECTs that configure local timeouts.
                     if readonly:
-                        cursor.execute('SET TRANSACTION READ ONLY')
+                        if consistent_snapshot:
+                            cursor.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY')
+                        else:
+                            cursor.execute('SET TRANSACTION READ ONLY')
                     # PostgreSQL utility SET syntax does not accept bind
                     # parameters (PG18 rejects ``SET ... = $1``). set_config
                     # is parameterizable and ``is_local=true`` keeps both
@@ -580,8 +587,11 @@ class PostgresBackend(Backend):
             raise StorageError('database_unavailable', 'PostgreSQL read pool is not ready')
         if operation_name == 'conversation.search' and self._turn_search_projection is None:
             raise StorageError('database_unavailable', 'Conversation search projection is unavailable', True, 250)
+        # Context hashes compact headers and hydrates Turns in separate
+        # statements; READ COMMITTED can mix a proof with a newer projection.
         result = self._transaction(
-            self._read_pool, operation, deadline_at, readonly=True, retries=1)
+            self._read_pool, operation, deadline_at, readonly=True, retries=1,
+            consistent_snapshot=operation_name == 'turn.context.read')
         self._metrics['queries'] += 1
         if operation_name == 'conversation.search':
             from lib.storage_authority_sql.turn_search_query import attach_search_coverage

@@ -200,12 +200,67 @@ def test_probe_routes_openai_responses_to_the_responses_endpoint(monkeypatch):
     assert calls[0]['headers']['x-context-provider'] == 'kunlun'
 
 
-def test_native_route_includes_request_name_headers():
-    import inspect
-    from lib.model_routing import native_route
+@pytest.mark.parametrize('mixed_case', [False, True], ids=['ordinary', 'mixed-case'])
+def test_native_route_layers_connection_deployment_and_credential_headers(mixed_case):
+    from lib.identity import PrincipalContext
+    from lib.model_routing.credential_envelope import ENVELOPE_FORMAT
+    from lib.model_routing.domain import ModelRef, NativeModelSelection
+    from lib.model_routing.native_route import compile_native_route
+    from lib.model_routing.repository import StoredAuthority
 
-    source = inspect.getsource(native_route)
-    assert 'chosen.deployment.get("extra_headers")' in source
+    boundary = _boundary()
+    document = _document({
+        'x-context-provider': 'deployment-default',
+        'x-request-selector': 'kunlun',
+    })
+    document['connections'][0]['extra_headers'] = {
+        'x-context-provider': 'connection-default',
+        'x-request-selector': 'connection-default',
+        'x-client_region': '\t café',
+    }
+    credential_headers = {'x-context-provider': 'credential-choice'}
+    expected_extra = {}
+    if mixed_case:
+        document['connections'][0]['extra_headers'].update({
+            'X-Request-Selector': 'later-connection-variant',
+            'x-connection-only': 'first-connection-choice',
+            'X-Connection-Only': 'last-connection-choice',
+        })
+        document['deployments'][0]['extra_headers'].update({
+            'X-Context-Provider': 'later-deployment-variant',
+            'X-Deployment-Only': 'first-deployment-choice',
+            'x-deployment-only': 'last-deployment-choice',
+        })
+        credential_headers = {
+            'X-Context-Provider': 'first-credential-choice',
+            'X-CONTEXT-PROVIDER': 'credential-choice',
+        }
+        expected_extra = {
+            'x-connection-only': 'last-connection-choice',
+            'x-deployment-only': 'last-deployment-choice',
+        }
+    repository = SimpleNamespace(
+        get=lambda _: StoredAuthority(boundary, 0, document, 0),
+        resolve_secret=lambda *_: json.dumps({
+            'format': ENVELOPE_FORMAT,
+            'api_key': 'synthetic-api-key',
+            'extra_headers': credential_headers,
+        }),
+    )
+    route = compile_native_route(
+        repository, boundary, NativeModelSelection(ModelRef('openai', 'gpt-6.1-sol'), None))
+    _, private = route.consume(PrincipalContext.user(
+        subject_id='header-precedence-fixture', owner_user_id=_OWNER))
+
+    headers = {name.lower(): value for name, value in private['headers'].items()}
+    assert headers == {
+        'x-context-provider': 'credential-choice',
+        'x-request-selector': 'kunlun',
+        'x-client_region': '\t café',
+        'authorization': 'Bearer synthetic-api-key',
+        **expected_extra,
+    }
+    assert len(private['headers']) == len(headers)
 
 
 _CREDENTIAL_HEADER_NAMES = [

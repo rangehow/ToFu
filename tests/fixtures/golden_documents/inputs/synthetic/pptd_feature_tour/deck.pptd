@@ -1,0 +1,33 @@
+version: v2
+title: Golden PPTD 特性巡览
+size:
+- 1280
+- 720
+theme:
+  colors:
+    bg: '#FBFAF7'
+    ink: '#1C232B'
+    primary: '#17324D'
+    accent: '#D2602A'
+    muted: '#5E6B78'
+    hairline: '#D9DEE3'
+  textStyles:
+    title:
+      fontSize: 32
+      color: $ink
+      bold: true
+      fontFamily: MiSans
+      lineHeight: 1.25
+    body:
+      fontSize: 18
+      color: $ink
+      fontFamily: Noto Sans SC
+      lineHeight: 1.45
+    caption:
+      fontSize: 13
+      color: $muted
+      fontFamily: Noto Sans SC
+pages:
+- pages/01.page
+- pages/02.page
+- pages/03.page

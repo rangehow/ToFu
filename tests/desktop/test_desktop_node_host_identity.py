@@ -6,7 +6,9 @@ changed must keep its node when it is provably the same device (same
 container renamed) and otherwise name its predecessor when it pairs again.
 """
 import json
+import sys
 import threading
+import types
 
 import pytest
 
@@ -25,6 +27,18 @@ def shared_home(tmp_path, monkeypatch):
 def _on(monkeypatch, *, machine='image-mid', hostname='host', container=''):
     monkeypatch.setattr(host_identity, '_machine_id', lambda: machine)
     monkeypatch.setattr(host_identity, '_hostname_scoped', lambda: True)
+    monkeypatch.setattr(host_identity.socket, 'gethostname', lambda: hostname)
+    monkeypatch.setattr(host_identity, '_container_id', lambda: container)
+
+
+def _on_platform(monkeypatch, platform, *, machine, hostname='fixture-host', container=''):
+    """Run as a fixture host of ``platform``; never touches the real OS readers.
+
+    Only the identity seams are substituted: ``_hostname_scoped`` follows the
+    patched ``sys.platform``, so Windows/macOS hosts scope by machine id alone.
+    """
+    monkeypatch.setattr(host_identity.sys, 'platform', platform)
+    monkeypatch.setattr(host_identity, '_machine_id', lambda: machine)
     monkeypatch.setattr(host_identity.socket, 'gethostname', lambda: hostname)
     monkeypatch.setattr(host_identity, '_container_id', lambda: container)
 
@@ -116,6 +130,105 @@ def test_a_phase0_keyed_container_entry_is_claimed_once(shared_home, monkeypatch
     _on(monkeypatch, hostname='shared-host', container='2' * 64)
     twin = config.node_identity()
     assert twin['node_id'] != phase0 and twin['predecessor'] == phase0
+
+
+@pytest.mark.parametrize('platform', ['win32', 'darwin'])
+def test_rename_keeps_the_node_and_its_attachments_on_windows_and_macos(
+        shared_home, monkeypatch, platform):
+    # These platforms scope the key by the platform machine id alone, so a
+    # renamed computer is still the same node with the same joined servers.
+    _on_platform(monkeypatch, platform, machine='fixture-machine-guid', hostname='old-name')
+    node = config.node_identity()['node_id']
+    key = host_identity.host_key()
+    _attach('https://home.example', 'kept-secret')
+    _on_platform(monkeypatch, platform, machine='fixture-machine-guid', hostname='new-name')
+    assert host_identity.host_key() == key
+    assert config.node_identity() == {'node_id': node, 'predecessor': None}
+    assert [a['secret'] for a in config.attachments()] == ['kept-secret']
+    # Restarting again, under either name, changes nothing.
+    assert config.node_identity()['node_id'] == node
+    _on_platform(monkeypatch, platform, machine='fixture-machine-guid', hostname='old-name')
+    assert config.node_identity()['node_id'] == node
+    assert [a['secret'] for a in config.attachments()] == ['kept-secret']
+    # Only digests of host facts reach the shared config file.
+    assert 'fixture-machine-guid' not in shared_home.read_text()
+
+
+@pytest.mark.parametrize('platform', ['win32', 'darwin'])
+def test_distinct_machines_do_not_inherit_secrets_on_windows_and_macos(
+        shared_home, monkeypatch, platform):
+    _on_platform(monkeypatch, platform, machine='machine-a', hostname='shared-host')
+    first = config.node_identity()['node_id']
+    _attach('https://home.example', 'secret-a')
+    # Same hostname, different platform machine id: a different machine.
+    _on_platform(monkeypatch, platform, machine='machine-b', hostname='shared-host')
+    second = config.node_identity()['node_id']
+    assert second != first
+    assert config.attachments() == []
+    _attach('https://home.example', 'secret-b')
+    assert [a['secret'] for a in config.attachments()] == ['secret-b']
+    _on_platform(monkeypatch, platform, machine='machine-a', hostname='shared-host')
+    assert config.node_identity()['node_id'] == first
+    assert [a['secret'] for a in config.attachments()] == ['secret-a']
+
+
+@pytest.mark.parametrize('platform', ['win32', 'darwin'])
+def test_a_missing_machine_identifier_falls_back_to_the_hostname(
+        shared_home, monkeypatch, platform):
+    # An unreadable platform id must not collapse every host to one node.
+    _on_platform(monkeypatch, platform, machine='', hostname='laptop')
+    facts = host_identity.host_facts()
+    assert facts['machine'] == '' and facts['hostname']
+    key = host_identity.host_key()
+    node = config.node_identity()['node_id']
+    _attach('https://home.example', 'fallback-secret')
+    # A restart with the same hostname keeps the node.
+    assert config.node_identity()['node_id'] == node
+    # Another hostname is another host: a distinct key, node, and credential list.
+    _on_platform(monkeypatch, platform, machine='', hostname='other-laptop')
+    assert host_identity.host_key() != key
+    assert config.node_identity()['node_id'] != node
+    assert config.attachments() == []
+    _on_platform(monkeypatch, platform, machine='', hostname='laptop')
+    assert config.node_identity()['node_id'] == node
+    assert [a['secret'] for a in config.attachments()] == ['fallback-secret']
+
+
+def test_windows_machine_guid_is_read_through_the_registry_seam(monkeypatch):
+    class _Key:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    fake = types.SimpleNamespace(
+        HKEY_LOCAL_MACHINE=object(), OpenKey=lambda *a, **k: _Key(),
+        QueryValueEx=lambda key, name: ('WIN-GUID-FIXTURE', 1))
+    monkeypatch.setitem(sys.modules, 'winreg', fake)
+    monkeypatch.setattr(host_identity.sys, 'platform', 'win32')
+    assert host_identity._machine_id() == 'WIN-GUID-FIXTURE'
+    # An unreadable value is a missing id, never an exception.
+    def _unreadable(key, name):
+        raise FileNotFoundError(name)
+
+    fake.QueryValueEx = _unreadable
+    assert host_identity._machine_id() == ''
+
+
+def test_macos_platform_uuid_is_read_through_the_ioreg_seam(monkeypatch):
+    class _Out:
+        stdout = '    "IOPlatformUUID" = "MAC-UUID-FIXTURE"\n'
+
+    monkeypatch.setattr(host_identity.sys, 'platform', 'darwin')
+    monkeypatch.setattr(host_identity.subprocess, 'run', lambda *a, **k: _Out())
+    assert host_identity._machine_id() == 'MAC-UUID-FIXTURE'
+
+    def _missing(*a, **k):
+        raise FileNotFoundError('ioreg')
+
+    monkeypatch.setattr(host_identity.subprocess, 'run', _missing)
+    assert host_identity._machine_id() == ''
 
 
 def test_concurrent_first_starts_on_one_file_get_distinct_ids(shared_home, monkeypatch):

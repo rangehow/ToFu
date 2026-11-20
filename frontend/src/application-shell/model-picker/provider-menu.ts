@@ -20,7 +20,7 @@ export function createProviderMenu(ports: ModelPickerPorts, select: (model: Pick
       const selected = preferredProvider(model, ports.selection());
       // Preference targets a Provider, not one of its interchangeable Offerings.
       const first = new Set<string>();
-      const options = [{ provider_id: '', provider_name: '自动服务商', offering_id: '' }, ...(model.provider_options || []).filter(option => {
+      const options = [{ provider_id: '', provider_name: '自动服务商', offering_id: '', availability: model.availability }, ...(model.provider_options || []).filter(option => {
         if (first.has(option.provider_id)) return false; first.add(option.provider_id); return true;
       })];
       const buttons = options.map(option => {
@@ -30,8 +30,15 @@ export function createProviderMenu(ports: ModelPickerPorts, select: (model: Pick
         entry.setAttribute('aria-selected', String(active));
         const check = document.createElement('span'); check.className = 'ps-dd-provider-check'; check.setAttribute('aria-hidden', 'true');
         if (active) check.innerHTML = PROVIDER_CHECK;
-        const label = document.createElement('span'); label.className = 'ps-dd-provider-menu-label'; label.textContent = option.provider_name; label.title = option.provider_name;
-        entry.append(check, label); menu.append(entry);
+        const label = document.createElement('span'); label.className = 'ps-dd-provider-menu-label'; label.textContent = option.provider_name;
+        label.title = option.availability === 'no_route' ? ports.text('mobile.depthNoRoute') : option.provider_name;
+        entry.append(check, label);
+        if (option.availability === 'no_route') {
+          const notice = document.createElement('span'); notice.className = 'ps-dd-provider-tag';
+          notice.textContent = ' · ' + ports.text('mobile.depthUnavailable'); notice.title = label.title;
+          entry.append(notice);
+        }
+        menu.append(entry);
         scope.listen(entry, 'click', event => { event.stopPropagation(); close(); select(option.provider_id ? { ...model, ...option } : model); });
         return entry;
       });

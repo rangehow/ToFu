@@ -161,6 +161,22 @@ isolated checkout; refactoring must preserve all generated output bytes.
 
 ## Verification
 
+`tests/storage/test_storage_v2_client.py::test_point_read_request_work_receipt`
+provides a synthetic, transport-substituted diagnosis for an ordinary native
+`record.get`: one operation normalization, one request-body preparation, one
+finite-number admission and one response decode, with exact payload bytes and
+revision-bearing result equality. Generated operation metadata is already shared;
+there is no per-read catalog conversion to cache. Retry preparation remains
+payload-dependent: `test_point_read_retry_reprepares_mutable_selector` checks both
+a changed selector and fresh non-finite-number rejection before dispatch. It is
+not safe to hoist that work for arbitrary mutable mappings. Batch fallback can
+normalize an operation again, but removing eager preflight would change malformed
+batch rejection, while bypassing public `query` would change its override seam.
+These receipts establish no latency, storage-materialization or filesystem claim.
+The next native investigation should use an explicitly selected disposable test
+engine and the existing semantic differential `record.get` cases to attribute
+one exact read across native admission, materialization and response construction;
+that investigation is separate from this application-only diagnosis.
 
 `scripts/tofudb_perf_compare.py` compares disposable authorities through their
 client contracts, not raw database primitives. Its `tofudb_workloads/` package

@@ -8,11 +8,19 @@ pytest_plugins = ('tests._chat_sidecar',)
 pytestmark = pytest.mark.unit
 
 
+def seed_mailbox_run(binding):
+    from lib.swarm.persistence import save_session
+    save_session(binding['swarmKey'], conv_id=binding['conversationId'],
+        task_id=binding['swarmRunId'], specs=[], config={'user_id': binding['owner']},
+        required=True, save_mode='launch')
+
+
 def test_durable_receipts_and_commit_before_lost_ack(chat_sidecar):
     from lib.storage import get_storage_client
     binding = {'owner': 1, 'tenant': '', 'conversationId': '', 'projectPath': '',
-               'swarmKey': 'isolated', 'swarmRunId': uuid.uuid4().hex, 'agentId': 'child',
+               'swarmKey': uuid.uuid4().hex, 'swarmRunId': uuid.uuid4().hex, 'agentId': 'child',
                'retainedAgentId': '', 'retainedRunId': '', 'retainedScope': ''}
+    seed_mailbox_run(binding)
     class LoseOneAck:
         lost = False
         def query(self, *args, **kw):
@@ -44,8 +52,9 @@ def test_durable_receipts_and_commit_before_lost_ack(chat_sidecar):
 def test_real_empty_terminal_tombstone_fences_late_first_send(chat_sidecar):
     from lib.swarm.run_messages import RunMessageError
     binding = {'owner': 1, 'tenant': '', 'conversationId': '', 'projectPath': '',
-               'swarmKey': 'isolated', 'swarmRunId': uuid.uuid4().hex, 'agentId': 'child',
+               'swarmKey': uuid.uuid4().hex, 'swarmRunId': uuid.uuid4().hex, 'agentId': 'child',
                'retainedAgentId': '', 'retainedRunId': '', 'retainedScope': ''}
+    seed_mailbox_run(binding)
     RunMessageRepository(binding).close()
     with pytest.raises(RunMessageError, match='ended'):
         RunMessageRepository(binding).submit(content='Late', kind='steer', key='late', sender_task_id='parent')

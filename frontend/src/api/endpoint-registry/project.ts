@@ -13,7 +13,7 @@ import type { ProjectDispatchRequest, ProjectDispatchRetry, ProjectDispatchRevok
   ProjectDispatchReviewRequest, ProjectDispatchPublishRequest, ProjectDispatchView,
   ProjectDispatchPage, ProjectDispatchListQuery,
   CoordinatorUsageState } from '../project-dispatch.generated';
-import type { RouterOfficeFacts } from '../router.generated';
+import type { RouterOfficeFacts, RouterOwnerQuestionConfirmation, RouterOwnerQuestionConfirmRequest } from '../router.generated';
 // Bound read-only navigation demand; writes keep their own acknowledgement policy.
 const COORDINATION_READ_TIMEOUT_MS = 12_000;
 
@@ -188,6 +188,11 @@ export function createProjectEndpoints(ports: EndpointPorts) {
     // 2026-11-13), and abandoning it discards that work; the caller's signal cancels it.
     routerOffice: (signal?: AbortSignal) =>
       get<RouterOfficeFacts>('/api/v4/router/office', { signal, onError: 'throw' }),
+    // The owner settles a non-blocking owner question on its stated default (docs/ROUTER.md R10);
+    // nothing reaches the lead.
+    confirmOwnerQuestionDefault: (body: RouterOwnerQuestionConfirmRequest) =>
+      post<RouterOwnerQuestionConfirmation>('/api/v4/router/questions/confirm-default', body,
+        { headers: { 'Idempotency-Key': ports.newIdempotencyKey() }, onError: 'throw' }),
     newAssignmentCommandId: () => ports.newIdempotencyKey(),
     coordinationAssignments: (path: string, commandId?: string, options?: Pick<ProjectDispatchListQuery, 'cursor' | 'assignmentId'>, signal?: AbortSignal) =>
       get<ProjectDispatchPage>('/api/v4/project/coordination/assignments',

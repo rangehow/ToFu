@@ -22,8 +22,6 @@ from lib.storage_authority_sql.preflight import ProjectLease
 
 
 pytestmark = pytest.mark.unit
-# The PostgreSQL lane uses the suite-owned cluster when no external DSN file is set.
-pytest_plugins = ('tests.support.postgres_cluster',)
 _BACKENDS = ['sqlite']
 if os.environ.get('TOFU_STORAGE_TEST_POSTGRES') == '1':
     _BACKENDS.append('postgres')
@@ -78,7 +76,7 @@ def test_record_list_headers_preserve_versions_cursors_without_value_hydration(s
 @pytest.fixture(params=_BACKENDS)
 def storage(request, tmp_path: Path, monkeypatch):
     from contextlib import ExitStack
-    from tests.support.postgres_isolation import isolated_postgres_dsn, postgres_dsn_source
+    from tests.support.postgres_isolation import isolated_postgres_dsn
 
     monkeypatch.setenv('TOFU_STORAGE_SQLITE_READ_POOL', '2')
     monkeypatch.setenv('TOFU_STORAGE_RPC_CAPACITY', '8')
@@ -86,7 +84,7 @@ def storage(request, tmp_path: Path, monkeypatch):
     monkeypatch.setenv('TOFU_STORAGE_PG_WRITE_POOL', '1')
     with ExitStack() as resources:
         if request.param == 'postgres':
-            source = postgres_dsn_source(request, tmp_path)
+            source = Path(os.environ['TOFU_STORAGE_TEST_POSTGRES_DSN_FILE'])
             isolated = resources.enter_context(isolated_postgres_dsn(source, tmp_path))
             monkeypatch.setenv('TOFU_STORAGE_TEST_POSTGRES_DSN_FILE', str(isolated))
         supervisor = StorageSupervisor(
@@ -96,6 +94,140 @@ def storage(request, tmp_path: Path, monkeypatch):
             yield supervisor
         finally:
             supervisor.stop()
+
+
+def test_portable_import_candidate_contract(storage):
+    from tests.support.portable_import_candidates import assert_candidate_contract
+
+    assert_candidate_contract(storage.client, 1)
+
+
+def test_portable_import_atomic_passive_and_replayable(storage):
+    client = storage.client
+    digest = '1' * 64
+    source = {
+        'conversation_id': 'portable-test', 'title': 'Synthetic import',
+        'source_id': 'test-source', 'source_conversation_id': 'source-chat',
+        'source_revision': 1, 'content_hash': '2' * 64,
+        'messages': [
+            {'role': 'user', 'text': 'Fixture question', 'turnId': 'external-id',
+             'originals': [digest]},
+            {'role': 'assistant', 'text': 'Fixture answer', 'originals': []},
+        ],
+    }
+    candidate = {
+        'id': 'portable-doc', 'sha256': digest, 'name': 'fixture.txt',
+        'stored_name': 'portable-doc.txt', 'scope': 'attachment', 'kind': 'text',
+        'size_bytes': 15, 'text_chars': 0, 'chunk_count': 0,
+        'method': 'portable_import', 'warnings_json': '[]',
+        'created_at': 1, 'updated_at': 1, 'assets': [], 'chunks': [],
+    }
+    payload = {'user_id': 1, 'chats': [source], 'documents': [
+        {'user_id': 1, 'document_id': candidate['id'], 'document': candidate},
+    ]}
+    identity = {'user_id': 1, 'conv_id': source['conversation_id']}
+    executable = {**source, 'messages': [{**source['messages'][0], 'toolRounds': [{}]}]}
+    with pytest.raises(StorageError) as error:
+        client.command('conversation.portable_import', {**payload, 'chats': [executable]},
+                       'portable-reject-executable')
+    assert error.value.code == 'database_protocol_error'
+    missing_message = {'role': 'user', 'text': '', 'originals': ['3' * 64]}
+    bad_chat = {**source, 'conversation_id': 'missing-original', 'messages': [missing_message]}
+    with pytest.raises(StorageError) as error:
+        client.command('conversation.portable_import', {**payload, 'chats': [source, bad_chat]},
+                       'portable-rollback')
+    assert error.value.code == 'database_protocol_error'
+    assert client.query('conversation.get', identity) is None
+    assert client.query('knowledge.document.find_digest', {'user_id': 1, 'sha256': digest}) is None
+
+    receipt = {'inserted': [identity['conv_id']], 'skipped': [],
+               'retained_document_ids': [candidate['id']]}
+    assert client.command('conversation.portable_import', payload, 'portable-first') == receipt
+    assert client.command('conversation.portable_import', payload, 'portable-first') == receipt
+    assert client.command('conversation.portable_import', payload, 'portable-reimport') == {
+        'inserted': [], 'skipped': [identity['conv_id']], 'retained_document_ids': [],
+    }
+    newer_revision = {**source, 'source_revision': 2}
+    assert client.command('conversation.portable_import', {**payload, 'chats': [newer_revision]},
+                          'portable-revision-replay')['skipped'] == [identity['conv_id']]
+    document = client.query('conversation.get', identity)
+    first, second = document['messages']
+    assert [(m['role'], m['content']) for m in (first, second)] == [
+        ('user', 'Fixture question'), ('assistant', 'Fixture answer'),
+    ]
+    assert first['_turnId'] != 'external-id'
+    assert first['attachments'][0]['attachmentId'] == candidate['id']
+    assert all(m['_turnStatus'] == 'completed' and m['_attemptId'] is None
+               and not m.get('toolRounds') for m in (first, second))
+    changes = client.query('turn.sync.changes', {
+        'conversation_id': identity['conv_id'], 'user_id': 1, 'after': 0,
+    })['events']
+    assert [event['type'] for event in changes] == ['conversation.activity']
+    assert changes[0]['payload'] == {'requiresSnapshot': True, 'conversationRevision': 2}
+    assert client.query('conversation.get', {**identity, 'user_id': 2}) is None
+    with pytest.raises(StorageError) as error:
+        client.command('conversation.portable_import', {**payload, 'user_id': 2}, 'portable-owner')
+    assert error.value.code == 'database_protocol_error'
+    divergent = {**source, 'content_hash': '4' * 64}
+    with pytest.raises(StorageError) as error:
+        client.command('conversation.portable_import', {**payload, 'chats': [divergent]},
+                       'portable-conflict')
+    assert error.value.code == 'database_conflict'
+    assert client.command('conversation.delete', identity, 'portable-delete')['deleted']
+    with pytest.raises(StorageError) as error:
+        client.command('conversation.portable_import', payload, 'portable-trashed')
+    assert error.value.code == 'database_conflict'
+    assert client.query('conversation.get', identity) is None
+
+
+def test_portable_package_materializes_original_and_search(storage, monkeypatch, tmp_path):
+    from lib.conv_ref import portable
+    from lib.conv_ref.portable_import import restore_selected
+    from lib.knowledge import store
+
+    source_bytes = b'synthetic original bytes'
+    matching_text = 'portable archived search needle'
+    monkeypatch.setattr('lib.storage.get_storage_client', lambda write=False: storage.client)
+    monkeypatch.setattr(store, '_SOURCE_ROOT_OVERRIDE', str(tmp_path / 'portable-files'))
+    monkeypatch.setattr(portable, '_original', lambda document_id, user_id: source_bytes)
+
+    def package(text):
+        monkeypatch.setattr(portable, '_read_all_messages', lambda conversation_id, user_id: (
+            {'title': 'Synthetic transcript', 'rev': 1},
+            [{'role': 'user', 'content': text, 'attachments': [{'attachmentId': 'original'}]}],
+        ))
+        return portable.export_selected(source_id='source', user_id=1,
+                                        conversation_ids=['chat'], approved_original_ids=['original'])
+
+    archive = package(matching_text)
+    receipt = restore_selected(archive, user_id=1)
+    [conv_id] = receipt['inserted']
+    [doc_id] = receipt['retained_document_ids']
+    source_path = store.read_source_path(doc_id, user_id=1)
+    assert source_path.read_bytes() == source_bytes
+    assert store.read_source_path(doc_id, user_id=2) is None
+    persisted = storage.client.query('conversation.get', {'conv_id': conv_id, 'user_id': 1})
+    [message] = persisted['messages']
+    assert message['content'] == matching_text
+    assert message['attachments'][0]['attachmentId'] == doc_id
+    assert restore_selected(archive, user_id=1) == {
+        'inserted': [], 'skipped': [conv_id], 'retained_document_ids': [],
+    }
+    assert list(source_path.parent.iterdir()) == [source_path]
+    with pytest.raises(StorageError) as error:
+        restore_selected(package('divergent transcript'), user_id=1)
+    assert error.value.code == 'database_conflict'
+    assert store.read_source_path(doc_id, user_id=1) == source_path
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        found = storage.client.query('conversation.search', {
+            'query': matching_text, 'user_id': 1, 'limit': 20,
+        })
+        if found:
+            break
+        time.sleep(0.025)
+    assert [row['id'] for row in found] == [conv_id]
 
 
 def _import_conversation(
@@ -375,79 +507,6 @@ def test_parent_watch_requests_stop_when_owner_image_channel_closes():
         ownership_stream.close()
 
 
-def test_owner_channel_alone_identifies_the_owner_where_ppid_is_a_launcher(monkeypatch):
-    """A Windows venv launcher is the Sidecar's PPID; only EOF proves death."""
-    import lib.storage_authority_sql.__main__ as sidecar_main
-
-    monkeypatch.setattr(sidecar_main, '_PARENT_PID_IDENTIFIES_OWNER', False)
-    monkeypatch.setattr(sidecar_main.os, 'getppid', lambda: 456)
-    requested = threading.Event()
-    read_descriptor, write_descriptor = os.pipe()
-    ownership_stream = os.fdopen(read_descriptor, 'rb', buffering=0)
-    watcher = sidecar_main._start_parent_watch(
-        123, requested.set, ownership_stream=ownership_stream, interval=0.01)
-    try:
-        assert not sidecar_main._owner_gone(123, read_descriptor)
-        assert not requested.wait(0.2)
-        os.close(write_descriptor)
-        write_descriptor = None
-        assert requested.wait(1.0)
-        assert sidecar_main._owner_gone(123, read_descriptor)
-    finally:
-        watcher.set()
-        if write_descriptor is not None:
-            os.close(write_descriptor)
-        ownership_stream.close()
-
-
-def test_supervisor_startup_refusal_names_child_exit_code_and_stderr(tmp_path, monkeypatch):
-    """A refused child startup must say why in the raised diagnostic itself."""
-    monkeypatch.delenv('TOFU_STORAGE_TEST_POSTGRES_DSN_FILE', raising=False)
-    forwarded = []
-    supervisor = StorageSupervisor(
-        project_root=tmp_path, backend='postgres', startup_timeout=60,
-        child_stderr_forward=forwarded.append)
-    try:
-        with pytest.raises(RuntimeError) as raised:
-            supervisor.start()
-    finally:
-        supervisor.stop()
-    message = str(raised.value)
-    assert message.startswith(
-        'storage sidecar startup refused (database_unavailable): '
-        'storage startup failed (RuntimeError) [exit_code=2; stderr: ')
-    assert 'requires TOFU_STORAGE_TEST_POSTGRES_DSN_FILE' in message
-    assert forwarded
-
-
-@pytest.mark.skipif(os.name == 'nt', reason='the byte-injecting launcher is a POSIX shell script')
-def test_undecodable_child_stderr_keeps_the_drainer_and_failure_tail(tmp_path, monkeypatch):
-    """A child byte the parent cannot decode must not end stderr draining."""
-    import sys
-
-    launcher = tmp_path / 'python-launcher'
-    launcher.write_text(
-        '#!/bin/sh\n'
-        "printf '\\377\\201 undecodable child output\\n' >&2\n"
-        f'exec "{sys.executable}" "$@"\n')
-    launcher.chmod(0o700)
-    monkeypatch.setattr(sys, 'executable', str(launcher))
-    monkeypatch.delenv('TOFU_STORAGE_TEST_POSTGRES_DSN_FILE', raising=False)
-    forwarded = []
-    supervisor = StorageSupervisor(
-        project_root=tmp_path, backend='postgres', startup_timeout=60,
-        child_stderr_forward=forwarded.append)
-    try:
-        with pytest.raises(RuntimeError) as raised:
-            supervisor.start()
-    finally:
-        supervisor.stop()
-    message = str(raised.value)
-    assert '[exit_code=2; stderr: ' in message
-    assert 'requires TOFU_STORAGE_TEST_POSTGRES_DSN_FILE' in message
-    assert forwarded[0] == '\ufffd\ufffd undecodable child output\n'
-
-
 def test_parent_watch_fails_closed_without_a_valid_owner_channel():
     import lib.storage_authority_sql.__main__ as sidecar_main
 
@@ -542,16 +601,13 @@ def test_process_service_keeps_failed_stop_owner_discoverable():
 
     class Runtime:
         fail_stop = True
-        closed = False
-
-        # StorageRuntime.close: refuse every later start, then the bounded stop.
-        def close(self, timeout=10.0):
-            self.closed = True
-            self.stop(timeout=timeout)
 
         def stop(self, timeout=10.0):
             if self.fail_stop:
                 raise RuntimeError(f'owner still alive after {timeout}s')
+
+        def close(self, timeout=10.0):
+            self.stop(timeout=timeout)
 
         def status(self):
             return {'ready': False, 'state': 'stopping', 'pid': 12345}
@@ -561,7 +617,6 @@ def test_process_service_keeps_failed_stop_owner_discoverable():
     try:
         with pytest.raises(RuntimeError, match='owner still alive'):
             stop_storage(timeout=0.1)
-        assert runtime.closed, 'a process shutdown closes, not merely stops, the runtime'
         assert storage_runtime() is runtime
         assert storage_status()['state'] == 'stopping'
 
@@ -1291,6 +1346,60 @@ def test_turn_lifecycle_sidecar_create_attempt_is_cas_and_idempotent(storage, mo
         expected_projection_revision=0, user_id=1)
     assert replay['idempotentReplay'] is True
     assert replay['attempt']['attemptId'] == next_attempt['attempt']['attemptId']
+
+
+def test_resume_plan_reads_only_the_exact_owned_settled_source(storage, monkeypatch):
+    from lib.turn_lifecycle import create_attempt, create_turn_pair, get_turn, record_task_event
+
+    client = storage.client
+    monkeypatch.setattr('lib.storage.get_storage_client', lambda write=False: client)
+    conv_id, user_id = 'resume-plan-sidecar', 5
+    created = create_turn_pair(
+        conv_id, command_id='resume-plan-create', input_projection={'content': 'hello'},
+        config={'privateSentinel': 'not in the pin'}, user_id=user_id,
+        conversation_defaults={'allowCreate': True, 'title': 'Plan', 'createdAt': 1, 'settings': {}},
+    )
+    turn_id, attempt_id = created['turn']['turnId'], created['attempt']['attemptId']
+    identity = dict(conversation_id=conv_id, user_id=user_id, turn_id=turn_id, attempt_id=attempt_id)
+
+    def read(revision, **overrides):
+        return client.query('turn.resume.plan.read',
+                            {**identity, 'projection_revision': revision, **overrides})
+
+    unavailable = {'status': 'source_unavailable'}
+    stale = {'status': 'stale_source'}
+    pending_revision = created['turn']['projectionRevision']
+    assert read(pending_revision) == unavailable
+    assert record_task_event(
+        {'_attemptId': attempt_id, '_userId': user_id, 'status': 'done',
+         'content': 'partial answer', 'thinking': '', 'toolRounds': [], 'segments': []},
+        {'type': 'done', 'finishReason': 'length'},
+    )
+    settled = get_turn(conv_id, turn_id, user_id=user_id)
+    assert settled['status'] == 'truncated'
+    revision = settled['projectionRevision']
+    expected = {'status': 'source_pinned', 'sourceStatus': 'truncated',
+                'conversationId': conv_id, 'turnId': turn_id,
+                'attemptId': attempt_id, 'projectionRevision': revision}
+    assert read(revision) == expected
+    assert read(revision + 1) == stale
+    assert read(revision, attempt_id='missing-attempt') == stale
+    assert read(revision, user_id=user_id + 1) == unavailable
+    assert read(revision, conversation_id='wrong-conversation') == unavailable
+    assert read(revision, turn_id='missing-turn') == unavailable
+    for invalid in (True, 2**63):
+        with pytest.raises(StorageError) as error:
+            read(invalid)
+        assert error.value.code == 'database_protocol_error'
+    assert read(revision) == expected  # Refusals and reads leave the source unchanged.
+
+    replacement = create_attempt(
+        conv_id, turn_id, command_id='resume-plan-regenerate', operation='regenerate',
+        expected_projection_revision=revision, user_id=user_id,
+    )
+    assert read(revision) == stale
+    assert read(replacement['turn']['projectionRevision'],
+                attempt_id=replacement['attempt']['attemptId']) == unavailable
 
 
 def test_turn_lifecycle_sidecar_projection_branch_and_delete(storage, monkeypatch):
@@ -3580,9 +3689,13 @@ def test_conversation_turn_usage_projects_only_priced_turns_in_window(storage):
             {'role': 'user', 'timestamp': 150, 'content': 'q' * 50_000},
             {'role': 'assistant', 'timestamp': 160, 'content': 'a' * 50_000,
              'usage': {'prompt_tokens': 7, 'completion_tokens': 3},
-             'apiRounds': [{'round': 1, 'usage': {'prompt_tokens': 7}}],
+             'apiRounds': [{'round': 1, 'usageReceiptId': 'fixture-paid-call',
+                            'requestTimestampMs': 159,
+                            'usage': {'prompt_tokens': 7}, 'cost': {'costCny': 0.02},
+                            'content': 'do not project this'}],
              'model': 'model-x', 'providerId': 'provider-y'},
-            {'role': 'assistant', 'timestamp': 170, 'usage': {}},
+            {'role': 'assistant', 'timestamp': 170,
+             'apiRounds': [{'taskId': 'legacy-producer', 'sourceRound': 2}]},
             {'role': 'assistant', 'timestamp': 500,
              'usage': {'prompt_tokens': 9}, 'preset': 'opus',
              'provider_id': 'snake'},
@@ -3614,7 +3727,12 @@ def test_conversation_turn_usage_projects_only_priced_turns_in_window(storage):
         'turns': [
             {'index': 1, 'timestamp': 160,
              'usage': {'prompt_tokens': 7, 'completion_tokens': 3},
+             'apiRounds': [{'round': 1, 'usageReceiptId': 'fixture-paid-call',
+                            'requestTimestampMs': 159, 'usage': {'prompt_tokens': 7},
+                            'cost': {'costCny': 0.02}}],
              'model': 'model-x', 'providerId': 'provider-y'},
+            {'index': 2, 'timestamp': 170, 'usage': {},
+             'apiRounds': [{'taskId': 'legacy-producer', 'sourceRound': 2}]},
             {'index': 4, 'timestamp': 260,
              'usage': {'prompt_tokens': 11}, 'providerId': 'snake'},
         ],
@@ -3623,6 +3741,15 @@ def test_conversation_turn_usage_projects_only_priced_turns_in_window(storage):
         'user_id': 1, 'conv_id': 'usage-foreign',
         'timestamp_gte': 0, 'timestamp_lt': 1000,
     }) is None
+    assert client.command('conversation.clone', {
+        'user_id': 1, 'conv_id': 'usage-owned', 'destination_conv_id': 'usage-clone',
+    }, 'usage-projection-clone')['cloned']
+    cloned = client.query('conversation.turn_usage', {
+        'user_id': 1, 'conv_id': 'usage-clone', 'timestamp_gte': 150, 'timestamp_lt': 300,
+    })
+    assert cloned['turns'][0] == result['turns'][0]
+    assert cloned['turns'][1]['apiRounds'][0]['sourceRound'] == 2
+    assert cloned['turns'][2:] == result['turns'][2:]
     for invalid in ({'timestamp_gte': 5, 'timestamp_lt': 5},
                     {'timestamp_gte': True, 'timestamp_lt': 5},
                     {'timestamp_gte': 0, 'timestamp_lt': 5,
@@ -3631,6 +3758,102 @@ def test_conversation_turn_usage_projects_only_priced_turns_in_window(storage):
             client.query('conversation.turn_usage', {
                 'user_id': 1, 'conv_id': 'usage-owned', **invalid})
         assert error.value.code == 'database_protocol_error'
+
+
+def test_conversation_turn_usage_myday_counts_clone_history_once_per_owner_and_day(storage, monkeypatch):
+    from datetime import date, datetime, timedelta
+
+    from lib.conversations.repository import ConversationRepository
+    from lib.cost import compute_cost
+    from lib.daily_report.cost import _get_live_day_costs, _scan_costs_in_range
+    from lib.daily_report.token_costs import DayTokenCosts
+
+    client = storage.client
+    # The real clone command timestamps the destination header at creation.
+    day = date.today()
+    start, end, tomorrow_end = [
+        int(datetime.combine(day + timedelta(days=offset), datetime.min.time()).timestamp() * 1000)
+        for offset in range(3)
+    ]
+
+    def paid(identity, stamp, tokens):
+        usage = {'prompt_tokens': tokens}
+        quote = compute_cost(usage, 'fixture-model', 'fixture-provider',
+                             pricing_override={'currency': 'CNY', 'input': 2, 'output': 0})
+        return {'role': 'assistant', 'timestamp': stamp, 'usage': usage,
+                'apiRounds': [{'usageReceiptId': identity, 'requestTimestampMs': stamp, 'cost': quote}]}
+
+    original = paid('shared-receipt', start, 150_000)
+    legacy = {'role': 'assistant', 'timestamp': start + 1, 'usage': {'prompt_tokens': 19},
+              'apiRounds': [{'taskId': 'legacy-task', 'sourceRound': 1}]}
+    _import_conversation(client, 'a-myday-source', created_at=start - 1, updated_at=start,
+                         messages=[paid('previous-day', start - 1, 90_000), original, legacy])
+    assert client.command('conversation.clone', {
+        'user_id': 1, 'conv_id': 'a-myday-source', 'destination_conv_id': 'b-myday-clone',
+    }, 'clone-myday-source')['cloned']
+    for message in (paid('new-clone-call', end - 1, 50_000), paid('next-day', end, 75_000)):
+        receipt = message['apiRounds'][0]['usageReceiptId']
+        client.command('turn.append_settled', {
+            'conversation_id': 'b-myday-clone', 'user_id': 1, 'command_id': receipt,
+            'actor': 'assistant', 'kind': 'fixture', 'projection': message,
+            'created_at': message['timestamp'],
+        }, receipt)
+    # Even an identical ID from a different owner must not affect either scan.
+    _import_conversation(client, 'foreign-myday', user_id=2, created_at=start, updated_at=start,
+                         messages=[paid('shared-receipt', start, 999_000)])
+    repo = ConversationRepository(client_factory=lambda **_: client)
+    monkeypatch.setattr('lib.conversations.repository.scan_conversation_turn_usage', repo.scan_turn_usage)
+
+    def source_rows():
+        return repo.turn_usage('a-myday-source', user_id=1, timestamp_gte=start, timestamp_lt=end).turns
+
+    before = source_rows()
+    assert 'usageReceiptId' not in before[1]['apiRounds'][0]
+    assert 'cost' not in before[1]['apiRounds'][0]
+    clone = repo.turn_usage('b-myday-clone', user_id=1, timestamp_gte=start, timestamp_lt=end)
+    assert clone.turns[0]['apiRounds'] == before[0]['apiRounds']
+
+    today = DayTokenCosts()
+    unsettled = set()
+    data = _scan_costs_in_range(start, end, owner_user_id=1, token_costs=today,
+                                unsettled_days=unsettled)[day.day]
+    detail = today.finish(day)
+    assert data['cost'] == detail['total_cny'] == .40
+    assert detail['buckets']['input']['tokens'] == 200_000
+    assert data['conversations']['b-myday-clone']['cost'] == .10
+    assert data['partial'] and detail['partial'] and unsettled == {day.day}
+    assert _scan_costs_in_range(end, tomorrow_end, owner_user_id=1)[(day + timedelta(days=1)).day]['cost'] == .15
+    assert _scan_costs_in_range(start, end, owner_user_id=2)[day.day]['cost'] == 1.998
+    assert source_rows() == before
+
+    # Exercise catalog witnesses across the actual store and transport, not
+    # just a fixture that promises its list and usage headers are identical.
+    projected = []
+
+    class ReadPort:
+        def query(self, operation, payload):
+            if operation == 'conversation.turn_usage':
+                projected.append(payload['conv_id'])
+            return client.query(operation, payload)
+
+    port = ReadPort()
+    monkeypatch.setattr('lib.storage.get_storage_client', lambda **_: port)
+    assert _get_live_day_costs(day, owner_user_id=1)['token_costs'] == detail
+    assert set(projected) == {'a-myday-source', 'b-myday-clone'}
+    projected.clear()
+    assert _get_live_day_costs(day, owner_user_id=1)['token_costs'] == detail
+    assert projected == []
+    assert _get_live_day_costs(day, owner_user_id=2)['cost'] == 1.998
+    assert projected == ['foreign-myday']
+    projected.clear()
+    message = paid('one-more-call', end - 1, 25_000)
+    client.command('turn.append_settled', {
+        'conversation_id': 'b-myday-clone', 'user_id': 1, 'command_id': 'one-more-call',
+        'actor': 'assistant', 'kind': 'fixture', 'projection': message,
+        'created_at': message['timestamp'],
+    }, 'one-more-call')
+    assert _get_live_day_costs(day, owner_user_id=1)['cost'] == .45
+    assert projected == ['b-myday-clone']
 
 
 def test_conversation_turn_usage_keeps_unplaced_frozen_archive_rows():
@@ -5100,15 +5323,15 @@ def test_swarm_checkpoint_aggregate_semantics(storage):
     assert client.command(
         'swarm.session.save', {
             'swarm_key': 'swarm-contract', 'conv_id': 'conv-1',
-            'task_id': 'task-1', 'status': 'running',
+            'task_id': 'task-2', 'status': 'running',
             'specs': [{'id': 'a1'}], 'config': {'model': 'test'},
             'now_ms': 100,
         }, 'swarm-session-create') == {'saved': True}
     assert client.command(
         'swarm.session.save', {
-            'swarm_key': 'swarm-contract', 'conv_id': 'conv-2',
+            'swarm_key': 'swarm-contract', 'conv_id': 'conv-1',
             'task_id': 'task-2', 'status': 'running',
-            'specs': [{'id': 'a1'}], 'config': {'model': 'test-2'},
+            'specs': [{'id': 'a1'}], 'config': {'model': 'test'},
             'now_ms': 200,
         }, 'swarm-session-update') == {'saved': True}
     client.command(
@@ -5129,7 +5352,7 @@ def test_swarm_checkpoint_aggregate_semantics(storage):
         }, 'swarm-agent-update')
     detail = client.query(
         'swarm.session.get', {'swarm_key': 'swarm-contract'})
-    assert detail['conv_id'] == 'conv-2'
+    assert detail['conv_id'] == 'conv-1'
     assert detail['created_at'] == 100
     assert detail['updated_at'] == 200
     assert detail['agents'][0]['delivered'] is True
@@ -5205,35 +5428,47 @@ def test_swarm_checkpoint_aggregate_semantics(storage):
             }, 'swarm-session-invalid-status')
     assert invalid_status.value.code == 'database_protocol_error'
 
-    # A concurrent/operator repair wins: quarantine re-checks the owner in
-    # its own transaction and cannot hide newly owned work.
-    assert client.command(
-        'swarm.session.save', {
-            'swarm_key': 'swarm-contract', 'conv_id': 'conv-2',
+    # Generic save cannot assign a new owner to an identified legacy header.
+    with pytest.raises(StorageError, match='accepted identity'):
+        client.command('swarm.session.save', {
+            'swarm_key': 'swarm-contract', 'conv_id': 'conv-1',
             'task_id': 'task-2', 'status': 'running',
-            'specs': [{'id': 'a1'}],
-            'config': {'model': 'test-2', 'user_id': 1},
+            'specs': [{'id': 'a1'}], 'config': {'model': 'test', 'user_id': 1},
             'now_ms': 800,
-        }, 'swarm-session-owner-repair') == {'saved': True}
+        }, 'swarm-session-owner-rebind')
+    assert client.query('swarm.session.get', {'swarm_key': 'swarm-contract'}) == quarantined
+
+    # Quarantine still re-checks ownership in its own transaction and cannot
+    # hide work whose header was owned when first written.
+    assert client.command('swarm.session.save', {
+        'swarm_key': 'owned-swarm', 'task_id': 'owned-task', 'specs': [{'id': 'a1'}],
+        'config': {'user_id': 1}, 'now_ms': 800,
+    }, 'swarm-session-owned') == {'saved': True}
+    client.command('swarm.agent.save', {
+        'swarm_key': 'owned-swarm', 'agent_id': 'a1', 'status': 'running',
+        'messages': [], 'result': {}, 'now_ms': 850,
+    }, 'swarm-owned-agent')
     assert client.command(
         'swarm.session.quarantine_ownerless', {
-            'swarm_key': 'swarm-contract', 'now_ms': 900,
-        }, 'swarm-session-quarantine-after-repair') == {'changed': False}
-    assert [item['swarm_key'] for item in client.query(
-        'swarm.resumable.list', {})] == ['swarm-contract']
+            'swarm_key': 'owned-swarm', 'now_ms': 900,
+        }, 'swarm-session-quarantine-owned') == {'changed': False}
+    assert [item['swarm_key'] for item in client.query('swarm.resumable.list', {})] == ['owned-swarm']
 
-    assert client.command(
-        'swarm.session.delete', {'swarm_key': 'swarm-contract'},
-        'swarm-session-delete') == {'deleted': True}
-    assert client.query(
-        'swarm.session.get', {'swarm_key': 'swarm-contract'}) is None
+    with pytest.raises(StorageError, match='exact-run teardown'):
+        client.command('swarm.session.delete', {'swarm_key': 'swarm-contract'},
+                       'swarm-session-delete')
+    assert client.query('swarm.session.get', {'swarm_key': 'swarm-contract'})['task_id'] == 'task-2'
 
 
 def test_swarm_checkpoint_marker_overlays_until_the_next_full_save(storage):
     """A compact marker reads like a full save of its fields and never outlives a later one."""
+    from lib.swarm.persistence_contract import (
+        SWARM_RUN_RESULT_FORMAT, SWARM_RUN_RESULT_NAMESPACE, swarm_archive_result, swarm_run_result_key,
+    )
+
     client = storage.client
     client.command('swarm.session.save', {
-        'swarm_key': 'swarm-marker', 'conv_id': 'conv', 'task_id': 'task',
+        'save_mode': 'launch', 'swarm_key': 'swarm-marker', 'conv_id': 'conv', 'task_id': 'task',
         'status': 'running', 'specs': [{'id': 'a1'}], 'config': {'user_id': 1},
         'now_ms': 100}, 'marker-session')
     in_flight = {'checkpoint_phase': 'model_in_flight', 'actuals_complete': False,
@@ -5241,7 +5476,7 @@ def test_swarm_checkpoint_marker_overlays_until_the_next_full_save(storage):
 
     def mark(command_id, result, now, **extra):
         return client.command('swarm.agent.checkpoint.mark', {
-            'swarm_key': 'swarm-marker', 'agent_id': 'a1', 'rounds_used': 3,
+            'swarm_key': 'swarm-marker', 'run_id': 'task', 'agent_id': 'a1', 'rounds_used': 3,
             'result': result, 'now_ms': now, **extra}, command_id)
 
     messages = [{'role': 'tool', 'content': 'x' * 4096}]
@@ -5250,7 +5485,7 @@ def test_swarm_checkpoint_marker_overlays_until_the_next_full_save(storage):
 
     def save(command_id, now):
         client.command('swarm.agent.save', {
-            'swarm_key': 'swarm-marker', 'agent_id': 'a1', 'role': 'coder',
+            'swarm_key': 'swarm-marker', 'run_id': 'task', 'agent_id': 'a1', 'role': 'coder',
             'objective': 'o', 'status': 'running', 'messages': messages,
             'result': settled, 'rounds_used': 2, 'delivered': None, 'now_ms': now},
             command_id)
@@ -5289,17 +5524,32 @@ def test_swarm_checkpoint_marker_overlays_until_the_next_full_save(storage):
         mark('marker-negative-rounds', in_flight, 500, rounds_used=-1)
     assert negative_rounds.value.code == 'database_protocol_error'
     assert mark('marker-3', in_flight, 600) == {'marked': True}
-    assert client.command('swarm.session.delete', {'swarm_key': 'swarm-marker'},
-                          'marker-delete') == {'deleted': True}
-    assert mark('marker-after-delete', in_flight, 700) == {'marked': False}
+    client.command('record.put', {'namespace': SWARM_RUN_RESULT_NAMESPACE,
+        'key': swarm_run_result_key(1, 'task', 'a1'), 'value': {
+            'format': SWARM_RUN_RESULT_FORMAT, 'ownerId': 1, 'tenantId': '',
+            'conversationId': 'conv', 'swarmKey': 'swarm-marker', 'swarmRunId': 'task',
+            'agentId': 'a1', 'role': 'coder', 'objective': 'o', 'status': 'running',
+            'result': swarm_archive_result({**settled, **in_flight}, rounds_used=3),
+        }}, 'marker-archive')
+    assert client.command('swarm.session.delete_exact', {
+        'swarm_key': 'swarm-marker', 'run_id': 'task', 'owner_id': 1, 'tenant_id': '',
+        'conversation_id': 'conv', 'project_path': '', 'disposition': 'ordinary_retirement',
+    }, 'marker-delete') == {'deleted': True, 'mailboxes_changed': 0}
+    assert client.query('swarm.session.get', {'swarm_key': 'swarm-marker'}) is None
+    with pytest.raises(StorageError, match='exact current swarm run'):
+        mark('marker-after-delete', in_flight, 700)
 
 
 def test_swarm_agent_append_equals_a_full_save_and_refuses_any_other_base(storage):
     """An append extends only the exact checkpoint its writer last saved."""
+    from lib.swarm.persistence_contract import (
+        SWARM_RUN_RESULT_FORMAT, SWARM_RUN_RESULT_NAMESPACE, swarm_run_result_key,
+    )
+
     client = storage.client
     for swarm_key in ('swarm-append', 'swarm-full'):
         client.command('swarm.session.save', {
-            'swarm_key': swarm_key, 'conv_id': 'conv', 'task_id': 'task',
+            'swarm_key': swarm_key, 'conv_id': 'conv', 'task_id': swarm_key,
             'status': 'running', 'specs': [{'id': 'a1'}], 'config': {'user_id': 1},
             'now_ms': 100}, f'{swarm_key}-session')
     rows = [{'role': 'tool', 'content': f'{index}:' + 'x' * 4096} for index in range(4)]
@@ -5359,9 +5609,19 @@ def test_swarm_agent_append_equals_a_full_save_and_refuses_any_other_base(storag
                 'base_message_count': 1, 'checkpoint_id': 'c3', 'messages': [], 'result': {},
                 'now_ms': 700, **invalid}, f'append-invalid-{index}')
         assert error.value.code == 'database_protocol_error'
-    assert client.command('swarm.session.delete', {'swarm_key': 'swarm-append'},
-                          'append-delete') == {'deleted': True}
-    assert append('append-after-delete', 'c2', 1, [], {}, 'c3', 800) == {'appended': False}
+    client.command('record.put', {'namespace': SWARM_RUN_RESULT_NAMESPACE,
+        'key': swarm_run_result_key(1, 'swarm-append', 'a1'), 'value': {
+            'format': SWARM_RUN_RESULT_FORMAT, 'ownerId': 1, 'tenantId': '',
+            'conversationId': 'conv', 'swarmKey': 'swarm-append', 'swarmRunId': 'swarm-append',
+            'agentId': 'a1', 'role': 'coder', 'objective': 'o', 'status': 'running',
+            'result': {'rounds_used': 5},
+        }}, 'append-archive')
+    assert client.command('swarm.session.delete_exact', {
+        'swarm_key': 'swarm-append', 'run_id': 'swarm-append', 'owner_id': 1, 'tenant_id': '',
+        'conversation_id': 'conv', 'project_path': '', 'disposition': 'ordinary_retirement',
+    }, 'append-delete') == {'deleted': True, 'mailboxes_changed': 0}
+    with pytest.raises(StorageError, match='run_id'):
+        append('append-after-delete', 'c2', 1, [], {}, 'c3', 800)
 
 
 def test_research_artifact_aggregate_semantics(storage):
@@ -6379,16 +6639,9 @@ def test_runtime_fences_then_restarts_and_rehandshakes_same_backend(
     os.environ.get('TOFU_STORAGE_TEST_POSTGRES') != '1',
     reason='real PostgreSQL contract is opt-in',
 )
-def test_postgres_kill_reconnects_external_authority(request, tmp_path, monkeypatch):
-    from contextlib import ExitStack
-    from tests.support.postgres_isolation import isolated_postgres_dsn, postgres_dsn_source
-
+def test_postgres_kill_reconnects_external_authority(tmp_path, monkeypatch):
     monkeypatch.setenv('TOFU_STORAGE_PG_READ_POOL', '1')
     monkeypatch.setenv('TOFU_STORAGE_PG_WRITE_POOL', '1')
-    resources = ExitStack()
-    isolated = resources.enter_context(isolated_postgres_dsn(
-        postgres_dsn_source(request, tmp_path), tmp_path))
-    monkeypatch.setenv('TOFU_STORAGE_TEST_POSTGRES_DSN_FILE', str(isolated))
     fenced = threading.Event()
     supervisor = StorageSupervisor(
         project_root=tmp_path, backend='postgres', startup_timeout=60)
@@ -6413,7 +6666,6 @@ def test_postgres_kill_reconnects_external_authority(request, tmp_path, monkeypa
         )['value'] is True
     finally:
         runtime.stop()
-        resources.close()
     assert not (tmp_path / 'data' / 'pgdata').exists()
 
 

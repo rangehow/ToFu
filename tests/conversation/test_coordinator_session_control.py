@@ -309,6 +309,77 @@ def test_a_project_lead_acts_on_another_projects_session_under_the_full_delegati
     assert s.turns.get_attempt(resumed['attempt']['attemptId'], user_id=1)['status'] in {'pending', 'running'}
 
 
+def test_owner_sets_model_without_a_delegation_marker(session_runtime, approvals, monkeypatch):
+    from lib.conversations import session_model
+    from lib.project_dispatch import delegation
+
+    s, gate = session_runtime, approvals
+    monkeypatch.setattr(delegation, 'admit_worker_model', lambda owner, model, **kwargs: model)
+    args = {**s.args, 'action': 'set_model', 'model': 'next-model', 'reason': 'Switch the next attempt'}
+    result = s.call('control_conversation', args)
+    assert result['model'] == 'next-model' and result['execution_started'] is False
+    assert not s.started and gate.delegated_actions(1) == []
+    denied = s.call('control_conversation', {**args, 'conversation_id': 'unavailable'})
+    assert 'not found in this owner scope' in denied['error']
+    assert session_model.session_model('session', owner=1) == 'next-model'
+    assert s.turns.get_attempt(args['attempt_id'], user_id=1, include_execution_config=True)[
+        'config']['model'] == 'target-model'
+
+
+def test_lead_sets_model_under_the_live_full_grant_without_a_marker(
+        session_runtime, approvals, monkeypatch, tmp_path):
+    from lib.conversations import project_coordination, session_model
+    from lib.conversations.project_messages import ProjectMailbox
+    from lib.project_dispatch import delegation
+    from lib.router.contract import validate
+
+    s, gate = session_runtime, approvals
+    project, target = _interrupted_in_another_project(s, tmp_path)
+    monkeypatch.setattr(project_coordination, 'ProjectCoordinationRepository',
+        lambda owner, **kwargs: SimpleNamespace(read=lambda path: {
+            'availability': 'available', 'revision': 1, 'projectPath': path,
+            'conversationId': 'helped-lead' if path == project else 'coordinator'}))
+    s.task.update(_attended=False, _principalContext=PrincipalContext.system(
+        subject_id='wake', owner_user_id=1, scopes={'chat'}).to_payload())
+    writes = []
+    monkeypatch.setattr(delegation, 'admit_worker_model', lambda owner, model, **kw: writes.append(model) or model)
+    args = {'action': 'set_model', 'conversation_id': 'helped', 'turn_id': target['turnId'],
+            'attempt_id': target['currentAttemptId'], 'idempotency_key': 'next-model',
+            'model': 'next-model', 'reason': 'Switch the next attempt'}
+    def unexpected_approval(*args, **kwargs):
+        pytest.fail('Standing delegation must not create or consume a human approval')
+
+    for name in ('create_request', 'decide', 'consume', 'consume_any'):
+        monkeypatch.setattr(gate, name, unexpected_approval)
+
+    def call(**overrides):
+        return s.call('control_conversation', {**args, **overrides})
+
+    assert call()['code'] == 'owner_delegation_not_granted'
+    assert not writes and not gate.delegated_actions(1)
+    grant = gate.set_delegation(1, True, provenance=HUMAN_UI, grantee={
+        'kind': 'global_router', 'conversationId': 'router', 'bindingRevision': 1, 'tenant': None})
+    result = call()
+    assert result['model'] == 'next-model' and result['execution_started'] is False
+    assert result['target_lead_notified'] == 'helped-lead'
+    [action] = gate.delegated_actions(1)
+    validate(action, 'ownerDelegatedAction')
+    assert (action['id'], action['grantRevision'], action['scope'], action['status']) == (
+        result['owner_delegation_action_id'], grant['revision'], 'conversation_control', 'completed')
+    assert action['requester']['kind'] == 'project_lead'
+    assert action['trigger']['kind'] == 'owner_delegation'
+    assert (action['target']['path'], action['target']['model'], action['reason']) == (
+        project, 'next-model', args['reason'])
+    assert call()['owner_delegation_action_id'] == action['id']
+    assert len(ProjectMailbox(1, project, 'helped-lead').page('')['messages']) == 1
+    explicit = call(idempotency_key='explicit-missing-trigger', owner_delegation={'reason': args['reason']})
+    assert explicit['code'] == 'owner_delegation_trigger_missing'
+    gate.set_delegation(1, False, provenance=HUMAN_UI, grantee=None)
+    assert call()['code'] == 'owner_delegation_not_granted'
+    assert writes == ['next-model'] and not s.started
+    assert session_model.session_model('helped', owner=1) == 'next-model'
+
+
 @pytest.fixture
 def tool_checkpoint_session(storage, monkeypatch, tmp_path):
     """A long turn that failed on a provider 402 after real tool rounds.

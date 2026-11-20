@@ -41,7 +41,7 @@ class _Repository:
     def __init__(self, rows, paused, verdicts=None):
         self.rows, self.paused, self.verdicts = rows, paused, verdicts or {}
 
-    def discover(self):
+    def discover(self, *, recipient_id=None):
         return self.rows, set()
 
     def read_attempts(self, attempt_ids):

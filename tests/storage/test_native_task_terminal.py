@@ -896,6 +896,31 @@ def test_real_native_route_commits_application_terminal(application_storage, mon
     if outcome=='native_cost':
         assert [row['nativeCredits']['total'] for row in turn['projection']['apiRounds']]==[31,31]
         assert turn['projection']['cost']['costUsd']==.0001
+        receipts = [row['usageReceiptId'] for row in turn['projection']['apiRounds']]
+        assert len(set(receipts)) == 2 and all(value.startswith('native:') for value in receipts)
+        destination = f'cost-clone-{uuid.uuid4().hex}'
+        cloned = application_storage.command('conversation.clone', {
+            'conv_id': conv_id, 'destination_conv_id': destination,
+            'user_id': owner_id,
+        }, f'native-receipt-clone:{destination}')
+        assert cloned['cloned']
+        usage = application_storage.query('conversation.turn_usage', {
+            'conv_id': destination, 'user_id': owner_id, 'timestamp_gte': 0,
+            'timestamp_lt': 2**63 - 1,
+        })
+        assert [row['usageReceiptId'] for row in usage['turns'][-1]['apiRounds']] == receipts
+        application_storage.command('turn.append_settled', {
+            'conversation_id': destination, 'user_id': owner_id,
+            'command_id': 'receipt-only-turn', 'actor': 'assistant', 'kind': 'fixture',
+            'projection': {'apiRounds': [{'taskId': 'legacy-producer', 'sourceRound': 2}]},
+            'created_at': int(time.time() * 1000),
+        }, f'receipt-only:{destination}')
+        rows = application_storage.query('conversation.turn_usage', {
+            'conv_id': destination, 'user_id': owner_id, 'timestamp_gte': 0,
+            'timestamp_lt': 2**63 - 1,
+        })['turns']
+        assert rows[-1]['usage'] == {}
+        assert rows[-1]['apiRounds'] == [{'taskId': 'legacy-producer', 'sourceRound': 2}]
         from lib.billing import deposit, reserve, get_balance, list_entries
         from lib.billing.request_flow import settle_task
         stored=application_storage.query('task_results.replay_get',

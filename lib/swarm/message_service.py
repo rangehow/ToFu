@@ -113,7 +113,7 @@ def send(task: dict, args: dict, session, *,
     binding = (coordinator_binding(session) if coordinator else
                binding_for(session._parent_task_proxy, spec, session.inbox_key, run_id=session.task_id))
     validate_target(binding)
-    repository = RunMessageRepository(binding)
+    repository = RunMessageRepository(binding, checkpoint_writer_epoch=getattr(session, '_checkpoint_writer_epoch', 0))
     def active():
         validate_target(binding)
         # Recheck the live caller after scope validation and before mailbox CAS.
@@ -177,7 +177,7 @@ def _uncreated_mailbox_binding(task: dict, agent_id: str, run_id: str,
             spec = next((item for item in session.specs if item.id == agent_id), None)
         parent = session._parent_task_proxy
     else:
-        row = load_session(key, required=True)
+        row = load_session(key, required=True, include_agents=False)
         config = (row or {}).get('config') or {}
         parent_cfg = config.get('parent_cfg') or {}
         if (row is None or row.get('task_id') != run_id
@@ -220,7 +220,7 @@ def read(task: dict, args: dict) -> dict:
     validate_target(binding, active_retained=False)
     repository = RunMessageRepository(binding)
     from lib.swarm.persistence import load_session
-    execution = load_session(binding['swarmKey'], required=True)
+    execution = load_session(binding['swarmKey'], required=True, agent_id=agent_id)
     ended = False
     if execution is not None and execution.get('task_id') == run_id:
         ended = execution.get('status') in {'terminated', 'quarantined', 'cancelled'} or any(

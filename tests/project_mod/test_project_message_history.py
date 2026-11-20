@@ -139,6 +139,15 @@ def test_many_segments_page_back_completely_with_stable_cursors(setup):
     assert all(setup.mailbox.get(m['id']) == m for m in history)
 
 
+def test_incoming_target_cannot_redirect_a_mailbox_read(setup):
+    original = send(setup, 'alpha', 'only the recipient should see this')
+    supplied_target = {'direction': 'incoming', 'conversation_id': 'recipient'}
+    view = pm.execute('get_project_messages', supplied_target, setup.task('alpha'))
+    assert view['conversation_id'] == 'alpha' and view['messages'] == []
+    owned = pm.execute('get_project_messages', {}, setup.task('recipient'))
+    assert [row['id'] for row in owned['messages']] == [original['id']]
+
+
 def test_outgoing_history_follows_one_sender_across_segments(setup):
     mine, theirs = [], []
     for i in range(120):

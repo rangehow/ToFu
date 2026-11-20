@@ -48,7 +48,6 @@ import subprocess
 import sys
 
 import pytest
-from tests.support.export_toolchain import require_export_toolchain
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -69,31 +68,36 @@ _EXTRA_KEEPERS = {
     # Tests of other opensource-excluded private modules
     # (export_pkg._lists._OPENSOURCE_EXCLUDE_PATHS) stay private with them.
     'tests/router/test_watchdog_compute_patrol.py',
-    'tests/router/test_router_home_hope_seed.py',
     'tests/export/test_export_git_reads.py',
+    # Tests of export_pkg's private structure/content/preflight owners; the
+    # package never ships, so its tests stay private with it.
+    'tests/export/test_export_content.py',
+    'tests/export/test_export_preflight.py',
+    'tests/export/test_export_structure.py',
     'tests/evaluations/test_yourprovider_sandbox_score.py',
-    'tests/evaluations/test_owner_memory_action_time.py',
     'tests/evaluations/test_owner_memory_benchmark.py',
     'tests/evaluations/test_owner_memory_failure_selection.py',
     'tests/evaluations/test_owner_memory_midtask.py',
     'tests/evaluations/test_owner_memory_phase1_cost.py',
     'tests/evaluations/test_owner_memory_replay.py',
-    'tests/evaluations/test_owner_memory_scale.py',
     'tests/evaluations/test_owner_memory_triggers.py',
-    # Load host-only eval-matrix tools from this site's .eval-runs tree.
+    'tests/deploy/test_migrate_host.py',
+    # Cargo/dev tooling lives under the opensource-excluded scripts/ tree; its
+    # tests stay private with it instead of shipping dangling imports.
+    'tests/meta/test_cargo_footprint.py',
+    'tests/meta/test_remote_cargo.py',
+    # Terminal-Bench lane specs load this host's .eval-runs/eval-matrix-* tools;
+    # those lane tools never ship, so the specs stay private with them.
     'tests/evaluations/test_tb_batch_report.py',
     'tests/evaluations/test_tb_em3_watch.py',
     'tests/evaluations/test_tb_evidence_scan.py',
     'tests/evaluations/test_tb_key_stop_guard.py',
     'tests/evaluations/test_tb_night_window_6672.py',
     'tests/evaluations/test_tb_watch_relay_auth.py',
-    # A private conversation's recording; the private dx channel overlay.
-    'tests/e2e/test_e2e_turn16_replay_diag.py',
-    'tests/visual/test_visual_dx_settings_tab.py',
-    'tests/deploy/test_migrate_host.py',
-    'tests/deploy/test_verify_checkout_view.py',
-    # Verifies the internal-only bundles/yourprovider/skills source, absent publicly.
-    'tests/skills/test_internal_platform_bundle.py',
+    # Exact private pilot CLI refusal stays mandatory in the internal unit tier.
+    'tests/longform/test_research_loop_cli.py',
+    # Exact private document/contract CLI tests stay mandatory in the unit tier.
+    'tests/production/test_deliverable_cli.py',
     # Portable diagnostic dependencies are owned by the public keep-list;
     # this set contains only deliberately private source.
     'export.py',                                 # export infra (sanitization patterns)
@@ -134,6 +138,11 @@ _EXTRA_KEEPERS = {
     # is useless to a public checkout, but the postmortems it prevents are
     # ours, so it stays tracked here and out of _OPENSOURCE_KEEP_FILES.
     'scripts/release_open.sh',
+    # Root-level members of the figure/table audit bundle. The ZIP holds the
+    # same unsanitizable PDF bytes as figure-table-audit/; the probe is audit
+    # tooling pinned to a private evaluation root.
+    'figure-table-audit-evidence.zip',
+    'figure_table_audit_probe.py',
     # ── Internal-only tooling: tracked on purpose, never public ─────────────
     # Syncs our template to the SSO-gated ModelPlaza catalog; exercised only by
     # the internal bundles/yourprovider tier, useless to a public checkout.
@@ -156,7 +165,6 @@ _EXTRA_KEEPERS = {
     'scripts/benchmark_verification.py',
     'scripts/lane.py',
     'scripts/migrate_host.py',  # names this site's proxy hosts; private with its test
-    'scripts/verify_checkout_view.py',  # host-move FUSE checkout audit; private with its test
     'scripts/inspect_context.py',
     'scripts/gen_command_control.py',
     # It path-loads scripts/lane.py above, a shared-checkout development
@@ -200,9 +208,6 @@ _KEEPER_PREFIXES = (
     # OPENSOURCE_EXTRA_EXCLUDE_DIRS.
     'bundles/',
     'static/icons/_gen/tofu-pet/_candidates/',
-    # Rust-rewrite time-breakdown evidence (01f61406be): live measurements of
-    # this host (its paths and accounts), private like benchmarks/.
-    'output/rust_rewrite/',
     # The off-host Hope liveness patrol (docs/COMPUTE_PATROL.md, HOPE-PATROL-1
     # bb79b6f430): it runs as a job on the owner's own Hope account with his
     # queue and owner maps, so the whole package stays private and is never
@@ -216,6 +221,13 @@ _KEEPER_PREFIXES = (
     # above — registered as a prefix so adding a
     # module to the package never requires editing this list.
     'export_pkg/',
+    # Internal figure/table audit evidence: tracked audit output, not product
+    # source. Its render PDFs embed the compiling host's absolute path and
+    # username in binary streams the text sanitizer cannot rewrite, so the
+    # directory (plus the ZIP bundle and probe that carry/reproduce it) is
+    # excluded from the opensource export by
+    # _TOP_LEVEL_ONLY_OPENSOURCE_EXCLUDE_DIRS / _OPENSOURCE_EXCLUDE_PATHS.
+    'figure-table-audit/',
     # Company-only integrations stripped from the opensource export by
     # export_pkg._lists._OPENSOURCE_EXCLUDE_PATHS (docs/PUBLICATION_AUDIT.md
     # §6.2) until the private overlay owns them.
@@ -317,19 +329,18 @@ def test_no_tracked_file_is_opensource_excluded():
     left tracked, so a direct ``git push`` of the working repo would leak it.
     """
     _require_git_repo()
-    export = require_export_toolchain()
+    export = pytest.importorskip(
+        'export', reason='export.py not shipped in opensource tree')
     tracked = _tracked_files()
     assert tracked, 'git ls-files returned nothing — not a real checkout?'
 
     offenders = _offenders(export, tracked)
     assert not offenders, (
         f'{len(offenders)} git-tracked file(s) would be STRIPPED by the '
-        'opensource export but are NOT gitignored — export.py and .gitignore '
-        'have DRIFTED (a leak path). First 30:\n  ' +
+        'opensource export without a documented keeper. First 30:\n  ' +
         '\n  '.join(offenders[:30]) +
-        '\n→ Either add a .gitignore rule + `git rm --cached` the path, or (if '
-        'it must stay tracked) add it to _EXTRA_KEEPERS / '
-        'export._OPENSOURCE_KEEP_FILES with a documented reason.')
+        '\n→ Resolve tracking intent: stop tracking excluded artifacts only when '
+        'authorized, or document a justified keeper. Ignore rules do not untrack files.')
 
 
 def test_keepers_are_actually_tracked_and_excluded():
@@ -339,7 +350,7 @@ def test_keepers_are_actually_tracked_and_excluded():
     keeps the allow-list honest so it can't quietly grow into a blanket bypass.
     """
     _require_git_repo()
-    export = require_export_toolchain()
+    export = pytest.importorskip('export', reason='export.py not shipped')
     tracked = set(_tracked_files())
     stale = []
     for k in _keeper_set(export):
@@ -364,7 +375,7 @@ def test_keeper_prefixes_are_live_and_narrow():
     shippable territory).
     """
     _require_git_repo()
-    export = require_export_toolchain()
+    export = pytest.importorskip('export', reason='export.py not shipped')
     tracked = _tracked_files()
     for p in _KEEPER_PREFIXES:
         assert p.endswith('/'), (
@@ -392,7 +403,7 @@ def test_neuter_guard_has_teeth():
     run comes back green for the wrong reason.
     """
     _require_git_repo()
-    export = require_export_toolchain()
+    export = pytest.importorskip('export', reason='export.py not shipped')
     tracked = _tracked_files()
 
     real_extra = _EXTRA_KEEPERS.copy()
@@ -427,7 +438,7 @@ def test_neuter_keeper_prefix_is_load_bearing():
     subtrees — anything else means the exact-path keepers drifted.
     """
     _require_git_repo()
-    export = require_export_toolchain()
+    export = pytest.importorskip('export', reason='export.py not shipped')
     tracked = _tracked_files()
 
     real_prefixes = tuple(_KEEPER_PREFIXES)

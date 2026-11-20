@@ -58,6 +58,7 @@ def start(state, perms, log, *, remote=True, on_revoked=None):
         from lib.desktop_agent import run_agent
         stop_event = threading.Event()
         state['stop'] = stop_event
+        state['error'] = None
 
         def on_status(status):
             state['last_status'] = status
@@ -87,6 +88,9 @@ def start(state, perms, log, *, remote=True, on_revoked=None):
             if stop_event.is_set():
                 return None
             if new_url and (new_url, new_secret) != (current, credential):
+                routes = [current, *(state.get('candidates') or [])]
+                state['candidates'] = list(dict.fromkeys(
+                    route for route in routes if route != new_url))
                 state['url'], state['secret'] = new_url, new_secret
                 state['server_url'] = new_url
                 return new_url, new_secret
@@ -101,6 +105,7 @@ def start(state, perms, log, *, remote=True, on_revoked=None):
                           browser_relay=state.get('browser_relay') if remote else None,
                           stop_on_refusal=remote)
             except Exception as exc:
+                state['error'] = str(exc)
                 on_status({'state': 'error', 'detail': str(exc)})
                 log('Agent loop crashed: %s' % exc)
             finally:
@@ -165,17 +170,25 @@ class NodeLinks:
                  'label': record.get('label') or record['url'],
                  'candidates': list(record.get('candidates') or []),
                  'attachment_id': att_id,
-                 'persist_route': lambda url: update_attachment(att_id, url=url)}
+                 'persist_route': lambda url: update_attachment(
+                     att_id, expected_secret=record['secret'], url=url)}
         self._links[att_id] = state
         ensure_relay(state, self.log)
         start(state, self.perms, self.log, remote=True,
-              on_revoked=lambda s: update_attachment(att_id, state=s['revoked']))
+              on_revoked=lambda s: update_attachment(
+                  att_id, expected_secret=record['secret'], state=s['revoked']))
 
     def start(self, local=None):
         """Start the local link (``(url, secret)``) and every active attachment."""
         from lib.desktop_agent.config import attachments
         with self._lock:
             self.running = True
+            for link_id, state in list(self._links.items()):
+                event = state.get('stop')
+                thread = state.get('thread')
+                if event is not None and event.is_set() and not (thread and thread.is_alive()):
+                    stop(state, self.log)
+                    del self._links[link_id]
             if local is not None and LOCAL_LINK not in self._links:
                 url, secret = local
                 state = {'url': url, 'secret': secret, 'server_url': url,
@@ -190,29 +203,42 @@ class NodeLinks:
     def stop(self):
         with self._lock:
             self.running = False
-            links = list(self._links.values())
-            self._links.clear()
-        return all([stop(state, self.log) for state in links])
+            stopped = True
+            for link_id, state in list(self._links.items()):
+                if stop(state, self.log):
+                    del self._links[link_id]
+                else:
+                    stopped = False
+            return stopped
 
     def join(self, text, *, node_id, name='', stop=None, kind='computer'):
         """Redeem one pairing input and, if the node is running, link at once."""
         from lib.desktop_agent.attachments import join
-        record = join(text, node_id=node_id, name=name, log=self.log, stop=stop, kind=kind)
-        with self._lock:
-            old = self._links.pop(record['id'], None)
-            if old is not None:
-                stop(old, self.log)
-            if self.running:
-                self._start_attachment(record)
-        return record
+        from lib.desktop_agent.links import stop as stop_link
+        from lib.desktop_agent.config import save_attachment
+
+        def publish(record):
+            with self._lock:
+                record = save_attachment(record, renew_route=True)
+                old = self._links.get(record['id'])
+                if old is not None:
+                    if not stop_link(old, self.log):
+                        return record
+                    del self._links[record['id']]
+                if self.running:
+                    self._start_attachment(record)
+                return record
+
+        return join(text, node_id=node_id, name=name, log=self.log, stop=stop,
+                    kind=kind, publish=publish)
 
     def leave(self, attachment_id):
         from lib.desktop_agent.config import remove_attachment
         with self._lock:
-            state = self._links.pop(attachment_id, None)
-        if state is not None:
-            stop(state, self.log)
-        return remove_attachment(attachment_id)
+            state = self._links.get(attachment_id)
+            if state is not None and stop(state, self.log):
+                del self._links[attachment_id]
+            return remove_attachment(attachment_id)
 
     def statuses(self):
         """One row per joined server (and the local link while running)."""

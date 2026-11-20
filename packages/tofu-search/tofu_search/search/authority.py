@@ -14,9 +14,13 @@ evidence. The reranker bounds their contribution by actual lexical evidence.
 
 from __future__ import annotations
 
+import functools
+import importlib
 import re
 from ipaddress import ip_address
 from urllib.parse import urlparse
+
+_native = importlib.import_module('tofu_search._native_kernels').native
 
 __all__ = [
     "AUTHORITY_BOOST",
@@ -162,3 +166,40 @@ def classify_authority(url: str, query: str = "") -> str:
 def authority_label(url: str, query: str = "") -> str:
     """Human-readable authority tag for format.py (empty string if neutral)."""
     return _LABEL[classify_authority(url, query)]
+
+
+# The Python bodies above are the parity oracle. The native kernels return None
+# for a non-ASCII host (Python's IDNA 2003 codec), which keeps the oracle.
+PYTHON_KERNELS = {'brand_tokens': brand_tokens, 'host_brand_labels': host_brand_labels,
+                  'classify_authority': classify_authority}
+if _native is not None:
+    @functools.wraps(brand_tokens)
+    def brand_tokens(text: str) -> set[str]:
+        if type(text) is str or text is None:
+            try:
+                return _native.brand_tokens(text)
+            except UnicodeEncodeError:  # lone surrogates cannot cross into Rust
+                pass
+        return PYTHON_KERNELS['brand_tokens'](text)
+
+    @functools.wraps(host_brand_labels)
+    def host_brand_labels(url: str) -> set[str]:
+        if type(url) is str:
+            try:
+                labels = _native.host_brand_labels(url)
+            except UnicodeEncodeError:
+                labels = None
+            if labels is not None:
+                return labels
+        return PYTHON_KERNELS['host_brand_labels'](url)
+
+    @functools.wraps(classify_authority)
+    def classify_authority(url: str, query: str = "") -> str:
+        if type(url) is str and type(query) is str:
+            try:
+                hint = _native.classify_authority(url, query)
+            except UnicodeEncodeError:
+                hint = None
+            if hint is not None:
+                return hint
+        return PYTHON_KERNELS['classify_authority'](url, query)

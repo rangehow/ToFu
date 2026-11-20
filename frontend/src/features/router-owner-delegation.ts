@@ -39,10 +39,11 @@ export function createRouterOwnerDelegation(ports: RouterOwnerDelegationPorts) {
   let alive = true, pending = false;
   let state: RouterOwnerDelegationState | null = null;
   let reading: AbortController | null = null;
+  let readError: string | null = null;
 
   const settings = document.createElement('details');
   settings.className = 'router-owner-delegation';
-  const summary = localized(createDisclosureSummary(document), 'routerDelegation.summaryOff');
+  const summary = createDisclosureSummary(document);
   const body = document.createElement('div');
   body.className = 'router-owner-delegation-body';
   const hint = localized(document.createElement('p'), 'routerDelegation.hint');
@@ -57,18 +58,24 @@ export function createRouterOwnerDelegation(ports: RouterOwnerDelegationPorts) {
   advisory.hidden = true;
   const lastUse = document.createElement('p');
   lastUse.className = 'router-owner-delegation-last';
+  const actionDetail = document.createElement('p');
+  actionDetail.className = 'router-owner-delegation-detail';
+  actionDetail.hidden = true;
   const error = document.createElement('p');
   error.className = 'router-owner-delegation-error';
   error.setAttribute('role', 'alert');
   error.hidden = true;
-  body.append(hint, toggle.el, coverage, advisory, lastUse, error);
+  body.append(hint, toggle.el, coverage, advisory, lastUse, actionDetail, error);
   settings.append(summary, body);
 
   function renderCoverage() {
     if (!alive) return;
     const grant = state?.grant;
     coverage.hidden = !grant;
-    if (!grant) return;
+    if (!grant) {
+      coverage.textContent = '';
+      return;
+    }
     const scopes = grant.scopes.map((scope) => t(`routerDelegation.op.${scope}`)).join(', ');
     coverage.textContent = t(
       grant.coverage === 'full' ? 'routerDelegation.coversFull' : 'routerDelegation.coversOnly', { scopes });
@@ -77,6 +84,16 @@ export function createRouterOwnerDelegation(ports: RouterOwnerDelegationPorts) {
   function renderLastUse() {
     if (!alive) return;
     const action: Action | undefined = state?.actions[0];
+    const detail = action?.detail || action?.code || '';
+    actionDetail.textContent = detail;
+    actionDetail.hidden = !detail;
+    lastUse.hidden = !state;
+    if (!state) {
+      delete lastUse.dataset.i18n;
+      lastUse.textContent = '';
+      lastUse.removeAttribute('title');
+      return;
+    }
     if (!action) {
       localized(lastUse, 'routerDelegation.noUse');
       lastUse.removeAttribute('title');
@@ -89,20 +106,34 @@ export function createRouterOwnerDelegation(ports: RouterOwnerDelegationPorts) {
       status: t(`routerDelegation.status.${action.status}`),
       reason: action.reason,
     });
-    const detail = action.detail || action.code || '';
     if (detail) lastUse.title = detail; else lastUse.removeAttribute('title');
   }
 
   function adopt(next: RouterOwnerDelegationState) {
     if (!alive) return;
     state = next;
-    toggle.input.checked = next.active;
-    localized(summary, next.active ? 'routerDelegation.summaryOn' : 'routerDelegation.summaryOff');
-    advisory.hidden = !(next.active && next.grant.assurance === 'advisory');
+    reading = null;
+    readError = null;
+    error.hidden = true;
     repaint();
   }
 
   function repaint() {
+    if (!alive) return;
+    if (state) {
+      localized(summary, state.active ? 'routerDelegation.summaryOn' : 'routerDelegation.summaryOff');
+    } else {
+      delete summary.dataset.i18n;
+      summary.textContent = `${t('routerDelegation.switch')} · ${t(reading ? 'common.loading' : 'rich.unknown')}`;
+    }
+    toggle.el.hidden = !state;
+    toggle.input.checked = !!state?.active;
+    toggle.input.disabled = pending || !state;
+    advisory.hidden = !(state?.active && state.grant.assurance === 'advisory');
+    if (readError !== null) {
+      error.textContent = `${t('context.loadFailed')}: ${readError}`;
+      error.hidden = false;
+    }
     renderCoverage();
     renderLastUse();
   }
@@ -110,11 +141,22 @@ export function createRouterOwnerDelegation(ports: RouterOwnerDelegationPorts) {
   function read() {
     reading?.abort();
     const current = reading = new AbortController();
-    ports.read(current.signal).then((next) => { if (reading === current) adopt(next); }, () => undefined);
+    state = null;
+    readError = null;
+    error.hidden = true;
+    repaint();
+    ports.read(current.signal).then((next) => {
+      if (alive && reading === current) adopt(next);
+    }, (reason) => {
+      if (!alive || reading !== current) return;
+      reading = null;
+      readError = failure(reason);
+      repaint();
+    });
   }
 
   toggle.input.addEventListener('change', () => {
-    if (pending) {
+    if (pending || !state) {
       // The switch shows only server state: a change made while a request runs is not sent.
       toggle.input.checked = !!state?.active;
       return;
@@ -124,6 +166,7 @@ export function createRouterOwnerDelegation(ports: RouterOwnerDelegationPorts) {
     toggle.input.disabled = true;
     error.hidden = true;
     reading?.abort();
+    reading = null;
     ports.set(wanted).then(adopt, (reason) => {
       if (!alive) return;
       toggle.input.checked = !!state?.active;
@@ -131,7 +174,7 @@ export function createRouterOwnerDelegation(ports: RouterOwnerDelegationPorts) {
       error.hidden = false;
     }).finally(() => {
       pending = false;
-      if (alive) toggle.input.disabled = false;
+      if (alive) toggle.input.disabled = !state;
     });
   });
   // Opening it shows the latest audited use without polling.

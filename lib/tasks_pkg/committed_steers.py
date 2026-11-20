@@ -16,7 +16,9 @@ only for a local executor), ``committed_steers`` (steers committed to this
 executor's live Turn that it has not taken: every blocking ``poll`` wait through
 ``lib.tasks_pkg.wait_interruption``, and the task finalizer), ``take_steers`` (round boundary: commit order, each block once),
 ``requeue_committed_steer`` (a steer that missed the last boundary becomes the
-next turn), ``live_turn_steer_records`` (the live Turn's committed records with
+next turn; a forward it cannot queue is bounced to its sender),
+``requeue_orphaned_steers`` (restart recovery settles a Turn without its
+executor: its pending steers are queued the same way), ``live_turn_steer_records`` (the live Turn's committed records with
 their authors, for project dispatch's request source).
 Dependencies: turn_lifecycle (owned Turn reads, the executor's last written
 view), tasks_pkg.manager (local registry, task owner), tasks_pkg.
@@ -238,6 +240,7 @@ def requeue_committed_steer(task: dict[str, Any], item: Mapping[str, Any]) -> di
     if not outcome.accepted:
         logger.warning('[Steer] conv=%s block=%s missed its Turn and was not queued (%s)',
                        task.get('convId'), item['blockId'], outcome.disposition)
+        _bounce(task, item, 'the recipient did not accept it as its next turn (' + outcome.disposition + ')')
         return None
     logger.info('[Steer] conv=%s block=%s missed its Turn; %s as the next turn',
                 task.get('convId'), item['blockId'], outcome.disposition)
@@ -245,6 +248,57 @@ def requeue_committed_steer(task: dict[str, Any], item: Mapping[str, Any]) -> di
             **({'queueId': outcome.queue_id} if outcome.queue_id else {})}
 
 
+def _bounce(task: Mapping[str, Any], item: Mapping[str, Any], reason: str) -> None:
+    """Tell a forward's sender that its owner message did not reach the recipient.
+
+    Only a Global Router forward has a sender to tell; any other steer keeps its
+    pending record and the warning its caller logged.
+    """
+    author = item.get('steerAuthor')
+    if not isinstance(author, Mapping):
+        return
+    try:
+        from lib.router.forwarding import bounce_undelivered_forward
+        from lib.tasks_pkg.manager import task_user_id
+        bounce_undelivered_forward(task_user_id(task), task['convId'], author,
+                                   block_id=item['blockId'], reason=reason)
+    except Exception as error:
+        logger.error('[Steer] conv=%s block=%s undelivered forward not bounced: %s',
+                     task.get('convId'), item['blockId'], error, exc_info=True)
+
+
+def requeue_orphaned_steers(task: dict[str, Any], records: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Requeue the steers still pending on a Turn that settles without its executor.
+
+    Restart recovery fails or stops a Turn whose executor already exited, so
+    no task finalizer salvages what was committed to it (a forward steered into
+    a Turn whose host had stopped, docs/ROUTER.md R2 "A forward never stays
+    pending"). Each pending record becomes the conversation's next Turn exactly
+    as the finalizer queues it, or is bounced to its forward's sender. Returns
+    ``records`` with every requeued record marked ``queued``.
+    """
+    records = [dict(record) for record in records if isinstance(record, Mapping)]
+    taken = {record.get('blockId') for record in records
+             if record.get('deliveryState') in ('delivered', 'queued')}
+    queued = {}
+    for item in _pending(records, taken):
+        try:
+            record = requeue_committed_steer(task, item)
+        except Exception as error:
+            logger.error('[Steer] conv=%s block=%s orphaned steer requeue failed: %s',
+                         task.get('convId'), item['blockId'], error, exc_info=True)
+            _bounce(task, item, 'requeueing it failed (' + type(error).__name__ + ')')
+            continue
+        if record is None:
+            continue
+        queued[item['blockId']] = record
+        from lib.scheduler.timer import record_requeued_continuation
+        from lib.tasks_pkg.manager import task_user_id
+        record_requeued_continuation(item['injectionId'], user_id=task_user_id(task))
+    return [{**record, **queued[record['blockId']]} if record.get('blockId') in queued else record
+            for record in records]
+
+
 __all__ = ['COMMITTED_STEER', 'INJECTION_PREVIEW_CHARS', 'committed_steers',
            'executes_attempt_here', 'live_turn_steer_records', 'requeue_committed_steer',
-           'take_steers']
+           'requeue_orphaned_steers', 'take_steers']

@@ -117,6 +117,18 @@ def test_an_owner_attachment_and_a_conversation_image_are_readable_references(le
     assert len(_admit(task, ['a.md', str(root / 'a.md')])) == 1
 
 
+def test_denied_batch_does_not_promote_an_earlier_owned_draft(lead, isolated_knowledge):
+    from lib.conversations.lead_attachments import AttachmentRefused
+    from lib.media_attachments import ingest_document
+
+    task, _root = lead
+    draft = ingest_document(b'Draft preview', 'draft.txt', user_id=OWNER)
+    attachment_id = draft['attachmentId']
+    with pytest.raises(AttachmentRefused, match='does not exist'):
+        _admit(task, [f'att_media_{attachment_id}', 'missing.txt'])
+    assert isolated_knowledge.get_document_metadata(attachment_id, user_id=OWNER)['scope'] == 'draft'
+
+
 def _steer(image: str, author) -> dict:
     record = {'blockId': 'injection:user-steer:s1', 'commandId': 's1', 'deliveryState': 'delivered',
               'previews': [{'text': 'like this', 'images': [{'preview': image, 'url': image}]}]}
@@ -174,10 +186,19 @@ def test_an_image_steered_by_anyone_but_the_owner_here_is_refused(lead, monkeypa
     'outside', 'traversal', 'symlink', 'directory', 'missing', 'foreign_attachment', 'unseen_image',
 ])
 def test_the_boundary_refuses_what_the_lead_cannot_read(lead, tmp_path, monkeypatch, case):
-    from lib import attachments
+    from lib import attachments, media_attachments
     from lib.conversations.lead_attachments import AttachmentRefused
     from lib.knowledge import list_documents
     task, root = lead
+    retained = []
+    ingest = media_attachments.ingest_received_file
+
+    def track_ingest(*args, **kwargs):
+        record = ingest(*args, **kwargs)
+        retained.append(record)
+        return record
+
+    monkeypatch.setattr(media_attachments, 'ingest_received_file', track_ingest)
     secret = tmp_path / 'secret.txt'
     secret.write_text('not yours', encoding='utf-8')
     (root / 'sub').mkdir()
@@ -191,10 +212,12 @@ def test_the_boundary_refuses_what_the_lead_cannot_read(lead, tmp_path, monkeypa
         'directory': 'sub', 'missing': 'absent.txt',
         'foreign_attachment': 'att_media_' + 'f' * 32, 'unseen_image': '/api/images/other.png',
     }[case]
+    (root / 'allowed.txt').write_text('allowed', encoding='utf-8')
     with pytest.raises(AttachmentRefused) as refused:
-        _admit(task, [reference])
+        _admit(task, ['allowed.txt', reference])
     assert refused.value.code == 'attachment_refused' and refused.value.execution_started is False
     assert 'not yours' not in str(refused.value)
+    assert not retained
     assert not list_documents(user_id=OWNER)
 
 

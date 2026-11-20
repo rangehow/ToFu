@@ -33,6 +33,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 
+from lib.conversation_sync.execution_identity import ManualDetectAdmission
 from lib.identity import PrincipalContext, require_user_id
 from lib.log import get_logger
 from lib.scheduler.tool_defs import (
@@ -85,8 +86,12 @@ class SchedulerActor:
     # A Worker's delegating request: the Coordinator Attempt that issued its grant.
     request_attempt_id: str | None = None
 
-    def principal(self) -> PrincipalContext:
-        """The least-privilege scheduling identity rows of this actor are created with."""
+    # The existing invocation's authority, not the derived identity for row creation.
+    invocation_principal: PrincipalContext | None = None
+    manual_detect_admission: ManualDetectAdmission | None = None
+
+    def project_row_creation_principal(self) -> PrincipalContext:
+        """Narrow a validated project scheduling grant for the row-creation port."""
         return PrincipalContext.user(
             subject_id=f'scheduler-{self.role}:{self.conversation_id or self.owner}',
             owner_user_id=self.owner, tenant_id=self.tenant, scopes={'agents:scheduler'})
@@ -107,10 +112,13 @@ def row_scope(row: dict) -> str:
 def resolve_actor(task: dict) -> SchedulerActor:
     """The scheduler actor of a live task. Lookup failures propagate (fail closed)."""
     from lib.tasks_pkg.manager import task_user_id
-    owner = require_user_id(task_user_id(task), context='scheduler tool')
+    # Owner validation can stamp a legacy owner-only task with a compatibility
+    # identity. Capture what arrived before that step; it is not a caller grant.
     payload = task.get('_principalContext')
-    tenant = PrincipalContext.from_payload(payload).tenant_id if payload else None
-    base = dict(owner=owner, tenant=tenant, conversation_id=str(task.get('convId') or ''),
+    owner = require_user_id(task_user_id(task), context='scheduler tool')
+    principal = PrincipalContext.from_payload(payload) if payload is not None else None
+    base = dict(owner=owner, tenant=principal.tenant_id if principal else None,
+                invocation_principal=principal, conversation_id=str(task.get('convId') or ''),
                 task_id=str(task.get('id') or ''), turn_id=task.get('_turnId'),
                 attempt_id=task.get('_attemptId'))
     from lib.project_dispatch.admission import is_dispatch_task, profile_for, validated_dispatch
@@ -140,7 +148,17 @@ def resolve_actor(task: dict) -> SchedulerActor:
     from lib.tasks_pkg.coordinator_policy import coordinator_scope
     scope = coordinator_scope(task)
     if not scope:
-        return SchedulerActor(role='owner', **base)
+        admission = task.get('_manualDetectAdmission')
+        if (not isinstance(admission, ManualDetectAdmission)
+                or admission.task_id != base['task_id']
+                or admission.conversation_id != base['conversation_id']
+                or admission.turn_id != base['turn_id']
+                or admission.attempt_id != base['attempt_id']
+                or admission.principal != principal or task.get('_attended') is not True
+                or task.get('aborted')
+                or (task.get('abort_event') is not None and task['abort_event'].is_set())):
+            admission = None
+        return SchedulerActor(role='owner', manual_detect_admission=admission, **base)
     from lib.router.watchdog.binding import is_watchdog_scope
     if is_watchdog_scope(scope):
         raise SchedulerRefused('scheduler_role_unsupported',

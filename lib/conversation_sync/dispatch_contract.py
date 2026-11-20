@@ -22,6 +22,58 @@ class AcceptedResumeLineage:
     source_task_id: str
 
 
+@dataclass(frozen=True)
+class ResumeSourceSnapshot:
+    """Detached evidence only; never an accepted Attempt or dispatch authority."""
+    conversation_id: str
+    turn_id: str
+    attempt_id: str
+    projection_revision: int
+    source_status: str
+
+
+def read_resume_source_snapshot(*, user_id: int, conversation_id: str,
+                                turn_id: str, attempt_id: str,
+                                projection_revision: int) -> ResumeSourceSnapshot | str:
+    """Read the exact settled source on one selected-authority snapshot."""
+    from lib.agent_core.storage_errors import StorageError
+    from lib.identity import require_user_id
+    from lib.storage import get_storage_client
+
+    owner = require_user_id(user_id, context='prospective resume source')
+    if (not isinstance(conversation_id, str) or not 0 < len(conversation_id) <= 256
+            or not all(isinstance(value, str) and 0 < len(value) <= 128
+                       for value in (turn_id, attempt_id))
+            or type(projection_revision) is not int or not 0 <= projection_revision < 2**63):
+        raise ValueError('prospective resume requires an exact source pin')
+    try:
+        result = get_storage_client().query('turn.resume.plan.read', {
+            'user_id': owner, 'conversation_id': conversation_id, 'turn_id': turn_id,
+            'attempt_id': attempt_id, 'projection_revision': projection_revision,
+        })
+    except StorageError as exc:
+        if (exc.code in ('unknown_operation', 'operation_not_implemented')
+                or (exc.code == 'database_protocol_error'
+                    and str(exc) == 'Unknown storage operation')):
+            return 'source_unavailable'
+        raise
+    if isinstance(result, dict):
+        status = result.get('status')
+        if set(result) == {'status'} and status in ('source_unavailable', 'stale_source'):
+            return status
+        expected = {'status': 'source_pinned', 'conversationId': conversation_id,
+                    'turnId': turn_id, 'attemptId': attempt_id,
+                    'projectionRevision': projection_revision}
+        source_status = result.get('sourceStatus')
+        if (set(result) == expected.keys() | {'sourceStatus'}
+                and all(result[key] == value for key, value in expected.items())
+                and type(result['projectionRevision']) is int
+                and source_status in ('failed', 'interrupted', 'truncated')):
+            return ResumeSourceSnapshot(conversation_id, turn_id, attempt_id,
+                                        projection_revision, source_status)
+    raise StorageError('database_protocol_error', 'Malformed resume source snapshot')
+
+
 def read_accepted_resume_lineage(task: dict) -> AcceptedResumeLineage:
     """Read the transaction-issued receipt; caller config never grants lineage.
 

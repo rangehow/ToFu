@@ -43,7 +43,7 @@ def worker_section(checks):
         return ''
     return ('\n\nAcceptance checks (your result is reviewed against each one by its number; for every '
             'check, report the evidence that it is met, or state that it is unmet or could not be '
-            'verified):\n' + '\n'.join(f'{number}. {check}' for number, check in enumerate(checks, 1)))
+            'verified here, naming what would be needed to verify it):\n' + '\n'.join(f'{number}. {check}' for number, check in enumerate(checks, 1)))
 
 
 def judged(checks, decision, results):

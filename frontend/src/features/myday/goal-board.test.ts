@@ -59,6 +59,8 @@ function setup(api: Partial<MyDayGoalApi>) {
     element: (id) => document.getElementById(id),
     renderCalendar: () => { calls.calendar += 1; },
     showToday: () => { calls.today += 1; },
+    brandLogoAttrs: (size) => `src="/static/icons/tofu-welcome.svg?v=test" `
+      + `data-brand-logo="1" alt="Tofu" width="${size}" height="${size}"`,
     now: () => NOW,
   });
   const tasks = () => document.getElementById('mydayTasks') as HTMLElement;
@@ -158,6 +160,9 @@ describe('My Day goal board', () => {
     const { board, tasks } = setup({ goals: vi.fn(async () => ({ goals: [] })), goalCreate, goalDecompose });
     await board.show('2026-11-08');
     expect(tasks().querySelector('.myday-empty')).not.toBeNull();
+    const mascot = tasks().querySelector<HTMLImageElement>('.myday-empty img.myday-empty-tofu');
+    expect(mascot?.getAttribute('src')).toBe('/static/icons/tofu-welcome.svg?v=test');
+    expect(mascot?.getAttribute('data-brand-logo')).toBe('1');
     const input = tasks().querySelector('.myday-goal-composer input') as HTMLInputElement;
     input.value = '  Run three times  ';
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));

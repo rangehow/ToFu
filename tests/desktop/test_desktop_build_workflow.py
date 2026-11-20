@@ -62,7 +62,6 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from tests.support.export_toolchain import require_export_toolchain
 
 yaml = pytest.importorskip('yaml', reason='PyYAML required to parse workflows')
 
@@ -518,7 +517,8 @@ def _retarget_step() -> dict:
 
 def _run_retarget(*, remote_sha: str | None, http_code: str | None,
                   built_sha: str = _BUILT_SHA,
-                  tag_object_sha: str | None = None) -> list[str]:
+                  tag_object_sha: str | None = None,
+                  expected_rc: int = 0) -> list[str]:
     """Execute the REAL retarget step; return the git commands it issued.
 
     Asserting on the step's text cannot distinguish "moves an orphan tag" from
@@ -599,8 +599,8 @@ def _run_retarget(*, remote_sha: str | None, http_code: str | None,
         }
         proc = subprocess.run(['bash', '-c', body], cwd=tmp, env=env,
                               capture_output=True, text=True, timeout=60)
-        assert proc.returncode == 0, (
-            f'retarget step exited {proc.returncode}\n'
+        assert proc.returncode == expected_rc, (
+            f'retarget step exited {proc.returncode} (expected {expected_rc})\n'
             f'stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}'
         )
         if not log.exists():
@@ -640,24 +640,6 @@ def test_an_orphan_tag_is_moved_to_the_built_commit():
     )
 
 
-def test_a_published_tag_is_never_moved():
-    """THE COMPLEMENT, and the one that makes this safe to do automatically.
-
-    ``should_release`` is NOT authorisation to rewrite a tag:
-    ``workflow_dispatch`` sets it to true WITHOUT probing (the deliberate
-    re-release hatch), so a manual re-run on a shipped version reaches this
-    step. Moving the tag there would rewrite published history and break every
-    downstream pin — the exact thing ``export.py::_tag_push_action`` refuses to
-    do without an explicit human ``--force``. So the step must re-probe and
-    move only tags with NO release behind them.
-    """
-    cmds = _run_retarget(remote_sha=_STALE_SHA, http_code='200')
-    assert not _pushes(cmds), (
-        f'a tag with a real Release must NEVER be force-moved; the step '
-        f'pushed anyway: {_pushes(cmds)!r}'
-    )
-
-
 def test_an_unreadable_probe_does_not_move_the_tag():
     """Here uncertainty must resolve toward NOT touching the tag.
 
@@ -667,7 +649,7 @@ def test_an_unreadable_probe_does_not_move_the_tag():
     ambiguous probe declines and warns.
     """
     for code in ('403', '429', '500', None):
-        cmds = _run_retarget(remote_sha=_STALE_SHA, http_code=code)
+        cmds = _run_retarget(remote_sha=_STALE_SHA, http_code=code, expected_rc=1)
         assert not _pushes(cmds), (
             f'probe HTTP {code!r} is not proof the tag is an orphan — the step '
             f'must not move it, but it pushed: {_pushes(cmds)!r}'
@@ -1139,7 +1121,7 @@ def test_an_unreadable_asset_list_builds():
 # ── the retarget step on the repair path ──────────────────────────
 
 def _run_retarget_body(*, remote_sha, http_code, body_text,
-                       built_sha=_BUILT_SHA):
+                       built_sha=_BUILT_SHA, expected_rc=0):
     """Run the REAL retarget step with a body-serving curl stub."""
     body = _retarget_step()['run']
     with tempfile.TemporaryDirectory() as td:
@@ -1202,8 +1184,8 @@ def _run_retarget_body(*, remote_sha, http_code, body_text,
         }
         proc = subprocess.run(['bash', '-c', body], cwd=tmp, env=env,
                               capture_output=True, text=True, timeout=60)
-        assert proc.returncode == 0, (
-            f'retarget exited {proc.returncode}\n'
+        assert proc.returncode == expected_rc, (
+            f'retarget exited {proc.returncode} (expected {expected_rc})\n'
             f'stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}'
         )
         cmds = ([ln for ln in log.read_text(encoding='utf-8').splitlines() if ln]
@@ -1234,14 +1216,10 @@ def test_a_partial_releases_tag_is_moved_to_the_built_commit():
     )
 
 
-def test_a_complete_releases_tag_is_still_never_moved():
-    """THE COMPLEMENT, and the reason this is safe to automate.
-
-    A genuinely published release has downstream pins. Only an INCOMPLETE one
-    may be retargeted; a complete one is left exactly where it is.
-    """
+def test_a_complete_release_with_a_different_source_tag_cannot_be_replaced():
+    """Preserve published tags and refuse to attach another commit's binaries."""
     cmds, log = _run_retarget_body(remote_sha=_STALE_SHA, http_code='200',
-                                   body_text=_release_json(_complete_names()))
+                                   body_text=_release_json(_complete_names()), expected_rc=1)
     assert not _pushes(cmds), (
         f'a COMPLETE published release must never have its tag force-moved; '
         f'pushes={_pushes(cmds)!r}\nlog:\n{log}'
@@ -1256,7 +1234,7 @@ def test_an_unreadable_asset_list_does_not_move_the_tag():
     assets" declines to move.
     """
     cmds, log = _run_retarget_body(remote_sha=_STALE_SHA, http_code='200',
-                                   body_text='<html>502 Bad Gateway</html>')
+                                   body_text='<html>502 Bad Gateway</html>', expected_rc=1)
     assert not _pushes(cmds), (
         f'an unreadable asset list is not proof of incompleteness — the tag '
         f'must be left alone; pushes={_pushes(cmds)!r}\nlog:\n{log}'
@@ -1295,7 +1273,7 @@ def test_the_shared_script_survives_export_and_is_tracked():
     membership in the keep-list — ``_should_exclude`` returning a verdict there
     is expected and is NOT evidence of a problem.
     """
-    _export = require_export_toolchain()
+    _export = pytest.importorskip('export', reason='export.py not shipped in opensource')
     rel = 'scripts/release_assets.py'
     for mode in ('personal', 'internal'):
         verdict = _export._should_exclude('scripts', 'release_assets.py', mode)

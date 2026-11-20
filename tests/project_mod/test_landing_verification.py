@@ -93,7 +93,7 @@ def test_unusable_impact_cache_keeps_static_selection_available(tmp_path, monkey
     from lib.project_mod import impact_selection, landing_verification
 
     monkeypatch.setattr(landing_verification, '_cache_dir', lambda top: tmp_path)
-    monkeypatch.setattr(landing_verification, '_environment_key', lambda python: 'env')
+    monkeypatch.setattr(landing_verification, '_environment_key', lambda python, root=None: 'env')
     (tmp_path / 'impact-v5.sqlite').write_bytes(b'corrupt optional cache')
 
     store = landing_verification._store(tmp_path, sys.executable)
@@ -728,6 +728,30 @@ def test_the_test_environment_does_not_depend_on_the_launcher(monkeypatch):
     assert os.path.dirname(sys.executable) in first['PATH'].split(os.pathsep)
     monkeypatch.setenv('LANDING_FLAKE_MARKER', '/tmp/landing-scenario')
     assert verification._test_environment()['LANDING_FLAKE_MARKER'] == '/tmp/landing-scenario'
+
+
+def test_the_blackbox_target_selectors_reach_the_tests_and_nothing_else(monkeypatch):
+    """A black-box server is a test target, not launcher state: the harness
+    uses TOFU_BLACKBOX_URL verbatim and boots no in-repo server when it is set,
+    so verification forwards exactly the two selectors that name that server."""
+    from lib.project_mod import landing_verification as verification
+
+    for name in ('TOFU_BLACKBOX_URL', 'TOFU_BLACKBOX_REFERENCE_URL',
+                 'TOFU_BLACKBOX_TOKEN'):
+        monkeypatch.delenv(name, raising=False)
+    without = verification._test_environment()
+    assert 'TOFU_BLACKBOX_URL' not in without
+    assert 'TOFU_BLACKBOX_REFERENCE_URL' not in without
+
+    monkeypatch.setenv('TOFU_BLACKBOX_URL', 'http://127.0.0.1:18080')
+    monkeypatch.setenv('TOFU_BLACKBOX_REFERENCE_URL', 'http://127.0.0.1:18081')
+    monkeypatch.setenv('TOFU_BLACKBOX_TOKEN', 'must-not-reach-the-tests')
+    environment = verification._test_environment()
+
+    assert environment['TOFU_BLACKBOX_URL'] == 'http://127.0.0.1:18080'
+    assert environment['TOFU_BLACKBOX_REFERENCE_URL'] == 'http://127.0.0.1:18081'
+    assert set(environment) - set(without) == {'TOFU_BLACKBOX_URL',
+                                               'TOFU_BLACKBOX_REFERENCE_URL'}
 
 
 def test_record_refuses_paths_with_pending_instead_of_dropping_them(shared, monkeypatch, capsys):

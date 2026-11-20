@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from lib.llm.route_features import route_feature
+from lib.llm.route_features import SUBSCRIPTION_DIALECTS, route_feature
 from lib.llm_dispatch.compaction_policy import native_compaction_mode_for_route
 from lib.tools.gateway import resolve_tool_search_backend
 from lib.tools.programmatic import resolve_programmatic_backend
@@ -57,6 +57,48 @@ def test_codex_installed_stateful_bindings_preserve_explicit_denial(feature):
                              protocol='responses', oauth='codex') is False
     assert route_feature({}, feature, protocol='responses', oauth='claude') is False
     assert route_feature({}, feature, protocol='responses') is False
+
+
+def test_subscription_dialects_declare_the_installed_codex_bindings():
+    """Cache and route-feature facts of a subscription live in one table."""
+    from lib.llm_dispatch.cache_settle import CACHE_PROFILE_CODEX
+
+    assert SUBSCRIPTION_DIALECTS == {
+        'codex': {
+            'features': frozenset({
+                'responses_reasoning_replay', 'responses_prompt_cache',
+                'responses_reasoning_summary',
+            }),
+            'cache_profile': CACHE_PROFILE_CODEX,
+        },
+    }
+
+
+def test_second_subscription_dialect_is_added_as_data(monkeypatch):
+    """One table entry installs a dialect; route_feature needs no new branch."""
+    monkeypatch.setitem(SUBSCRIPTION_DIALECTS, 'acme-sub', {
+        'features': frozenset({'responses_prompt_cache'}),
+        'cache_profile': 'acme-sub',
+    })
+    for protocol in ('responses', 'openai_responses'):
+        assert route_feature({}, 'responses_prompt_cache', protocol=protocol,
+                             oauth='acme-sub') is True
+    # An explicit unsupported/unknown declaration still wins.
+    for declaration in ('unsupported', 'unknown', None, False, '', {}):
+        assert route_feature(
+            {'features': {'responses_prompt_cache': declaration}},
+            'responses_prompt_cache', protocol='responses',
+            oauth='acme-sub') is False
+    # Closed-world boundaries are unchanged around the new dialect.
+    assert route_feature({}, 'responses_prompt_cache', protocol='responses',
+                         oauth='claude') is False
+    assert route_feature({}, 'responses_prompt_cache', protocol='anthropic',
+                         oauth='acme-sub') is False
+    assert route_feature({}, 'responses_reasoning_summary',
+                         protocol='responses', oauth='acme-sub') is False
+    # Codex's declared bindings are untouched by the added dialect.
+    assert route_feature({}, 'responses_reasoning_summary',
+                         protocol='responses', oauth='codex') is True
 
 
 def test_explicit_anthropic_compatible_gateway_can_declare_native_extensions():

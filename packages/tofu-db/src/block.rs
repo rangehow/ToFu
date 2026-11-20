@@ -1363,6 +1363,26 @@ pub(crate) enum PayloadByteSource {
         payload_offset: u64,
     },
 }
+#[cfg(test)]
+pub(crate) fn count_read_io_for_test<T>(
+    vfs: &crate::vfs::DeterministicVfs,
+    read: impl FnOnce() -> T,
+) -> (T, (usize, usize)) {
+    use crate::vfs::Operation;
+
+    let start = vfs.trace().unwrap().len();
+    let result = read();
+    let mut opens_and_reads = (0, 0);
+    for operation in &vfs.trace().unwrap()[start..] {
+        match operation {
+            Operation::Open => opens_and_reads.0 += 1,
+            Operation::Read => opens_and_reads.1 += 1,
+            _ => {}
+        }
+    }
+    (result, opens_and_reads)
+}
+
 /// Outcome of one bounded dedupe probe.
 enum DedupeProbe {
     /// Payload bytes resolved through the candidate segments or the loose

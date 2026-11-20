@@ -85,6 +85,8 @@ def build_stdio_environment(config: dict, *, prepare_directories=True,
         environment.pop('TOFU_MCP_OWNER_ID', None)
         from lib.tools.hope_queue_policy import POLICY_ENV
         environment.pop(POLICY_ENV, None)
+    from lib.tools.process_environment import bind_runtime_base
+    bind_runtime_base(environment)
     _propagate_proxy_env(environment)
     # New Node releases support this env switch. Older releases ignore it;
     # adding --use-env-proxy to NODE_OPTIONS makes those releases fail startup.

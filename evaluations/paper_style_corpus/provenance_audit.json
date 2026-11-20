@@ -1,0 +1,5606 @@
+{
+ "gate": "lib.longform.documents.provenance.check_texts (source = the unit revised)",
+ "revisions": 457,
+ "with_unsourced": 2,
+ "results": [
+  {
+   "revision": "drafts_ab/rev-01270ff75a64d4b0d4f7.txt",
+   "label": "",
+   "unit": "C610e358c",
+   "latex": false,
+   "checked": {
+    "numbers": 34,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-0167516e0ac27201ce77.txt",
+   "label": "",
+   "unit": "C8ba4c184",
+   "latex": false,
+   "checked": {
+    "numbers": 11,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-0171b06a86e8334ceae6.txt",
+   "label": "",
+   "unit": "C4c738e0a",
+   "latex": false,
+   "checked": {
+    "numbers": 33,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-0174d5a54ce114e6376b.txt",
+   "label": "",
+   "unit": "C001ccd31",
+   "latex": false,
+   "checked": {
+    "numbers": 3,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-0253bedb82e91278d28a.txt",
+   "label": "",
+   "unit": "C4c738e0a",
+   "latex": false,
+   "checked": {
+    "numbers": 38,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-02c00a0f6feb0db3a237.txt",
+   "label": "",
+   "unit": "Cd8504c68",
+   "latex": false,
+   "checked": {
+    "numbers": 27,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-043bc988211d4d12b81d.txt",
+   "label": "",
+   "unit": "C08e1805c",
+   "latex": false,
+   "checked": {
+    "numbers": 58,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-05a5b1bbf30201dee226.txt",
+   "label": "",
+   "unit": "C01b1f30e",
+   "latex": false,
+   "checked": {
+    "numbers": 50,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-05bf1a3543d7ba4bef46.txt",
+   "label": "",
+   "unit": "C0179e95d",
+   "latex": false,
+   "checked": {
+    "numbers": 51,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-061fec7a9e5c097825c7.txt",
+   "label": "",
+   "unit": "C14be940b",
+   "latex": false,
+   "checked": {
+    "numbers": 72,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-06dc0b17357059173953.txt",
+   "label": "",
+   "unit": "C01b1f30e",
+   "latex": false,
+   "checked": {
+    "numbers": 42,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-0741434e9306dadd7b30.txt",
+   "label": "",
+   "unit": "C2c30dd3d",
+   "latex": false,
+   "checked": {
+    "numbers": 34,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-08720c1b2b7c41ebafdc.txt",
+   "label": "shipped config arm A",
+   "unit": "Cc9ada956",
+   "latex": false,
+   "checked": {
+    "numbers": 39,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-0ac0f0876360f18d0afc.txt",
+   "label": "",
+   "unit": "bf16_mechanism",
+   "latex": true,
+   "checked": {
+    "numbers": 36,
+    "citations": 13
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-0b181af67598dd3f4949.txt",
+   "label": "shipped config arm A",
+   "unit": "Cd8ad1700",
+   "latex": false,
+   "checked": {
+    "numbers": 19,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-0b297542f3311a6c68a9.txt",
+   "label": "",
+   "unit": "C5c572149",
+   "latex": false,
+   "checked": {
+    "numbers": 20,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-0ce4c48d4d63bc06462c.txt",
+   "label": "",
+   "unit": "Cf5031a4a",
+   "latex": false,
+   "checked": {
+    "numbers": 48,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-0d8c85ad826e9ae9b58d.txt",
+   "label": "",
+   "unit": "Ccbbf91d9",
+   "latex": false,
+   "checked": {
+    "numbers": 47,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-0e67191508b722000060.txt",
+   "label": "",
+   "unit": "C610e358c",
+   "latex": false,
+   "checked": {
+    "numbers": 18,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-0ebc66f36084a97af30c.txt",
+   "label": "shipped config arm B",
+   "unit": "C8ba4c184",
+   "latex": false,
+   "checked": {
+    "numbers": 15,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-107190175f16f19da0e2.txt",
+   "label": "",
+   "unit": "C0179e95d",
+   "latex": false,
+   "checked": {
+    "numbers": 51,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-109002db97366663384c.txt",
+   "label": "",
+   "unit": "C001ccd31",
+   "latex": false,
+   "checked": {
+    "numbers": 0,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-10bc8a13da4f758dce3a.txt",
+   "label": "",
+   "unit": "C4c738e0a",
+   "latex": false,
+   "checked": {
+    "numbers": 30,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-110dcc38c1597831070a.txt",
+   "label": "",
+   "unit": "C8dec6da7",
+   "latex": false,
+   "checked": {
+    "numbers": 17,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-123405926ca144d253d0.txt",
+   "label": "",
+   "unit": "Cd8ad1700",
+   "latex": false,
+   "checked": {
+    "numbers": 13,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-13af59812c701fc47513.txt",
+   "label": "shipped config arm A",
+   "unit": "parallel_paper3",
+   "latex": true,
+   "checked": {
+    "numbers": 10,
+    "citations": 10
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-1794545fac31a1ffb203.txt",
+   "label": "",
+   "unit": "Cfc650c98",
+   "latex": false,
+   "checked": {
+    "numbers": 67,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-1920a72aaeaa42dc7cd1.txt",
+   "label": "shipped config arm A",
+   "unit": "parallel_paper3",
+   "latex": true,
+   "checked": {
+    "numbers": 10,
+    "citations": 11
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-1920f8e90535ef28c20e.txt",
+   "label": "",
+   "unit": "C01270227",
+   "latex": false,
+   "checked": {
+    "numbers": 49,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-1952fe1880a60f5ed98c.txt",
+   "label": "",
+   "unit": "C0822766b",
+   "latex": false,
+   "checked": {
+    "numbers": 47,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-19c90bfeea4c8d04a0fa.txt",
+   "label": "",
+   "unit": "C01270227",
+   "latex": false,
+   "checked": {
+    "numbers": 49,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-1c3aaf27e3dddb7f5ae5.txt",
+   "label": "",
+   "unit": "C0822766b",
+   "latex": false,
+   "checked": {
+    "numbers": 48,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-1fb8dc4af15537e501b0.txt",
+   "label": "",
+   "unit": "C08e1805c",
+   "latex": false,
+   "checked": {
+    "numbers": 59,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-2001c511c5b2f5a1d108.txt",
+   "label": "",
+   "unit": "C00af8742",
+   "latex": false,
+   "checked": {
+    "numbers": 28,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-20411b084d4384bbaa76.txt",
+   "label": "",
+   "unit": "C001ccd31",
+   "latex": false,
+   "checked": {
+    "numbers": 0,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-21af6c0849fe5005faa5.txt",
+   "label": "",
+   "unit": "C4c738e0a",
+   "latex": false,
+   "checked": {
+    "numbers": 38,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-21fd7990f3e173791295.txt",
+   "label": "",
+   "unit": "C846d85da",
+   "latex": false,
+   "checked": {
+    "numbers": 95,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-22941b6992a6100be037.txt",
+   "label": "",
+   "unit": "Cf5031a4a",
+   "latex": false,
+   "checked": {
+    "numbers": 47,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-22e02f2c3cf1fb419740.txt",
+   "label": "",
+   "unit": "C00af8742",
+   "latex": false,
+   "checked": {
+    "numbers": 24,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-2555f61504397e2259b9.txt",
+   "label": "",
+   "unit": "C0179e95d",
+   "latex": false,
+   "checked": {
+    "numbers": 53,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-256b6748a9287516b4e8.txt",
+   "label": "",
+   "unit": "C4c738e0a",
+   "latex": false,
+   "checked": {
+    "numbers": 38,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-25cd34b98d53c4a35028.txt",
+   "label": "",
+   "unit": "C01270227",
+   "latex": false,
+   "checked": {
+    "numbers": 47,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-260a1b273fa4a5a2ac03.txt",
+   "label": "shipped config arm B",
+   "unit": "Cfc650c98",
+   "latex": false,
+   "checked": {
+    "numbers": 64,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-295375e8187290cad06c.txt",
+   "label": "",
+   "unit": "Cd8504c68",
+   "latex": false,
+   "checked": {
+    "numbers": 27,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-29d30f03490b615c3bfe.txt",
+   "label": "",
+   "unit": "Cc9ada956",
+   "latex": false,
+   "checked": {
+    "numbers": 37,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-2a62b9bbecee88fe449e.txt",
+   "label": "",
+   "unit": "Cd8ad1700",
+   "latex": false,
+   "checked": {
+    "numbers": 18,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-2b21b83d3879db986f22.txt",
+   "label": "",
+   "unit": "C01b1f30e",
+   "latex": false,
+   "checked": {
+    "numbers": 46,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-2cd2b3bc02d69b6c7ebf.txt",
+   "label": "",
+   "unit": "C5c572149",
+   "latex": false,
+   "checked": {
+    "numbers": 23,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-2d14ffbf8380b95acca4.txt",
+   "label": "",
+   "unit": "C003cf5e3",
+   "latex": false,
+   "checked": {
+    "numbers": 37,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-2d82b14c1e37bfcbb74b.txt",
+   "label": "",
+   "unit": "C8ba4c184",
+   "latex": false,
+   "checked": {
+    "numbers": 9,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-2e6a1332ce1fa5483139.txt",
+   "label": "",
+   "unit": "Cc9ada956",
+   "latex": false,
+   "checked": {
+    "numbers": 31,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-2e9ce8896f9481675623.txt",
+   "label": "shipped config arm A",
+   "unit": "C2c30dd3d",
+   "latex": false,
+   "checked": {
+    "numbers": 38,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-2f0393d752ab27929ef5.txt",
+   "label": "shipped config arm B",
+   "unit": "C346d9621",
+   "latex": false,
+   "checked": {
+    "numbers": 28,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-2f52056211b28dfb8eb9.txt",
+   "label": "",
+   "unit": "C14be940b",
+   "latex": false,
+   "checked": {
+    "numbers": 30,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-2f71892dcf87a94df2c0.txt",
+   "label": "",
+   "unit": "parallel_paper3",
+   "latex": true,
+   "checked": {
+    "numbers": 6,
+    "citations": 10
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-3002ab8f9e5635e67181.txt",
+   "label": "shipped config arm B",
+   "unit": "C0822766b",
+   "latex": false,
+   "checked": {
+    "numbers": 55,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-318f31bcb9c6b25fe00e.txt",
+   "label": "",
+   "unit": "C01b1f30e",
+   "latex": false,
+   "checked": {
+    "numbers": 74,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-32f0f547d497c8e78c8c.txt",
+   "label": "shipped config arm A",
+   "unit": "C346d9621",
+   "latex": false,
+   "checked": {
+    "numbers": 28,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-33a571e38be5470cafd1.txt",
+   "label": "",
+   "unit": "C8ba4c184",
+   "latex": false,
+   "checked": {
+    "numbers": 16,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-349fc92de038537213d0.txt",
+   "label": "",
+   "unit": "C5c572149",
+   "latex": false,
+   "checked": {
+    "numbers": 23,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-354a1e72c111d874d15a.txt",
+   "label": "shipped config arm A",
+   "unit": "C4c738e0a",
+   "latex": false,
+   "checked": {
+    "numbers": 29,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-35cac494c1fe3cd7df2b.txt",
+   "label": "",
+   "unit": "C01270227",
+   "latex": false,
+   "checked": {
+    "numbers": 44,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-36ce96f360d4d2890e49.txt",
+   "label": "",
+   "unit": "C346d9621",
+   "latex": false,
+   "checked": {
+    "numbers": 28,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-3835c1bd5563c6dd23cd.txt",
+   "label": "",
+   "unit": "C2c30dd3d",
+   "latex": false,
+   "checked": {
+    "numbers": 33,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-3abb9efe5f296747f5c5.txt",
+   "label": "",
+   "unit": "Cd8504c68",
+   "latex": false,
+   "checked": {
+    "numbers": 26,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-3b0a348384a4d4816c61.txt",
+   "label": "",
+   "unit": "Cd8504c68",
+   "latex": false,
+   "checked": {
+    "numbers": 24,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-3b0c32ca98842cde583e.txt",
+   "label": "",
+   "unit": "Cf5031a4a",
+   "latex": false,
+   "checked": {
+    "numbers": 47,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-3b5174ec6ac7a897a331.txt",
+   "label": "",
+   "unit": "Cd8504c68",
+   "latex": false,
+   "checked": {
+    "numbers": 29,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-3c5d19d7a7bbf3211409.txt",
+   "label": "",
+   "unit": "C01b1f30e",
+   "latex": false,
+   "checked": {
+    "numbers": 72,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-3c89d40a1c32504b2031.txt",
+   "label": "",
+   "unit": "Cfc650c98",
+   "latex": false,
+   "checked": {
+    "numbers": 66,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-3dbff03cb91c3e980111.txt",
+   "label": "shipped config arm B",
+   "unit": "C4c738e0a",
+   "latex": false,
+   "checked": {
+    "numbers": 44,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-3e9e1d0a7245147ed1bc.txt",
+   "label": "",
+   "unit": "C846d85da",
+   "latex": false,
+   "checked": {
+    "numbers": 83,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-3ef947aa74138ec96a84.txt",
+   "label": "",
+   "unit": "parallel_paper3",
+   "latex": true,
+   "checked": {
+    "numbers": 6,
+    "citations": 10
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-3f225b447101cc2b214a.txt",
+   "label": "",
+   "unit": "Cfc650c98",
+   "latex": false,
+   "checked": {
+    "numbers": 68,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-3f7249504d5a0846bf82.txt",
+   "label": "",
+   "unit": "C346d9621",
+   "latex": false,
+   "checked": {
+    "numbers": 25,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-3fad313216058c6926bd.txt",
+   "label": "",
+   "unit": "C00af8742",
+   "latex": false,
+   "checked": {
+    "numbers": 44,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-4004e846004ba0d3edd0.txt",
+   "label": "shipped config arm B",
+   "unit": "C08e1805c",
+   "latex": false,
+   "checked": {
+    "numbers": 60,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-410a2cbd5c2e9873c716.txt",
+   "label": "",
+   "unit": "C4c738e0a",
+   "latex": false,
+   "checked": {
+    "numbers": 31,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-41936b3ae5f8c14e210d.txt",
+   "label": "",
+   "unit": "C08e1805c",
+   "latex": false,
+   "checked": {
+    "numbers": 59,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-4225415c9eda0c1b1e8b.txt",
+   "label": "shipped config arm A",
+   "unit": "C14be940b",
+   "latex": false,
+   "checked": {
+    "numbers": 67,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-42934dc40d128465e5c6.txt",
+   "label": "",
+   "unit": "C003cf5e3",
+   "latex": false,
+   "checked": {
+    "numbers": 35,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-4314528a97005d34cefe.txt",
+   "label": "",
+   "unit": "Cd8ad1700",
+   "latex": false,
+   "checked": {
+    "numbers": 14,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-431a0d967d0fcaa8c6d2.txt",
+   "label": "",
+   "unit": "C8ba4c184",
+   "latex": false,
+   "checked": {
+    "numbers": 12,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-432dfe3b74789f87cbb0.txt",
+   "label": "shipped config arm B",
+   "unit": "C2c30dd3d",
+   "latex": false,
+   "checked": {
+    "numbers": 34,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-43445e57d4c85634a366.txt",
+   "label": "",
+   "unit": "C846d85da",
+   "latex": false,
+   "checked": {
+    "numbers": 88,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-43d49d8d51558bdf8ce6.txt",
+   "label": "",
+   "unit": "C01270227",
+   "latex": false,
+   "checked": {
+    "numbers": 52,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-44105f848ef91c47c216.txt",
+   "label": "",
+   "unit": "C2c30dd3d",
+   "latex": false,
+   "checked": {
+    "numbers": 38,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-4443b4b7964e9157a2c9.txt",
+   "label": "",
+   "unit": "Cfc650c98",
+   "latex": false,
+   "checked": {
+    "numbers": 75,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-4457a330fff93546c702.txt",
+   "label": "shipped config arm A",
+   "unit": "Cfc650c98",
+   "latex": false,
+   "checked": {
+    "numbers": 66,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-447e30d16031628b3680.txt",
+   "label": "",
+   "unit": "C610e358c",
+   "latex": false,
+   "checked": {
+    "numbers": 36,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-44b5993686397fcc09a5.txt",
+   "label": "",
+   "unit": "C08e1805c",
+   "latex": false,
+   "checked": {
+    "numbers": 60,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-44d371b3f7b95f645467.txt",
+   "label": "",
+   "unit": "C0822766b",
+   "latex": false,
+   "checked": {
+    "numbers": 48,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-45883c56d8441863ea4a.txt",
+   "label": "",
+   "unit": "C5c572149",
+   "latex": false,
+   "checked": {
+    "numbers": 21,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-46b8995e9389e6a6ab57.txt",
+   "label": "",
+   "unit": "bf16_mechanism",
+   "latex": true,
+   "checked": {
+    "numbers": 37,
+    "citations": 16
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-471df35e43544972e4cd.txt",
+   "label": "",
+   "unit": "C01270227",
+   "latex": false,
+   "checked": {
+    "numbers": 42,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-471fc69c05987158825c.txt",
+   "label": "shipped config arm A",
+   "unit": "C846d85da",
+   "latex": false,
+   "checked": {
+    "numbers": 85,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-48304f3112dcf1b2a596.txt",
+   "label": "shipped config arm A",
+   "unit": "C610e358c",
+   "latex": false,
+   "checked": {
+    "numbers": 35,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-484782dd8c46e6ee028f.txt",
+   "label": "",
+   "unit": "Ccbbf91d9",
+   "latex": false,
+   "checked": {
+    "numbers": 48,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-4899cb62523edc82ff20.txt",
+   "label": "shipped config arm B",
+   "unit": "Cd8ad1700",
+   "latex": false,
+   "checked": {
+    "numbers": 19,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-490844e689a8081e86c5.txt",
+   "label": "",
+   "unit": "bf16_mechanism",
+   "latex": true,
+   "checked": {
+    "numbers": 44,
+    "citations": 13
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-49bc9b87f7d01e519d2a.txt",
+   "label": "shipped config arm A",
+   "unit": "C01b1f30e",
+   "latex": false,
+   "checked": {
+    "numbers": 36,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-49dfa0c783da60a76a46.txt",
+   "label": "",
+   "unit": "C346d9621",
+   "latex": false,
+   "checked": {
+    "numbers": 31,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-4a6fb1bb6dd9077c9c9e.txt",
+   "label": "",
+   "unit": "C003cf5e3",
+   "latex": false,
+   "checked": {
+    "numbers": 35,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-4aa7577e5e00812f710b.txt",
+   "label": "",
+   "unit": "C00af8742",
+   "latex": false,
+   "checked": {
+    "numbers": 43,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-4b066533414c4a32545e.txt",
+   "label": "",
+   "unit": "C00802146",
+   "latex": false,
+   "checked": {
+    "numbers": 44,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-4c1e782533bdab5a7eb6.txt",
+   "label": "",
+   "unit": "C08e1805c",
+   "latex": false,
+   "checked": {
+    "numbers": 60,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-4ddc24b74e1a7f91ff2a.txt",
+   "label": "",
+   "unit": "C346d9621",
+   "latex": false,
+   "checked": {
+    "numbers": 28,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-4e0a381cfb40c2ab6b15.txt",
+   "label": "",
+   "unit": "C001ccd31",
+   "latex": false,
+   "checked": {
+    "numbers": 0,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-4eca4e39e6f295b2bca4.txt",
+   "label": "",
+   "unit": "Cf5031a4a",
+   "latex": false,
+   "checked": {
+    "numbers": 24,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-4fcfedfbc89e8b5628fe.txt",
+   "label": "",
+   "unit": "C003cf5e3",
+   "latex": false,
+   "checked": {
+    "numbers": 47,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-50980dbc8b7c59dcdc91.txt",
+   "label": "",
+   "unit": "C8dec6da7",
+   "latex": false,
+   "checked": {
+    "numbers": 21,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-50c1d22355ebfdffeaab.txt",
+   "label": "shipped config arm B",
+   "unit": "Ccbbf91d9",
+   "latex": false,
+   "checked": {
+    "numbers": 47,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-5241e9516c3a3ffdd8b8.txt",
+   "label": "",
+   "unit": "Ccbbf91d9",
+   "latex": false,
+   "checked": {
+    "numbers": 46,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-534ec1cff940bd08590c.txt",
+   "label": "",
+   "unit": "bf16_mechanism",
+   "latex": true,
+   "checked": {
+    "numbers": 45,
+    "citations": 13
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-55383fdf535fc6ed7e27.txt",
+   "label": "",
+   "unit": "Cfc650c98",
+   "latex": false,
+   "checked": {
+    "numbers": 67,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-569b1cf68d34aad11d23.txt",
+   "label": "",
+   "unit": "C0822766b",
+   "latex": false,
+   "checked": {
+    "numbers": 51,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-56e627aae006986a7626.txt",
+   "label": "",
+   "unit": "C003cf5e3",
+   "latex": false,
+   "checked": {
+    "numbers": 37,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-579f3eb76e2413f45a93.txt",
+   "label": "",
+   "unit": "C8dec6da7",
+   "latex": false,
+   "checked": {
+    "numbers": 18,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-59168477db39dabc65ad.txt",
+   "label": "",
+   "unit": "C0822766b",
+   "latex": false,
+   "checked": {
+    "numbers": 48,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-598182a64b774c9449d3.txt",
+   "label": "shipped config arm B",
+   "unit": "parallel_paper3",
+   "latex": true,
+   "checked": {
+    "numbers": 9,
+    "citations": 9
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-5a71bb87d151617cbf63.txt",
+   "label": "",
+   "unit": "C846d85da",
+   "latex": false,
+   "checked": {
+    "numbers": 79,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-5ae10f6590a8075c5115.txt",
+   "label": "",
+   "unit": "C846d85da",
+   "latex": false,
+   "checked": {
+    "numbers": 83,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-5ae74cfdc564783831b4.txt",
+   "label": "",
+   "unit": "C0179e95d",
+   "latex": false,
+   "checked": {
+    "numbers": 53,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-5b6789fce2913d34df9f.txt",
+   "label": "",
+   "unit": "bf16_mechanism",
+   "latex": true,
+   "checked": {
+    "numbers": 39,
+    "citations": 16
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-5c27a8fe7371d324a20b.txt",
+   "label": "",
+   "unit": "Cd8504c68",
+   "latex": false,
+   "checked": {
+    "numbers": 22,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-5c64a233c20bfe4720f9.txt",
+   "label": "shipped config arm A",
+   "unit": "C00802146",
+   "latex": false,
+   "checked": {
+    "numbers": 34,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-5d9c34d3e91dd5959df2.txt",
+   "label": "",
+   "unit": "Cf5031a4a",
+   "latex": false,
+   "checked": {
+    "numbers": 54,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-5ea5f7361f749ce5d88d.txt",
+   "label": "shipped config arm A",
+   "unit": "bf16_mechanism",
+   "latex": true,
+   "checked": {
+    "numbers": 35,
+    "citations": 16
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-5f83aefe17298e16a9ad.txt",
+   "label": "",
+   "unit": "Cd8ad1700",
+   "latex": false,
+   "checked": {
+    "numbers": 15,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-5fbd7174593331cc0b2a.txt",
+   "label": "shipped config arm B",
+   "unit": "Cd8504c68",
+   "latex": false,
+   "checked": {
+    "numbers": 35,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-6135c95873143748f957.txt",
+   "label": "",
+   "unit": "C346d9621",
+   "latex": false,
+   "checked": {
+    "numbers": 30,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-62518ae05d3c305f804d.txt",
+   "label": "",
+   "unit": "C5c572149",
+   "latex": false,
+   "checked": {
+    "numbers": 25,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-6310a9aa9d3268c2103d.txt",
+   "label": "",
+   "unit": "Cd8504c68",
+   "latex": false,
+   "checked": {
+    "numbers": 27,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-63e142178fd818e39ba4.txt",
+   "label": "",
+   "unit": "C5c572149",
+   "latex": false,
+   "checked": {
+    "numbers": 25,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-649f9e3395d53f3ba3cb.txt",
+   "label": "",
+   "unit": "C8ba4c184",
+   "latex": false,
+   "checked": {
+    "numbers": 9,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-64a6fd6fb2929b349f56.txt",
+   "label": "shipped config arm B",
+   "unit": "Cc9ada956",
+   "latex": false,
+   "checked": {
+    "numbers": 40,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-65e407d8ade54b38baf4.txt",
+   "label": "",
+   "unit": "C01270227",
+   "latex": false,
+   "checked": {
+    "numbers": 49,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-6639af1018aba32ab7b0.txt",
+   "label": "",
+   "unit": "Ccbbf91d9",
+   "latex": false,
+   "checked": {
+    "numbers": 47,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-66536b8b1f2d30287873.txt",
+   "label": "",
+   "unit": "C4c738e0a",
+   "latex": false,
+   "checked": {
+    "numbers": 32,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-69304cab0669d701e554.txt",
+   "label": "",
+   "unit": "C5c572149",
+   "latex": false,
+   "checked": {
+    "numbers": 24,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-695b1040f8aac0b317a7.txt",
+   "label": "",
+   "unit": "C00af8742",
+   "latex": false,
+   "checked": {
+    "numbers": 49,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-6be2d6ff51c9d72afa9c.txt",
+   "label": "shipped config arm B",
+   "unit": "C14be940b",
+   "latex": false,
+   "checked": {
+    "numbers": 46,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-6cefa6a49acbaef932d2.txt",
+   "label": "",
+   "unit": "C001ccd31",
+   "latex": false,
+   "checked": {
+    "numbers": 0,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-6d5a61a849c38b5c9593.txt",
+   "label": "shipped config arm B",
+   "unit": "parallel_paper3",
+   "latex": true,
+   "checked": {
+    "numbers": 12,
+    "citations": 12
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-6fb84b37a6a08f188aab.txt",
+   "label": "",
+   "unit": "C14be940b",
+   "latex": false,
+   "checked": {
+    "numbers": 63,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-71b45802837dc3478d4c.txt",
+   "label": "",
+   "unit": "C0822766b",
+   "latex": false,
+   "checked": {
+    "numbers": 45,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-71be93caf88069d05a6d.txt",
+   "label": "",
+   "unit": "C00af8742",
+   "latex": false,
+   "checked": {
+    "numbers": 24,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-720a2b59d68ab1346877.txt",
+   "label": "",
+   "unit": "C0822766b",
+   "latex": false,
+   "checked": {
+    "numbers": 46,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-729b57c412e18075746a.txt",
+   "label": "",
+   "unit": "C2c30dd3d",
+   "latex": false,
+   "checked": {
+    "numbers": 29,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-731d10f854709ecd79ea.txt",
+   "label": "",
+   "unit": "C5c572149",
+   "latex": false,
+   "checked": {
+    "numbers": 21,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-7399ed92e0371ac60ae0.txt",
+   "label": "",
+   "unit": "Cfc650c98",
+   "latex": false,
+   "checked": {
+    "numbers": 67,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-7479a7f3726eeb9331bc.txt",
+   "label": "",
+   "unit": "Cfc650c98",
+   "latex": false,
+   "checked": {
+    "numbers": 58,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-74f283827fb6f38447d9.txt",
+   "label": "",
+   "unit": "Cf5031a4a",
+   "latex": false,
+   "checked": {
+    "numbers": 23,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-74fd5bbceee83263f49c.txt",
+   "label": "",
+   "unit": "C346d9621",
+   "latex": false,
+   "checked": {
+    "numbers": 25,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-7517fc382b72bb9d19f1.txt",
+   "label": "",
+   "unit": "C346d9621",
+   "latex": false,
+   "checked": {
+    "numbers": 33,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-7613ace4bd049ce73822.txt",
+   "label": "shipped config arm B",
+   "unit": "C00af8742",
+   "latex": false,
+   "checked": {
+    "numbers": 36,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-76801a830171d0a2704a.txt",
+   "label": "shipped config arm A",
+   "unit": "parallel_paper3",
+   "latex": true,
+   "checked": {
+    "numbers": 6,
+    "citations": 12
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-768214537f3a9678b630.txt",
+   "label": "",
+   "unit": "C01270227",
+   "latex": false,
+   "checked": {
+    "numbers": 41,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-7866ff3ecb7531f3df73.txt",
+   "label": "",
+   "unit": "C346d9621",
+   "latex": false,
+   "checked": {
+    "numbers": 27,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-793ce5db6414c9c33187.txt",
+   "label": "",
+   "unit": "C00af8742",
+   "latex": false,
+   "checked": {
+    "numbers": 24,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-7962ea3450fe7823693f.txt",
+   "label": "",
+   "unit": "C003cf5e3",
+   "latex": false,
+   "checked": {
+    "numbers": 33,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-796face6f54b0f540393.txt",
+   "label": "",
+   "unit": "C610e358c",
+   "latex": false,
+   "checked": {
+    "numbers": 24,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-7a735453e01d528a1df4.txt",
+   "label": "",
+   "unit": "C610e358c",
+   "latex": false,
+   "checked": {
+    "numbers": 28,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-7bbfc544411a5e7b58bd.txt",
+   "label": "",
+   "unit": "C001ccd31",
+   "latex": false,
+   "checked": {
+    "numbers": 0,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-7bf822246e5fac43263d.txt",
+   "label": "",
+   "unit": "parallel_paper3",
+   "latex": true,
+   "checked": {
+    "numbers": 7,
+    "citations": 13
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-7c719ac3b6a677913a81.txt",
+   "label": "",
+   "unit": "C0179e95d",
+   "latex": false,
+   "checked": {
+    "numbers": 48,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-7c78b7b3be81c2e64c38.txt",
+   "label": "shipped config arm A",
+   "unit": "C0822766b",
+   "latex": false,
+   "checked": {
+    "numbers": 52,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-7f379ebbb9f1fea0332e.txt",
+   "label": "",
+   "unit": "Cc9ada956",
+   "latex": false,
+   "checked": {
+    "numbers": 40,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-8109bc2ad005f7373a18.txt",
+   "label": "",
+   "unit": "C5c572149",
+   "latex": false,
+   "checked": {
+    "numbers": 25,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-820404539564424b0380.txt",
+   "label": "",
+   "unit": "C01270227",
+   "latex": false,
+   "checked": {
+    "numbers": 41,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-821f46133047f13ba41c.txt",
+   "label": "",
+   "unit": "C846d85da",
+   "latex": false,
+   "checked": {
+    "numbers": 47,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-83abed30318cfeebd205.txt",
+   "label": "",
+   "unit": "C8dec6da7",
+   "latex": false,
+   "checked": {
+    "numbers": 17,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-83daf327a8fdc9b54bca.txt",
+   "label": "",
+   "unit": "C08e1805c",
+   "latex": false,
+   "checked": {
+    "numbers": 63,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-842bebf4ebba3abbf5e3.txt",
+   "label": "",
+   "unit": "C00802146",
+   "latex": false,
+   "checked": {
+    "numbers": 32,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-850a01488cfc982e4338.txt",
+   "label": "",
+   "unit": "Cc9ada956",
+   "latex": false,
+   "checked": {
+    "numbers": 34,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-856eab4ab70fdb7a50ce.txt",
+   "label": "",
+   "unit": "Ccbbf91d9",
+   "latex": false,
+   "checked": {
+    "numbers": 52,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-863714bb7b387d9dfd52.txt",
+   "label": "",
+   "unit": "C0179e95d",
+   "latex": false,
+   "checked": {
+    "numbers": 52,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-8780c39f2ae8b012a879.txt",
+   "label": "",
+   "unit": "C14be940b",
+   "latex": false,
+   "checked": {
+    "numbers": 69,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-8896b74ed4ff011f3ae8.txt",
+   "label": "",
+   "unit": "C003cf5e3",
+   "latex": false,
+   "checked": {
+    "numbers": 53,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-88b25c82597097518c42.txt",
+   "label": "shipped config arm A",
+   "unit": "C8dec6da7",
+   "latex": false,
+   "checked": {
+    "numbers": 22,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-8bb9e2db73a5899efa8d.txt",
+   "label": "",
+   "unit": "parallel_paper3",
+   "latex": true,
+   "checked": {
+    "numbers": 6,
+    "citations": 10
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-8bdb03bb78851185e8a6.txt",
+   "label": "shipped config arm A",
+   "unit": "C0179e95d",
+   "latex": false,
+   "checked": {
+    "numbers": 61,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-8da29f2ae1c0494e985d.txt",
+   "label": "",
+   "unit": "C00802146",
+   "latex": false,
+   "checked": {
+    "numbers": 33,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-8e62a21baa3c5bccbe1b.txt",
+   "label": "",
+   "unit": "C00802146",
+   "latex": false,
+   "checked": {
+    "numbers": 32,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-8e720b87de37d4c161e2.txt",
+   "label": "",
+   "unit": "C14be940b",
+   "latex": false,
+   "checked": {
+    "numbers": 26,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-8f1cc5c27d26a4969ff9.txt",
+   "label": "",
+   "unit": "C2c30dd3d",
+   "latex": false,
+   "checked": {
+    "numbers": 34,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-8fb4b63f5fe956faf8d8.txt",
+   "label": "shipped config arm B",
+   "unit": "C003cf5e3",
+   "latex": false,
+   "checked": {
+    "numbers": 35,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-8ffa4e734df5ebf9657a.txt",
+   "label": "",
+   "unit": "Cf5031a4a",
+   "latex": false,
+   "checked": {
+    "numbers": 48,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-91ac2c36973a0734349d.txt",
+   "label": "",
+   "unit": "C8dec6da7",
+   "latex": false,
+   "checked": {
+    "numbers": 20,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-92179330bdfc5a385842.txt",
+   "label": "",
+   "unit": "C610e358c",
+   "latex": false,
+   "checked": {
+    "numbers": 25,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-933a946b700f6a3f5d23.txt",
+   "label": "shipped config arm A",
+   "unit": "C001ccd31",
+   "latex": false,
+   "checked": {
+    "numbers": 6,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-9591dadd433da025de8c.txt",
+   "label": "",
+   "unit": "C0822766b",
+   "latex": false,
+   "checked": {
+    "numbers": 49,
+    "citations": 0
+   },
+   "unsourced": [
+    {
+     "kind": "number",
+     "value": "1.2",
+     "location": "drafts_ab/rev-9591dadd433da025de8c.txt:29",
+     "context": "1.2 LIMITATIONS"
+    }
+   ],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-9705ef21e7a30d97fb3e.txt",
+   "label": "",
+   "unit": "C8dec6da7",
+   "latex": false,
+   "checked": {
+    "numbers": 17,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-97abc96bbfa1ffbea183.txt",
+   "label": "",
+   "unit": "C01b1f30e",
+   "latex": false,
+   "checked": {
+    "numbers": 45,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-982b47c8e4530db3d7ba.txt",
+   "label": "",
+   "unit": "C4c738e0a",
+   "latex": false,
+   "checked": {
+    "numbers": 38,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-9988e6159da43fe55248.txt",
+   "label": "",
+   "unit": "C00802146",
+   "latex": false,
+   "checked": {
+    "numbers": 55,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-9a542fd3da948e645649.txt",
+   "label": "shipped config arm B",
+   "unit": "C0179e95d",
+   "latex": false,
+   "checked": {
+    "numbers": 60,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-9bc4c6a75788a600d2cf.txt",
+   "label": "shipped config arm B",
+   "unit": "C8dec6da7",
+   "latex": false,
+   "checked": {
+    "numbers": 23,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-9c0cb6364e5dc16babdd.txt",
+   "label": "",
+   "unit": "Cd8504c68",
+   "latex": false,
+   "checked": {
+    "numbers": 24,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-9cf30ebc791e31824e2e.txt",
+   "label": "",
+   "unit": "Cd8504c68",
+   "latex": false,
+   "checked": {
+    "numbers": 31,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-9ecd8bb87db23548b207.txt",
+   "label": "shipped config arm B",
+   "unit": "C01b1f30e",
+   "latex": false,
+   "checked": {
+    "numbers": 49,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-9eeedf8eda989eeaeafd.txt",
+   "label": "",
+   "unit": "C01b1f30e",
+   "latex": false,
+   "checked": {
+    "numbers": 46,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-a141d86c561f2abf30ff.txt",
+   "label": "",
+   "unit": "bf16_mechanism",
+   "latex": true,
+   "checked": {
+    "numbers": 38,
+    "citations": 13
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-a15f248cf20d7df60f0f.txt",
+   "label": "",
+   "unit": "C00802146",
+   "latex": false,
+   "checked": {
+    "numbers": 30,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-a267fb0c3339c7ff42f3.txt",
+   "label": "",
+   "unit": "Cd8ad1700",
+   "latex": false,
+   "checked": {
+    "numbers": 16,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-a3ae40c089b35c2d334f.txt",
+   "label": "",
+   "unit": "C346d9621",
+   "latex": false,
+   "checked": {
+    "numbers": 30,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-a3c612d3a69391fed7c1.txt",
+   "label": "",
+   "unit": "C8dec6da7",
+   "latex": false,
+   "checked": {
+    "numbers": 26,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-a40a53042091f9c1b1d4.txt",
+   "label": "",
+   "unit": "Cd8ad1700",
+   "latex": false,
+   "checked": {
+    "numbers": 16,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-a41bb42db7ac0b3a08d3.txt",
+   "label": "",
+   "unit": "parallel_paper3",
+   "latex": true,
+   "checked": {
+    "numbers": 6,
+    "citations": 10
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-a55874d4e1431f3e3bac.txt",
+   "label": "",
+   "unit": "C003cf5e3",
+   "latex": false,
+   "checked": {
+    "numbers": 33,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-a5881beb5e4c5bfa3b10.txt",
+   "label": "shipped config arm B",
+   "unit": "C846d85da",
+   "latex": false,
+   "checked": {
+    "numbers": 85,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-a5c1babdcd57e9453643.txt",
+   "label": "shipped config arm A",
+   "unit": "C01270227",
+   "latex": false,
+   "checked": {
+    "numbers": 55,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-a7343aa75e3f736acb64.txt",
+   "label": "",
+   "unit": "C001ccd31",
+   "latex": false,
+   "checked": {
+    "numbers": 0,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-a7ce8e69884ad9b285e3.txt",
+   "label": "",
+   "unit": "C14be940b",
+   "latex": false,
+   "checked": {
+    "numbers": 72,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-a904ae749efe2984e5d7.txt",
+   "label": "",
+   "unit": "C08e1805c",
+   "latex": false,
+   "checked": {
+    "numbers": 67,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-a93c875c686d34c67f5b.txt",
+   "label": "shipped config arm A",
+   "unit": "C5c572149",
+   "latex": false,
+   "checked": {
+    "numbers": 26,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-a9d159690fcdeb19b589.txt",
+   "label": "",
+   "unit": "C8dec6da7",
+   "latex": false,
+   "checked": {
+    "numbers": 18,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-aa75c48bc0a07d8594f3.txt",
+   "label": "",
+   "unit": "C2c30dd3d",
+   "latex": false,
+   "checked": {
+    "numbers": 34,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-aa7f24147e9e5c7ab858.txt",
+   "label": "",
+   "unit": "C0179e95d",
+   "latex": false,
+   "checked": {
+    "numbers": 57,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-aadb379d2441844216f6.txt",
+   "label": "",
+   "unit": "C00802146",
+   "latex": false,
+   "checked": {
+    "numbers": 47,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-ab0e51123ef52c2da84b.txt",
+   "label": "shipped config arm A",
+   "unit": "C00af8742",
+   "latex": false,
+   "checked": {
+    "numbers": 48,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-ab7928967b4e006fe2d7.txt",
+   "label": "",
+   "unit": "C0822766b",
+   "latex": false,
+   "checked": {
+    "numbers": 48,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-acc847afab9279b36ddc.txt",
+   "label": "",
+   "unit": "bf16_mechanism",
+   "latex": true,
+   "checked": {
+    "numbers": 38,
+    "citations": 13
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-ae5433480fb2b3e81891.txt",
+   "label": "",
+   "unit": "bf16_mechanism",
+   "latex": true,
+   "checked": {
+    "numbers": 35,
+    "citations": 13
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-af2c879a786980621ad4.txt",
+   "label": "",
+   "unit": "C610e358c",
+   "latex": false,
+   "checked": {
+    "numbers": 32,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-b1f9c9e382aa5ab383d0.txt",
+   "label": "",
+   "unit": "Ccbbf91d9",
+   "latex": false,
+   "checked": {
+    "numbers": 57,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-b1fe53d419f5ae94c692.txt",
+   "label": "",
+   "unit": "C00802146",
+   "latex": false,
+   "checked": {
+    "numbers": 32,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-b2e47461333d1acfddeb.txt",
+   "label": "",
+   "unit": "C610e358c",
+   "latex": false,
+   "checked": {
+    "numbers": 27,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-b3aa31c6a6e1963aef39.txt",
+   "label": "shipped config arm B",
+   "unit": "C001ccd31",
+   "latex": false,
+   "checked": {
+    "numbers": 3,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-b5a46f0515d79c3d047b.txt",
+   "label": "",
+   "unit": "C001ccd31",
+   "latex": false,
+   "checked": {
+    "numbers": 0,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-b67ed8aad842440faed0.txt",
+   "label": "",
+   "unit": "parallel_paper3",
+   "latex": true,
+   "checked": {
+    "numbers": 6,
+    "citations": 13
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-b81cd01281237ed801d1.txt",
+   "label": "",
+   "unit": "C5c572149",
+   "latex": false,
+   "checked": {
+    "numbers": 27,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-b8214b9963778728bab5.txt",
+   "label": "",
+   "unit": "C346d9621",
+   "latex": false,
+   "checked": {
+    "numbers": 29,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-b994b4c9e976abf55c4f.txt",
+   "label": "",
+   "unit": "C4c738e0a",
+   "latex": false,
+   "checked": {
+    "numbers": 31,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-b9f63424d4686ef7b8bf.txt",
+   "label": "",
+   "unit": "Cfc650c98",
+   "latex": false,
+   "checked": {
+    "numbers": 65,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-ba178f48e87720893201.txt",
+   "label": "",
+   "unit": "C08e1805c",
+   "latex": false,
+   "checked": {
+    "numbers": 60,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-bac18acfeb8107574125.txt",
+   "label": "",
+   "unit": "Cd8ad1700",
+   "latex": false,
+   "checked": {
+    "numbers": 15,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-bacee8c607ad522aa45e.txt",
+   "label": "",
+   "unit": "C846d85da",
+   "latex": false,
+   "checked": {
+    "numbers": 85,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-bad63b46676d6ae61147.txt",
+   "label": "shipped config arm B",
+   "unit": "C610e358c",
+   "latex": false,
+   "checked": {
+    "numbers": 39,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-bbbee0dac749afa9ed77.txt",
+   "label": "",
+   "unit": "C0179e95d",
+   "latex": false,
+   "checked": {
+    "numbers": 48,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-bbebe817f859d1a22fcb.txt",
+   "label": "",
+   "unit": "parallel_paper3",
+   "latex": true,
+   "checked": {
+    "numbers": 7,
+    "citations": 11
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-bdf01f54270d8ac5611b.txt",
+   "label": "",
+   "unit": "C003cf5e3",
+   "latex": false,
+   "checked": {
+    "numbers": 46,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-be0b2a2ceac0d8507139.txt",
+   "label": "",
+   "unit": "Cf5031a4a",
+   "latex": false,
+   "checked": {
+    "numbers": 49,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-c05f0a8f3c70d325b736.txt",
+   "label": "",
+   "unit": "C0179e95d",
+   "latex": false,
+   "checked": {
+    "numbers": 50,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-c1bbdafa07f2f14f7935.txt",
+   "label": "",
+   "unit": "C846d85da",
+   "latex": false,
+   "checked": {
+    "numbers": 74,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-c20cc8fce1b1a9615bf3.txt",
+   "label": "",
+   "unit": "Ccbbf91d9",
+   "latex": false,
+   "checked": {
+    "numbers": 55,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-c25b3e1b881464b4e539.txt",
+   "label": "",
+   "unit": "parallel_paper3",
+   "latex": true,
+   "checked": {
+    "numbers": 7,
+    "citations": 10
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-c454917f8756642ae358.txt",
+   "label": "shipped config arm A",
+   "unit": "C003cf5e3",
+   "latex": false,
+   "checked": {
+    "numbers": 45,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-c48718584fa474e19c32.txt",
+   "label": "shipped config arm A",
+   "unit": "C8ba4c184",
+   "latex": false,
+   "checked": {
+    "numbers": 13,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-c4f76a7b24e8266bc5b8.txt",
+   "label": "",
+   "unit": "C846d85da",
+   "latex": false,
+   "checked": {
+    "numbers": 94,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-c560734f86a525fecfa6.txt",
+   "label": "",
+   "unit": "C610e358c",
+   "latex": false,
+   "checked": {
+    "numbers": 42,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-c6b6f503ef7ac9e79de7.txt",
+   "label": "",
+   "unit": "C08e1805c",
+   "latex": false,
+   "checked": {
+    "numbers": 65,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-c6fd7b78c2759c3175fd.txt",
+   "label": "",
+   "unit": "C4c738e0a",
+   "latex": false,
+   "checked": {
+    "numbers": 34,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-c79e272c89b20ffcf135.txt",
+   "label": "shipped config arm B",
+   "unit": "C00802146",
+   "latex": false,
+   "checked": {
+    "numbers": 45,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-c7d9f7b3431c0a336616.txt",
+   "label": "",
+   "unit": "C00af8742",
+   "latex": false,
+   "checked": {
+    "numbers": 32,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-c88b7a9450eccbece0ac.txt",
+   "label": "",
+   "unit": "C08e1805c",
+   "latex": false,
+   "checked": {
+    "numbers": 59,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-ca322af6555c79f74087.txt",
+   "label": "",
+   "unit": "parallel_paper3",
+   "latex": true,
+   "checked": {
+    "numbers": 7,
+    "citations": 10
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-cb427a62e6d7d2498434.txt",
+   "label": "",
+   "unit": "C00802146",
+   "latex": false,
+   "checked": {
+    "numbers": 34,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-cc3cf87688468d2d35d1.txt",
+   "label": "",
+   "unit": "C08e1805c",
+   "latex": false,
+   "checked": {
+    "numbers": 57,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-cda040564f2afada649d.txt",
+   "label": "",
+   "unit": "C003cf5e3",
+   "latex": false,
+   "checked": {
+    "numbers": 33,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-cdf43625f6428f789619.txt",
+   "label": "",
+   "unit": "Cd8504c68",
+   "latex": false,
+   "checked": {
+    "numbers": 30,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-ce260d8d1d5b4f8980cf.txt",
+   "label": "",
+   "unit": "C00af8742",
+   "latex": false,
+   "checked": {
+    "numbers": 35,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-ce768056a474585eec8c.txt",
+   "label": "",
+   "unit": "C00802146",
+   "latex": false,
+   "checked": {
+    "numbers": 41,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-cfb35d9e772cc40f6d93.txt",
+   "label": "",
+   "unit": "C001ccd31",
+   "latex": false,
+   "checked": {
+    "numbers": 0,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-d041d199ec9ab1775508.txt",
+   "label": "",
+   "unit": "C610e358c",
+   "latex": false,
+   "checked": {
+    "numbers": 19,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-d052cf3f927ca78cb04b.txt",
+   "label": "shipped config arm B",
+   "unit": "C01270227",
+   "latex": false,
+   "checked": {
+    "numbers": 51,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-d0686bf527090f027c6e.txt",
+   "label": "",
+   "unit": "C01270227",
+   "latex": false,
+   "checked": {
+    "numbers": 45,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-d191ecdd8ccd4ae62570.txt",
+   "label": "",
+   "unit": "C5c572149",
+   "latex": false,
+   "checked": {
+    "numbers": 17,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-d1c3628e67fb4d943697.txt",
+   "label": "",
+   "unit": "Ccbbf91d9",
+   "latex": false,
+   "checked": {
+    "numbers": 55,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-d329e8bdfaa2524b0b17.txt",
+   "label": "",
+   "unit": "C610e358c",
+   "latex": false,
+   "checked": {
+    "numbers": 32,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-d4049d8f5e63fc3603cb.txt",
+   "label": "",
+   "unit": "C01b1f30e",
+   "latex": false,
+   "checked": {
+    "numbers": 44,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-d447d17f550f2846ade9.txt",
+   "label": "",
+   "unit": "Cc9ada956",
+   "latex": false,
+   "checked": {
+    "numbers": 34,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-d509b6c0d3da219a3ade.txt",
+   "label": "",
+   "unit": "C2c30dd3d",
+   "latex": false,
+   "checked": {
+    "numbers": 38,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-d53d8197a4b25ab9d579.txt",
+   "label": "",
+   "unit": "C8dec6da7",
+   "latex": false,
+   "checked": {
+    "numbers": 16,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-d589c065033617ae2a54.txt",
+   "label": "",
+   "unit": "C846d85da",
+   "latex": false,
+   "checked": {
+    "numbers": 74,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-d5e44ba4b30efe84d0bd.txt",
+   "label": "",
+   "unit": "C2c30dd3d",
+   "latex": false,
+   "checked": {
+    "numbers": 35,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-d6c648b5740ca4ee75fe.txt",
+   "label": "",
+   "unit": "bf16_mechanism",
+   "latex": true,
+   "checked": {
+    "numbers": 43,
+    "citations": 13
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-d931c986924027267142.txt",
+   "label": "",
+   "unit": "Ccbbf91d9",
+   "latex": false,
+   "checked": {
+    "numbers": 47,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-da1c14761edf27994642.txt",
+   "label": "",
+   "unit": "Cc9ada956",
+   "latex": false,
+   "checked": {
+    "numbers": 34,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-da1d322ab27b27e7fa35.txt",
+   "label": "",
+   "unit": "Cd8ad1700",
+   "latex": false,
+   "checked": {
+    "numbers": 15,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-dbd6817655797f2c2eca.txt",
+   "label": "",
+   "unit": "C01270227",
+   "latex": false,
+   "checked": {
+    "numbers": 39,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-dc1b81c7448e8cc9557b.txt",
+   "label": "",
+   "unit": "Cfc650c98",
+   "latex": false,
+   "checked": {
+    "numbers": 67,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-dc6bc97639097ea7919a.txt",
+   "label": "",
+   "unit": "C01b1f30e",
+   "latex": false,
+   "checked": {
+    "numbers": 39,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-dcf56cf3180a9dc6e6b4.txt",
+   "label": "",
+   "unit": "C4c738e0a",
+   "latex": false,
+   "checked": {
+    "numbers": 30,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-dd8b7a4cb332100b01d8.txt",
+   "label": "",
+   "unit": "C00802146",
+   "latex": false,
+   "checked": {
+    "numbers": 30,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-deb6b655a0efa263ac3d.txt",
+   "label": "",
+   "unit": "C8ba4c184",
+   "latex": false,
+   "checked": {
+    "numbers": 9,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-df07b1abe509f66dc990.txt",
+   "label": "",
+   "unit": "C2c30dd3d",
+   "latex": false,
+   "checked": {
+    "numbers": 38,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-e037e6fda77ae6f5790a.txt",
+   "label": "",
+   "unit": "C0179e95d",
+   "latex": false,
+   "checked": {
+    "numbers": 58,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-e0ebe89a912cd8a92782.txt",
+   "label": "",
+   "unit": "Cd8504c68",
+   "latex": false,
+   "checked": {
+    "numbers": 28,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-e204acbfb6bf13cd08ee.txt",
+   "label": "shipped config arm A",
+   "unit": "Cf5031a4a",
+   "latex": false,
+   "checked": {
+    "numbers": 52,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-e2c667d0f011e3442101.txt",
+   "label": "",
+   "unit": "Cc9ada956",
+   "latex": false,
+   "checked": {
+    "numbers": 29,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-e5241af1ff28352fb617.txt",
+   "label": "",
+   "unit": "C346d9621",
+   "latex": false,
+   "checked": {
+    "numbers": 27,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-e56172b39a69063cec78.txt",
+   "label": "",
+   "unit": "C8dec6da7",
+   "latex": false,
+   "checked": {
+    "numbers": 17,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-e5a57b56896580159a29.txt",
+   "label": "",
+   "unit": "Cfc650c98",
+   "latex": false,
+   "checked": {
+    "numbers": 66,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-e5b255f1aaf318c193ba.txt",
+   "label": "",
+   "unit": "Cfc650c98",
+   "latex": false,
+   "checked": {
+    "numbers": 64,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-e6816b3a3a3bfecfb4a1.txt",
+   "label": "",
+   "unit": "C2c30dd3d",
+   "latex": false,
+   "checked": {
+    "numbers": 34,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-e6d0bbacf06fc6ec7850.txt",
+   "label": "",
+   "unit": "C14be940b",
+   "latex": false,
+   "checked": {
+    "numbers": 53,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-e703385353e8a847f38c.txt",
+   "label": "shipped config arm A",
+   "unit": "C08e1805c",
+   "latex": false,
+   "checked": {
+    "numbers": 61,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-e7885d7aa9d9e8e06b52.txt",
+   "label": "",
+   "unit": "C0822766b",
+   "latex": false,
+   "checked": {
+    "numbers": 49,
+    "citations": 0
+   },
+   "unsourced": [
+    {
+     "kind": "number",
+     "value": "1.2",
+     "location": "drafts_ab/rev-e7885d7aa9d9e8e06b52.txt:26",
+     "context": "1.2 LIMITATIONS"
+    }
+   ],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-e9882fb23a341bc0f7f1.txt",
+   "label": "",
+   "unit": "C2c30dd3d",
+   "latex": false,
+   "checked": {
+    "numbers": 33,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-ea27dd660d6e2689fa90.txt",
+   "label": "",
+   "unit": "Cf5031a4a",
+   "latex": false,
+   "checked": {
+    "numbers": 49,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-ea5a5425649b1471b62d.txt",
+   "label": "",
+   "unit": "Cd8ad1700",
+   "latex": false,
+   "checked": {
+    "numbers": 16,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-ec14b2fe5f685b668541.txt",
+   "label": "",
+   "unit": "bf16_mechanism",
+   "latex": true,
+   "checked": {
+    "numbers": 34,
+    "citations": 13
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-ec59c8e941b35a7af806.txt",
+   "label": "shipped config arm A",
+   "unit": "Cd8504c68",
+   "latex": false,
+   "checked": {
+    "numbers": 30,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-ecc4d7cf2226ff8dc394.txt",
+   "label": "",
+   "unit": "Cf5031a4a",
+   "latex": false,
+   "checked": {
+    "numbers": 49,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-ed09944f6f22b8931f3a.txt",
+   "label": "",
+   "unit": "C0822766b",
+   "latex": false,
+   "checked": {
+    "numbers": 46,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-ed72434a3a6c0e3976a4.txt",
+   "label": "",
+   "unit": "C14be940b",
+   "latex": false,
+   "checked": {
+    "numbers": 69,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-ed9b29faf1c104ae1bf9.txt",
+   "label": "",
+   "unit": "Cc9ada956",
+   "latex": false,
+   "checked": {
+    "numbers": 34,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-ee0cd6bed24d76571818.txt",
+   "label": "shipped config arm B",
+   "unit": "bf16_mechanism",
+   "latex": true,
+   "checked": {
+    "numbers": 41,
+    "citations": 13
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-ee4d0070317fa88883c2.txt",
+   "label": "",
+   "unit": "C8ba4c184",
+   "latex": false,
+   "checked": {
+    "numbers": 11,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-f07690d821e9cee80717.txt",
+   "label": "",
+   "unit": "C14be940b",
+   "latex": false,
+   "checked": {
+    "numbers": 34,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-f078af8f380b601462ae.txt",
+   "label": "",
+   "unit": "C8dec6da7",
+   "latex": false,
+   "checked": {
+    "numbers": 19,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-f093cc39dc46e80474e8.txt",
+   "label": "",
+   "unit": "C8ba4c184",
+   "latex": false,
+   "checked": {
+    "numbers": 9,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-f0b0e8fa6b32dc9fab67.txt",
+   "label": "",
+   "unit": "Cf5031a4a",
+   "latex": false,
+   "checked": {
+    "numbers": 48,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-f100849878572c403248.txt",
+   "label": "",
+   "unit": "parallel_paper3",
+   "latex": true,
+   "checked": {
+    "numbers": 6,
+    "citations": 10
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-f12e56f6fbd4e16871fe.txt",
+   "label": "",
+   "unit": "C00af8742",
+   "latex": false,
+   "checked": {
+    "numbers": 29,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-f1622b4bfcc409a60407.txt",
+   "label": "",
+   "unit": "C14be940b",
+   "latex": false,
+   "checked": {
+    "numbers": 71,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-f1ef483d7dd3be513c99.txt",
+   "label": "",
+   "unit": "C8ba4c184",
+   "latex": false,
+   "checked": {
+    "numbers": 9,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-f2ebaba8ab64bdbe0326.txt",
+   "label": "shipped config arm B",
+   "unit": "Cf5031a4a",
+   "latex": false,
+   "checked": {
+    "numbers": 53,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-f3683dbaf542636cbc43.txt",
+   "label": "",
+   "unit": "C01b1f30e",
+   "latex": false,
+   "checked": {
+    "numbers": 42,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-f3b5077a5eb8b62dbba4.txt",
+   "label": "",
+   "unit": "Cc9ada956",
+   "latex": false,
+   "checked": {
+    "numbers": 37,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-f4a2d4fc55ebefc1a3b0.txt",
+   "label": "",
+   "unit": "C8ba4c184",
+   "latex": false,
+   "checked": {
+    "numbers": 11,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-f4b1bcd6924bbb699413.txt",
+   "label": "",
+   "unit": "Cd8ad1700",
+   "latex": false,
+   "checked": {
+    "numbers": 20,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-f5c2d196a4dfd3f5ac84.txt",
+   "label": "",
+   "unit": "Cd8ad1700",
+   "latex": false,
+   "checked": {
+    "numbers": 16,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-f62fe7cf9b23444a178b.txt",
+   "label": "",
+   "unit": "C0179e95d",
+   "latex": false,
+   "checked": {
+    "numbers": 49,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-f68177f5c9e1a6155d3f.txt",
+   "label": "",
+   "unit": "C001ccd31",
+   "latex": false,
+   "checked": {
+    "numbers": 0,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-f6de9095dea83af7e9b1.txt",
+   "label": "",
+   "unit": "C001ccd31",
+   "latex": false,
+   "checked": {
+    "numbers": 0,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-f75ff79d4eaf7975c2f3.txt",
+   "label": "",
+   "unit": "C00af8742",
+   "latex": false,
+   "checked": {
+    "numbers": 24,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-f7a63dd5a48cb187d425.txt",
+   "label": "",
+   "unit": "Cc9ada956",
+   "latex": false,
+   "checked": {
+    "numbers": 34,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-f7e09db9ed02312da899.txt",
+   "label": "shipped config arm B",
+   "unit": "C5c572149",
+   "latex": false,
+   "checked": {
+    "numbers": 22,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-f945fd8396460f30b057.txt",
+   "label": "",
+   "unit": "Ccbbf91d9",
+   "latex": false,
+   "checked": {
+    "numbers": 51,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-fa7eb5875e916fcd2ff1.txt",
+   "label": "",
+   "unit": "C01b1f30e",
+   "latex": false,
+   "checked": {
+    "numbers": 34,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-fbc3fff9a54402b8a850.txt",
+   "label": "",
+   "unit": "Cc9ada956",
+   "latex": false,
+   "checked": {
+    "numbers": 38,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-fd64e4c4da6b2942b773.txt",
+   "label": "shipped config arm A",
+   "unit": "Ccbbf91d9",
+   "latex": false,
+   "checked": {
+    "numbers": 48,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-fde1a61ec3b177f916a7.txt",
+   "label": "",
+   "unit": "Ccbbf91d9",
+   "latex": false,
+   "checked": {
+    "numbers": 47,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-feb53559c579f1ec772d.txt",
+   "label": "",
+   "unit": "C14be940b",
+   "latex": false,
+   "checked": {
+    "numbers": 22,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-fefb21ad6230143d6125.txt",
+   "label": "",
+   "unit": "C8ba4c184",
+   "latex": false,
+   "checked": {
+    "numbers": 11,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-ff2e36091d469d1c43b2.txt",
+   "label": "",
+   "unit": "bf16_mechanism",
+   "latex": true,
+   "checked": {
+    "numbers": 35,
+    "citations": 13
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-ff7b01ba744e387d8fc9.txt",
+   "label": "",
+   "unit": "C846d85da",
+   "latex": false,
+   "checked": {
+    "numbers": 38,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-ff810e36db5007da0d77.txt",
+   "label": "",
+   "unit": "parallel_paper3",
+   "latex": true,
+   "checked": {
+    "numbers": 6,
+    "citations": 10
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "drafts_ab/rev-ffab4753dc41b7829632.txt",
+   "label": "",
+   "unit": "C003cf5e3",
+   "latex": false,
+   "checked": {
+    "numbers": 36,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-0058f2a718cb101f9688.txt",
+   "label": "",
+   "unit": "C01f0d47f",
+   "latex": false,
+   "checked": {
+    "numbers": 43,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-02cd94b132bccae59429.txt",
+   "label": "",
+   "unit": "C25162d90",
+   "latex": false,
+   "checked": {
+    "numbers": 16,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-046c054edbf3292dc2e5.txt",
+   "label": "",
+   "unit": "C25162d90",
+   "latex": false,
+   "checked": {
+    "numbers": 16,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-077392d73cd447a97d7b.txt",
+   "label": "",
+   "unit": "C40b24fd4",
+   "latex": false,
+   "checked": {
+    "numbers": 20,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-097b5a3ed0bca5d08cab.txt",
+   "label": "",
+   "unit": "C00532305",
+   "latex": false,
+   "checked": {
+    "numbers": 37,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-0a234f262c1c341a9378.txt",
+   "label": "",
+   "unit": "C378ad35c",
+   "latex": false,
+   "checked": {
+    "numbers": 19,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-0bbf333e9a333deb2a1d.txt",
+   "label": "",
+   "unit": "C3241e0a8",
+   "latex": false,
+   "checked": {
+    "numbers": 20,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-0c30b85e78be81baaf5e.txt",
+   "label": "",
+   "unit": "C318a4506",
+   "latex": false,
+   "checked": {
+    "numbers": 13,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-0c7be0951795e9c78089.txt",
+   "label": "",
+   "unit": "C3241e0a8",
+   "latex": false,
+   "checked": {
+    "numbers": 21,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-0ccecef791a671c0caab.txt",
+   "label": "",
+   "unit": "C25162d90",
+   "latex": false,
+   "checked": {
+    "numbers": 18,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-0ceb52a4cd42c8ed9899.txt",
+   "label": "",
+   "unit": "C6b934f47",
+   "latex": false,
+   "checked": {
+    "numbers": 31,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-1402cc805695ad1eee15.txt",
+   "label": "",
+   "unit": "C6b934f47",
+   "latex": false,
+   "checked": {
+    "numbers": 34,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": [
+    {
+     "kind": "number",
+     "value": "6",
+     "location": "rule_ab/rev-1402cc805695ad1eee15.txt:2",
+     "context": "However, we identify a misalignment between translation-specific and general understanding in LLMs: models can mistranslate or translate literally complicated concepts that they understand correctly in general scenarios, such as QA (§6).",
+     "how": "rounded",
+     "source_value": "6.1",
+     "source": "C6b934f47"
+    },
+    {
+     "kind": "number",
+     "value": "6",
+     "location": "rule_ab/rev-1402cc805695ad1eee15.txt:2",
+     "context": "On the self-constructed Challenge-WMT1 benchmark, which comprises samples prone to mistranslation, human evaluation across high-resource and low-resource language pairs suggests that DUAT improves translation quality by up to +3.85 COMET and reduces translation literality by -25\\% $\\sim$-51\\% (§6).",
+     "how": "rounded",
+     "source_value": "6.1",
+     "source": "C6b934f47"
+    },
+    {
+     "kind": "number",
+     "value": "6",
+     "location": "rule_ab/rev-1402cc805695ad1eee15.txt:8",
+     "context": "To address this gap, we propose DUAT (Difficult words Understanding Aligned Translation), which incorporates general understanding of complicated content into translation; on the evaluated settings, DUAT improves translation quality by up to +3.85 COMET and reduces translation literality by -25\\% $\\sim$-51\\% (§6).",
+     "how": "rounded",
+     "source_value": "6.1",
+     "source": "C6b934f47"
+    },
+    {
+     "kind": "number",
+     "value": "6",
+     "location": "rule_ab/rev-1402cc805695ad1eee15.txt:11",
+     "context": "This design aims to help the model develop a deeper understanding of the source sentence and produce more nuanced translations (§6).",
+     "how": "rounded",
+     "source_value": "6.1",
+     "source": "C6b934f47"
+    },
+    {
+     "kind": "number",
+     "value": "6",
+     "location": "rule_ab/rev-1402cc805695ad1eee15.txt:14",
+     "context": "This alignment is also associated with improved automatic-metric scores, including up to +3.85 COMET, and lower translation literalness of -25\\% $\\sim$-51\\% (§6).",
+     "how": "rounded",
+     "source_value": "6.1",
+     "source": "C6b934f47"
+    }
+   ]
+  },
+  {
+   "revision": "rule_ab/rev-16c16a9fe1c89e74d774.txt",
+   "label": "",
+   "unit": "C86b8b685",
+   "latex": false,
+   "checked": {
+    "numbers": 41,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-17b4b7f1901d7118edc7.txt",
+   "label": "",
+   "unit": "C6b934f47",
+   "latex": false,
+   "checked": {
+    "numbers": 40,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": [
+    {
+     "kind": "number",
+     "value": "6",
+     "location": "rule_ab/rev-17b4b7f1901d7118edc7.txt:2",
+     "context": "Human evaluation on high-resource and low-resource language pairs shows that DUAT reduces generalization failures and improves translation quality by up to +3.85 COMET, while reducing translation literalness by -25\\% $\\sim$-51\\% (§6).",
+     "how": "rounded",
+     "source_value": "6.1",
+     "source": "C6b934f47"
+    },
+    {
+     "kind": "number",
+     "value": "6",
+     "location": "rule_ab/rev-17b4b7f1901d7118edc7.txt:7",
+     "context": "We show that, on Challenge-WMT and the evaluated high-resource and low-resource language pairs, DUAT reduces 80\\%$\\sim$88\\% of generalization failures, improves automatic translation metrics by up to +3.85 COMET, and reduces translation literalness by -25\\% $\\sim$-51\\% (§6).",
+     "how": "rounded",
+     "source_value": "6.1",
+     "source": "C6b934f47"
+    },
+    {
+     "kind": "number",
+     "value": "6",
+     "location": "rule_ab/rev-17b4b7f1901d7118edc7.txt:23",
+     "context": "This design is intended to help the model better understand the source sentence and produce more nuanced translations (§6).",
+     "how": "rounded",
+     "source_value": "6.1",
+     "source": "C6b934f47"
+    },
+    {
+     "kind": "number",
+     "value": "6",
+     "location": "rule_ab/rev-17b4b7f1901d7118edc7.txt:25",
+     "context": "We further adapt token-level quality estimation (QE) from Rei et al. (2023) to improve difficult-word detection and design an interpretation quality-control strategy that uses sentence-level QE from Rei et al. (2020) to filter hallucinated interpretations (§6).",
+     "how": "rounded",
+     "source_value": "6.1",
+     "source": "C6b934f47"
+    },
+    {
+     "kind": "number",
+     "value": "6",
+     "location": "rule_ab/rev-17b4b7f1901d7118edc7.txt:25",
+     "context": "Human evaluation indicates that DUAT reduces 80\\%$\\sim$88\\% of generalization failures (§6).",
+     "how": "rounded",
+     "source_value": "6.1",
+     "source": "C6b934f47"
+    },
+    {
+     "kind": "number",
+     "value": "6",
+     "location": "rule_ab/rev-17b4b7f1901d7118edc7.txt:25",
+     "context": "This alignment is also associated with improved translation quality, as measured by automatic metrics of up to +3.85 COMET, and reduced translation literalness of -25\\% $\\sim$-51\\% (§6).",
+     "how": "rounded",
+     "source_value": "6.1",
+     "source": "C6b934f47"
+    }
+   ]
+  },
+  {
+   "revision": "rule_ab/rev-182c4fcbdda8589c9ba0.txt",
+   "label": "",
+   "unit": "C3b3382ed",
+   "latex": false,
+   "checked": {
+    "numbers": 22,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-1a79969c96f3d4a6762d.txt",
+   "label": "",
+   "unit": "C3b3382ed",
+   "latex": false,
+   "checked": {
+    "numbers": 20,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-1b8f7bfdba8814ac626d.txt",
+   "label": "",
+   "unit": "Cda92f2c1",
+   "latex": false,
+   "checked": {
+    "numbers": 34,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-1d1135c805b2160b408f.txt",
+   "label": "",
+   "unit": "C01f0d47f",
+   "latex": false,
+   "checked": {
+    "numbers": 35,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-1d1e9e5cc448c90e46cb.txt",
+   "label": "",
+   "unit": "C00532305",
+   "latex": false,
+   "checked": {
+    "numbers": 36,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-1e3d52ab914925518117.txt",
+   "label": "",
+   "unit": "Cda92f2c1",
+   "latex": false,
+   "checked": {
+    "numbers": 38,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-1eee323f8d729f09980b.txt",
+   "label": "",
+   "unit": "C318a4506",
+   "latex": false,
+   "checked": {
+    "numbers": 17,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-27aafb4b911cf018ab1e.txt",
+   "label": "",
+   "unit": "C40b24fd4",
+   "latex": false,
+   "checked": {
+    "numbers": 19,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-2ca59d7bfedc2594eee0.txt",
+   "label": "",
+   "unit": "C40b24fd4",
+   "latex": false,
+   "checked": {
+    "numbers": 26,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-2dab895b23a4034e2e31.txt",
+   "label": "",
+   "unit": "C318a4506",
+   "latex": false,
+   "checked": {
+    "numbers": 12,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-2dfde76fde02689c191e.txt",
+   "label": "",
+   "unit": "Ccea9591c",
+   "latex": false,
+   "checked": {
+    "numbers": 27,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-2f6ce0137c3efc02d6b0.txt",
+   "label": "",
+   "unit": "C0010e4e0",
+   "latex": false,
+   "checked": {
+    "numbers": 36,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-31048b598ab74a02fdf7.txt",
+   "label": "",
+   "unit": "Cc337d34b",
+   "latex": false,
+   "checked": {
+    "numbers": 35,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-314597e2f6a2b2445a89.txt",
+   "label": "",
+   "unit": "Cda92f2c1",
+   "latex": false,
+   "checked": {
+    "numbers": 33,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-32f3d21064f146173835.txt",
+   "label": "",
+   "unit": "Cc337d34b",
+   "latex": false,
+   "checked": {
+    "numbers": 31,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-34091e4d1d0fb0cfd8e5.txt",
+   "label": "",
+   "unit": "C00532305",
+   "latex": false,
+   "checked": {
+    "numbers": 29,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-35db1bcef5f608502f3a.txt",
+   "label": "",
+   "unit": "Ca1b674ad",
+   "latex": false,
+   "checked": {
+    "numbers": 37,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-39406d994f70cd54a949.txt",
+   "label": "",
+   "unit": "C6b934f47",
+   "latex": false,
+   "checked": {
+    "numbers": 31,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-39a64634ee2fe5ddacf8.txt",
+   "label": "",
+   "unit": "C3241e0a8",
+   "latex": false,
+   "checked": {
+    "numbers": 29,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-3f16f72c50f4690fbdf2.txt",
+   "label": "",
+   "unit": "C86b8b685",
+   "latex": false,
+   "checked": {
+    "numbers": 31,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-450d9566fb4698672e7d.txt",
+   "label": "",
+   "unit": "Cc337d34b",
+   "latex": false,
+   "checked": {
+    "numbers": 36,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-457004f276290116fd5d.txt",
+   "label": "",
+   "unit": "C378ad35c",
+   "latex": false,
+   "checked": {
+    "numbers": 21,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-4654623b068869b877f4.txt",
+   "label": "",
+   "unit": "Ca1b674ad",
+   "latex": false,
+   "checked": {
+    "numbers": 27,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-4a6928ca22371ce31000.txt",
+   "label": "",
+   "unit": "C0010e4e0",
+   "latex": false,
+   "checked": {
+    "numbers": 43,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-4e2dcaa67342771ac5a3.txt",
+   "label": "",
+   "unit": "Cc337d34b",
+   "latex": false,
+   "checked": {
+    "numbers": 29,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-50d5852b131585b37a41.txt",
+   "label": "",
+   "unit": "Ccea9591c",
+   "latex": false,
+   "checked": {
+    "numbers": 33,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-55abc857abb8d40cb6eb.txt",
+   "label": "",
+   "unit": "C86b8b685",
+   "latex": false,
+   "checked": {
+    "numbers": 40,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-55d88dbe8ad93199824a.txt",
+   "label": "",
+   "unit": "Ca1b674ad",
+   "latex": false,
+   "checked": {
+    "numbers": 32,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-5c415fb840bd6277c57d.txt",
+   "label": "",
+   "unit": "C40b24fd4",
+   "latex": false,
+   "checked": {
+    "numbers": 22,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-5d14743d4e61d9eb8b87.txt",
+   "label": "",
+   "unit": "C01f0d47f",
+   "latex": false,
+   "checked": {
+    "numbers": 19,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-5f041f1804a86e17c7bb.txt",
+   "label": "",
+   "unit": "C25162d90",
+   "latex": false,
+   "checked": {
+    "numbers": 17,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-612c7af42bb5005a972b.txt",
+   "label": "",
+   "unit": "Cda92f2c1",
+   "latex": false,
+   "checked": {
+    "numbers": 37,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-619ce835c825647c745a.txt",
+   "label": "",
+   "unit": "Ccea9591c",
+   "latex": false,
+   "checked": {
+    "numbers": 33,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-649fcb6cf68c562794c6.txt",
+   "label": "",
+   "unit": "C0010e4e0",
+   "latex": false,
+   "checked": {
+    "numbers": 43,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-65e507403cdc11f6f681.txt",
+   "label": "",
+   "unit": "C378ad35c",
+   "latex": false,
+   "checked": {
+    "numbers": 23,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-67ca69690f489460d990.txt",
+   "label": "",
+   "unit": "C40b24fd4",
+   "latex": false,
+   "checked": {
+    "numbers": 18,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-6ada3b00a34e6eecea74.txt",
+   "label": "",
+   "unit": "C25162d90",
+   "latex": false,
+   "checked": {
+    "numbers": 14,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-6d5463cbb8017574a5f3.txt",
+   "label": "",
+   "unit": "C3b3382ed",
+   "latex": false,
+   "checked": {
+    "numbers": 24,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-708fc96072dddb564a62.txt",
+   "label": "",
+   "unit": "Cc337d34b",
+   "latex": false,
+   "checked": {
+    "numbers": 32,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-7322f604dc8e87cb4fb9.txt",
+   "label": "",
+   "unit": "C3b3382ed",
+   "latex": false,
+   "checked": {
+    "numbers": 26,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-740593613ce14b52a200.txt",
+   "label": "",
+   "unit": "C00532305",
+   "latex": false,
+   "checked": {
+    "numbers": 30,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-7514a242dd9e857bb9a5.txt",
+   "label": "",
+   "unit": "Cc337d34b",
+   "latex": false,
+   "checked": {
+    "numbers": 27,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-75dd6ac93a10d73a74ad.txt",
+   "label": "",
+   "unit": "C0044ae0f",
+   "latex": false,
+   "checked": {
+    "numbers": 48,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-787707547e81b2e172d9.txt",
+   "label": "",
+   "unit": "C86b8b685",
+   "latex": false,
+   "checked": {
+    "numbers": 36,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-7c633d2501cfe0ee7712.txt",
+   "label": "",
+   "unit": "C01f0d47f",
+   "latex": false,
+   "checked": {
+    "numbers": 38,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-7f061f4cb532b397e335.txt",
+   "label": "",
+   "unit": "Cc337d34b",
+   "latex": false,
+   "checked": {
+    "numbers": 37,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-7f2a7c88676b1dcf36a4.txt",
+   "label": "",
+   "unit": "C25162d90",
+   "latex": false,
+   "checked": {
+    "numbers": 17,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-82f7c8a4837e1f9fc1da.txt",
+   "label": "",
+   "unit": "C00532305",
+   "latex": false,
+   "checked": {
+    "numbers": 44,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-847ec8e2a6c379970168.txt",
+   "label": "",
+   "unit": "C86b8b685",
+   "latex": false,
+   "checked": {
+    "numbers": 35,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-8745997a74a823745c7a.txt",
+   "label": "",
+   "unit": "Cda92f2c1",
+   "latex": false,
+   "checked": {
+    "numbers": 35,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-899d073ce8085f4675b5.txt",
+   "label": "",
+   "unit": "C0044ae0f",
+   "latex": false,
+   "checked": {
+    "numbers": 55,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-91ebf95f6a566f346054.txt",
+   "label": "",
+   "unit": "C0010e4e0",
+   "latex": false,
+   "checked": {
+    "numbers": 63,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-94bd66f649be0cecf3c1.txt",
+   "label": "",
+   "unit": "C0010e4e0",
+   "latex": false,
+   "checked": {
+    "numbers": 36,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-9aeef9c59931199fc67d.txt",
+   "label": "",
+   "unit": "C378ad35c",
+   "latex": false,
+   "checked": {
+    "numbers": 24,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-9ec5ad8ae8cef7d99ba1.txt",
+   "label": "",
+   "unit": "Ccea9591c",
+   "latex": false,
+   "checked": {
+    "numbers": 38,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-9eea4d6949da7bceeca2.txt",
+   "label": "",
+   "unit": "C3b3382ed",
+   "latex": false,
+   "checked": {
+    "numbers": 23,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-9fff063ad6778ed2087b.txt",
+   "label": "",
+   "unit": "C6b934f47",
+   "latex": false,
+   "checked": {
+    "numbers": 26,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-a00c52c540c93956974e.txt",
+   "label": "",
+   "unit": "C0010e4e0",
+   "latex": false,
+   "checked": {
+    "numbers": 44,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-a02a5314c950e1319b79.txt",
+   "label": "",
+   "unit": "C00532305",
+   "latex": false,
+   "checked": {
+    "numbers": 26,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-a12384f9684a26c1be00.txt",
+   "label": "",
+   "unit": "C01f0d47f",
+   "latex": false,
+   "checked": {
+    "numbers": 27,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-a12d43262ab9e2990590.txt",
+   "label": "",
+   "unit": "C3241e0a8",
+   "latex": false,
+   "checked": {
+    "numbers": 18,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-a527dbeb0889b2c35cbd.txt",
+   "label": "",
+   "unit": "C3b3382ed",
+   "latex": false,
+   "checked": {
+    "numbers": 28,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-a7cd983035a21abe5db3.txt",
+   "label": "",
+   "unit": "Ca1b674ad",
+   "latex": false,
+   "checked": {
+    "numbers": 29,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-aa526efcdeafa203ebf7.txt",
+   "label": "",
+   "unit": "C378ad35c",
+   "latex": false,
+   "checked": {
+    "numbers": 20,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-ab10c0ed0c55d8014bad.txt",
+   "label": "",
+   "unit": "C6b934f47",
+   "latex": false,
+   "checked": {
+    "numbers": 25,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-abc8fe397a9e2aab343f.txt",
+   "label": "",
+   "unit": "C0010e4e0",
+   "latex": false,
+   "checked": {
+    "numbers": 41,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-b23b52f722eca01f9624.txt",
+   "label": "",
+   "unit": "C3241e0a8",
+   "latex": false,
+   "checked": {
+    "numbers": 18,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-b5c91938e621b8acf1b5.txt",
+   "label": "",
+   "unit": "C01f0d47f",
+   "latex": false,
+   "checked": {
+    "numbers": 43,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-b6cc10be31f223217ad2.txt",
+   "label": "",
+   "unit": "Ca1b674ad",
+   "latex": false,
+   "checked": {
+    "numbers": 27,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-b99cc6c75a49408e00a1.txt",
+   "label": "",
+   "unit": "C0044ae0f",
+   "latex": false,
+   "checked": {
+    "numbers": 31,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-bb8f3c4454f76392aa2e.txt",
+   "label": "",
+   "unit": "C40b24fd4",
+   "latex": false,
+   "checked": {
+    "numbers": 21,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-bfb78c8888211934deac.txt",
+   "label": "",
+   "unit": "Ca1b674ad",
+   "latex": false,
+   "checked": {
+    "numbers": 28,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-bfbcabd9172f9ec16351.txt",
+   "label": "",
+   "unit": "C318a4506",
+   "latex": false,
+   "checked": {
+    "numbers": 20,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-c0e93652b1b4f9cd0d4d.txt",
+   "label": "",
+   "unit": "C318a4506",
+   "latex": false,
+   "checked": {
+    "numbers": 20,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-c99712682eee875ce3eb.txt",
+   "label": "",
+   "unit": "Ccea9591c",
+   "latex": false,
+   "checked": {
+    "numbers": 33,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-c9fb455ead3f5a29e919.txt",
+   "label": "",
+   "unit": "C3b3382ed",
+   "latex": false,
+   "checked": {
+    "numbers": 24,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-cbc5c15ffc5f65e9a3d4.txt",
+   "label": "",
+   "unit": "C318a4506",
+   "latex": false,
+   "checked": {
+    "numbers": 20,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-cbd483e5a3b7acd44776.txt",
+   "label": "",
+   "unit": "Cda92f2c1",
+   "latex": false,
+   "checked": {
+    "numbers": 38,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-cc35eba73aa16aff8074.txt",
+   "label": "",
+   "unit": "Ccea9591c",
+   "latex": false,
+   "checked": {
+    "numbers": 23,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-cfb7516336efb45f5c4f.txt",
+   "label": "",
+   "unit": "C86b8b685",
+   "latex": false,
+   "checked": {
+    "numbers": 34,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-d11cbb2ea57a4e60d31d.txt",
+   "label": "",
+   "unit": "C318a4506",
+   "latex": false,
+   "checked": {
+    "numbers": 13,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-d5fb6509e0a2d913e2c9.txt",
+   "label": "",
+   "unit": "C378ad35c",
+   "latex": false,
+   "checked": {
+    "numbers": 22,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-d8735b04e823a8520242.txt",
+   "label": "",
+   "unit": "C00532305",
+   "latex": false,
+   "checked": {
+    "numbers": 32,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-d98b3b50a1b6ad998b58.txt",
+   "label": "",
+   "unit": "C25162d90",
+   "latex": false,
+   "checked": {
+    "numbers": 15,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-da34f37eccb8b047556d.txt",
+   "label": "",
+   "unit": "C6b934f47",
+   "latex": false,
+   "checked": {
+    "numbers": 34,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-db8dbdcbd9bfb92eaa98.txt",
+   "label": "",
+   "unit": "Ccea9591c",
+   "latex": false,
+   "checked": {
+    "numbers": 33,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-dc452779a7bc05ad4c15.txt",
+   "label": "",
+   "unit": "C0044ae0f",
+   "latex": false,
+   "checked": {
+    "numbers": 29,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-e335d46d230cb82d5460.txt",
+   "label": "",
+   "unit": "C0044ae0f",
+   "latex": false,
+   "checked": {
+    "numbers": 51,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-e45ff015a9c7402bdb89.txt",
+   "label": "",
+   "unit": "Ca1b674ad",
+   "latex": false,
+   "checked": {
+    "numbers": 29,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-e66bc75a87c817f33466.txt",
+   "label": "",
+   "unit": "C01f0d47f",
+   "latex": false,
+   "checked": {
+    "numbers": 19,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-e8ce672022aacb1ef0b3.txt",
+   "label": "",
+   "unit": "C40b24fd4",
+   "latex": false,
+   "checked": {
+    "numbers": 23,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-ef176b01525994f3ffd9.txt",
+   "label": "",
+   "unit": "C0044ae0f",
+   "latex": false,
+   "checked": {
+    "numbers": 35,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-f4c45c4ed110f3d78174.txt",
+   "label": "",
+   "unit": "Cda92f2c1",
+   "latex": false,
+   "checked": {
+    "numbers": 30,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-f60a975dff27fa9838c6.txt",
+   "label": "",
+   "unit": "C86b8b685",
+   "latex": false,
+   "checked": {
+    "numbers": 38,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-f950efa44b004d488c8c.txt",
+   "label": "",
+   "unit": "C3241e0a8",
+   "latex": false,
+   "checked": {
+    "numbers": 19,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-fa0610be99c741bf791a.txt",
+   "label": "",
+   "unit": "C0044ae0f",
+   "latex": false,
+   "checked": {
+    "numbers": 40,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-fe69a987b04433c37a81.txt",
+   "label": "",
+   "unit": "C378ad35c",
+   "latex": false,
+   "checked": {
+    "numbers": 21,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "rule_ab/rev-ffa8d9b03aaeab03aec4.txt",
+   "label": "",
+   "unit": "C3241e0a8",
+   "latex": false,
+   "checked": {
+    "numbers": 26,
+    "citations": 0
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "ab/bf16_mechanism.A_pipeline.tex",
+   "label": "ab mode",
+   "unit": "bf16_mechanism",
+   "latex": true,
+   "checked": {
+    "numbers": 38,
+    "citations": 16
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "ab/bf16_mechanism.B_pipeline_plus_style.tex",
+   "label": "ab mode",
+   "unit": "bf16_mechanism",
+   "latex": true,
+   "checked": {
+    "numbers": 38,
+    "citations": 14
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "ab/parallel_paper3.A_pipeline.tex",
+   "label": "ab mode",
+   "unit": "parallel_paper3",
+   "latex": true,
+   "checked": {
+    "numbers": 6,
+    "citations": 10
+   },
+   "unsourced": [],
+   "rounded": []
+  },
+  {
+   "revision": "ab/parallel_paper3.B_pipeline_plus_style.tex",
+   "label": "ab mode",
+   "unit": "parallel_paper3",
+   "latex": true,
+   "checked": {
+    "numbers": 6,
+    "citations": 8
+   },
+   "unsourced": [],
+   "rounded": []
+  }
+ ]
+}

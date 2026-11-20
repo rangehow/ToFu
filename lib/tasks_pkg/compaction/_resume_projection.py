@@ -11,11 +11,15 @@ compactions it did not reuse (``report_compaction_resume``).
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 from copy import deepcopy
 import hashlib
 import json
 import time
 
+from lib.agent_core.model_context_limits import (
+    MAX_ENTRY_BYTES, MAX_RESUME_ARCHIVE_CANDIDATES, json_within_bytes,
+)
 from lib.log import get_logger
 from lib.tasks_pkg.compaction._archive import newest_compaction_archives
 from lib.tasks_pkg.inbox_delivery import UNVERIFIED_INBOX_DELIVERY
@@ -23,7 +27,6 @@ from lib.tasks_pkg.model_replay import policy_witness
 from lib.tasks_pkg.conv_message_builder._toolcalls import _reconstruct_tool_call_messages
 
 logger = get_logger(__name__)
-_MAX_ARCHIVE_CANDIDATES = 8
 # Receipt implementation of a suspended-working-view checkpoint, derived from an
 # accepted compaction or standing alone; never a compaction event itself.
 CHECKPOINT_IMPLEMENTATION = 'suspended_working_context'
@@ -133,6 +136,127 @@ def restore_compacted_resume(task, config, rounds, *, fresh_messages=(), current
     return projected
 
 
+def validated_archive_post_messages(item, expected_receipt):
+    """Validate a hydrated archive against the receipt used to select it.
+
+    No storage or adoption effects. A changed receipt must not be paired with
+    the earlier selection; callers still verify history, policy and media.
+    """
+    from lib.agent_core.model_context_limits import MAX_MESSAGES
+    from lib.tasks_pkg.compaction._handoff import is_compaction_handoff
+
+    if not expected_receipt or ((item or {}).get('archive') or {}).get('receipt') != expected_receipt:
+        return None
+    post = item.get('postMessages')
+    if (not isinstance(post, list) or not 0 < len(post) <= MAX_MESSAGES
+            or any(not isinstance(message, dict) for message in post)):
+        return None
+    encoded_bytes = 0
+    for part in json.JSONEncoder(ensure_ascii=False).iterencode(post):
+        encoded_bytes += len(part.encode('utf-8'))
+        if encoded_bytes > MAX_ENTRY_BYTES:
+            return None
+    if (_is_compaction_receipt(expected_receipt)
+            and not any(is_compaction_handoff(message) for message in post)):
+        return None
+    return post
+
+
+def _choose_resume_archive(archives, read_receipt, task, config, rounds, history, *, measure=None):
+    """Choose the first compatible receipt; only serving supplies a meter."""
+
+    reason = None
+    for metadata in archives:
+        if task.get('aborted'):
+            return None, 'ineligible'
+        if metadata.get('resultStatus') != 'completed':
+            continue
+        receipt = read_receipt(metadata['id'])
+        witness = receipt.get('resumeWitness') or {}
+        if witness.get('version') != 1 or witness.get('turnId') != task.get('_turnId'):
+            continue
+        with (measure('resume_view_witness') if measure else nullcontext()):
+            mismatch = _witness_mismatch(witness, receipt, config, rounds, history)
+        if not mismatch:
+            return (metadata['id'], receipt, witness), None
+        # The newest witnessed archive of this Turn names the cause.
+        reason = reason or mismatch
+    return None, reason or 'no_witness'
+
+
+def _verified_archive_view(item, receipt, task, current_messages, owner, *, detached=False):
+    post = validated_archive_post_messages(item, receipt)
+    if post is None:
+        return None, 'unavailable'
+    from lib.tasks_pkg.compaction._continuity import read_continuity
+    read_continuity(post, task)
+    if detached:
+        return post, None  # Caller refused all retained media/source references.
+    from lib.tasks_pkg.model_images import retained_images_reproducible
+    if not retained_images_reproducible(post, current_messages=current_messages, user_id=owner):
+        return None, 'media_unavailable'
+    return post, None
+
+
+def _detached_archive_records(items, conversation_id):
+    if (not isinstance(items, list) or len(items) > MAX_RESUME_ARCHIVE_CANDIDATES
+            or not json_within_bytes(items, MAX_ENTRY_BYTES)):
+        return None
+    records = {}
+    order = []
+    for item in items:
+        if not isinstance(item, dict) or item.keys() != {'archive', 'postMessages'}:
+            return None
+        row, post = item['archive'], item['postMessages']
+        if (not isinstance(row, dict) or row.get('convId') != conversation_id
+                or row.get('resultStatus') != 'completed' or not isinstance(row.get('receipt'), dict)
+                or row['receipt'].get('status') != 'completed'
+                or not isinstance(row.get('id'), str) or not 0 < len(row['id']) <= 128
+                or type(row.get('createdAt')) is not int or row['createdAt'] < 0
+                or row['id'] in records or (post is not None and not isinstance(post, list))):
+            return None
+        witness = row['receipt'].get('resumeWitness')
+        if witness is not None and (not isinstance(witness, dict) or type(witness.get('version')) is not int):
+            return None
+        key = row['id'].encode('utf-8')
+        order.append((row['createdAt'], len(key), key))
+        records[row['id']] = item
+    return records if order == sorted(order, reverse=True) else None
+
+
+def select_retained_text_archive(items, config, rounds, *, conversation_id, user_id, turn_id):
+    """Normal archive choice from detached snapshot inputs, without media IO or adoption."""
+    by_id = _detached_archive_records(items, conversation_id)
+    if by_id == {}:
+        return 'verified_absent', None
+    history = _history_digest(config)
+    if by_id is None or not history or config.get('toolHistory'):
+        return 'indeterminate', None
+    task = {'convId': conversation_id, '_turnId': turn_id, '_userId': user_id}
+    try:
+        archives = [item['archive'] for item in by_id.values()]
+        choice, _ = _choose_resume_archive(archives, lambda key: by_id[key]['archive']['receipt'],
+                                          task, config, rounds, history)
+        if choice is not None:
+            key, receipt, _ = choice
+            item = by_id[key]
+            # This seam cannot prove media from external sources. A matching
+            # but unusable record is not skipped by ordinary restoration.
+            from lib.tasks_pkg.message_semantics import has_nested_model_media
+            post = item['postMessages']
+            if (isinstance(post, list) and not has_nested_model_media(post)
+                    and all(isinstance(m, dict) and not m.get('_modelImageSources')
+                            and not m.get('attachments') and (m.get('content') is None
+                            or isinstance(m['content'], str)) for m in post)
+                    and _verified_archive_view(item, receipt, task, (), user_id, detached=True)[0] is not None):
+                # Neither storage encoding size nor derived display metadata
+                # identifies a retained execution view.
+                return 'selected', {'archiveId': key, 'receipt': receipt, 'postMessages': post}
+    except (KeyError, TypeError, AttributeError, ValueError):
+        pass  # Malformed evidence never proves absence.
+    return 'indeterminate', None
+
+
 def _restore_compacted_resume(task, config, rounds, fresh_messages, current_messages):
     from lib.observability import measure_task_startup
     if (task.get('aborted') or config.get('toolHistory') or fresh_messages is None
@@ -142,97 +266,66 @@ def _restore_compacted_resume(task, config, rounds, fresh_messages, current_mess
         history = _history_digest(config)
     if history is None:
         return None, 'ineligible', None
-    reason = None
     try:
         from lib.agent_core.store import get_conversation_store
         from lib.tasks_pkg.manager import task_user_id
-        from lib.agent_core.model_context_limits import MAX_ENTRY_BYTES, MAX_MESSAGES
         owner, conversation = task_user_id(task), task.get('convId')
         if not conversation:
             return None, 'ineligible', None
         store = get_conversation_store()
         with measure_task_startup('resume_view_read'):
             archives = newest_compaction_archives(
-                store, conversation, user_id=owner, count=_MAX_ARCHIVE_CANDIDATES)
-        for metadata in archives:
-            if task.get('aborted'):
-                return None, 'ineligible', None
-            if metadata.get('resultStatus') != 'completed':
-                continue
+                store, conversation, user_id=owner, count=MAX_RESUME_ARCHIVE_CANDIDATES)
+        def read_receipt(archive_id):
             with measure_task_startup('resume_view_read'):
                 item = store.get_compaction_archive(
-                    conversation, metadata['id'], user_id=owner,
+                    conversation, archive_id, user_id=owner,
                     include_messages=False, include_post_messages=False)
-            receipt = ((item or {}).get('archive') or {}).get('receipt') or {}
-            witness = receipt.get('resumeWitness') or {}
-            if witness.get('version') != 1 or witness.get('turnId') != task.get('_turnId'):
-                continue
-            with measure_task_startup('resume_view_witness'):
-                mismatch = _witness_mismatch(witness, receipt, config, rounds, history)
-            if mismatch:
-                # The newest witnessed archive of this Turn names the cause.
-                reason = reason or mismatch
-                continue
-            with measure_task_startup('resume_view_read'):
-                item = store.get_compaction_archive(
-                    conversation, metadata['id'], user_id=owner,
-                    include_messages=False, include_post_messages=True)
-            with measure_task_startup('resume_view_verify'):
-                if ((item or {}).get('archive') or {}).get('receipt') != receipt:
-                    return None, 'unavailable', None
-                post = (item or {}).get('postMessages')
-                if (not isinstance(post, list) or not 0 < len(post) <= MAX_MESSAGES
-                        or any(not isinstance(message, dict) for message in post)):
-                    return None, 'unavailable', None
-                # The existing continuation size bound also caps restore work.
-                encoded_bytes = 0
-                for part in json.JSONEncoder(ensure_ascii=False).iterencode(post):
-                    encoded_bytes += len(part.encode('utf-8'))
-                    if encoded_bytes > MAX_ENTRY_BYTES:
-                        break
-                if encoded_bytes > MAX_ENTRY_BYTES:
-                    return None, 'unavailable', None
-                from lib.tasks_pkg.compaction._handoff import is_compaction_handoff
-                if (_is_compaction_receipt(receipt)
-                        and not any(is_compaction_handoff(message) for message in post)):
-                    return None, 'unavailable', None
-                from lib.tasks_pkg.compaction._continuity import read_continuity
-                read_continuity(post, task)  # Corrupt state cannot be an accepted replay.
-                from lib.tasks_pkg.model_images import retained_images_reproducible
-                if not retained_images_reproducible(
-                        post, current_messages=current_messages, user_id=owner):
-                    return None, 'media_unavailable', None
-                from lib.tasks_pkg.message_input_receipts import historical_swarm_context
-                count = witness['toolRoundCount']
-                projected = historical_swarm_context(
-                    post, binding=task.get('_swarmMessageBinding'))
-                projected.extend(_reconstruct_tool_call_messages(list(rounds[count:])) or [])
+            return ((item or {}).get('archive') or {}).get('receipt') or {}
 
-            # Hydration proves this tail follows unchanged current input.
-            # Tool-prefix evidence alone cannot authorize dropping fresh
-            # guidance, Composer carriers or non-tool prose.
-            for message in fresh_messages:
-                # Only Composer-owned content-addressed carriers may already
-                # be present. Equal human/assistant occurrences stay distinct.
-                if message.get('_contextComposer') and message in projected:
-                    continue
-                projected.append(deepcopy(message))
-            if task.get('aborted'):
-                return None, 'ineligible', None
-            if _is_compaction_receipt(receipt):
-                task['_acceptedCompactionReceipt'] = deepcopy(receipt)
-            if receipt.get('implementation') == CHECKPOINT_IMPLEMENTATION:
-                # A later interruption supersedes this checkpoint and the
-                # Turn's completion retires it.
-                task['_resumedCheckpointArchiveId'] = metadata['id']
-            task['_compactionResumeStatus'] = 'restored'
-            logger.info('[CompactionResume] conv=%s archive=%s covered=%d suffix=%d messages=%d',
-                        conversation, metadata['id'], count, len(rounds) - count, len(projected))
-            return projected, 'restored', metadata['id']
+        choice, reason = _choose_resume_archive(archives, read_receipt, task, config, rounds, history,
+                                                measure=measure_task_startup)
+        if choice is None:
+            return None, reason, None
+        archive_id, receipt, witness = choice
+        with measure_task_startup('resume_view_read'):
+            item = store.get_compaction_archive(
+                conversation, archive_id, user_id=owner,
+                include_messages=False, include_post_messages=True)
+        with measure_task_startup('resume_view_verify'):
+            post, refusal = _verified_archive_view(item, receipt, task, current_messages, owner)
+            if refusal:
+                return None, refusal, None
+            from lib.tasks_pkg.message_input_receipts import historical_swarm_context
+            count = witness['toolRoundCount']
+            projected = historical_swarm_context(
+                post, binding=task.get('_swarmMessageBinding'))
+            projected.extend(_reconstruct_tool_call_messages(list(rounds[count:])) or [])
+
+        # Hydration proves this tail follows unchanged current input.
+        # Tool-prefix evidence alone cannot authorize dropping fresh
+        # guidance, Composer carriers or non-tool prose.
+        for message in fresh_messages:
+            # Only Composer-owned content-addressed carriers may already
+            # be present. Equal human/assistant occurrences stay distinct.
+            if message.get('_contextComposer') and message in projected:
+                continue
+            projected.append(deepcopy(message))
+        if task.get('aborted'):
+            return None, 'ineligible', None
+        if _is_compaction_receipt(receipt):
+            task['_acceptedCompactionReceipt'] = deepcopy(receipt)
+        if receipt.get('implementation') == CHECKPOINT_IMPLEMENTATION:
+            # A later interruption supersedes this checkpoint and the
+            # Turn's completion retires it.
+            task['_resumedCheckpointArchiveId'] = archive_id
+        task['_compactionResumeStatus'] = 'restored'
+        logger.info('[CompactionResume] conv=%s archive=%s covered=%d suffix=%d messages=%d',
+                    conversation, archive_id, count, len(rounds) - count, len(projected))
+        return projected, 'restored', archive_id
     except Exception as exc:
         logger.debug('[CompactionResume] unavailable: %s', type(exc).__name__)
         return None, 'unavailable', None
-    return None, reason or 'no_witness', None
 
 
 def report_compaction_resume(task, config, rounds):
@@ -484,7 +577,7 @@ def _retire_superseded_checkpoints(store, task, owner, *, keep):
     """
     stale = {task.get('_resumedCheckpointArchiveId')} - {None, keep}
     for metadata in newest_compaction_archives(
-            store, task['convId'], user_id=owner, count=_MAX_ARCHIVE_CANDIDATES):
+            store, task['convId'], user_id=owner, count=MAX_RESUME_ARCHIVE_CANDIDATES):
         if metadata.get('id') == keep or metadata.get('resultStatus') != 'completed':
             continue
         item = store.get_compaction_archive(

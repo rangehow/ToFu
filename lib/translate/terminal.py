@@ -14,6 +14,7 @@ import uuid
 from typing import Any, Mapping
 
 from lib.log import get_logger
+from lib.translate.commit import content_guard_refusal_recorded
 
 
 logger = get_logger(__name__)
@@ -114,6 +115,7 @@ def _schedule_one_settled_visible_turn(
     try:
         from lib.conv_config import resolve_translate_target, target_lang_code
         from lib.tasks_pkg.manager._registry import task_user_id
+        from lib.translate.commit import content_guard_refusal_recorded
         from lib.turn_lifecycle import get_turn
 
         conversation_id = str(task["convId"])
@@ -124,8 +126,10 @@ def _schedule_one_settled_visible_turn(
         projection = turn.get("projection") or {}
         content = str(projection.get("content") or "").strip()
         if (not content or projection.get("translatedContent")
-                or projection.get("_translateDone")):
-            # Already terminal in translation terms: no work remains, but
+                or projection.get("_translateDone")
+                or content_guard_refusal_recorded(projection)):
+            # Already terminal in translation terms (a content-guard refusal
+            # is final): no work remains, but
             # treat as admitted so later syncs stop re-reading it.
             return True
         target = resolve_translate_target(task.get("config") or {})
@@ -221,7 +225,8 @@ def _translate_settled_turns(task: dict[str, Any]) -> None:
                 incremental_handoff = finalize_incremental_stamp_only(task)
             projection = turn.get("projection") or {}
             content = str(projection.get("content") or "").strip()
-            if not content or projection.get("translatedContent"):
+            if (not content or projection.get("translatedContent")
+                    or content_guard_refusal_recorded(projection)):
                 continue
 
             from lib.translate.skip_policy import (
@@ -382,7 +387,9 @@ def sweep_conversation_translations(
     terminally translated: no ``translatedContent`` and ``_translateDone`` not
     True. A recorded ``_translateFailed`` verdict makes a turn eligible again
     (that is its purpose) but is not required — turns that predate the marker
-    are recovered too. Skips content already in the target language via the
+    are recovered too. The one exception is a content-guard refusal: that
+    verdict is a property of the text, so re-spawning would buy the same
+    refusal again (content_guard_refusal_recorded). Skips content already in the target language via the
     shared skip gate. Fail-soft per turn and overall: the sweep runs on
     boot / conversation open and must never wedge the caller.
 
@@ -406,6 +413,7 @@ def sweep_conversation_translations(
             resolve_translate_target,
             target_lang_code,
         )
+        from lib.translate.commit import content_guard_refusal_recorded
         from lib.translate.skip_policy import should_skip_automatic_translation
         from lib.turn_lifecycle import iter_turn_translation_states_newest_first
 
@@ -436,6 +444,8 @@ def sweep_conversation_translations(
                 projection = row.get("projection") or {}
                 content = str(projection.get("content") or "").strip()
                 if not content:
+                    continue
+                if content_guard_refusal_recorded(projection):
                     continue
                 # Read the normalized verdict, not the translated body: the
                 # light read deliberately omits bodies, and a settled turn

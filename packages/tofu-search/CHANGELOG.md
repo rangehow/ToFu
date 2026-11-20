@@ -1,12 +1,24 @@
 # Changelog
 
-## 0.12.29
+## Unreleased
 
+- Native text kernels: an optional Rust extension `tofu_search._native`
+  (`rust/`, built with `rust/scripts/build_wheel.py`) replaces `lexical`
+  tokenization, `select_relevant_passages`, snippet/full-content dedup
+  decisions and BM25 scoring when installed. Results are identical to the
+  Python implementations, which remain the fallback and the parity oracle
+  (`PYTHON_KERNELS`). The public API, CLI and pure wheel are unchanged.
+- The native extension also covers `canonical_url_key`, the authority
+  classifier (`classify_authority`, `host_brand_labels`, `brand_tokens`),
+  citation parsing (`parse_bibtex`, `parse_references`,
+  `extract_citations_from_text`, `extract_identifiers`) and HTML extraction
+  after trafilatura (the `html.parser`/BeautifulSoup tree and every document
+  rule `extract_html_text` applies to it), with identical output. A captured
+  64-page real-site corpus with recorded extraction output
+  (`tests/fixtures/html_corpus`) now guards extraction changes on both paths.
 - Hugging Face Papers keyword search keeps the endpoint's relevance order;
   only the topic-less daily list is ranked by upvotes. Re-sorting a keyword
   search by upvotes and keeping 15 dropped the exact title match.
-
-## 0.12.28
 - `SearchConfig.skip_domains` is a source ban only and defaults to empty. The
   nine JS/social hosts it used to list by default (YouTube, X/Twitter,
   Facebook, Instagram, TikTok, LinkedIn, Discord) are now the built-in
@@ -381,7 +393,7 @@
 - Keep legacy sync handler registration with independently owned thread-affine
   browser workers. Preserve browser access, cookie isolation and rendering policy.
 
-## 0.12.29
+## Unreleased
 
 - Treat URL-derived source authority as explicitly unverified hints, match
   reference hosts at DNS label boundaries, and require query evidence before

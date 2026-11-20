@@ -51,7 +51,7 @@
     "github": {"label": "GitHub", "commandChat": false, "quoteReply": false, "attachments": false},
     "wecom": {"label": "企业微信", "commandChat": true, "quoteReply": false, "attachments": false},
     "qq": {"label": "QQ", "commandChat": true, "quoteReply": false, "attachments": false},
-    "wechat": {"label": "微信", "commandChat": true, "quoteReply": false, "attachments": false}
+    "wechat": {"label": "微信", "commandChat": true, "quoteReply": false, "attachments": true}
   },
   "x-botChannels": ["wecom", "qq", "wechat"],
   "x-wecom": {
@@ -81,6 +81,7 @@
   "x-wechat": {
     "description": "微信 ClawBot (iLink) facts used by lib/channels/wechat (docs/CHANNELS.md C12), from Tencent's protocol reference for its MIT-licensed client (https://github.com/Tencent/openclaw-weixin/blob/main/docs/protocol.md): the API base, the QR login bot type, the application ID header value, the long-poll hold the server documents when it sends no longpolling_timeout_ms, the session-expired return code, and trustedHostSuffix, the only hosts a returned baseurl or redirect_host may name.",
     "apiBase": "https://ilinkai.weixin.qq.com",
+    "cdnBase": "https://novac2c.cdn.weixin.qq.com/c2c",
     "botType": 3,
     "appId": "bot",
     "channelVersion": "2.4.8",
@@ -327,6 +328,7 @@
         "renditionOf": {"type": ["integer", "null"], "minimum": 0,
                         "description": "Index of the original this is a preview copy of (its PDF or one page image); null for an original."},
         "state": {"$ref": "#/$defs/OutboxAttachmentState"},
+        "confirmation": {"enum": ["provider_ack"], "description": "The provider accepted the file message; not proof of handset delivery."},
         "error": {"type": ["string", "null"]},
         "project": {"type": "string",
                     "description": "The registered project the file came from (channel_send {path, project}, docs/CHANNEL_PROTOCOL.md P13); absent for the sending conversation's own files, artifacts and decks."}
@@ -343,6 +345,10 @@
         "text": {"type": "string"},
         "replyTo": {"type": ["string", "null"]},
         "state": {"$ref": "#/$defs/OutboxState"},
+        "deliveryEvidence": {
+          "enum": ["acceptance_unverified", "delivery_unconfirmed"],
+          "description": "Personal 微信 only: acceptance_unverified means recorded as sent, but provider acceptance of the complete message is unverified; the stored state alone is not explicit provider proof. delivery_unconfirmed means the send may have reached iLink; check before requesting another send. Neither value proves handset delivery. Omitted for queued work, drafts and other states without either outcome."
+        },
         "origin": {"$ref": "#/$defs/OutboxOrigin"},
         "createdAtMs": {"type": "integer", "minimum": 0},
         "updatedAtMs": {"type": "integer", "minimum": 0},
@@ -506,15 +512,15 @@
       }, "required": []}}},
     {"type": "function", "function": {
       "name": "channel_send",
-      "description": "Send a message to a channel thread through the durable outbox. The command chat (the owner's own chat) always sends. Other threads follow their reply policy: notify takes no reply while you review other people's messages (tell the owner in the command chat instead) and makes an owner-requested reply a draft; draft waits for the owner's approval (the owner gets a notice with the draft's approval code); auto sends only your reply to a reviewed message of that thread (give reply_to) or the owner's own request, everything else is a draft; never refuses. While reviewing other people's messages you may write only to the command chat and to the threads under review, without attachments. Messages in threads other than the command chat carry the visible label [Tofu 代发]. GitHub threads have no command chat: a message there is posted as an issue or pull request comment under the owner's account, and reply_to is not supported. GitHub, 企业微信, QQ and 微信 carry no files: each attachment is named in the text instead. A file of one of the owner's registered projects (a Worker's deliverable) is attached as {path, project}, and a file in the checkout of a Worker you dispatched as {path, worker}. A file carrying a credential (a vault value, a private key, an issuer token, a credential file) is refused. The Global Router sends to every thread; a Project Router sends only to the owner's own command chat (pass that thread), and other project conversations report a file's path to their lead; nothing sends through a platform login of its own. Your final answer to an owner message from the command chat is sent back automatically, with the workspace files, images and slide decks it links (Markdown links or images) attached; use channel_send for other threads or additional messages. Reuse the same idempotency_key after an uncertain result; a result of queued or draft is not proof of delivery.",
+      "description": "Send a message to a channel thread through the durable outbox. The command chat (the owner's own chat) always sends. Other threads follow their reply policy: notify takes no reply while you review other people's messages (tell the owner in the command chat instead) and makes an owner-requested reply a draft; draft waits for the owner's approval (the owner gets a notice with the draft's approval code); auto sends only your reply to a reviewed message of that thread (give reply_to) or the owner's own request, everything else is a draft; never refuses. While reviewing other people's messages you may write only to the command chat and to the threads under review, without attachments. Messages in threads other than the command chat carry the visible label [Tofu 代发]. GitHub threads have no command chat: a message there is posted as an issue or pull request comment under the owner's account, and reply_to is not supported. Personal 微信 (ClawBot iLink) sends original files in private chats with an inbound reply context. It does not support outbound native quotes. GitHub, 企业微信 and QQ carry no files: each attachment is named in the text instead, not delivered. A file of one of the owner's registered projects (a Worker's deliverable) is attached as {path, project}, and a file in the checkout of a Worker you dispatched as {path, worker}. A file carrying a credential (a vault value, a private key, an issuer token, a credential file) is refused. The Global Router sends to every thread; a Project Router sends only to the owner's own command chat (pass that thread), and other project conversations report a file's path to their lead; nothing sends through a platform login of its own. Your final answer to an owner message from the command chat is sent back automatically, with the workspace files, images and slide decks it links (Markdown links or images) attached; use channel_send for other threads or additional messages. Reuse the same idempotency_key after an uncertain result; a result of queued or draft is not proof of delivery.",
       "parameters": {"type": "object", "additionalProperties": false, "properties": {
         "thread": {"type": "string", "pattern": "^(dx:(gid|uid|pid):[0-9]{1,32}|github:[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}#[1-9][0-9]{0,9}|(wecom|qq|wechat):(uid|gid):[a-z2-7]{1,128})$"},
         "text": {"type": "string", "minLength": 1},
-        "reply_to": {"type": "string", "pattern": "^dx:(gid|uid|pid):[0-9]{1,32}/[0-9]{1,32}$", "description": "大象 event ID to quote-reply to (same thread)."},
+        "reply_to": {"type": "string", "pattern": "^(dx:(gid|uid|pid):[0-9]{1,32}|wechat:(uid|gid):[a-z2-7]{1,128})/[0-9]{1,32}$", "description": "Native quote: 大象 only, same-thread event ID. Personal 微信 IDs are accepted for an explicit reply_to_unsupported refusal; omit reply_to to send plain text instead."},
         "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200},
         "needs_approval": {"type": "boolean", "description": "true keeps the message as a draft for the owner's approval even where auto-reply is on (use it when the reply is outside the owner's note). It can never skip an approval."},
         "attachments": {"type": "array", "minItems": 1,
-                        "description": "Files to send with the text. On 大象 each goes as its own message: jpg, jpeg, png, gif and bmp as image messages that preview inline; pdf, ppt, pptx, doc, docx, xls, xlsx, csv, txt, zip and rar as file messages; each under 30 MiB (大象's documented upload limits; other types are refused, so zip them). On a platform without files (GitHub, 企业微信, QQ, 微信) the text names each file instead, with no type or size limit. A pptx exported from a Tofu deck (a slide deck URL, or a pptx beside its deck.pptd) also gets a PDF copy and one image per slide; docx, xlsx and other pptx files have no converter on this server, so the message says that no preview copy was made.",
+                        "description": "Files to send with the text. On 大象 each goes as its own message: jpg, jpeg, png, gif and bmp as image messages that preview inline; pdf, ppt, pptx, doc, docx, xls, xlsx, csv, txt, zip and rar as file messages; each under 30 MiB (大象's documented upload limits; other types are refused, so zip them). On personal 微信, each original goes as a generic file without a generated preview. On a platform without files (GitHub, 企业微信, QQ) the text names each file instead, with no type or size limit. On 大象, a pptx exported from a Tofu deck (a slide deck URL, or a pptx beside its deck.pptd) also gets a PDF copy and one image per slide; docx, xlsx and other pptx files have no converter on this server, so the message says that no preview copy was made.",
                         "items": {"type": "object", "additionalProperties": false, "properties": {
                           "path": {"type": "string", "minLength": 1, "maxLength": 4096,
                                    "description": "A file of this conversation's workspace: relative to its primary root, rootname:relative, or absolute inside a root (no symlinks). Or a published artifact of this conversation by its delivery URL (/api/artifacts/<id>/download, /api/response-assets/<id>), or a slide deck it produced (/api/v4/slides/<task_id>/file). With project: a file of that project, relative to its root or absolute inside it (no symlinks). With worker: a file of that Worker's checkout, relative to its root (no symlinks)."},
@@ -548,7 +554,7 @@
       }, "required": ["thread", "conversation_id"]}}},
     {"type": "function", "function": {
       "name": "channel_outbox",
-      "description": "Read outbox items: one item by item_id (any state), or the active items (draft, queued, sending, unknown, failed), optionally for one thread.",
+      "description": "Read outbox items: one item by item_id (any state), or the active items (draft, queued, sending, unknown, failed), optionally for one thread. For personal 微信, deliveryEvidence=acceptance_unverified means recorded as sent without complete explicit provider acceptance proof. Attachment confirmation=provider_ack applies only to that file, not its caption or handset delivery. deliveryEvidence=delivery_unconfirmed means it may have been sent: check before requesting a new send.",
       "parameters": {"type": "object", "additionalProperties": false, "properties": {
         "item_id": {"type": "string", "minLength": 1, "maxLength": 128},
         "thread": {"type": "string", "pattern": "^(dx:(gid|uid|pid):[0-9]{1,32}|github:[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}#[1-9][0-9]{0,9}|(wecom|qq|wechat):(uid|gid):[a-z2-7]{1,128})$"}

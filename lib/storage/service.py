@@ -33,9 +33,11 @@ def start_storage() -> StorageClient:
     return storage_runtime().start()
 
 
-def get_storage_client(*, write: bool = False) -> StorageClient:
-    """Return the ready client; never lazily open a database or fallback."""
-    client = storage_runtime().client(write=write)
+def get_storage_client(*, write: bool = False, cancellation=None) -> StorageClient:
+    """Return the ready client; optionally interrupt its restart readiness wait."""
+    runtime = storage_runtime()
+    client = (runtime.client(write=write) if cancellation is None else
+              runtime.client(write=write, cancellation=cancellation))
     from lib.resource_control.adapters import bind_storage
     bind_storage(client)
     return client

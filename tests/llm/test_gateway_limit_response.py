@@ -4,7 +4,7 @@ Some gateways (CatPaw ``mcli``) answer a rate-limited request with HTTP 200 and
 a normal ``finish_reason=stop`` chat body whose entire content is the hourly
 throttle notice, instead of HTTP 429. Without a dedicated stream state the
 dispatcher counted a rate-limit as a verified success, never cooled the key,
-and kept a broken endpoint sticky (conv mtxxaf2l). These tests pin:
+and kept a broken endpoint sticky. These tests pin:
 
   - ``is_gateway_limit_response`` matches only SHORT, tool-call-free, stop
     bodies that contain a known limit phrase (never a genuine long answer);
@@ -34,7 +34,6 @@ from lib.llm.stream_result import (
 class IsGatewayLimitResponseTest(unittest.TestCase):
 
     def test_matches_short_limit_notice(self):
-        # Verbatim CatPaw mcli hourly-limit text (18 chars, conv mtxxaf2l).
         self.assertTrue(is_gateway_limit_response(
             '当前小时请求过于频繁', 'stop', 0))
         self.assertTrue(is_gateway_limit_response(
@@ -89,6 +88,30 @@ class ClassifyGatewayLimitTest(unittest.TestCase):
             self._classify(saw_finish_reason=False,
                            gateway_limit_response=True),
             ProviderStreamState.PREMATURE_CLOSE)
+
+
+class GatewayLimitStreamTest(unittest.TestCase):
+
+    def test_limit_notice_without_usage_settles_as_gateway_limit(self):
+        from lib.llm._sse_core import SSEAccumulator
+        from lib.llm._sse_stream import SSEByteStream
+
+        class Dumper:
+            def line(self, *_args, **_kwargs):
+                pass
+
+            payload = dump_anomaly = finish = line
+
+        acc = SSEAccumulator({'model': 'm', 'max_tokens': 8}, 'trace', Dumper(), None, 0.0)
+        stream = SSEByteStream(acc)
+        stream.feed(
+            'data: {"choices":[{"delta":{"content":"当前小时请求过于频繁"}}]}\n\n'
+            'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
+            'data: [DONE]\n\n'.encode())
+        stream.finalize(interrupted=False)
+        result = acc.finalize()
+        self.assertEqual(result.state, ProviderStreamState.GATEWAY_LIMIT_RESPONSE)
+        self.assertEqual(result.usage['trace_id'], 'trace')
 
 
 if __name__ == '__main__':

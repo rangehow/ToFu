@@ -148,6 +148,21 @@ def model_fallback_receipt(api_rounds: Any, accepted_model: str) -> dict[str, An
     names = ', '.join(
         f'{model} ({len(values)} round{"" if len(values) == 1 else "s"})'
         for model, values in sorted(others.items()))
+    # Whether the primary was attempted again is a fact of the ledger, not a
+    # policy claim: a REFUSED row is not an authoring round, so byModel cannot
+    # see it. Count any later primary attempt, answered or refused.
+    attempted_later = any(
+        isinstance(row, dict)
+        and str(row.get('model') or '').strip() == primary
+        and type(row.get('round')) is int
+        and row['round'] > min(rounds)
+        for row in (api_rounds or ()))
+    tail = (
+        'A content_filter refusal is per-request, so later rounds retried '
+        'the primary.' if attempted_later else
+        'The primary was never attempted again after the switch: no later '
+        'round in the paid ledger carries it.'
+    )
     return {
         'primaryModel': primary,
         'byModel': {model: sorted(values) for model, values in by_model.items()},
@@ -155,8 +170,7 @@ def model_fallback_receipt(api_rounds: Any, accepted_model: str) -> dict[str, An
         'totalRounds': total,
         'notice': (
             f'{len(rounds)} of {total} model rounds ran on a fallback model '
-            f'instead of {primary}: {names}. A content_filter refusal is '
-            f'per-request, so later rounds retried the primary.'
+            f'instead of {primary}: {names}. {tail}'
         ),
     }
 

@@ -64,26 +64,24 @@ def _bootstrap_fresh_authority(binary: str, authority: Path) -> None:
 def _durability_args() -> list:
     """Explicit WAL durability selection for the exec'd daemon.
 
-    The engine defaults to ``--durability strict`` (per-commit barrier) and
-    treats ``normal`` as an explicit bounded-RPO consent, never a silent
-    default — so this launcher mirrors that contract: anything but the two
-    documented values fails closed, and a flush interval without ``normal``
-    is a configuration error, not something to silently ignore.  On
+    Unset leaves the engine's automatic tier (strict on local volumes,
+    normal on network/fuse ones). An explicit value always wins and is
+    passed through, ``strict`` included: omitting it would let a fuse
+    volume silently serve ``normal``. Anything but the two documented
+    values fails closed, and a flush interval without ``normal`` is a
+    configuration error, not something to silently ignore.  On
     network-mounted authorities (FUSE), strict-mode barrier waits add the
     mount's fsync latency to every command response; ``normal`` acknowledges
     after the in-memory commit and lets the background flusher own fdatasync
     (2026-09-18 FUSE-storm postmortem).
     """
     durability = os.environ.get('TOFU_DB_DURABILITY', '').strip().lower()
-    if not durability or durability == 'strict':
-        durability = 'strict'
-    elif durability != 'normal':
+    if durability not in ('', 'strict', 'normal'):
         raise RuntimeError(
             'TOFU_DB_DURABILITY must be strict or normal')
     interval = os.environ.get('TOFU_DB_WAL_FLUSH_INTERVAL_MS', '').strip()
-    args = []
+    args = ['--durability', durability] if durability else []
     if durability == 'normal':
-        args.extend(['--durability', 'normal'])
         if interval:
             try:
                 value = int(interval)

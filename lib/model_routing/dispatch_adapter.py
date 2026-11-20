@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from copy import deepcopy
 from dataclasses import dataclass
 import secrets
 from typing import Callable, ContextManager, Mapping
@@ -131,7 +132,8 @@ def _select_route_candidates(
         authority.document, normalized=getattr(authority, 'normalized', False))
     primary_candidates = compiler.compile(
         selection, policy=policy, health=health,
-        rejections=rejections, max_candidates=(None
+        rejections=rejections,
+        max_candidates=(None
             if expected_route_identity is not None else max_candidates))
     if expected_route_identity is not None:
         primary_candidates = [candidate for candidate in primary_candidates
@@ -249,7 +251,7 @@ def mint_routed_slot_group(
                 runnable_candidates=runnable_candidates,
                 initialization_errors=initialization_errors,
                 resolved_secrets=resolved_secrets,
-                endpoint_verdicts=endpoint_verdicts)
+                endpoint_verdicts=endpoint_verdicts, authority=authority)
         witness = MappingProxyType(issued_route_identity(
             runnable_candidates[0], boundary, authority.revision))
         return RoutedSlotGroup(pin_id, handles, runnable_candidates, route_identity=witness)
@@ -278,6 +280,7 @@ def _prepare_and_publish_group(
     initialization_errors: list,
     resolved_secrets: dict,
     endpoint_verdicts: dict,
+    authority,
 ) -> None:
     """Prepare one slot per runnable candidate, then publish them together.
 
@@ -306,6 +309,9 @@ def _prepare_and_publish_group(
             if isinstance(decoded, ModelRoutingError):
                 raise decoded
             api_key, oauth, secret_headers = decoded
+            if candidate.codex_account_fingerprints and (oauth != "codex" or api_key):
+                raise ModelRoutingError("scoped Codex grant requires direct OAuth transport",
+                                        kind="credential_secret_invalid")
         except ModelRoutingError as exc:
             if exc.kind not in {
                 'credential_secret_missing', 'credential_secret_invalid',
@@ -332,7 +338,7 @@ def _prepare_and_publish_group(
                     **(candidate.deployment.get("extra_headers") or {}),
                     **secret_headers,
                 },
-                capabilities=set(candidate.offering["capabilities"]),
+                capabilities=candidate.dispatch_capabilities,
                 protocol=candidate.connection["protocol"],
                 oauth=oauth,
                 adapter=dict(candidate.connection.get("adapter") or {}),
@@ -350,6 +356,11 @@ def _prepare_and_publish_group(
             continue
         handles.append(handle)
         runnable_candidates.append(candidate)
+        if oauth == 'codex':
+            from lib.oauth.accounts import SubscriptionAccounts
+            binding = SubscriptionAccounts.issued_default(authority, oauth)
+            if binding is not None:
+                handle.slot.subscription_account = (binding, repository)
 
     if not handles:
         if initialization_errors and isinstance(initialization_errors[0], ModelRoutingError):
@@ -368,6 +379,7 @@ def _prepare_and_publish_group(
         slot.route_deployment_id = candidate.deployment["deployment_id"]
         slot.route_connection_id = candidate.connection["connection_id"]
         slot.route_credential_id = credential["credential_id"]
+        slot.codex_account_fingerprints = candidate.codex_account_fingerprints
         slot.route_witness = MappingProxyType(issued_route_identity(candidate, boundary, revision))
         from .serving_locality import candidate_is_local_inference
         slot.local_inference = candidate_is_local_inference(candidate)
@@ -388,6 +400,7 @@ def _prepare_and_publish_group(
         # and inflight penalties. Keep the compiler order explicit.
         slot.route_rank = rank
         pricing = candidate.offering.get("actual_pricing") or {}
+        slot.route_actual_pricing = deepcopy(pricing) if pricing and not slot.oauth else None
         slot.cost_per_1k_tokens = (
             float(pricing.get("input") or 0.0)
             + float(pricing.get("output") or 0.0)

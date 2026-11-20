@@ -101,7 +101,9 @@ def test_user_messages_are_delivered_with_their_cursor_and_bot_messages_skipped(
     run(transport, sink)
     eventually(lambda: len(sink.batches) >= 3)
     texts = [item.text for item in sink.batches]
-    assert texts == ['早上好', '这是语音', '[file: plan.pdf]']
+    assert texts == ['早上好', '这是语音', '']
+    [file] = sink.batches[2].media
+    assert (file.name, file.status) == ('plan.pdf', 'failed')
     first = sink.batches[0]
     assert (first.kind, first.peer, first.sender) == ('uid', 'owner@im.wechat', 'owner@im.wechat')
     assert first.reply == {'contextToken': 'ctx-1'} and first.sent_at_s == 1_793_934_000
@@ -211,7 +213,8 @@ def test_qr_login_binds_the_owner_and_keeps_the_token_in_the_vault(ilink, store,
     ilink.qr_statuses.extend([{'status': 'scaned'}, ilink.confirmed()])
     login.complete(OWNER, store=store, api_base=ilink.base)
     stored = store.account('wechat')
-    entry = f'channel.u{OWNER}.wechat.token'
+    entry = stored['credential']['name']
+    assert entry.startswith(f'channel.u{OWNER}.wechat.token.')
     assert vault.get_entry(entry) == WECHAT_TOKEN and WECHAT_TOKEN not in str(stored)
     assert stored['identity']['uid'] == 'owner@im.wechat'
     assert stored['commandChat'] == str(ids.thread_key('wechat', 'uid', 'owner@im.wechat'))

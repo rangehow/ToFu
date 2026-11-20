@@ -55,6 +55,35 @@ describe('conversation-owned project projection', () => {
     const deleted = h.controller.beginMutation(); h.remove('b');
     expect(deleted()).toBe(false);
   });
+  it('enrichment phases supersede branch reads without advancing navigation or mutation guards', () => {
+    const h = harness();
+    const visit = h.controller.begin();
+    const first = h.controller.beginEnrichment();
+    const status = h.controller.capture();
+    const hydrated = h.controller.beginEnrichment();
+    expect(first()).toBe(false);
+    expect(hydrated()).toBe(true);
+    expect(visit()).toBe(true);
+    expect(status()).toBe(true);
+    h.controller.restore({ ...a(), projectPath: '/hydrated' }, visit);
+    expect(h.state().path).toBe('/hydrated');
+    const mutation = h.controller.beginMutation();
+    const refresh = h.controller.capture();
+    h.controller.restore(a(), refresh);
+    h.controller.beginEnrichment();
+    expect(mutation()).toBe(true);
+    expect(refresh()).toBe(true);
+  });
+  it.each(['navigation', 'choice'])('%s invalidates captured status and branch phase together', change => {
+    const h = harness();
+    const status = h.controller.capture();
+    const enrichment = h.controller.beginEnrichment();
+    if (change === 'navigation') { h.select('b'); h.controller.restore(b()); }
+    else h.controller.beginMutation();
+    expect(status()).toBe(false);
+    expect(enrichment()).toBe(false);
+    expect(h.controller.beginEnrichment()()).toBe(true);
+  });
   it('empty primary detaches stale extras and read-only roots', () => {
     const empty = { ...a(), projectPath: '' };
     expect(captureConversationProject(empty)).toEqual({ projectPath: '', projectPaths: [], readOnlyPaths: [] });

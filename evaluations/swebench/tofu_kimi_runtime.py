@@ -260,7 +260,7 @@ def tofu_kimi_production_tool_catalog(
 
     from lib.tools.image_edit import INSPECT_IMAGE_TOOL
     from lib.tools.project import READ_FILES_TOOL, project_tools_for_runtime
-    from lib.tools.search import build_fetch_url_tool, build_search_tool
+    from lib.tools.search import build_fetch_url_tool, search_tool_for_request
     from lib.tools.todo import TODO_WRITE_TOOL
 
     catalog: list[dict[str, Any]] = [
@@ -274,7 +274,7 @@ def tofu_kimi_production_tool_catalog(
         catalog.append(copy.deepcopy(tool))
     catalog.append(build_fetch_url_tool())
     if search_enabled:
-        catalog.append(build_search_tool())
+        catalog.append(search_tool_for_request())
     catalog.append(copy.deepcopy(TODO_WRITE_TOOL))
     catalog.extend(_clean_schemas(tofu_kimi_production_custom_tools()))
     return catalog
@@ -283,9 +283,15 @@ def tofu_kimi_production_tool_catalog(
 def tofu_kimi_production_tool_schema_sha256(
     *, search_enabled: bool = False,
 ) -> str:
-    """Digest the exact production-surface catalog the model may see."""
+    """Build and bind the expected production declaration for a manifest."""
+    return tofu_kimi_tool_catalog_sha256(
+        tofu_kimi_production_tool_catalog(search_enabled=search_enabled))
+
+
+def tofu_kimi_tool_catalog_sha256(catalog: list[dict[str, Any]]) -> str:
+    """Canonical digest of an assembled, ordered declaration (not provider wire)."""
     encoded = json.dumps(
-        tofu_kimi_production_tool_catalog(search_enabled=search_enabled),
+        catalog,
         ensure_ascii=False, sort_keys=True, separators=(",", ":"),
         allow_nan=False,
     ).encode("utf-8")
@@ -649,13 +655,12 @@ class TofuKimiCandidateSettings:
             raise ValueError('Tofu tool execution budget digest missing or drifted; prepare a new run')
         if value.get('contextWindowTokens') != TOFU_BENCHMARK_MODELS[str(settings.model)]['context_window']:
             raise ValueError('Tofu model context budget missing or drifted; prepare a new run')
-        expected_schema_digest, _ = settings._expected_tool_digests()
         if value.get("promptContractSha256") != \
                 tofu_kimi_prompt_contract_sha256(
                     settings.runtime_config,
                     tool_surface=str(settings.tool_surface),
                     tool_catalog_sha256=(
-                        expected_schema_digest
+                        expected_schema
                         if str(settings.tool_surface) == "production"
                         else "")):
             raise ValueError("Tofu Kimi formal prompt contract digest drifted")
@@ -682,5 +687,6 @@ __all__ = [
     "tofu_kimi_production_tool_execution_sha256",
     "tofu_kimi_production_tool_schema_sha256",
     "tofu_kimi_search_enabled",
+    "tofu_kimi_tool_catalog_sha256",
     "tofu_kimi_tool_schema_sha256",
 ]

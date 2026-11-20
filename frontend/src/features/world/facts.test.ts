@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import stream from '../../../../tests/fixtures/office_facts/stream_v1.json';
 import type { RouterOfficeFacts } from '../../api/router.generated';
 import {
-  busyConversations, changedFacts, createFactStore, factQuestions, factsReplaceHints, openAlarms, type FactFrame,
+  busyConversations, changedFacts, createFactStore, factQuestions, factsReplaceHints, type FactFrame,
 } from './facts';
 
 const snapshot = stream.snapshot as unknown as RouterOfficeFacts;
@@ -46,11 +46,12 @@ describe('office facts follow the recorded stream (tests/fixtures/office_facts/s
       ordinal: 530, blocking: true, question: '' });
     const withText = factQuestions(store.view(), LEAD, [{ ...question, question: 'Keep 8 jobs?', createdAt: 9 }])!;
     expect(withText[0]).toMatchObject({ question: 'Keep 8 jobs?', createdAt: 9 });
+    const alarms = () => [...store.view()!.facts.values()].filter(fact => fact.fact === 'alarm').length;
     store.apply(frames[11]);
-    expect(openAlarms(store.view())).toBe(1);
+    expect(alarms()).toBe(1);
     for (const frame of frames.slice(12)) store.apply(frame);
     expect(factQuestions(store.view(), LEAD, null)).toEqual([]);
-    expect(openAlarms(store.view())).toBe(0);
+    expect(alarms()).toBe(0);
     const partial = createFactStore();
     partial.reset({ ...snapshot, coverage: { ...snapshot.coverage, busy: 'unsupported' } });
     expect(busyConversations(partial.view())).toBeNull();

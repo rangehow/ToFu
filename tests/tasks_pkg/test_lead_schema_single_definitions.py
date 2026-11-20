@@ -17,11 +17,9 @@ from tests.router.test_router_tool_name_budget import _assemble as _assemble_rou
 from tests.router.test_router_tool_name_budget import router as router  # noqa: F401
 from tests.tasks_pkg.test_coordinator_policy import coordinator as coordinator  # noqa: F401
 from tests.tasks_pkg.test_coordinator_tool_name_budget import (  # noqa: F401
-    homes as homes,
-    project_router_with_command_chat as project_router_with_command_chat,
-    router_with_channels as router_with_channels,
-)
+    homes, project_router_with_command_chat, router_with_channels)
 from tests.tasks_pkg.test_coordinator_tool_surface import assemble
+__all__ = ['project_router_with_command_chat', 'router_with_channels']
 
 pytestmark = pytest.mark.unit
 
@@ -62,3 +60,13 @@ def test_delegation_tools_leave_the_trigger_rules_to_the_trigger_fields(
         assert not TRIGGER_FIELDS.search(description), (name, TRIGGER_FIELDS.findall(description))
         parameters = json.dumps(tools[name]['function']['parameters'])
         assert 'under_delegation' in parameters, name
+
+
+def test_session_model_schema_preserves_explicit_authority_as_optional(
+        project_router_with_command_chat, router_with_channels):
+    tools = _by_name(_surfaces(project_router_with_command_chat, router_with_channels)['global_router'])
+    parameters = tools['control_conversation']['function']['parameters']
+    assert 'set_model' in parameters['properties']['action']['enum']
+    assert 'owner_delegation' not in parameters['required']
+    assert 'under_delegation' in parameters['properties']['owner_delegation']['properties']
+    assert {'conversation_id', 'turn_id', 'attempt_id', 'idempotency_key'} <= set(parameters['required'])

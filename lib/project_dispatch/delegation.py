@@ -4,10 +4,9 @@ The ordinary Coordinator tool assembly issues a worker capability ceiling. A
 tool call may narrow it, never manufacture it from arguments. Durable source
 Turn/Attempt checks and the repository CAS own authorization and frozen policy.
 Requests have no spend or concurrency ceiling. Worker execution remains the
-ordinary command/Turn/task pipeline. Workers run on the Coordinator
-conversation's ``workerModel`` setting, else the owner's default model, never
-implicitly on the Coordinator's own model (docs/ROUTER.md R5): resolve_worker_model
-and admit_worker_model are that resolver and its route admission.
+ordinary command/Turn/task pipeline. Fresh Workers use the Coordinator's
+explicit ``workerModel`` or inherit its current session model (docs/ROUTER.md R5).
+The issued request freezes capabilities, not the model of later Workers.
 """
 from __future__ import annotations
 
@@ -88,52 +87,30 @@ def admit_worker_model(owner: int, model: str, *, tenant_id: str | None = None,
     return model
 
 
-def resolve_worker_model(task) -> str:
-    """The Workers' model for this Coordinator request, pinned on the task.
+def resolve_worker_model(repository, task, *, fallback='') -> str:
+    """Read the owned Coordinator selection at grant admission, not its running config.
 
-    The bound Coordinator conversation's ``workerModel`` wins; otherwise the
-    owner's default model. Models never choose it: only the owner's setting
-    (written through ProjectCoordinationRepository.set_worker_model) does.
-    A Coordinator continuation re-resolves the owner's CURRENT choice at each
-    tool assembly (the setting may have changed after a provider refusal);
-    a resumed request's earlier delegation no longer re-pins the old value.
+    A Worker override wins over the Coordinator's session override and composer
+    model. The grant records a logical model only, not the Coordinator's route.
     """
+    from collections.abc import Mapping
+    from lib.conversations.project_coordination import WORKER_MODEL_SETTING
+    from lib.conversations.session_model import SETTING
     from lib.tasks_pkg.coordinator_policy import coordinator_scope
-    from lib.tasks_pkg.manager import task_user_id
     scope = coordinator_scope(task)
-    owner = scope['user_id'] if scope else task_user_id(task)
-    model = ''
     if scope:
-        from lib.conversations.project_coordination import ProjectCoordinationRepository
-        model = ProjectCoordinationRepository(owner).worker_model(scope['project_path'])
-    model = model or owner_default_model(owner)
+        settings = repository._conversation(scope['conversation_id'])
+        ref = settings.get('modelRef')
+        candidates = (settings.get(WORKER_MODEL_SETTING), settings.get(SETTING),
+                      ref.get('model_id') if isinstance(ref, Mapping) else None, settings.get('model'))
+        for model in candidates:
+            if isinstance(model, str) and model.strip():
+                return model.strip()
+    model = owner_default_model(repository.owner) or fallback
     if not model:
-        raise PermissionError('No Worker model: configure a default model or this Coordinator’s '
-                              'Worker model, then delegate again')
-    task['_coordinatorWorkerModel'] = model
+        raise PermissionError('No Worker model: select a Coordinator model, configure its Worker model, '
+                              'or configure a default model, then delegate again')
     return model
-
-
-def _live_worker_model(task, fallback: str) -> str:
-    """A continuation's Workers follow the owner's current setting (session_model).
-
-    Without a Coordinator scope there is no owner setting to resolve, so the
-    model this request was issued with stands (unchanged behavior for every
-    non-Coordinator delegation).
-    """
-    try:
-        return resolve_worker_model(task)
-    except (PermissionError, ValueError):
-        return fallback
-    except AttributeError:
-        # A repository port without the coordination binding reader (test doubles)
-        # cannot resolve the live setting; it keeps the issued model.
-        return fallback
-
-
-def continuation_worker_model(task, controls: dict) -> str:
-    """The Workers' model of a Coordinator continuation: live, never the frozen replay."""
-    return _live_worker_model(task, controls.get('workerModel', controls['model']))
 
 
 def request_delegation(repository, task):
@@ -156,7 +133,7 @@ def request_delegation(repository, task):
     return shared, prior
 
 
-def issued_worker_policy(repository, task):
+def issued_worker_policy(repository, task, *, recorded=None):
     """Resumed human attempts retain the first worker capability ceiling.
 
     The Workers' model is the owner's current choice: after a provider refusal
@@ -166,7 +143,9 @@ def issued_worker_policy(repository, task):
     _, prior = request_delegation(repository, task)
     if prior is None:
         issued = task['_coordinatorWorkerPolicy']
-        return replace(issued, model=_live_worker_model(task, issued.model or ''))
+        model = recorded['model'] if recorded is not None else resolve_worker_model(
+            repository, task, fallback=issued.model or '')
+        return replace(issued, model=model)
     request = prior['request']; policy = request['delegation']['policy']
     controls = policy.get('continuation') or {}
     servers = tuple(controls.get('workerMcpServers', request['profile'].get('mcpServers', ())))
@@ -174,7 +153,8 @@ def issued_worker_policy(repository, task):
     # value this request's earlier delegation pinned (the owner may have changed
     # it after a provider refusal). Without a Coordinator scope there is no
     # setting to resolve and the issued model stands.
-    model = _live_worker_model(task, request['model'])
+    model = recorded['model'] if recorded is not None else resolve_worker_model(
+        repository, task, fallback=request['model'])
     # The first Worker's request records the Workers' model; continuation
     # controls record the Coordinator's own model.
     return CoordinatorWorkerPolicy(tuple(controls.get('workerTools', request['profile']['tools'])),
@@ -260,7 +240,7 @@ def capture_worker_policy(task, config, catalog, model, *, worker_model=None, en
         controls = policy['continuation']
         # Grants issued before separate Worker models recorded one shared model.
         task['_coordinatorWorkerPolicy'] = CoordinatorWorkerPolicy(
-            tuple(controls['workerTools']), continuation_worker_model(task, controls),
+            tuple(controls['workerTools']), controls.get('workerModel', controls['model']),
             deepcopy(policy['config']), tuple(controls['tools']), controls['model'],
             tuple(controls.get('workerMcpServers', ())))
         return
@@ -280,8 +260,6 @@ def capture_worker_policy(task, config, catalog, model, *, worker_model=None, en
     # continuation holds its request's catalog: scope.granted_tools derives it from the
     # role its grant is bound to (docs/ROUTER.md R15).
     controls = tuple(name for name in CONTRACT['continuationTools'] if name in visible)
-    if worker_model is not None:
-        task['_coordinatorWorkerModel'] = worker_model
     from lib.mcp.types import parse_namespaced_name
     servers = tuple(sorted(set(enabled_mcp_servers) | {
         parsed[0] for parsed in map(parse_namespaced_name, names) if parsed is not None}))
@@ -620,8 +598,9 @@ def policy_for_task(repository, task, attempt):
     if shared is not None:
         result['requestBudgetId'] = shared['id']
     if {'delegate_project_work', 'get_project_workers', 'finish_project_request', 'report_to_user'} <= set(policy.coordinator_tools):
+        # Legacy continuation controls are source policy, not a live selection.
         result['continuation'] = {'version': 1, 'model': policy.coordinator_model,
-            'workerModel': policy.model or resolve_worker_model(task), 'workerTools': list(policy.tools),
+            'workerModel': policy.model or policy.coordinator_model, 'workerTools': list(policy.tools),
             **({'workerMcpServers': list(policy.mcp_servers)} if policy.mcp_servers else {}),
             'tools': list(policy.coordinator_tools),
             'maxStalledTurns': CONTRACT['delegationDefaults']['maxStalledTurns']}
@@ -758,8 +737,9 @@ def successor_brief(predecessor, instruction, *, held_checkpoint=None):
 
     Only immutable facts enter it, so a retried follow-up replays the same delegation.
     ``held_checkpoint`` is the accepted, pinned checkpoint whose delivery a conflict
-    holds or a superseding rework stopped: the successor merges it first, and once that lands the held delivery
-    settles as delivered by itself (``task_delta_delivery.checkpoint_contained``).
+    holds or a superseding rework stopped: the successor merges it first, so its own landing
+    carries those changes. A conflict hold then settles as delivered by itself
+    (``task_delta_delivery.checkpoint_contained``); a reworked one is already closed.
     """
     held = '' if not held_checkpoint else (
         'Its accepted checkpoint ' + held_checkpoint + ' did not land (a conflict with the shared '
@@ -767,7 +747,8 @@ def successor_brief(predecessor, instruction, *, held_checkpoint=None):
         + held_checkpoint + ' into your '
         'checkout, resolve each conflicted file keeping both sides\' intent (regenerate generated '
         'outputs from the merged sources, never hand-merge them) and rerun the checks covering those '
-        'files; once your work lands, the held delivery settles as delivered by itself.\n\n')
+        'files; your landing then carries its changes (a conflict-held delivery settles as delivered '
+        'by itself, a reworked one is already closed).\n\n')
     return ('Follow-up in this same conversation: a new assignment continuing assignment '
             + predecessor['id'] + ', whose result is final (reviewed or delivered). You work in a '
             'fresh isolated checkout of the current project branch, your working directory now: it '

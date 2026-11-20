@@ -264,8 +264,11 @@ not yet have configured Hope host ports or live GPU acceptance.
 into a private new directory under a trusted destination. Total collected bytes
 are bounded by the plan, each file is SHA256-sealed, and receipts are checkpointed
 through scoped CAS. Changed terminal outputs fail against earlier receipts.
-Failed reads or checkpoints remove local partial files. Collection is read-only
-at the provider and adds no persistent polling worker. `read_job_output` adapters
+Failed reads or checkpoints remove local partial snapshots through pinned
+no-follow POSIX directory handles. Cleanup uses Python 3.10 descriptor-relative
+APIs, not `shutil.rmtree(dir_fd=...)`, and preserves the primary failure if
+cleanup also fails. Collection is read-only at the provider and adds no
+persistent polling worker. `read_job_output` adapters
 remain responsible for exact owned-job binding, deadlines and remote transport. Declared cost bounds must be enforced by each real adapter; schema
 validation alone does not enforce remote cost or seal a source file.
 
@@ -293,6 +296,45 @@ proves the owned operation, obtains the platform dry-run confirmation, then
 consumes it once with transport replay disabled. Confirmation tokens are not
 persisted in job records. Deployment must still arrange deadline monitoring;
 this primitive does not create an automatic watchdog.
+
+The SDK checks repeated output bytes against an existing seal; a concurrent
+collection CAS conflict propagates. The experiment consumer reclaims the
+private collection snapshot before linking complete, synced file bytes
+atomically without replacement.
+The link makes the result visible; directory sync separately confirms durability.
+If that sync fails, the visible result is preserved and marked `needs_attention`,
+not scored. Failure to unlink the temporary name is reported separately and
+cannot erase visibility or override the sync outcome. A later pass verifies
+existing bytes and retries sync without resubmitting the job. The Stop guard
+samples just before linking; it is not atomic with the link. A Stop first
+observed after publication does not prove when the request arrived, and does
+not undo a visible link. Analysis consumes the decoded, digest-bound receipt
+itself; any checkpoint copy must agree by JSON type and value. Snapshot cleanup
+is descriptor-relative using Python 3.10 APIs and preserves a primary error if
+cleanup fails. None of these mechanisms establishes untrusted-code isolation.
+
+Experiment smoke and the CLI's `experiment` and `pilot` commands remain blocked
+pending independent provider implementation and admission. Every registered
+cell requires a durable, owned, successful receipt; a local file or a subset
+of the cells is not enough.
+
+`JobService.inspect` and initial Stop-intent persistence use only the owned
+local record and verify its plan seal. Planned cancellation prevents future
+submission. For an in-flight or uncertain submission, persisted intent survives
+provider resolution failure and compatible submit-settlement CAS conflicts.
+`reconcile_reference` checkpoints recovered identity before any optional status
+read; `status` never issues a stop. An embedding can explicitly advance only an
+existing exact-plan intent via `progress_cancellation`. A definitively rejected
+stop needs fresh authorization; a claimed or uncertain stop is not replayed.
+A `requested` intent is not evidence of external cancellation, drain, or native
+runtime parity.
+
+Trusted embeddings may supply `submit(..., before_submit=check)` as a current
+admission check, not an authorization grant. A final check follows the last
+blocking record read before physical submit. A post-claim refusal records a
+non-submission; local settlement may retry CAS without repeating the provider
+write. Separating local inspection and intent from external progress avoids
+making local control depend on provider availability.
 
 ## Batch source archive boundary
 

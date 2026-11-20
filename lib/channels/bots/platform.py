@@ -22,7 +22,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from lib.channels.model import QuotedMessage
+from lib.channels.model import ChannelMedia, QuotedMessage
 
 
 @dataclass(frozen=True)
@@ -49,6 +49,7 @@ class Inbound:
     reply: Mapping[str, Any] = field(default_factory=dict)
     quote_message_id: str = ''
     quoted: QuotedMessage | None = None
+    media: tuple[ChannelMedia, ...] = ()
 
 
 class SessionEnded(Exception):

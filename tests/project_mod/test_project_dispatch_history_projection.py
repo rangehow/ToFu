@@ -211,7 +211,7 @@ def test_cancelled_build_reads_no_further_row_and_keeps_the_last_complete_page(b
     # The client leaves while the first row is read: no later row is read.
     with pytest.raises(HistoryBuildCancelled):
         service.history_page(principal=c.principal, cancelled=lambda: bool(reads))
-    assert reads == ['turn-2', 'attempt-2']
+    assert reads == ['attempt-2', 'turn-2']
     # Only a complete build replaces the remembered previews.
     assert service.history_previews.previous(c.repo.owner, c.repo.project) is slot
 

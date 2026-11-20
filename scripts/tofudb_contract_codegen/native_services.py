@@ -115,7 +115,6 @@ def render_services(tables) -> list[str]:
         f'pub const INTEGRATION_EVENT_NAMESPACE: &str = "{integration["eventNamespace"]}";',
         f'pub const INTEGRATION_EVENT_SEQUENCE_NAMESPACE: &str = "{integration["eventSequenceNamespace"]}";',
         f'pub const INTEGRATION_EVENT_COUNT_NAMESPACE: &str = "{integration["eventCountNamespace"]}";',
-        f"pub const MAX_INTEGRATION_STATUS_ROWS: usize = {integration['maximumStatusRows']};",
         f"pub const MAX_INTEGRATION_EVENTS_PER_PROJECT: usize = {integration['maximumEventsPerProject']};",
         f"pub const MAX_INTEGRATION_STATUS_EVENTS: usize = {integration['maximumStatusEvents']};",
         f"pub const MAX_INTEGRATION_PROJECT_ROOT_CHARACTERS: usize = {integration['maximumProjectRootCharacters']};",

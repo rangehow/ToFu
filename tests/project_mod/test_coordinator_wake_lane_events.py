@@ -227,7 +227,8 @@ def test_a_long_deferred_wake_starts_with_its_brief_rebuilt_from_current_state(b
     end(r, controls(r)[-1], delivered=False)
     due = r.c.now[0] + 10
     r.publish([{'title': 'Report the restart outcome', 'status': 'in_progress', 'due': iso(due)},
-               {'title': 'Ship the queue fix', 'status': 'pending', 'due': iso(due)}])
+               {'title': 'Ship the queue fix', 'status': 'pending', 'due': iso(due),
+                'blocker': {'kind': 'next_action', 'action': 'Merge the queue fix'}}])
     r.c.now[0] += 20
     current = continuation.continuation_instruction
     monkeypatch.setattr(continuation, 'continuation_instruction',
@@ -250,7 +251,8 @@ def test_a_long_deferred_wake_starts_with_its_brief_rebuilt_from_current_state(b
     monkeypatch.setattr(continuation, 'continuation_instruction', current)
     r.c.now[0] += 8 * 3600
     r.publish([{'title': 'Report the restart outcome', 'status': 'completed', 'due': iso(due)},
-               {'title': 'Ship the queue fix', 'status': 'pending', 'due': iso(due)}])
+               {'title': 'Ship the queue fix', 'status': 'pending', 'due': iso(due),
+                'blocker': {'kind': 'next_action', 'action': 'Merge the queue fix'}}])
     r.attempts['busy-attempt']['status'] = 'completed'
     assert r.wake() == ['accepted'] and births == ['coordinator', 'coordinator']
     started = inputs[-1]

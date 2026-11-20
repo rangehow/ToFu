@@ -453,6 +453,11 @@ def test_a_follow_up_after_a_final_result_continues_the_session_as_a_linked_assi
             'assignment_id': assignment_id, 'result_revision': ended['projectionRevision'],
             'decision': 'accept', 'note': 'First stage checked'})
         assert 'error' not in reviewed, reviewed
+    from lib.conversations.settings_store import update_conversation_settings
+    update_conversation_settings(p.scope['conversation_id'], lambda settings: settings.update(model='model-new'),
+                                 user_id=p.owner)
+    update_conversation_settings(conversation, lambda settings: settings.update(modelOverride='model-session'),
+                                 user_id=p.owner)
     instruction = 'Now also add the bot automatically whenever a Router group is created.'
     receipt = _follow_up(p, conversation, ended, key='auto-add', instruction=instruction)
     assert 'error' not in receipt, receipt
@@ -464,6 +469,9 @@ def test_a_follow_up_after_a_final_result_continues_the_session_as_a_linked_assi
     assert not coordinator_births.failures(p.coordinator)
     row = p.repository.read(successor_id)
     assert row['request']['recipientId'] == conversation
+    assert row['request']['model'] == 'model-new'
+    accepted = turns.get_attempt(row['execution']['attemptId'], user_id=p.owner, include_execution_config=True)
+    assert accepted['config']['model'] == 'model-session'
     assert row['request']['authorizationSource'] == p.repository.read(assignment_id)['request']['authorizationSource']
     # The final result keeps its association; nothing regenerated.
     assert _execution(p, assignment_id) == first

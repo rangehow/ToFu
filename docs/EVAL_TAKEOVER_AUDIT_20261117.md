@@ -555,3 +555,27 @@ Reported, not fixed:
 | stop a relay | `sh L/launch.sh stop-relay <model>@<tail>` |
 
 A 429 or a production-429 STOP holds that relay until someone reviews the incident, records it in `eval-quota.json` and removes STOP. No process restarts Tofu or touches production storage.
+
+## 9. Sandbox platform decision (2026-11-18)
+
+**Problem.** The owner asked whether the matrix should run on the sandbox platform, which is faster and can be given many resources.
+
+**Decision.** Nothing moves. Every TB2.1 trial already runs in an EnvSandbox cluster-857 VM, and this host only orchestrates
+and relays. The measurement is in `N/sandbox-migration-20261118/REPORT.md` (scripts `bottleneck.py`, `remaining.py`).
+- **Where trial time goes** (3,122 trials): model generation 49%, RPM-budget wait 7%, tool execution in the sandbox 22%,
+  tests 11%, environment setup 8.5%, VM start 0.7%.
+- **What limits throughput:** the per-AppId+model RPM cap ÷ requests per trial. The 5–10 RPM relays run at 75–90% of
+  that ceiling, and 857 takes 128 concurrent starts.
+
+**Alternatives considered.**
+- More or larger VMs: rejected. RPM-saturated buckets gain nothing, and larger VMs change the frozen 4 CPU / 16 GiB protocol.
+- Prewarmed images: rejected. They save at most 6% of a trial, and that time becomes RPM wait.
+- Second buckets per model (`grok-4.6@6672` cap 30, `Doubao`/`deepseek@4861` cap 10, `qwen3.5-plus@4861` cap 2): measured
+  and available. They don't shorten the critical path (kimi-k3, qwen). MiniMax-M2.7 never runs on …4861 (Paper B).
+- SWE-bench on 857: originally blocked by the task Dockerfiles' uv download from GitHub; resolved below by vendoring uv.
+
+**SWE-bench on 857 (rework, 2026-11-18).**
+- **What changed:** the blocker was the task Dockerfile's uv download from GitHub. Bundles now install the same official uv 0.7.13 from host-fetched archives (`N/sandbox-migration-20261118/prep_857_tasks.py`, sha256 provenance per bundle).
+- **Oracle pilot:** 20/20 passed on 857, mean 86 s per task, the whole batch in 136 s. The host rootless-QEMU arm needs about 1,000 s per task just for its environment cache.
+- **Launcher for SWE-bench cells on 857:** `swev_857.sh` (resumable, provenance recorded).
+- **Code fix:** `load_definitions` now restores the exec bit on task shebang scripts.

@@ -304,7 +304,10 @@ function paintQuestionSummary(
   if (!title.parentNode) header.prepend(title);
   const nonBlocking = round.guidanceBlocking === false;
   const withdrawn = Boolean(round.guidanceWithdrawn);
-  const badgeText = withdrawn
+  const confirmed = nonBlocking && Boolean(round.guidanceDefaultAccepted);
+  const badgeText = confirmed
+    ? textFor(ports, 'toolHumanGuidance.defaultConfirmedBadge', 'Default confirmed by you')
+    : withdrawn
     ? textFor(ports, 'toolHumanGuidance.withdrawnBadge', 'Withdrawn by the lead · an answer still counts')
     : nonBlocking
     ? textFor(ports, 'toolHumanGuidance.nonBlockingBadge', 'Not blocking · reply anytime')

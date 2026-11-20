@@ -25,7 +25,11 @@ class DispatchWaitStatus:
     cooldown_cause: str = ''
 
 
-class DispatchNoAdmissibleSlot(RuntimeError):
+class DispatchNoCapableSlot(RuntimeError):
+    """The dispatcher exhausted selection without an upstream attempt."""
+
+
+class DispatchNoAdmissibleSlot(DispatchNoCapableSlot):
     """Strict optional-work policy rejected every slot before transport.
 
     No upstream call was made, so cooldown polling or an outer retry cannot

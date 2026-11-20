@@ -1,0 +1,3496 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="defaultLanguage" content="en">
+    <meta name="availableLanguages"
+          content="de, en, es, eo, fr, pt_BR, el, ru, uk, he, zh_Hans, zh_Hant, ja, ko">
+    <title>requests · PyPI</title>
+    <meta name="description"
+          content="Python HTTP for Humans.">
+    <link rel="stylesheet"
+          href="/static/css/warehouse-ltr.b71ddd9f.css">
+    <link rel="stylesheet"
+          href="/static/css/fontawesome.94176253.css">
+    <link rel="stylesheet"
+          href="/static/css/fonts.f84c7795.css">
+    <noscript>
+      <link rel="stylesheet"
+            href="/static/css/noscript.0673c9ea.css">
+    </noscript>
+    <link rel="icon"
+          href="/static/images/favicon.35549fe8.ico"
+          type="image/x-icon">
+    <link rel="alternate"
+          type="application/rss+xml"
+          title="RSS: 40 latest updates"
+          href="/rss/updates.xml">
+    <link rel="alternate"
+          type="application/rss+xml"
+          title="RSS: 40 newest packages"
+          href="/rss/packages.xml">
+<link rel="alternate"
+        type="application/rss+xml"
+        title="RSS: latest releases for requests"
+        href="/rss/project/requests/releases.xml">      <link rel="canonical" href="https://pypi.org/project/requests/">
+    <meta property="og:url"
+          content="https://pypi.org/project/requests/">
+    <meta property="og:site_name" content="PyPI">
+    <meta property="og:type" content="website">
+<meta property="og:image" content="https://pypi.org/static/images/og-card.00947198.webp">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="PyPI, the Python Package Index">
+  <meta name="twitter:image:alt" content="PyPI, the Python Package Index">
+  <meta name="twitter:card" content="summary_large_image">    <meta property="og:title"
+          content="requests">
+    <meta property="og:description" content="Python HTTP for Humans.">
+<meta name="source-commit" content="c2f79b4a6fb0bc1c46f9f9ddb592340ec5f06e6e">    <link rel="search"
+          type="application/opensearchdescription+xml"
+          title="PyPI"
+          href="/opensearch.xml">
+    <script defer src="/static/js/warehouse.c61ca478.js">/* stub */</script>
+  <script src="/static/js/utils/mathjax-config.e569c56a.js">/* stub */</script>
+  <script async
+          src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-svg.js"
+          integrity="sha256-1CldwzdEg2k1wTmf7s5RWVd7NMXI/7nxxjJM2C4DqII="
+          crossorigin="anonymous">/* stub */</script>
+      <script src="/static/js/utils/plausible-init.912dafff.js">/* stub */</script>
+      <script async
+              src="https://analytics.python.org/js/pa-Z-QYGvOKHwfKWak0xljXn.js">/* stub */</script>
+    <script async
+            src="https://media.ethicalads.io/media/client/v1.4.0/ethicalads.min.js"
+            integrity="sha256-U3hKDidudIaxBDEzwGJApJgPEf2mWk6cfMWghrAa6i0= sha384-UcmsCqcNRSLW/dV3Lo1oCi2/VaurXbib6p4HyUEOeIa/4OpsrnucrugAefzVZJfI sha512-q4t1L4xEjGV2R4hzqCa41P8jrgFUS8xTb8rdNv4FGvw7FpydVj/kkxBJHOiaoxHa8olCcx1Slk9K+3sNbsM4ug=="
+            crossorigin="anonymous">/* stub */</script>
+  </head>
+  <body data-controller="viewport-toggle">
+      
+      <a href="#content" class="skip-to-content">Skip to main content</a>
+      <button type="button"
+              class="button button--primary button--switch-to-mobile hidden"
+              data-viewport-toggle-target="switchToMobile"
+              data-action="viewport-toggle#switchToMobile">Switch to mobile version</button>
+      <div id="sticky-notifications" class="stick-to-top js-stick-to-top">
+        
+        <!--[if IE]>
+      <div class="notification-bar notification-bar--warning" role="status">
+        <div class="notification-bar__container">
+          <span class="notification-bar__icon">
+            <i class="fa fa-exclamation-triangle" aria-hidden="true"></i>
+            <span class="sr-only">Warning</span>
+          </span>
+          <span class="notification-bar__message">You are using an unsupported browser, upgrade to a newer version.</span>
+        </div>
+      </div>
+      <![endif]-->
+        <noscript>
+          <div class="notification-bar notification-bar--warning" role="status">
+            <div class="notification-bar__container">
+              <span class="notification-bar__icon">
+                <i class="fa fa-exclamation-triangle" aria-hidden="true"></i>
+                <span class="sr-only">Warning</span>
+              </span>
+              <span class="notification-bar__message">Some features may not work without JavaScript. Please try enabling it if you encounter problems.</span>
+            </div>
+          </div>
+        </noscript>
+<div data-html-include="/_includes/unauthed/notification-banners/"></div>    </div>
+<div data-html-include="/_includes/unauthed/flash-messages/"></div><div data-html-include="/_includes/authed/session-notifications/"></div><header class="site-header ">
+  <div class="site-container">
+    <div class="split-layout">
+        <div class="split-layout">
+          <div>
+            <a class="site-header__logo" href="/">
+              <img alt="PyPI"
+                   src="/static/images/logo-small.0e0855d0.svg">
+            </a>
+          </div>
+          <form class="search-form search-form--primary"
+                action="/search/"
+                role="search">
+            <label for="search" class="sr-only">Search PyPI</label>
+            <input id="search"
+                   class="search-form__search"
+                   type="text"
+                   name="q"
+                   placeholder="Type '/' to search projects"
+                   value=""
+                   autocomplete="off"
+                   autocapitalize="off"
+                   spellcheck="false"
+                   data-controller="search-focus"
+                   data-action="keydown@window->search-focus#focusSearchField"
+                   data-search-focus-target="searchField">
+            <button type="submit" class="search-form__button">
+              <i class="fa fa-search" aria-hidden="true"></i>
+              <span class="sr-only">Search</span>
+            </button>
+          </form>
+        </div>
+<div data-html-include="/_includes/authed/current-user-indicator/">        <div class="site-menu">
+    <nav class="site-menu site-menu--dropdown-below-desktop"
+         aria-label="Main navigation">
+      <ul>
+        <li class="site-menu__item">
+          <a href="https://blog.pypi.org" class="site-menu__link">Blog</a>
+        </li>
+        <li class="site-menu__item">
+          <a href="https://docs.pypi.org/" class="site-menu__link">Docs</a>
+        </li>
+        <li class="site-menu__item">
+          <a href="/account/login/?next=https%3A%2F%2Fpypi.org%2Fproject%2Frequests%2F" class="site-menu__link">Log in</a>
+        </li>
+        <li class="site-menu__item">
+          <a href="/account/register/"
+             class="site-menu__link">Register</a>
+        </li>
+      </ul>
+    </nav>
+    <nav class="dropdown dropdown--on-menu site-menu--dropdown site-menu--dropdown-below-desktop"
+         aria-label="Main navigation">
+      <button type="button"
+              class="site-menu__link dropdown__trigger"
+              aria-haspopup="true"
+              aria-expanded="false"
+              aria-label="View menu">
+        <i class="fa-solid fa-bars" aria-hidden="true"></i>
+      </button>
+      <ul class="dropdown__content"
+          aria-hidden="true"
+          aria-label="Main menu">
+        <li>
+          <a class="dropdown__link" href="https://blog.pypi.org">Blog</a>
+        </li>
+        <li>
+          <a class="dropdown__link" href="https://docs.pypi.org/">Docs</a>
+        </li>
+        <li>
+          <a class="dropdown__link" href="/account/login/?next=https%3A%2F%2Fpypi.org%2Fproject%2Frequests%2F">Log in</a>
+        </li>
+        <li>
+          <a class="dropdown__link"
+             href="/account/register/">Register</a>
+        </li>
+      </ul>
+    </nav>
+<nav class="dropdown dropdown--on-menu dropdown--with-icons site-menu--dropdown"
+     aria-label="Localization">
+  <button type="button"
+          class="site-menu__link site-menu__link--with-icon dropdown__trigger"
+          aria-haspopup="true"
+          aria-expanded="false"
+          aria-label="Change language">
+    <i class="fa-solid fa-language" aria-hidden="true"></i>
+  </button>
+  <form action="/locale/">
+    <ul class="dropdown__content dropdown__content--languages"
+        aria-hidden="true"
+        aria-label="Languages">
+        <li>
+          <button name="locale_id"
+                  value="de"
+                  type="submit"
+                  class="dropdown__link"
+>
+            Deutsch
+          </button>
+        </li>
+        <li>
+          <button name="locale_id"
+                  value="en"
+                  type="submit"
+                  class="dropdown__link"
+aria-current="true">
+<i class="fa fa-check" aria-hidden="true"></i>            English
+          </button>
+        </li>
+        <li>
+          <button name="locale_id"
+                  value="es"
+                  type="submit"
+                  class="dropdown__link"
+>
+            español
+          </button>
+        </li>
+        <li>
+          <button name="locale_id"
+                  value="eo"
+                  type="submit"
+                  class="dropdown__link"
+>
+            Esperanto
+          </button>
+        </li>
+        <li>
+          <button name="locale_id"
+                  value="fr"
+                  type="submit"
+                  class="dropdown__link"
+>
+            français
+          </button>
+        </li>
+        <li>
+          <button name="locale_id"
+                  value="pt_BR"
+                  type="submit"
+                  class="dropdown__link"
+>
+            português (Brasil)
+          </button>
+        </li>
+        <li>
+          <button name="locale_id"
+                  value="el"
+                  type="submit"
+                  class="dropdown__link"
+>
+            Ελληνικά
+          </button>
+        </li>
+        <li>
+          <button name="locale_id"
+                  value="ru"
+                  type="submit"
+                  class="dropdown__link"
+>
+            русский
+          </button>
+        </li>
+        <li>
+          <button name="locale_id"
+                  value="uk"
+                  type="submit"
+                  class="dropdown__link"
+>
+            українська
+          </button>
+        </li>
+        <li>
+          <button name="locale_id"
+                  value="he"
+                  type="submit"
+                  class="dropdown__link"
+>
+            עברית
+          </button>
+        </li>
+        <li>
+          <button name="locale_id"
+                  value="zh_Hans"
+                  type="submit"
+                  class="dropdown__link"
+>
+            中文 (简体)
+          </button>
+        </li>
+        <li>
+          <button name="locale_id"
+                  value="zh_Hant"
+                  type="submit"
+                  class="dropdown__link"
+>
+            中文 (繁體)
+          </button>
+        </li>
+        <li>
+          <button name="locale_id"
+                  value="ja"
+                  type="submit"
+                  class="dropdown__link"
+>
+            日本語
+          </button>
+        </li>
+        <li>
+          <button name="locale_id"
+                  value="ko"
+                  type="submit"
+                  class="dropdown__link"
+>
+            한국어
+          </button>
+        </li>
+    </ul>
+  </form>
+</nav>  </div>
+</div>  </div>
+</div>
+</header>
+  <div class="mobile-search">
+    <form class="search-form search-form--fullwidth"
+          action="/search/"
+          role="search">
+      <label for="mobile-search" class="sr-only">Search PyPI</label>
+      <input id="mobile-search"
+             class="search-form__search"
+             type="text"
+             name="q"
+             placeholder="Search projects"
+             value=""
+             autocomplete="off"
+             autocapitalize="off"
+             spellcheck="false">
+      
+      <button type="submit" class="search-form__button">
+        <i class="fa fa-search" aria-hidden="true"></i>
+        <span class="sr-only">Search</span>
+      </button>
+    </form>
+  </div>
+<main id="content">
+<div class="banner  banner--project">
+  <div class="project-header">
+    <h1 class="project-header__name">requests 2.34.2</h1>
+      <p class="project-header__summary">Python HTTP for Humans.</p>
+      <div data-controller="clipboard"
+           data-clipboard-plausible-event-value="Copy Project Install Command">
+        <p class="project-header__pip-instructions">
+          <span id="pip-command" data-clipboard-target="source">pip install requests</span>
+          <button type="button"
+                  class="copy-tooltip copy-tooltip-n"
+                  data-action="clipboard#copy"
+                  data-clipboard-target="tooltip"
+                  data-clipboard-tooltip-value="Copy to clipboard">
+            <i class="fa fa-copy" aria-hidden="true"></i>
+            <span class="sr-only">Copy PIP instructions</span>
+          </button>
+        </p>
+      </div>
+  </div>
+</div><div data-html-include="/_includes/authed/administer-project-include/requests"></div>  <div data-controller="project-tabs" class="project-tabs">
+<div class="horizontal-section horizontal-section--grey horizontal-section--no-padding">
+  <div class="site-container">
+    <nav class="project-tabs__tabs"
+         aria-label="Navigation for requests">
+      <ul class="project-tabs__list" role="tablist">
+        <li role="presentation">
+          <a id="description-tab"
+             href="#description"
+             role="tab"
+             class="project-tabs__tab project-tabs__tab--is-active"
+             aria-selected="true"
+             aria-controls="description"
+             tabindex="0"
+             data-project-tabs-target="tab"
+             data-action="project-tabs#tabClick keydown->project-tabs#tabKeydown"
+             aria-label="Project description. Focus will be moved to the description.">
+            <span>
+              <i class="fa-regular fa-rectangle-list" aria-hidden="true"></i>
+Description            </span>
+          </a>
+        </li>
+        <li role="presentation">
+          <a id="metadata-tab"
+             href="#metadata"
+             role="tab"
+             class="project-tabs__tab project-tabs__tab--mobile-only"
+             aria-selected="false"
+             aria-controls="metadata"
+             tabindex="-1"
+             data-project-tabs-target="tab"
+             data-action="project-tabs#tabClick keydown->project-tabs#tabKeydown"
+             aria-label="Metadata. Focus will be moved to the metadata panel.">
+            <span>
+              <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
+Metadata            </span>
+          </a>
+        </li>
+          <li role="presentation">
+            <a id="files-tab"
+               href="#files"
+               role="tab"
+               class="project-tabs__tab"
+               aria-selected="false"
+               aria-controls="files"
+               tabindex="-1"
+               data-project-tabs-target="tab"
+               data-action="project-tabs#tabClick keydown->project-tabs#tabKeydown"
+               aria-label="Release files. Focus will be moved to the release files panel.">
+              <span>
+                <i class="fa-regular fa-circle-down" aria-hidden="true"></i>
+Release files              </span>
+            </a>
+          </li>
+          <li role="presentation">
+            <a id="security-tab"
+               href="#security"
+               role="tab"
+               class="project-tabs__tab"
+               aria-selected="false"
+               aria-controls="security"
+               tabindex="-1"
+               data-project-tabs-target="tab"
+               data-action="project-tabs#tabClick keydown->project-tabs#tabKeydown"
+               aria-label="Release security. Focus will be moved to the security panel.">
+              <span>
+                <i class="fa fa-shield-halved" aria-hidden="true"></i>
+Security              </span>
+            </a>
+          </li>
+        <li role="presentation">
+          <a id="history-tab"
+             href="#history"
+             role="tab"
+             class="project-tabs__tab"
+             aria-selected="false"
+             aria-controls="history"
+             tabindex="-1"
+             data-project-tabs-target="tab"
+             data-action="project-tabs#tabClick keydown->project-tabs#tabKeydown"
+             aria-label="Release history. Focus will be moved to the release history panel.">
+            <span>
+              <i class="fa fa-history" aria-hidden="true"></i>
+Release history            </span>
+          </a>
+        </li>
+      </ul>
+    </nav>
+  </div>
+</div>    <div class="site-container">
+      <div class="project-tabs__panel">
+<div id="description"
+     data-project-tabs-target="content"
+     role="tabpanel"
+     aria-labelledby="description-tab"
+     tabindex="-1">
+  <div class="project-description">
+    <div class="project-description__main">
+        <div class="project-description__content"><h1 id="user-content-requests">Requests<a href="#user-content-requests" rel="nofollow"></a></h1>
+<p><a href="https://pypi.org/project/requests/" rel="nofollow"><img src="https://pypi-camo.freetls.fastly.net/506b1a4c6b40f7ef7d0602fddd7a98ff5ac8467d/68747470733a2f2f696d672e736869656c64732e696f2f707970692f762f72657175657374732e7376673f6d61784167653d3836343030" alt="Version"></a>
+<a href="https://pypi.org/project/requests" rel="nofollow"><img src="https://pypi-camo.freetls.fastly.net/508b21fb70f4bc69e3d62730b3ac3c307a209bca/68747470733a2f2f696d672e736869656c64732e696f2f707970692f707976657273696f6e732f72657175657374732e737667" alt="Supported Versions"></a>
+<a href="https://pepy.tech/project/requests" rel="nofollow"><img src="https://pypi-camo.freetls.fastly.net/2757478eed0aacd27f29fb7253fdc8b8ca900354/68747470733a2f2f7374617469632e706570792e746563682f62616467652f72657175657374732f6d6f6e7468" alt="Downloads"></a>
+<a href="https://github.com/psf/requests/graphs/contributors" rel="nofollow"><img src="https://pypi-camo.freetls.fastly.net/ea4a3e8164c289858e9bdc8e83e5425979d1fb3e/68747470733a2f2f696d672e736869656c64732e696f2f6769746875622f636f6e7472696275746f72732f7073662f72657175657374732e737667" alt="Contributors"></a>
+<a href="https://requests.readthedocs.io" rel="nofollow"><img src="https://pypi-camo.freetls.fastly.net/3c4d0123fd7c83cd9f16c559866a2cf1cb569a96/68747470733a2f2f72656164746865646f63732e6f72672f70726f6a656374732f72657175657374732f62616467652f3f76657273696f6e3d6c6174657374" alt="Documentation"></a></p>
+<p><strong>Requests</strong> is a simple, yet elegant, HTTP library.</p>
+<pre lang="python"><span class="o">&gt;&gt;&gt;</span> <span class="kn">import</span><span class="w"> </span><span class="nn">requests</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">r</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'https://httpbin.org/basic-auth/user/pass'</span><span class="p">,</span> <span class="n">auth</span><span class="o">=</span><span class="p">(</span><span class="s1">'user'</span><span class="p">,</span> <span class="s1">'pass'</span><span class="p">))</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">r</span><span class="o">.</span><span class="n">status_code</span>
+<span class="mi">200</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">r</span><span class="o">.</span><span class="n">headers</span><span class="p">[</span><span class="s1">'content-type'</span><span class="p">]</span>
+<span class="s1">'application/json; charset=utf8'</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">r</span><span class="o">.</span><span class="n">encoding</span>
+<span class="s1">'utf-8'</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">r</span><span class="o">.</span><span class="n">text</span>
+<span class="s1">'{"authenticated": true, ...'</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">r</span><span class="o">.</span><span class="n">json</span><span class="p">()</span>
+<span class="p">{</span><span class="s1">'authenticated'</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span> <span class="o">...</span><span class="p">}</span>
+</pre>
+<p>Requests allows you to send HTTP/1.1 requests extremely easily. There’s no need to manually add query strings to your URLs, or to form-encode your <code>PUT</code> &amp; <code>POST</code> data — but nowadays, just use the <code>json</code> method!</p>
+<p>Requests is one of the most downloaded Python packages today, pulling in around <code>300M downloads / week</code> — according to GitHub, Requests is currently <a href="https://github.com/psf/requests/network/dependents?package_id=UGFja2FnZS01NzA4OTExNg%3D%3D" rel="nofollow">depended upon</a> by <code>4,000,000+</code> repositories.</p>
+<h2 id="user-content-installing-requests-and-supported-versions">Installing Requests and Supported Versions<a href="#user-content-installing-requests-and-supported-versions" rel="nofollow"></a></h2>
+<p>Requests is available on PyPI:</p>
+<pre lang="console"><span class="gp">$ </span>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>requests
+</pre>
+<p>Requests officially supports Python 3.10+.</p>
+<h2 id="user-content-supported-features--bestpractices">Supported Features &amp; Best–Practices<a href="#user-content-supported-features--bestpractices" rel="nofollow"></a></h2>
+<p>Requests is ready for the demands of building robust and reliable HTTP–speaking applications, for the needs of today.</p>
+<ul>
+<li>Keep-Alive &amp; Connection Pooling</li>
+<li>International Domains and URLs</li>
+<li>Sessions with Cookie Persistence</li>
+<li>Browser-style TLS/SSL Verification</li>
+<li>Basic &amp; Digest Authentication</li>
+<li>Familiar <code>dict</code>–like Cookies</li>
+<li>Automatic Content Decompression and Decoding</li>
+<li>Multi-part File Uploads</li>
+<li>SOCKS Proxy Support</li>
+<li>Connection Timeouts</li>
+<li>Streaming Downloads</li>
+<li>Automatic honoring of <code>.netrc</code></li>
+<li>Chunked HTTP Requests</li>
+</ul>
+<h2 id="user-content-cloning-the-repository">Cloning the repository<a href="#user-content-cloning-the-repository" rel="nofollow"></a></h2>
+<p>When cloning the Requests repository, you may need to add the <code>-c fetch.fsck.badTimezone=ignore</code> flag to avoid an error about a bad commit timestamp (see
+<a href="https://github.com/psf/requests/issues/2690" rel="nofollow">this issue</a> for more background):</p>
+<pre lang="shell">git<span class="w"> </span>clone<span class="w"> </span>-c<span class="w"> </span>fetch.fsck.badTimezone<span class="o">=</span>ignore<span class="w"> </span>https://github.com/psf/requests.git
+</pre>
+<p>You can also apply this setting to your global Git config:</p>
+<pre lang="shell">git<span class="w"> </span>config<span class="w"> </span>--global<span class="w"> </span>fetch.fsck.badTimezone<span class="w"> </span>ignore
+</pre>
+<hr>
+<p><a href="https://kennethreitz.org" rel="nofollow"><img src="https://pypi-camo.freetls.fastly.net/9ccac975f9a405d76d40072b700ba9137de9c19a/68747470733a2f2f7261772e67697468756275736572636f6e74656e742e636f6d2f7073662f72657175657374732f6d61696e2f6578742f6b722e706e67" alt="Kenneth Reitz"></a> <a href="https://www.python.org/psf" rel="nofollow"><img src="https://pypi-camo.freetls.fastly.net/78df7a4e37f894af3fe57b07e37c10f51822d696/68747470733a2f2f7261772e67697468756275736572636f6e74656e742e636f6d2f7073662f72657175657374732f6d61696e2f6578742f7073662e706e67" alt="Python Software Foundation"></a></p>
+</div>
+    </div>
+    <div class="project-description__sidebar">
+<div data-html-include="/_includes/authed/edit-project-button/requests"></div><div class="sidebar-section">
+  <h2 class="sidebar-section__title">Project links</h2>
+    <div class="sidebar-section__content sidebar-section__content--verified">
+      <details class="sidebar-section__data-source">
+        <summary class="sidebar-section__data-source-label"
+                 title="2026-05-14 19:25:26 (+00:00)">
+Data verified by PyPI on May 14, 2026        </summary>
+        <div class="sidebar-section__data-source-description">
+Data provided by the project maintainers, verified at the time the release was uploaded to PyPI.        </div>
+      </details>
+      <div class="sidebar-section__data-block">
+        <ul class="sidebar-links">
+              <li>
+                <a class="sidebar-links__link" href="https://github.com/psf/requests" rel="nofollow">  <i class="fab fa-github" aria-hidden="true"></i>Source</a>
+              </li>
+        </ul>
+      </div>
+    </div>
+    <div class="sidebar-section__data-block">
+      <ul class="sidebar-links">
+            <li>
+              <a class="sidebar-links__link" href="https://requests.readthedocs.io" rel="nofollow">  <i class="fas fa-book" aria-hidden="true"></i>Documentation</a>
+            </li>
+      </ul>
+    </div>
+</div><div class="sidebar-section">
+  <h2 class="sidebar-section__title">Key dates</h2>
+  <div class="sidebar-section__content sidebar-section__content--pypi">
+    <details class="sidebar-section__data-source">
+      <summary class="sidebar-section__data-source-label"
+               title="PyPI data">PyPI data</summary>
+      <div class="sidebar-section__data-source-description">Data sourced directly from PyPI's database.</div>
+    </details>
+    <div class="sidebar-section__data-block">
+      <ul class="unstyled">
+          <li>
+              <strong>Released:</strong> <time datetime="2026-05-14T19:25:26+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 14, 2026
+  </time>
+          </li>
+      </ul>
+          <span class="badge badge--success">Latest release</span>
+    </div>
+  </div>
+</div><div class="sidebar-section">
+  <h2 class="sidebar-section__title">
+3 maintainers  </h2>
+  <div class="sidebar-section__content sidebar-section__content--pypi">
+    <details class="sidebar-section__data-source">
+      <summary class="sidebar-section__data-source-label"
+               title="PyPI data">PyPI data</summary>
+      <div class="sidebar-section__data-source-description">Data sourced directly from PyPI's database.</div>
+    </details>
+    <div class="sidebar-section__data-block">
+          <a class="sidebar-section__maintainer"
+     href="/user/graffatcolmingov/"
+     aria-label="graffatcolmingov">
+    <img src="https://pypi-camo.freetls.fastly.net/5e54b97e7ddee5412794323f95250047912d87aa/68747470733a2f2f7365637572652e67726176617461722e636f6d2f6176617461722f33393665336465353333323061626639383535643931326364336439343331663f73697a653d3335"
+         srcset="https://pypi-camo.freetls.fastly.net/7bc618d87747eba7b09b61c9a1457952b846e1c8/68747470733a2f2f7365637572652e67726176617461722e636f6d2f6176617461722f33393665336465353333323061626639383535643931326364336439343331663f73697a653d3730 2x,
+                 https://pypi-camo.freetls.fastly.net/a4be97f289055b82c54bded6b06a8819f703c9e6/68747470733a2f2f7365637572652e67726176617461722e636f6d2f6176617461722f33393665336465353333323061626639383535643931326364336439343331663f73697a653d313035 3x"
+         loading="lazy"
+         height="35"
+         width="35"
+         alt="Avatar for graffatcolmingov from gravatar.com"
+         title="Avatar for graffatcolmingov from gravatar.com">
+    <span>graffatcolmingov</span>
+  </a>
+
+          <a class="sidebar-section__maintainer"
+     href="/user/Lukasa/"
+     aria-label="Lukasa">
+    <img src="https://pypi-camo.freetls.fastly.net/65cce94b940dcb62aeaee6248afb162c83532b39/68747470733a2f2f7365637572652e67726176617461722e636f6d2f6176617461722f62356165656530356138663435326339623131336435313239383065623065343f73697a653d3335"
+         srcset="https://pypi-camo.freetls.fastly.net/319c71a2c530376ad183e20454812a304b67db5f/68747470733a2f2f7365637572652e67726176617461722e636f6d2f6176617461722f62356165656530356138663435326339623131336435313239383065623065343f73697a653d3730 2x,
+                 https://pypi-camo.freetls.fastly.net/fe8d1cc643f42b832cf3f81465247be9a53be28b/68747470733a2f2f7365637572652e67726176617461722e636f6d2f6176617461722f62356165656530356138663435326339623131336435313239383065623065343f73697a653d313035 3x"
+         loading="lazy"
+         height="35"
+         width="35"
+         alt="Avatar for Lukasa from gravatar.com"
+         title="Avatar for Lukasa from gravatar.com">
+    <span>Lukasa</span>
+  </a>
+
+          <a class="sidebar-section__maintainer"
+     href="/user/nateprewitt/"
+     aria-label="nateprewitt">
+    <img src="https://pypi-camo.freetls.fastly.net/8b50e0183cb8a294f25992733621e2ebb1bfa85d/68747470733a2f2f7365637572652e67726176617461722e636f6d2f6176617461722f66333733383231373065396436613962363632653739353331313730343232653f73697a653d3335"
+         srcset="https://pypi-camo.freetls.fastly.net/6bc226e2b8fdfea4a9e19f3b4773b0b73176185e/68747470733a2f2f7365637572652e67726176617461722e636f6d2f6176617461722f66333733383231373065396436613962363632653739353331313730343232653f73697a653d3730 2x,
+                 https://pypi-camo.freetls.fastly.net/bdf17c422b9e6a97f6369ef06e3fa9105044e1fe/68747470733a2f2f7365637572652e67726176617461722e636f6d2f6176617461722f66333733383231373065396436613962363632653739353331313730343232653f73697a653d313035 3x"
+         loading="lazy"
+         height="35"
+         width="35"
+         alt="Avatar for nateprewitt from gravatar.com"
+         title="Avatar for nateprewitt from gravatar.com">
+    <span>nateprewitt</span>
+  </a>
+
+    </div>
+  </div>
+</div><div class="sidebar-section">
+  <h2 class="sidebar-section__title">Credits</h2>
+      <div class="sidebar-section__data-block">
+          <p>
+            <strong>
+Author:            </strong>
+            <a href="mailto:me@kennethreitz.org">Kenneth Reitz</a>
+          </p>
+          <p>
+            <strong>Maintainer:</strong>
+            <a href="mailto:graffatcolmingov@gmail.com">Ian Stapleton Cordasco</a>
+          </p>
+      </div>
+</div><div class="hidden"
+     data-controller="github-repo-stats"
+     data-github-repo-stats-github-repo-info-outlet=".github-repo-info"
+     data-github-repo-stats-url-value="https://api.github.com/repos/psf/requests"
+     data-github-repo-stats-issue-url-value="https://api.github.com/search/issues?q=repo:psf/requests+type:issue+state:open&amp;per_page=1"></div>
+<div class="sidebar-section">
+  <h2 class="sidebar-section__title">GitHub Statistics</h2>
+  <div class="sidebar-section__content sidebar-section__content--verified">
+    <details class="sidebar-section__data-source">
+      <summary class="sidebar-section__data-source-label"
+               title="2026-05-14 19:25:26 (+00:00)">Data verified by PyPI on&nbsp;May 14, 2026</summary>
+      <div class="sidebar-section__data-source-description">The GitHub source repository was provided by the project maintainers and verified by PyPI at the time of upload. Stars, forks, and open issues/PRs are derived from that repository and have not been independently verified.</div>
+    </details>
+    <div class="sidebar-section__data-block hidden github-repo-info"
+         data-controller="github-repo-info">
+      <ul class="sidebar-links">
+        <li>
+          <a class="sidebar-links__link"
+             rel="noopener"
+             href="https://github.com/psf/requests">
+            <i class="fab fa-github" aria-hidden="true"></i>
+Repository          </a>
+        </li>
+        <li>
+          <a class="sidebar-links__link"
+             data-github-repo-info-target="stargazersUrl"
+             rel="noopener">
+            <i class="fa fa-star" aria-hidden="true"></i>
+Stars:
+            <strong data-github-repo-info-target="stargazersCount"></strong>
+          </a>
+        </li>
+        <li>
+          <a class="sidebar-links__link"
+             data-github-repo-info-target="forksUrl"
+             rel="noopener">
+            <i class="fa fa-code-branch" aria-hidden="true"></i>
+Forks:
+            <strong data-github-repo-info-target="forksCount"></strong>
+          </a>
+        </li>
+        <li>
+          <a class="sidebar-links__link"
+             data-github-repo-info-target="openIssuesUrl"
+             rel="noopener">
+            <i class="fa fa-exclamation-circle" aria-hidden="true"></i>
+Open issues:
+            <strong data-github-repo-info-target="openIssuesCount"></strong>
+          </a>
+        </li>
+        <li>
+          <a class="sidebar-links__link"
+             data-github-repo-info-target="openPRsUrl"
+             rel="noopener">
+            <i class="fa fa-code-pull-request" aria-hidden="true"></i>
+Open PRs:
+            <strong data-github-repo-info-target="openPRsCount"></strong>
+          </a>
+        </li>
+      </ul>
+    </div>
+  </div>
+</div>    <div class="sidebar-section">
+      <h2 class="sidebar-section__title">
+Provenance        <a href="https://docs.pypi.org/using-pypi/package-security/provenance/"
+           target="_blank"
+           aria-label="About provenance">
+          <i class="fa fa-info-circle" aria-hidden="true"></i>
+        </a>
+      </h2>
+        <div class="sidebar-section__content sidebar-section__content--verified">
+          <details class="sidebar-section__data-source">
+            <summary class="sidebar-section__data-source-label"
+                     title="2026-05-14 19:25:26 (+00:00)">Data verified by PyPI on&nbsp;May 14, 2026</summary>
+            <div class="sidebar-section__data-source-description">Data provided by the project maintainers and verified by PyPI at the time of upload.</div>
+          </details>
+          <div class="sidebar-section__data-block">
+            <p>
+              <i class="fa-solid fa-circle-check primary" aria-hidden="true"></i>
+              <strong>Full provenance</strong>
+            </p>
+            <p>
+Both files in this release have provenance metadata.            </p>
+            <p>
+              <a href="#security"
+                 data-project-tabs-target="tab"
+                 data-action="project-tabs#tabClick">View provenance details</a>
+            </p>
+          </div>
+        </div>
+    </div>
+<div class="sidebar-section">
+    <h2 class="sidebar-section__title">License</h2>
+    <div class="sidebar-section__data-block">
+      <p>Apache Software License (Apache-2.0)</p>
+    </div>
+</div><div class="sidebar-section">
+  <h2 class="sidebar-section__title">Requires</h2>
+  <div class="sidebar-section__data-block">
+    <p><strong>Python</strong> &gt;=3.10</p>
+  </div>
+</div><div class="sidebar-section">
+  <h2 class="sidebar-section__title">Provides Extra</h2>
+  <div class="sidebar-section__data-block">
+    <p>
+        <code>security</code>
+        <code>socks</code>
+        <code>use-chardet-on-py3</code>
+    </p>
+  </div>
+</div><div class="sidebar-section">
+  <h2 class="sidebar-section__title">Classifiers</h2>
+  <div class="sidebar-section__data-block">
+    <ul class="sidebar-section__classifiers">
+        <li>
+          Development Status
+          <ul>
+              <li>
+                <a href="/search/?c=Development+Status+%3A%3A+5+-+Production%2FStable">
+                  5 - Production/Stable
+                </a>
+              </li>
+          </ul>
+        </li>
+        <li>
+          Environment
+          <ul>
+              <li>
+                <a href="/search/?c=Environment+%3A%3A+Web+Environment">
+                  Web Environment
+                </a>
+              </li>
+          </ul>
+        </li>
+        <li>
+          Intended Audience
+          <ul>
+              <li>
+                <a href="/search/?c=Intended+Audience+%3A%3A+Developers">
+                  Developers
+                </a>
+              </li>
+          </ul>
+        </li>
+        <li>
+          License
+          <ul>
+              <li>
+                <a href="/search/?c=License+%3A%3A+OSI+Approved+%3A%3A+Apache+Software+License">
+                  OSI Approved :: Apache Software License
+                </a>
+              </li>
+          </ul>
+        </li>
+        <li>
+          Natural Language
+          <ul>
+              <li>
+                <a href="/search/?c=Natural+Language+%3A%3A+English">
+                  English
+                </a>
+              </li>
+          </ul>
+        </li>
+        <li>
+          Operating System
+          <ul>
+              <li>
+                <a href="/search/?c=Operating+System+%3A%3A+OS+Independent">
+                  OS Independent
+                </a>
+              </li>
+          </ul>
+        </li>
+        <li>
+          Programming Language
+          <ul>
+              <li>
+                <a href="/search/?c=Programming+Language+%3A%3A+Python">
+                  Python
+                </a>
+              </li>
+              <li>
+                <a href="/search/?c=Programming+Language+%3A%3A+Python+%3A%3A+3">
+                  Python :: 3
+                </a>
+              </li>
+              <li>
+                <a href="/search/?c=Programming+Language+%3A%3A+Python+%3A%3A+3+%3A%3A+Only">
+                  Python :: 3 :: Only
+                </a>
+              </li>
+              <li>
+                <a href="/search/?c=Programming+Language+%3A%3A+Python+%3A%3A+3.10">
+                  Python :: 3.10
+                </a>
+              </li>
+              <li>
+                <a href="/search/?c=Programming+Language+%3A%3A+Python+%3A%3A+3.11">
+                  Python :: 3.11
+                </a>
+              </li>
+              <li>
+                <a href="/search/?c=Programming+Language+%3A%3A+Python+%3A%3A+3.12">
+                  Python :: 3.12
+                </a>
+              </li>
+              <li>
+                <a href="/search/?c=Programming+Language+%3A%3A+Python+%3A%3A+3.13">
+                  Python :: 3.13
+                </a>
+              </li>
+              <li>
+                <a href="/search/?c=Programming+Language+%3A%3A+Python+%3A%3A+3.14">
+                  Python :: 3.14
+                </a>
+              </li>
+              <li>
+                <a href="/search/?c=Programming+Language+%3A%3A+Python+%3A%3A+3.15">
+                  Python :: 3.15
+                </a>
+              </li>
+              <li>
+                <a href="/search/?c=Programming+Language+%3A%3A+Python+%3A%3A+Free+Threading+%3A%3A+2+-+Beta">
+                  Python :: Free Threading :: 2 - Beta
+                </a>
+              </li>
+              <li>
+                <a href="/search/?c=Programming+Language+%3A%3A+Python+%3A%3A+Implementation+%3A%3A+CPython">
+                  Python :: Implementation :: CPython
+                </a>
+              </li>
+              <li>
+                <a href="/search/?c=Programming+Language+%3A%3A+Python+%3A%3A+Implementation+%3A%3A+PyPy">
+                  Python :: Implementation :: PyPy
+                </a>
+              </li>
+          </ul>
+        </li>
+        <li>
+          Topic
+          <ul>
+              <li>
+                <a href="/search/?c=Topic+%3A%3A+Internet+%3A%3A+WWW%2FHTTP">
+                  Internet :: WWW/HTTP
+                </a>
+              </li>
+              <li>
+                <a href="/search/?c=Topic+%3A%3A+Software+Development+%3A%3A+Libraries">
+                  Software Development :: Libraries
+                </a>
+              </li>
+          </ul>
+        </li>
+    </ul>
+  </div>
+</div><div class="sidebar-section">
+  <div class="sidebar-section"
+       data-ea-publisher="psf"
+       data-ea-type="psf"
+       data-ea-keywords="pypi-sidebar"></div>
+</div>    </div>
+  </div>
+</div><div id="metadata"
+     data-project-tabs-target="content"
+     role="tabpanel"
+     aria-labelledby="metadata-tab"
+     tabindex="-1">
+  <h2 class="page-title">Metadata</h2>
+<div data-html-include="/_includes/authed/edit-project-button/requests"></div><div class="sidebar-section">
+  <h2 class="sidebar-section__title">Project links</h2>
+    <div class="sidebar-section__content sidebar-section__content--verified">
+      <details class="sidebar-section__data-source">
+        <summary class="sidebar-section__data-source-label"
+                 title="2026-05-14 19:25:26 (+00:00)">
+Data verified by PyPI on May 14, 2026        </summary>
+        <div class="sidebar-section__data-source-description">
+Data provided by the project maintainers, verified at the time the release was uploaded to PyPI.        </div>
+      </details>
+      <div class="sidebar-section__data-block">
+        <ul class="sidebar-links">
+              <li>
+                <a class="sidebar-links__link" href="https://github.com/psf/requests" rel="nofollow">  <i class="fab fa-github" aria-hidden="true"></i>Source</a>
+              </li>
+        </ul>
+      </div>
+    </div>
+    <div class="sidebar-section__data-block">
+      <ul class="sidebar-links">
+            <li>
+              <a class="sidebar-links__link" href="https://requests.readthedocs.io" rel="nofollow">  <i class="fas fa-book" aria-hidden="true"></i>Documentation</a>
+            </li>
+      </ul>
+    </div>
+</div><div class="sidebar-section">
+  <h2 class="sidebar-section__title">Key dates</h2>
+  <div class="sidebar-section__content sidebar-section__content--pypi">
+    <details class="sidebar-section__data-source">
+      <summary class="sidebar-section__data-source-label"
+               title="PyPI data">PyPI data</summary>
+      <div class="sidebar-section__data-source-description">Data sourced directly from PyPI's database.</div>
+    </details>
+    <div class="sidebar-section__data-block">
+      <ul class="unstyled">
+          <li>
+              <strong>Released:</strong> <time datetime="2026-05-14T19:25:26+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 14, 2026
+  </time>
+          </li>
+      </ul>
+          <span class="badge badge--success">Latest release</span>
+    </div>
+  </div>
+</div><div class="sidebar-section">
+  <h2 class="sidebar-section__title">
+3 maintainers  </h2>
+  <div class="sidebar-section__content sidebar-section__content--pypi">
+    <details class="sidebar-section__data-source">
+      <summary class="sidebar-section__data-source-label"
+               title="PyPI data">PyPI data</summary>
+      <div class="sidebar-section__data-source-description">Data sourced directly from PyPI's database.</div>
+    </details>
+    <div class="sidebar-section__data-block">
+          <a class="sidebar-section__maintainer"
+     href="/user/graffatcolmingov/"
+     aria-label="graffatcolmingov">
+    <img src="https://pypi-camo.freetls.fastly.net/5e54b97e7ddee5412794323f95250047912d87aa/68747470733a2f2f7365637572652e67726176617461722e636f6d2f6176617461722f33393665336465353333323061626639383535643931326364336439343331663f73697a653d3335"
+         srcset="https://pypi-camo.freetls.fastly.net/7bc618d87747eba7b09b61c9a1457952b846e1c8/68747470733a2f2f7365637572652e67726176617461722e636f6d2f6176617461722f33393665336465353333323061626639383535643931326364336439343331663f73697a653d3730 2x,
+                 https://pypi-camo.freetls.fastly.net/a4be97f289055b82c54bded6b06a8819f703c9e6/68747470733a2f2f7365637572652e67726176617461722e636f6d2f6176617461722f33393665336465353333323061626639383535643931326364336439343331663f73697a653d313035 3x"
+         loading="lazy"
+         height="35"
+         width="35"
+         alt="Avatar for graffatcolmingov from gravatar.com"
+         title="Avatar for graffatcolmingov from gravatar.com">
+    <span>graffatcolmingov</span>
+  </a>
+
+          <a class="sidebar-section__maintainer"
+     href="/user/Lukasa/"
+     aria-label="Lukasa">
+    <img src="https://pypi-camo.freetls.fastly.net/65cce94b940dcb62aeaee6248afb162c83532b39/68747470733a2f2f7365637572652e67726176617461722e636f6d2f6176617461722f62356165656530356138663435326339623131336435313239383065623065343f73697a653d3335"
+         srcset="https://pypi-camo.freetls.fastly.net/319c71a2c530376ad183e20454812a304b67db5f/68747470733a2f2f7365637572652e67726176617461722e636f6d2f6176617461722f62356165656530356138663435326339623131336435313239383065623065343f73697a653d3730 2x,
+                 https://pypi-camo.freetls.fastly.net/fe8d1cc643f42b832cf3f81465247be9a53be28b/68747470733a2f2f7365637572652e67726176617461722e636f6d2f6176617461722f62356165656530356138663435326339623131336435313239383065623065343f73697a653d313035 3x"
+         loading="lazy"
+         height="35"
+         width="35"
+         alt="Avatar for Lukasa from gravatar.com"
+         title="Avatar for Lukasa from gravatar.com">
+    <span>Lukasa</span>
+  </a>
+
+          <a class="sidebar-section__maintainer"
+     href="/user/nateprewitt/"
+     aria-label="nateprewitt">
+    <img src="https://pypi-camo.freetls.fastly.net/8b50e0183cb8a294f25992733621e2ebb1bfa85d/68747470733a2f2f7365637572652e67726176617461722e636f6d2f6176617461722f66333733383231373065396436613962363632653739353331313730343232653f73697a653d3335"
+         srcset="https://pypi-camo.freetls.fastly.net/6bc226e2b8fdfea4a9e19f3b4773b0b73176185e/68747470733a2f2f7365637572652e67726176617461722e636f6d2f6176617461722f66333733383231373065396436613962363632653739353331313730343232653f73697a653d3730 2x,
+                 https://pypi-camo.freetls.fastly.net/bdf17c422b9e6a97f6369ef06e3fa9105044e1fe/68747470733a2f2f7365637572652e67726176617461722e636f6d2f6176617461722f66333733383231373065396436613962363632653739353331313730343232653f73697a653d313035 3x"
+         loading="lazy"
+         height="35"
+         width="35"
+         alt="Avatar for nateprewitt from gravatar.com"
+         title="Avatar for nateprewitt from gravatar.com">
+    <span>nateprewitt</span>
+  </a>
+
+    </div>
+  </div>
+</div><div class="sidebar-section">
+  <h2 class="sidebar-section__title">Credits</h2>
+      <div class="sidebar-section__data-block">
+          <p>
+            <strong>
+Author:            </strong>
+            <a href="mailto:me@kennethreitz.org">Kenneth Reitz</a>
+          </p>
+          <p>
+            <strong>Maintainer:</strong>
+            <a href="mailto:graffatcolmingov@gmail.com">Ian Stapleton Cordasco</a>
+          </p>
+      </div>
+</div><div class="hidden"
+     data-controller="github-repo-stats"
+     data-github-repo-stats-github-repo-info-outlet=".github-repo-info"
+     data-github-repo-stats-url-value="https://api.github.com/repos/psf/requests"
+     data-github-repo-stats-issue-url-value="https://api.github.com/search/issues?q=repo:psf/requests+type:issue+state:open&amp;per_page=1"></div>
+<div class="sidebar-section">
+  <h2 class="sidebar-section__title">GitHub Statistics</h2>
+  <div class="sidebar-section__content sidebar-section__content--verified">
+    <details class="sidebar-section__data-source">
+      <summary class="sidebar-section__data-source-label"
+               title="2026-05-14 19:25:26 (+00:00)">Data verified by PyPI on&nbsp;May 14, 2026</summary>
+      <div class="sidebar-section__data-source-description">The GitHub source repository was provided by the project maintainers and verified by PyPI at the time of upload. Stars, forks, and open issues/PRs are derived from that repository and have not been independently verified.</div>
+    </details>
+    <div class="sidebar-section__data-block hidden github-repo-info"
+         data-controller="github-repo-info">
+      <ul class="sidebar-links">
+        <li>
+          <a class="sidebar-links__link"
+             rel="noopener"
+             href="https://github.com/psf/requests">
+            <i class="fab fa-github" aria-hidden="true"></i>
+Repository          </a>
+        </li>
+        <li>
+          <a class="sidebar-links__link"
+             data-github-repo-info-target="stargazersUrl"
+             rel="noopener">
+            <i class="fa fa-star" aria-hidden="true"></i>
+Stars:
+            <strong data-github-repo-info-target="stargazersCount"></strong>
+          </a>
+        </li>
+        <li>
+          <a class="sidebar-links__link"
+             data-github-repo-info-target="forksUrl"
+             rel="noopener">
+            <i class="fa fa-code-branch" aria-hidden="true"></i>
+Forks:
+            <strong data-github-repo-info-target="forksCount"></strong>
+          </a>
+        </li>
+        <li>
+          <a class="sidebar-links__link"
+             data-github-repo-info-target="openIssuesUrl"
+             rel="noopener">
+            <i class="fa fa-exclamation-circle" aria-hidden="true"></i>
+Open issues:
+            <strong data-github-repo-info-target="openIssuesCount"></strong>
+          </a>
+        </li>
+        <li>
+          <a class="sidebar-links__link"
+             data-github-repo-info-target="openPRsUrl"
+             rel="noopener">
+            <i class="fa fa-code-pull-request" aria-hidden="true"></i>
+Open PRs:
+            <strong data-github-repo-info-target="openPRsCount"></strong>
+          </a>
+        </li>
+      </ul>
+    </div>
+  </div>
+</div>    <div class="sidebar-section">
+      <h2 class="sidebar-section__title">
+Provenance        <a href="https://docs.pypi.org/using-pypi/package-security/provenance/"
+           target="_blank"
+           aria-label="About provenance">
+          <i class="fa fa-info-circle" aria-hidden="true"></i>
+        </a>
+      </h2>
+        <div class="sidebar-section__content sidebar-section__content--verified">
+          <details class="sidebar-section__data-source">
+            <summary class="sidebar-section__data-source-label"
+                     title="2026-05-14 19:25:26 (+00:00)">Data verified by PyPI on&nbsp;May 14, 2026</summary>
+            <div class="sidebar-section__data-source-description">Data provided by the project maintainers and verified by PyPI at the time of upload.</div>
+          </details>
+          <div class="sidebar-section__data-block">
+            <p>
+              <i class="fa-solid fa-circle-check primary" aria-hidden="true"></i>
+              <strong>Full provenance</strong>
+            </p>
+            <p>
+Both files in this release have provenance metadata.            </p>
+            <p>
+              <a href="#security"
+                 data-project-tabs-target="tab"
+                 data-action="project-tabs#tabClick">View provenance details</a>
+            </p>
+          </div>
+        </div>
+    </div>
+<div class="sidebar-section">
+    <h2 class="sidebar-section__title">License</h2>
+    <div class="sidebar-section__data-block">
+      <p>Apache Software License (Apache-2.0)</p>
+    </div>
+</div><div class="sidebar-section">
+  <h2 class="sidebar-section__title">Requires</h2>
+  <div class="sidebar-section__data-block">
+    <p><strong>Python</strong> &gt;=3.10</p>
+  </div>
+</div><div class="sidebar-section">
+  <h2 class="sidebar-section__title">Provides Extra</h2>
+  <div class="sidebar-section__data-block">
+    <p>
+        <code>security</code>
+        <code>socks</code>
+        <code>use-chardet-on-py3</code>
+    </p>
+  </div>
+</div><div class="sidebar-section">
+  <h2 class="sidebar-section__title">Classifiers</h2>
+  <div class="sidebar-section__data-block">
+    <ul class="sidebar-section__classifiers">
+        <li>
+          Development Status
+          <ul>
+              <li>
+                <a href="/search/?c=Development+Status+%3A%3A+5+-+Production%2FStable">
+                  5 - Production/Stable
+                </a>
+              </li>
+          </ul>
+        </li>
+        <li>
+          Environment
+          <ul>
+              <li>
+                <a href="/search/?c=Environment+%3A%3A+Web+Environment">
+                  Web Environment
+                </a>
+              </li>
+          </ul>
+        </li>
+        <li>
+          Intended Audience
+          <ul>
+              <li>
+                <a href="/search/?c=Intended+Audience+%3A%3A+Developers">
+                  Developers
+                </a>
+              </li>
+          </ul>
+        </li>
+        <li>
+          License
+          <ul>
+              <li>
+                <a href="/search/?c=License+%3A%3A+OSI+Approved+%3A%3A+Apache+Software+License">
+                  OSI Approved :: Apache Software License
+                </a>
+              </li>
+          </ul>
+        </li>
+        <li>
+          Natural Language
+          <ul>
+              <li>
+                <a href="/search/?c=Natural+Language+%3A%3A+English">
+                  English
+                </a>
+              </li>
+          </ul>
+        </li>
+        <li>
+          Operating System
+          <ul>
+              <li>
+                <a href="/search/?c=Operating+System+%3A%3A+OS+Independent">
+                  OS Independent
+                </a>
+              </li>
+          </ul>
+        </li>
+        <li>
+          Programming Language
+          <ul>
+              <li>
+                <a href="/search/?c=Programming+Language+%3A%3A+Python">
+                  Python
+                </a>
+              </li>
+              <li>
+                <a href="/search/?c=Programming+Language+%3A%3A+Python+%3A%3A+3">
+                  Python :: 3
+                </a>
+              </li>
+              <li>
+                <a href="/search/?c=Programming+Language+%3A%3A+Python+%3A%3A+3+%3A%3A+Only">
+                  Python :: 3 :: Only
+                </a>
+              </li>
+              <li>
+                <a href="/search/?c=Programming+Language+%3A%3A+Python+%3A%3A+3.10">
+                  Python :: 3.10
+                </a>
+              </li>
+              <li>
+                <a href="/search/?c=Programming+Language+%3A%3A+Python+%3A%3A+3.11">
+                  Python :: 3.11
+                </a>
+              </li>
+              <li>
+                <a href="/search/?c=Programming+Language+%3A%3A+Python+%3A%3A+3.12">
+                  Python :: 3.12
+                </a>
+              </li>
+              <li>
+                <a href="/search/?c=Programming+Language+%3A%3A+Python+%3A%3A+3.13">
+                  Python :: 3.13
+                </a>
+              </li>
+              <li>
+                <a href="/search/?c=Programming+Language+%3A%3A+Python+%3A%3A+3.14">
+                  Python :: 3.14
+                </a>
+              </li>
+              <li>
+                <a href="/search/?c=Programming+Language+%3A%3A+Python+%3A%3A+3.15">
+                  Python :: 3.15
+                </a>
+              </li>
+              <li>
+                <a href="/search/?c=Programming+Language+%3A%3A+Python+%3A%3A+Free+Threading+%3A%3A+2+-+Beta">
+                  Python :: Free Threading :: 2 - Beta
+                </a>
+              </li>
+              <li>
+                <a href="/search/?c=Programming+Language+%3A%3A+Python+%3A%3A+Implementation+%3A%3A+CPython">
+                  Python :: Implementation :: CPython
+                </a>
+              </li>
+              <li>
+                <a href="/search/?c=Programming+Language+%3A%3A+Python+%3A%3A+Implementation+%3A%3A+PyPy">
+                  Python :: Implementation :: PyPy
+                </a>
+              </li>
+          </ul>
+        </li>
+        <li>
+          Topic
+          <ul>
+              <li>
+                <a href="/search/?c=Topic+%3A%3A+Internet+%3A%3A+WWW%2FHTTP">
+                  Internet :: WWW/HTTP
+                </a>
+              </li>
+              <li>
+                <a href="/search/?c=Topic+%3A%3A+Software+Development+%3A%3A+Libraries">
+                  Software Development :: Libraries
+                </a>
+              </li>
+          </ul>
+        </li>
+    </ul>
+  </div>
+</div><div class="sidebar-section">
+  <div class="sidebar-section"
+       data-ea-publisher="psf"
+       data-ea-type="psf"
+       data-ea-keywords="pypi-sidebar"></div>
+</div></div>  <div id="files"
+       data-project-tabs-target="content"
+       role="tabpanel"
+       aria-labelledby="files-tab"
+       tabindex="-1"
+       data-controller="filter-list">
+    <h2 class="page-title">Release files for requests 2.34.2</h2>
+    <p>
+For a detailed explanation of source distributions (sdists) and built distributions (wheels), please see the <a href="https://packaging.python.org/en/latest/discussions/package-formats/#package-formats" title="External link" target="_blank" rel="noopener">package formats documentation</a>.    </p>
+      <h3>
+        <i class="fa-regular fa-file-code" aria-hidden="true"></i>
+Source distribution (sdist)    </h3>
+    <table class="table table--files">
+      <caption class="sr-only">Source distribution for requests 2.34.2</caption>
+      <thead>
+        <tr>
+          <th scope="col">File</th>
+          <th scope="col">Size</th>
+          <th scope="col">Uploaded</th>
+          <th scope="col">Provenance</th>
+          <th scope="col">
+            <span class="sr-only">Actions</span>
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr>
+            <td>
+              <span class="file-info__name">
+                <a href="https://files.pythonhosted.org/packages/ac/c3/e2a2b89f2d3e2179abd6d00ebd70bff6273f37fb3e0cc209f48b39d00cbf/requests-2.34.2.tar.gz"><i class="fa-regular fa-circle-down" aria-hidden="true"></i> <span>requests-2.34.2.tar.gz</span></a>
+              </span>
+            </td>
+            <td>142.9 kB</td>
+            <td>
+                <time datetime="2026-05-14T19:25:27+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 14, 2026
+  </time>
+            </td>
+            <td>  <i class="fa-solid fa-circle-check primary" aria-hidden="true"></i> With provenance</td>
+            <td>
+              <a href="#requests-2.34.2.tar.gz"
+                 id="requests-2.34.2.tar.gz-tab"
+                 class="button button--small button--outline file-info__details-button"
+                 data-project-tabs-target="tab"
+                 data-action="project-tabs#tabClick">Details <span class="sr-only">for requests-2.34.2.tar.gz</span></a>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+<hr>    <h3>
+      <i class="fa-solid fa-cube" aria-hidden="true"></i>
+Built distribution (wheel)  </h3>
+  <table class="table table--files">
+    <caption class="sr-only">Table of built distributions (wheels) for requests 2.34.2</caption>
+    <thead>
+      <tr>
+        <th scope="col">File</th>
+        <th scope="col" class="table__filter-col">
+Interpreter        </th>
+        <th scope="col" class="table__filter-col">
+ABI        </th>
+        <th scope="col" class="table__filter-col">
+Platform        </th>
+        <th scope="col">
+          <span class="sr-only">Actions</span>
+          <a href="https://pypi.org/project/requests/#files"
+             data-action="filter-list#filterClear"
+             data-filter-list-target="clear"
+             class="hidden button button--link">Reset</a>
+        </th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr class="file-row"
+ data-filter-list-target="item" data-filtered-target-filename='["requests-2.34.2-py3-none-any.whl", "Python 3"]'  data-filtered-target-interpreter='["py3"]'  data-filtered-target-abi='["none"]'  data-filtered-target-platform='["any"]'  data-filtered-target-other='[]' >
+          <td>
+            <span class="file-info__name">
+              <a href="https://files.pythonhosted.org/packages/a0/f4/c67b0b3f1b9245e8d266f0f112c500d50e5b4e83cb6f3b71b6528104182a/requests-2.34.2-py3-none-any.whl"><i class="fa-regular fa-circle-down" aria-hidden="true"></i> <span>requests-2.34.2-py3-none-any.whl</span></a>
+            </span>
+            <span class="file-info__metadata">
+              <span class="file-info__meta">73.1 kB</span>
+              <span class="file-info__meta-divider" aria-hidden="true"></span>
+                <span class="file-info__meta">
+                  <i class="fa-regular fa-calendar" aria-hidden="true"></i>
+                  <time datetime="2026-05-14T19:25:26+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 14, 2026
+  </time>
+                </span>
+              <span class="file-info__meta-divider" aria-hidden="true"></span>
+              <span class="file-info__meta">  <i class="fa-solid fa-circle-check primary" aria-hidden="true"></i> With provenance</span>
+            </span>
+          </td>
+            <td class="table__filter-col">
+              Python 3
+            </td>
+            <td class="table__filter-col">
+              none
+            </td>
+            <td class="table__filter-col">
+              any
+            </td>
+          <td>
+            <a href="#requests-2.34.2-py3-none-any.whl"
+               id="requests-2.34.2-py3-none-any.whl-tab"
+               class="button button--small button--outline file-info__details-button"
+               data-project-tabs-target="tab"
+               data-action="project-tabs#tabClick">Details <span class="sr-only">for requests-2.34.2-py3-none-any.whl</span></a>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+    <hr />
+    <div>
+      <p>
+        <strong>Total release size:</strong> 215.9 kB
+      </p>
+    </div>
+</div>
+<div id="requests-2.34.2.tar.gz"
+     data-project-tabs-target="content"
+     tabindex="-1">
+  <h2 class="page-title">
+    <a href="#files"
+       data-project-tabs-target="tab"
+       data-action="project-tabs#tabClick">Release files</a>
+    / requests-2.34.2.tar.gz
+  </h2>
+  <table class="table table--information">
+    <tbody>
+      <tr>
+        <th scope="row">Download URL</th>
+        <td class="file-download">
+          <a href="https://files.pythonhosted.org/packages/ac/c3/e2a2b89f2d3e2179abd6d00ebd70bff6273f37fb3e0cc209f48b39d00cbf/requests-2.34.2.tar.gz">
+            <i class="fa-regular fa-circle-down" aria-hidden="true"></i>
+            <span>requests-2.34.2.tar.gz</span>
+          </a>
+        </td>
+      </tr>
+      <tr>
+        <th scope="row">Size</th>
+        <td>142.9 kB</td>
+      </tr>
+        <tr>
+          <th scope="row">Tags</th>
+          <td class="file-tags">
+                <span class="badge badge--neutral badge--no-uppercase">Source</span>
+          </td>
+        </tr>
+      <tr data-controller="clipboard">
+        <th scope="row">
+SHA-256 checksum          <br>
+          <a href="https://pip.pypa.io/en/stable/topics/secure-installs/#hash-checking-mode"
+             title="External link"
+             target="_blank"
+             rel="noopener">How to use checksums</a>
+        </th>
+        <td>
+          <code class="code-block code-block--with-copy">
+            <span data-clipboard-target="source">f288924cae4e29463698d6d60bc6a4da69c89185ad1e0bcc4104f584e960b9ed</span>
+            <button type="button"
+                    class="button button--small copy-tooltip copy-tooltip-w"
+                    data-action="clipboard#copy"
+                    data-clipboard-target="tooltip"
+                    data-clipboard-tooltip-value="Copy to clipboard">
+              <i class="fa-regular fa-copy" aria-hidden="true"></i>
+              <span class="sr-only">Copy SHA-256 checksum</span>
+            </button>
+          </code>
+        </td>
+      </tr>
+      <tr data-controller="clipboard">
+        <th scope="row">
+BLAKE2b-256 checksum          <br>
+          <a href="https://pip.pypa.io/en/stable/topics/secure-installs/#hash-checking-mode"
+             title="External link"
+             target="_blank"
+             rel="noopener">How to use checksums</a>
+        </th>
+        <td>
+          <code class="code-block code-block--with-copy">
+            <span data-clipboard-target="source">acc3e2a2b89f2d3e2179abd6d00ebd70bff6273f37fb3e0cc209f48b39d00cbf</span>
+            <button type="button"
+                    class="button button--small copy-tooltip copy-tooltip-w"
+                    data-action="clipboard#copy"
+                    data-clipboard-target="tooltip"
+                    data-clipboard-tooltip-value="Copy to clipboard">
+              <i class="fa-regular fa-copy" aria-hidden="true"></i>
+              <span class="sr-only">Copy BLAKE2b-256 checksum</span>
+            </button>
+          </code>
+        </td>
+      </tr>
+      <tr>
+        <th scope="row">Upload date</th>
+        <td><time datetime="2026-05-14T19:25:27+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 14, 2026
+  </time></td>
+      </tr>
+      <tr>
+        <th scope="row">
+Uploaded using Trusted Publishing?          <br>
+          <a href="https://docs.pypi.org/trusted-publishers/">What is trusted publishing?</a>
+        </th>
+        <td>
+Yes        </td>
+      </tr>
+        <tr>
+          <th scope="row">Uploaded via</th>
+          <td>
+            <code class="code-block code-block--tight">twine/6.1.0 CPython/3.13.13</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+    <h3>Provenance</h3>
+    <p>
+<strong>Provenance</strong> describes where a file came from. On PyPI, provenance is shared via <strong>attestations</strong>, which provide a verifiable record of the build or publishing details. <a href="https://docs.pypi.org/using-pypi/package-security/provenance/">View details, limitations and caveats.</a>    </p>
+<div class="attestation attestation--pypi">
+  <div class="attestation__header">
+    <div class="attestation__publisher">
+      <div class="attestation__publisher-icons">
+          <img src="https://pypi.org/static/images/github.683a0246.svg"
+               alt=""
+               aria-hidden="true">
+          <img src="https://pypi.org/static/images/pypi-attestation-cube.1cfdb012.svg"
+               alt=""
+               aria-hidden="true">
+      </div>
+    </div>
+    <div class="attestation__header-content">
+      <h4>
+          <a href="https://docs.pypi.org/attestations/publish/v1" target="_blank" rel="noopener">
+PyPI Publish          </a>
+Attestation      </h4>
+      <p>
+PyPI verified that this artifact, at this checksum, originated from the publisher listed below.      </p>
+      <p>
+        <strong>
+Signed by GitHub Actions, verified by PyPI on May 14, 2026.        </strong>
+      </p>
+        <a href="https://search.sigstore.dev/?logIndex=1540243332"
+           target="_blank"
+           rel="noopener"
+           title="Sigstore transparency entry">Transparency log</a>
+    </div>
+  </div>
+  <div class="attestation__details">
+    <div class="attestation__metadata">
+      <div class="attestation__metadata-header">
+        <span class="attestation__metadata-icon">
+          <i class="fa-solid fa-fingerprint" aria-hidden="true"></i>
+        </span>
+        <h5 class="attestation__metadata-title">Identity</h5>
+      </div>
+      <dl class="attestation__metadata-content">
+        <dt>
+Publishing platform        </dt>
+        <dd>
+          GitHub Actions
+        </dd>
+          <dt>
+Publishing repository          </dt>
+          <dd>
+            <a href="https://github.com/psf/requests" target="_blank" rel="noopener">github.com/psf/requests</a>
+          </dd>
+          <dt>
+Publishing commit          </dt>
+          <dd>
+            <a href="https://github.com/psf/requests/tree/6e83187b8feb273ed4c6cdab5efd8d54901dfab3"
+               target="_blank"
+               rel="noopener">github.com/psf/requests/tree/6e83187b8feb273ed4c6cdab5efd8d54901dfab3</a>
+          </dd>
+      </dl>
+    </div>
+    <div class="attestation__metadata">
+      <div class="attestation__metadata-header">
+        <span class="attestation__metadata-icon">
+            <i class="fa-solid fa-circle-play" aria-hidden="true"></i>
+        </span>
+        <h5 class="attestation__metadata-title">
+Workflow        </h5>
+      </div>
+      <dl class="attestation__metadata-content">
+          <dt>
+Publishing configuration          </dt>
+          <dd>
+            <a href="https://github.com/psf/requests/blob/6e83187b8feb273ed4c6cdab5efd8d54901dfab3/.github/workflows/publish.yml" target="_blank" rel="noopener">github.com/psf/requests/blob/6e83187b8feb273ed4c6cdab5efd8d54901dfab3/.github/workflows/publish.yml</a>
+          </dd>
+          <dt>
+Publishing logs          </dt>
+          <dd>
+            <a href="https://github.com/psf/requests/actions/runs/25880703473/attempts/1" target="_blank" rel="noopener">github.com/psf/requests/actions/runs/25880703473/attempts/1</a>
+          </dd>
+      </dl>
+    </div>
+    <div class="attestation__metadata">
+      <div class="attestation__metadata-header">
+        <span class="attestation__metadata-icon">
+          <i class="fa-regular fa-file" aria-hidden="true"></i>
+        </span>
+        <h5 class="attestation__metadata-title">Artifact</h5>
+      </div>
+      <dl class="attestation__metadata-content">
+          <dt>Subject</dt>
+          <dd>
+            <code>requests-2.34.2.tar.gz</code>
+          </dd>
+          <dt>SHA-256 checksum</dt>
+          <dd>
+            <code class="code-block code-block--with-copy attestation__checksum"
+data-controller="clipboard">
+              <span data-clipboard-target="source">f288924cae4e29463698d6d60bc6a4da69c89185ad1e0bcc4104f584e960b9ed</span>
+              <button type="button"
+                      class="button button--small copy-tooltip copy-tooltip-w"
+                      data-action="clipboard#copy"
+                      data-clipboard-target="tooltip"
+                      data-clipboard-tooltip-value="Copy to clipboard">
+                <i class="fa-regular fa-copy" aria-hidden="true"></i>
+                <span class="sr-only">Copy SHA-256 checksum</span>
+              </button>
+            </code>
+            <a href="https://docs.pypi.org/attestations/consuming-attestations/"
+               target="_blank"
+               rel="noopener">Verifying attestations</a>
+          </dd>
+      </dl>
+    </div>
+  </div>
+</div></div><div id="requests-2.34.2-py3-none-any.whl"
+     data-project-tabs-target="content"
+     tabindex="-1">
+  <h2 class="page-title">
+    <a href="#files"
+       data-project-tabs-target="tab"
+       data-action="project-tabs#tabClick">Release files</a>
+    / requests-2.34.2-py3-none-any.whl
+  </h2>
+  <table class="table table--information">
+    <tbody>
+      <tr>
+        <th scope="row">Download URL</th>
+        <td class="file-download">
+          <a href="https://files.pythonhosted.org/packages/a0/f4/c67b0b3f1b9245e8d266f0f112c500d50e5b4e83cb6f3b71b6528104182a/requests-2.34.2-py3-none-any.whl">
+            <i class="fa-regular fa-circle-down" aria-hidden="true"></i>
+            <span>requests-2.34.2-py3-none-any.whl</span>
+          </a>
+        </td>
+      </tr>
+      <tr>
+        <th scope="row">Size</th>
+        <td>73.1 kB</td>
+      </tr>
+        <tr>
+          <th scope="row">Tags</th>
+          <td class="file-tags">
+                <span class="badge badge--neutral badge--no-uppercase">Python 3</span>
+          </td>
+        </tr>
+      <tr data-controller="clipboard">
+        <th scope="row">
+SHA-256 checksum          <br>
+          <a href="https://pip.pypa.io/en/stable/topics/secure-installs/#hash-checking-mode"
+             title="External link"
+             target="_blank"
+             rel="noopener">How to use checksums</a>
+        </th>
+        <td>
+          <code class="code-block code-block--with-copy">
+            <span data-clipboard-target="source">2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0</span>
+            <button type="button"
+                    class="button button--small copy-tooltip copy-tooltip-w"
+                    data-action="clipboard#copy"
+                    data-clipboard-target="tooltip"
+                    data-clipboard-tooltip-value="Copy to clipboard">
+              <i class="fa-regular fa-copy" aria-hidden="true"></i>
+              <span class="sr-only">Copy SHA-256 checksum</span>
+            </button>
+          </code>
+        </td>
+      </tr>
+      <tr data-controller="clipboard">
+        <th scope="row">
+BLAKE2b-256 checksum          <br>
+          <a href="https://pip.pypa.io/en/stable/topics/secure-installs/#hash-checking-mode"
+             title="External link"
+             target="_blank"
+             rel="noopener">How to use checksums</a>
+        </th>
+        <td>
+          <code class="code-block code-block--with-copy">
+            <span data-clipboard-target="source">a0f4c67b0b3f1b9245e8d266f0f112c500d50e5b4e83cb6f3b71b6528104182a</span>
+            <button type="button"
+                    class="button button--small copy-tooltip copy-tooltip-w"
+                    data-action="clipboard#copy"
+                    data-clipboard-target="tooltip"
+                    data-clipboard-tooltip-value="Copy to clipboard">
+              <i class="fa-regular fa-copy" aria-hidden="true"></i>
+              <span class="sr-only">Copy BLAKE2b-256 checksum</span>
+            </button>
+          </code>
+        </td>
+      </tr>
+      <tr>
+        <th scope="row">Upload date</th>
+        <td><time datetime="2026-05-14T19:25:26+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 14, 2026
+  </time></td>
+      </tr>
+      <tr>
+        <th scope="row">
+Uploaded using Trusted Publishing?          <br>
+          <a href="https://docs.pypi.org/trusted-publishers/">What is trusted publishing?</a>
+        </th>
+        <td>
+Yes        </td>
+      </tr>
+        <tr>
+          <th scope="row">Uploaded via</th>
+          <td>
+            <code class="code-block code-block--tight">twine/6.1.0 CPython/3.13.13</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+    <h3>Provenance</h3>
+    <p>
+<strong>Provenance</strong> describes where a file came from. On PyPI, provenance is shared via <strong>attestations</strong>, which provide a verifiable record of the build or publishing details. <a href="https://docs.pypi.org/using-pypi/package-security/provenance/">View details, limitations and caveats.</a>    </p>
+<div class="attestation attestation--pypi">
+  <div class="attestation__header">
+    <div class="attestation__publisher">
+      <div class="attestation__publisher-icons">
+          <img src="https://pypi.org/static/images/github.683a0246.svg"
+               alt=""
+               aria-hidden="true">
+          <img src="https://pypi.org/static/images/pypi-attestation-cube.1cfdb012.svg"
+               alt=""
+               aria-hidden="true">
+      </div>
+    </div>
+    <div class="attestation__header-content">
+      <h4>
+          <a href="https://docs.pypi.org/attestations/publish/v1" target="_blank" rel="noopener">
+PyPI Publish          </a>
+Attestation      </h4>
+      <p>
+PyPI verified that this artifact, at this checksum, originated from the publisher listed below.      </p>
+      <p>
+        <strong>
+Signed by GitHub Actions, verified by PyPI on May 14, 2026.        </strong>
+      </p>
+        <a href="https://search.sigstore.dev/?logIndex=1540243665"
+           target="_blank"
+           rel="noopener"
+           title="Sigstore transparency entry">Transparency log</a>
+    </div>
+  </div>
+  <div class="attestation__details">
+    <div class="attestation__metadata">
+      <div class="attestation__metadata-header">
+        <span class="attestation__metadata-icon">
+          <i class="fa-solid fa-fingerprint" aria-hidden="true"></i>
+        </span>
+        <h5 class="attestation__metadata-title">Identity</h5>
+      </div>
+      <dl class="attestation__metadata-content">
+        <dt>
+Publishing platform        </dt>
+        <dd>
+          GitHub Actions
+        </dd>
+          <dt>
+Publishing repository          </dt>
+          <dd>
+            <a href="https://github.com/psf/requests" target="_blank" rel="noopener">github.com/psf/requests</a>
+          </dd>
+          <dt>
+Publishing commit          </dt>
+          <dd>
+            <a href="https://github.com/psf/requests/tree/6e83187b8feb273ed4c6cdab5efd8d54901dfab3"
+               target="_blank"
+               rel="noopener">github.com/psf/requests/tree/6e83187b8feb273ed4c6cdab5efd8d54901dfab3</a>
+          </dd>
+      </dl>
+    </div>
+    <div class="attestation__metadata">
+      <div class="attestation__metadata-header">
+        <span class="attestation__metadata-icon">
+            <i class="fa-solid fa-circle-play" aria-hidden="true"></i>
+        </span>
+        <h5 class="attestation__metadata-title">
+Workflow        </h5>
+      </div>
+      <dl class="attestation__metadata-content">
+          <dt>
+Publishing configuration          </dt>
+          <dd>
+            <a href="https://github.com/psf/requests/blob/6e83187b8feb273ed4c6cdab5efd8d54901dfab3/.github/workflows/publish.yml" target="_blank" rel="noopener">github.com/psf/requests/blob/6e83187b8feb273ed4c6cdab5efd8d54901dfab3/.github/workflows/publish.yml</a>
+          </dd>
+          <dt>
+Publishing logs          </dt>
+          <dd>
+            <a href="https://github.com/psf/requests/actions/runs/25880703473/attempts/1" target="_blank" rel="noopener">github.com/psf/requests/actions/runs/25880703473/attempts/1</a>
+          </dd>
+      </dl>
+    </div>
+    <div class="attestation__metadata">
+      <div class="attestation__metadata-header">
+        <span class="attestation__metadata-icon">
+          <i class="fa-regular fa-file" aria-hidden="true"></i>
+        </span>
+        <h5 class="attestation__metadata-title">Artifact</h5>
+      </div>
+      <dl class="attestation__metadata-content">
+          <dt>Subject</dt>
+          <dd>
+            <code>requests-2.34.2-py3-none-any.whl</code>
+          </dd>
+          <dt>SHA-256 checksum</dt>
+          <dd>
+            <code class="code-block code-block--with-copy attestation__checksum"
+data-controller="clipboard">
+              <span data-clipboard-target="source">2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0</span>
+              <button type="button"
+                      class="button button--small copy-tooltip copy-tooltip-w"
+                      data-action="clipboard#copy"
+                      data-clipboard-target="tooltip"
+                      data-clipboard-tooltip-value="Copy to clipboard">
+                <i class="fa-regular fa-copy" aria-hidden="true"></i>
+                <span class="sr-only">Copy SHA-256 checksum</span>
+              </button>
+            </code>
+            <a href="https://docs.pypi.org/attestations/consuming-attestations/"
+               target="_blank"
+               rel="noopener">Verifying attestations</a>
+          </dd>
+      </dl>
+    </div>
+  </div>
+</div></div><div id="security"
+     data-project-tabs-target="content"
+     role="tabpanel"
+     aria-labelledby="security-tab"
+     tabindex="-1">
+  <div class="split-layout">
+    <h2 class="page-title no-bottom-padding margin-bottom">Security for requests 2.34.2</h2>
+    <div>
+      <a class="button button--outline"
+         href="https://pypi.org/project/requests/submit-malware-report/"
+         rel="nofollow">Report project as malware</a>
+    </div>
+  </div>
+  <h3 class="no-top-margin">Provenance</h3>
+  <p>
+<strong>Provenance</strong> describes where a file came from. On PyPI, provenance is shared via <strong>attestations</strong>, which provide a verifiable record of the build or publishing details. <a href="https://docs.pypi.org/using-pypi/package-security/provenance/">View details, limitations and caveats.</a>  </p>
+  <div class="provenance-status">
+<div class="callout-block">
+  <h4 class="callout-block__heading">
+    <i class="fa-solid fa-circle-check primary" aria-hidden="true"></i>
+Full provenance  </h4>
+  <p>
+Both files in this release have been uploaded with provenance metadata.  </p>
+</div>  </div>
+    <div class="attestations-viewer"
+         data-controller="attestations-viewer filter-list">
+      <div class="attestations-viewer__sidebar">
+        <div class="attestations-viewer__sidebar-header">
+            <div class="attestations-viewer__sidebar-title">
+Select from 2 files            </div>
+        </div>
+        <div class="attestations-viewer__sidebar-content">
+          <div class="attestations-viewer__sidebar-empty hidden"
+               data-attestations-viewer-target="empty">
+            <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>
+No files match the current filters.            <a href="https://pypi.org/project/requests/#security"
+               data-action="filter-list#filterClear">Reset filters</a>
+          </div>
+          <ul class="attestations-viewer__file-list">
+              <li class="attestations-viewer__file-item attestations-viewer__file-item--is-selected"
+                  data-attestations-viewer-target="item"
+                  data-filter-list-target="item"
+                  data-filename="requests-2.34.2.tar.gz"
+                  data-filtered-target-provenance='["with-provenance"]'
+                  data-filtered-target-file-type='["sdist"]'
+                  data-filtered-target-file-interpreter='[]'
+                  data-filtered-target-file-platform='[]'>
+                <button type="button"
+                        data-action="attestations-viewer#select"
+                        aria-controls="attestations-requests-2.34.2.tar.gz"
+                        aria-pressed="true">
+                    <i class="fa-solid fa-circle-check attestations-viewer__file-icon primary"
+                       aria-hidden="true"></i>
+                    <span class="sr-only">With provenance</span>
+                  <span class="attestations-viewer__file-info">
+                    <span class="attestations-viewer__file-name">requests-2.34.2.tar.gz</span>
+                    <span class="attestations-viewer__file-date">
+                      <i class="fa-regular fa-calendar" aria-hidden="true"></i>
+                      <time datetime="2026-05-14T19:25:27+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 14, 2026
+  </time>
+                    </span>
+                  </span>
+                </button>
+              </li>
+              <li class="attestations-viewer__file-item"
+                  data-attestations-viewer-target="item"
+                  data-filter-list-target="item"
+                  data-filename="requests-2.34.2-py3-none-any.whl"
+                  data-filtered-target-provenance='["with-provenance"]'
+                  data-filtered-target-file-type='["wheel"]'
+                  data-filtered-target-file-interpreter='["py3"]'
+                  data-filtered-target-file-platform='["any"]'>
+                <button type="button"
+                        data-action="attestations-viewer#select"
+                        aria-controls="attestations-requests-2.34.2-py3-none-any.whl"
+                        aria-pressed="false">
+                    <i class="fa-solid fa-circle-check attestations-viewer__file-icon primary"
+                       aria-hidden="true"></i>
+                    <span class="sr-only">With provenance</span>
+                  <span class="attestations-viewer__file-info">
+                    <span class="attestations-viewer__file-name">requests-2.34.2-py3-none-any.whl</span>
+                    <span class="attestations-viewer__file-date">
+                      <i class="fa-regular fa-calendar" aria-hidden="true"></i>
+                      <time datetime="2026-05-14T19:25:26+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 14, 2026
+  </time>
+                    </span>
+                  </span>
+                </button>
+              </li>
+          </ul>
+        </div>
+      </div>
+      <div class="attestations-viewer__content">
+          <div id="attestations-requests-2.34.2.tar.gz"
+               class="attestations-viewer__content-panel"
+               data-attestations-viewer-target="content"
+               data-filename="requests-2.34.2.tar.gz">
+            <h3 class="no-top-margin">
+Attestation for <a href="#requests-2.34.2.tar.gz" data-project-tabs-target="tab" data-action="project-tabs#tabClick">requests-2.34.2.tar.gz</a>            </h3>
+<div class="attestation attestation--pypi">
+  <div class="attestation__header">
+    <div class="attestation__publisher">
+      <div class="attestation__publisher-icons">
+          <img src="https://pypi.org/static/images/github.683a0246.svg"
+               alt=""
+               aria-hidden="true">
+          <img src="https://pypi.org/static/images/pypi-attestation-cube.1cfdb012.svg"
+               alt=""
+               aria-hidden="true">
+      </div>
+    </div>
+    <div class="attestation__header-content">
+      <h4>
+          <a href="https://docs.pypi.org/attestations/publish/v1" target="_blank" rel="noopener">
+PyPI Publish          </a>
+Attestation      </h4>
+      <p>
+PyPI verified that this artifact, at this checksum, originated from the publisher listed below.      </p>
+      <p>
+        <strong>
+Signed by GitHub Actions, verified by PyPI on May 14, 2026.        </strong>
+      </p>
+        <a href="https://search.sigstore.dev/?logIndex=1540243332"
+           target="_blank"
+           rel="noopener"
+           title="Sigstore transparency entry">Transparency log</a>
+    </div>
+  </div>
+  <div class="attestation__details">
+    <div class="attestation__metadata">
+      <div class="attestation__metadata-header">
+        <span class="attestation__metadata-icon">
+          <i class="fa-solid fa-fingerprint" aria-hidden="true"></i>
+        </span>
+        <h5 class="attestation__metadata-title">Identity</h5>
+      </div>
+      <dl class="attestation__metadata-content">
+        <dt>
+Publishing platform        </dt>
+        <dd>
+          GitHub Actions
+        </dd>
+          <dt>
+Publishing repository          </dt>
+          <dd>
+            <a href="https://github.com/psf/requests" target="_blank" rel="noopener">github.com/psf/requests</a>
+          </dd>
+          <dt>
+Publishing commit          </dt>
+          <dd>
+            <a href="https://github.com/psf/requests/tree/6e83187b8feb273ed4c6cdab5efd8d54901dfab3"
+               target="_blank"
+               rel="noopener">github.com/psf/requests/tree/6e83187b8feb273ed4c6cdab5efd8d54901dfab3</a>
+          </dd>
+      </dl>
+    </div>
+    <div class="attestation__metadata">
+      <div class="attestation__metadata-header">
+        <span class="attestation__metadata-icon">
+            <i class="fa-solid fa-circle-play" aria-hidden="true"></i>
+        </span>
+        <h5 class="attestation__metadata-title">
+Workflow        </h5>
+      </div>
+      <dl class="attestation__metadata-content">
+          <dt>
+Publishing configuration          </dt>
+          <dd>
+            <a href="https://github.com/psf/requests/blob/6e83187b8feb273ed4c6cdab5efd8d54901dfab3/.github/workflows/publish.yml" target="_blank" rel="noopener">github.com/psf/requests/blob/6e83187b8feb273ed4c6cdab5efd8d54901dfab3/.github/workflows/publish.yml</a>
+          </dd>
+          <dt>
+Publishing logs          </dt>
+          <dd>
+            <a href="https://github.com/psf/requests/actions/runs/25880703473/attempts/1" target="_blank" rel="noopener">github.com/psf/requests/actions/runs/25880703473/attempts/1</a>
+          </dd>
+      </dl>
+    </div>
+    <div class="attestation__metadata">
+      <div class="attestation__metadata-header">
+        <span class="attestation__metadata-icon">
+          <i class="fa-regular fa-file" aria-hidden="true"></i>
+        </span>
+        <h5 class="attestation__metadata-title">Artifact</h5>
+      </div>
+      <dl class="attestation__metadata-content">
+          <dt>Subject</dt>
+          <dd>
+            <code>requests-2.34.2.tar.gz</code>
+          </dd>
+          <dt>SHA-256 checksum</dt>
+          <dd>
+            <code class="code-block code-block--with-copy attestation__checksum"
+data-controller="clipboard">
+              <span data-clipboard-target="source">f288924cae4e29463698d6d60bc6a4da69c89185ad1e0bcc4104f584e960b9ed</span>
+              <button type="button"
+                      class="button button--small copy-tooltip copy-tooltip-w"
+                      data-action="clipboard#copy"
+                      data-clipboard-target="tooltip"
+                      data-clipboard-tooltip-value="Copy to clipboard">
+                <i class="fa-regular fa-copy" aria-hidden="true"></i>
+                <span class="sr-only">Copy SHA-256 checksum</span>
+              </button>
+            </code>
+            <a href="https://docs.pypi.org/attestations/consuming-attestations/"
+               target="_blank"
+               rel="noopener">Verifying attestations</a>
+          </dd>
+      </dl>
+    </div>
+  </div>
+</div>          </div>
+          <div id="attestations-requests-2.34.2-py3-none-any.whl"
+               class="attestations-viewer__content-panel hidden"
+               data-attestations-viewer-target="content"
+               data-filename="requests-2.34.2-py3-none-any.whl">
+            <h3 class="no-top-margin">
+Attestation for <a href="#requests-2.34.2-py3-none-any.whl" data-project-tabs-target="tab" data-action="project-tabs#tabClick">requests-2.34.2-py3-none-any.whl</a>            </h3>
+<div class="attestation attestation--pypi">
+  <div class="attestation__header">
+    <div class="attestation__publisher">
+      <div class="attestation__publisher-icons">
+          <img src="https://pypi.org/static/images/github.683a0246.svg"
+               alt=""
+               aria-hidden="true">
+          <img src="https://pypi.org/static/images/pypi-attestation-cube.1cfdb012.svg"
+               alt=""
+               aria-hidden="true">
+      </div>
+    </div>
+    <div class="attestation__header-content">
+      <h4>
+          <a href="https://docs.pypi.org/attestations/publish/v1" target="_blank" rel="noopener">
+PyPI Publish          </a>
+Attestation      </h4>
+      <p>
+PyPI verified that this artifact, at this checksum, originated from the publisher listed below.      </p>
+      <p>
+        <strong>
+Signed by GitHub Actions, verified by PyPI on May 14, 2026.        </strong>
+      </p>
+        <a href="https://search.sigstore.dev/?logIndex=1540243665"
+           target="_blank"
+           rel="noopener"
+           title="Sigstore transparency entry">Transparency log</a>
+    </div>
+  </div>
+  <div class="attestation__details">
+    <div class="attestation__metadata">
+      <div class="attestation__metadata-header">
+        <span class="attestation__metadata-icon">
+          <i class="fa-solid fa-fingerprint" aria-hidden="true"></i>
+        </span>
+        <h5 class="attestation__metadata-title">Identity</h5>
+      </div>
+      <dl class="attestation__metadata-content">
+        <dt>
+Publishing platform        </dt>
+        <dd>
+          GitHub Actions
+        </dd>
+          <dt>
+Publishing repository          </dt>
+          <dd>
+            <a href="https://github.com/psf/requests" target="_blank" rel="noopener">github.com/psf/requests</a>
+          </dd>
+          <dt>
+Publishing commit          </dt>
+          <dd>
+            <a href="https://github.com/psf/requests/tree/6e83187b8feb273ed4c6cdab5efd8d54901dfab3"
+               target="_blank"
+               rel="noopener">github.com/psf/requests/tree/6e83187b8feb273ed4c6cdab5efd8d54901dfab3</a>
+          </dd>
+      </dl>
+    </div>
+    <div class="attestation__metadata">
+      <div class="attestation__metadata-header">
+        <span class="attestation__metadata-icon">
+            <i class="fa-solid fa-circle-play" aria-hidden="true"></i>
+        </span>
+        <h5 class="attestation__metadata-title">
+Workflow        </h5>
+      </div>
+      <dl class="attestation__metadata-content">
+          <dt>
+Publishing configuration          </dt>
+          <dd>
+            <a href="https://github.com/psf/requests/blob/6e83187b8feb273ed4c6cdab5efd8d54901dfab3/.github/workflows/publish.yml" target="_blank" rel="noopener">github.com/psf/requests/blob/6e83187b8feb273ed4c6cdab5efd8d54901dfab3/.github/workflows/publish.yml</a>
+          </dd>
+          <dt>
+Publishing logs          </dt>
+          <dd>
+            <a href="https://github.com/psf/requests/actions/runs/25880703473/attempts/1" target="_blank" rel="noopener">github.com/psf/requests/actions/runs/25880703473/attempts/1</a>
+          </dd>
+      </dl>
+    </div>
+    <div class="attestation__metadata">
+      <div class="attestation__metadata-header">
+        <span class="attestation__metadata-icon">
+          <i class="fa-regular fa-file" aria-hidden="true"></i>
+        </span>
+        <h5 class="attestation__metadata-title">Artifact</h5>
+      </div>
+      <dl class="attestation__metadata-content">
+          <dt>Subject</dt>
+          <dd>
+            <code>requests-2.34.2-py3-none-any.whl</code>
+          </dd>
+          <dt>SHA-256 checksum</dt>
+          <dd>
+            <code class="code-block code-block--with-copy attestation__checksum"
+>
+              <span data-clipboard-target="source">2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0</span>
+              <button type="button"
+                      class="button button--small copy-tooltip copy-tooltip-w"
+                      data-action="clipboard#copy"
+                      data-clipboard-target="tooltip"
+                      data-clipboard-tooltip-value="Copy to clipboard">
+                <i class="fa-regular fa-copy" aria-hidden="true"></i>
+                <span class="sr-only">Copy SHA-256 checksum</span>
+              </button>
+            </code>
+            <a href="https://docs.pypi.org/attestations/consuming-attestations/"
+               target="_blank"
+               rel="noopener">Verifying attestations</a>
+          </dd>
+      </dl>
+    </div>
+  </div>
+</div>          </div>
+      </div>
+    </div>
+  <h3>A note on package security</h3>
+  <p>
+PyPI is a repository for distributing packages, not a service for auditing them. While third-party security researchers and our staff do their best to detect and remove malicious packages, PyPI cannot guarantee the quality, security or suitability of any given package.  </p>
+  <p>
+To learn more about protecting yourself from malicious actors, visit our <a href="https://docs.pypi.org/using-pypi/package-security/introduction/">package security documentation</a>.  </p>
+</div><div id="history"
+     data-project-tabs-target="content"
+     role="tabpanel"
+     aria-labelledby="history-tab"
+     tabindex="-1">
+  <h2 class="page-title split-layout">
+    <span>Release history</span>
+    <span class="reset-text margin-top">
+      <a href="https://docs.pypi.org/api/feeds/#project-releases-feed">Release notifications</a> |
+      <a href="/rss/project/requests/releases.xml">RSS feed <i class="fa fa-rss" aria-hidden="true"></i></a>
+    </span>
+  </h2>
+  <div class="release-timeline">
+      <div class="release release--current">
+        <div class="release__current-badge">
+            <span class="badge">This release</span>
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/blue-cube.572a5bfb.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.34.2/">2.34.2</a>
+                <span class="badge">This release</span>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2026-05-14T19:25:26+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 14, 2026
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.34.2/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.34.2/#security">
+                    <i class="fa-solid fa-circle-check primary" aria-hidden="true"></i>Full provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.34.1/">2.34.1</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2026-05-13T19:20:22+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 13, 2026
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.34.1/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.34.1/#security">
+                    <i class="fa-solid fa-circle-check primary" aria-hidden="true"></i>Full provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.34.0/">2.34.0</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2026-05-11T19:29:49+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 11, 2026
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.34.0/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.34.0/#security">
+                    <i class="fa-solid fa-circle-check primary" aria-hidden="true"></i>Full provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release release--pre-release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+            <div class="release__card-header">
+              <a href="https://docs.pypi.org/using-pypi/pypi-basics/#pre-release"><i class="fa fa-flask" aria-hidden="true"></i> <span>Pre-release</span></a>
+            </div>
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.34.0.dev1/">2.34.0.dev1</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2026-05-03T20:21:40+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 3, 2026
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.34.0.dev1/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.34.0.dev1/#security">
+                    <i class="fa-solid fa-circle-check primary" aria-hidden="true"></i>Full provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.33.1/">2.33.1</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2026-03-30T16:09:13+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    Mar 30, 2026
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.33.1/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.33.1/#security">
+                    <i class="fa-solid fa-circle-check primary" aria-hidden="true"></i>Full provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.33.0/">2.33.0</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2026-03-25T15:10:40+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    Mar 25, 2026
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.33.0/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.33.0/#security">
+                    <i class="fa-solid fa-circle-check primary" aria-hidden="true"></i>Full provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.32.5/">2.32.5</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2025-08-18T20:46:00+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    Aug 18, 2025
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.32.5/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.32.5/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.32.4/">2.32.4</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2025-06-09T16:43:05+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    Jun 9, 2025
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.32.4/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.32.4/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.32.3/">2.32.3</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2024-05-29T15:37:47+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 29, 2024
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.32.3/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.32.3/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.32.2/">2.32.2</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2024-05-21T18:51:29+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 21, 2024
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.32.2/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.32.2/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release release--yanked">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+            <div class="release__card-header">
+              <a href="https://docs.pypi.org/using-pypi/pypi-basics/#yanked-release"
+title="Release yanked on May 29, 2024"><i class="fa fa-ban" aria-hidden="true"></i> <span>Yanked</span></a>
+            </div>
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.32.1/">2.32.1</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2024-05-20T22:08:45+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 20, 2024
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.32.1/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.32.1/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+            <div class="release__card-footer">
+              <p><strong>Yanked reason:</strong> Yanked due to conflicts with CVE-2024-35195 mitigation </p>
+            </div>
+        </div>
+      </div>
+      <div class="release release--yanked">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+            <div class="release__card-header">
+              <a href="https://docs.pypi.org/using-pypi/pypi-basics/#yanked-release"
+title="Release yanked on May 29, 2024"><i class="fa fa-ban" aria-hidden="true"></i> <span>Yanked</span></a>
+            </div>
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.32.0/">2.32.0</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2024-05-20T16:08:19+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 20, 2024
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.32.0/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.32.0/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+            <div class="release__card-footer">
+              <p><strong>Yanked reason:</strong> Yanked due to conflicts with CVE-2024-35195 mitigation</p>
+            </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.31.0/">2.31.0</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2023-05-22T15:12:42+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 22, 2023
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.31.0/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.31.0/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.30.0/">2.30.0</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2023-05-03T15:44:03+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 3, 2023
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.30.0/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.30.0/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.29.0/">2.29.0</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2023-04-26T15:24:31+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    Apr 26, 2023
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.29.0/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.29.0/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.28.2/">2.28.2</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2023-01-12T16:24:52+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    Jan 12, 2023
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.28.2/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.28.2/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.28.1/">2.28.1</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2022-06-29T15:13:40+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    Jun 29, 2022
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.28.1/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.28.1/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.28.0/">2.28.0</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2022-06-09T14:44:34+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    Jun 9, 2022
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.28.0/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.28.0/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.27.1/">2.27.1</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2022-01-05T15:40:49+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    Jan 5, 2022
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.27.1/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.27.1/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.27.0/">2.27.0</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2022-01-03T15:09:26+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    Jan 3, 2022
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.27.0/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.27.0/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.26.0/">2.26.0</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2021-07-13T14:55:06+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    Jul 13, 2021
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.26.0/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.26.0/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.25.1/">2.25.1</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2020-12-16T19:38:34+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    Dec 16, 2020
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.25.1/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.25.1/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.25.0/">2.25.0</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2020-11-11T20:05:15+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    Nov 11, 2020
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.25.0/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.25.0/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.24.0/">2.24.0</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2020-06-17T16:30:08+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    Jun 17, 2020
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.24.0/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.24.0/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.23.0/">2.23.0</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2020-02-19T18:50:59+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    Feb 19, 2020
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.23.0/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>3 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.23.0/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.22.0/">2.22.0</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2019-05-16T14:37:14+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 16, 2019
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.22.0/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.22.0/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.21.0/">2.21.0</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2018-12-10T15:40:08+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    Dec 10, 2018
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.21.0/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.21.0/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.20.1/">2.20.1</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2018-11-08T17:20:29+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    Nov 8, 2018
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.20.1/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.20.1/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.20.0/">2.20.0</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2018-10-18T15:46:10+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    Oct 18, 2018
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.20.0/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.20.0/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.19.1/">2.19.1</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2018-06-14T13:40:38+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    Jun 14, 2018
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.19.1/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.19.1/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.19.0/">2.19.0</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2018-06-12T14:46:15+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    Jun 12, 2018
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.19.0/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.19.0/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.18.4/">2.18.4</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2017-08-15T13:23:43+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    Aug 15, 2017
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.18.4/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.18.4/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.18.3/">2.18.3</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2017-08-02T13:23:31+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    Aug 2, 2017
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.18.3/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.18.3/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.18.2/">2.18.2</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2017-07-25T15:23:15+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    Jul 25, 2017
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.18.2/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.18.2/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.18.1/">2.18.1</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2017-06-14T17:51:25+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    Jun 14, 2017
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.18.1/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.18.1/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.18.0/">2.18.0</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2017-06-14T15:44:35+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    Jun 14, 2017
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.18.0/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.18.0/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.17.3/">2.17.3</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2017-05-29T21:53:19+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 29, 2017
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.17.3/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.17.3/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.17.2/">2.17.2</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2017-05-29T21:33:32+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 29, 2017
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.17.2/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.17.2/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.17.1/">2.17.1</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2017-05-29T19:59:39+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 29, 2017
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.17.1/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.17.1/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.17.0/">2.17.0</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2017-05-29T17:24:35+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 29, 2017
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.17.0/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.17.0/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.16.5/">2.16.5</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2017-05-28T04:35:44+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 28, 2017
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.16.5/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.16.5/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.16.4/">2.16.4</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2017-05-27T21:17:38+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 27, 2017
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.16.4/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.16.4/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.16.3/">2.16.3</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2017-05-27T16:24:47+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 27, 2017
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.16.3/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.16.3/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.16.2/">2.16.2</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2017-05-27T14:53:09+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 27, 2017
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.16.2/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.16.2/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.16.1/">2.16.1</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2017-05-27T13:43:53+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 27, 2017
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.16.1/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.16.1/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            <img class="release__node" alt="" src="https://pypi.org/static/images/white-cube.2351a86c.svg">
+        </div>
+        <div class="release__card">
+          <div class="release__card-body">
+            <h3 class="release__version">
+              <a href="/project/requests/2.16.0/">2.16.0</a>
+            </h3>
+            <p class="release__meta">
+              <span class="release__date"><i class="fa-regular fa-calendar" aria-hidden="true"></i> <time datetime="2017-05-27T03:45:40+0000"
+        data-controller="localized-time"
+        data-localized-time-relative="true"
+        data-localized-time-show-time="false">
+    May 27, 2017
+  </time></span>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.16.0/#files"><i class="fa-regular fa-circle-down" aria-hidden="true"></i>2 release files</a>
+                <span class="release__meta-divider" aria-hidden="true"></span>
+                <a href="/project/requests/2.16.0/#security">
+                    <i class="fa-solid fa-circle-xmark muted" aria-hidden="true"></i>No provenance                </a>
+            </p>
+          </div>
+        </div>
+      </div>
+      <div class="release">
+        <div class="release__current-badge">
+        </div>
+        <div class="release__graphic">
+            <div class="release__line"></div>
+            

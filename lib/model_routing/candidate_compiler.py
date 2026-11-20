@@ -38,6 +38,18 @@ class RouteCandidate:
     credential: dict[str, Any]
     score: tuple[Any, ...]
     selection_reasons: tuple[str, ...] = ()
+    codex_account_fingerprints: tuple[str, ...] = ()
+
+    @property
+    def dispatch_capabilities(self) -> set[str]:
+        capabilities = set(self.offering["capabilities"])
+        if self.codex_account_fingerprints:
+            # Legacy personal media callers can pick configured slots based on
+            # capability alone. Scoped bearer authorization lives in chat only.
+            from .operations import OPENAI_OPERATION_PROTOCOLS, protocols_for_capability
+            capabilities = {cap for cap in capabilities
+                            if protocols_for_capability(cap) != OPENAI_OPERATION_PROTOCOLS}
+        return capabilities
 
     @property
     def provider_id(self) -> str:
@@ -65,27 +77,46 @@ def _pricing_allowed(offering: Mapping[str, Any], policy: RoutePolicy) -> bool:
     return True
 
 
-def _credential_rejection(
+def _credential_authorization(
     credential: Mapping[str, Any],
     *,
     connection_id: str,
     model_ref: ModelRef | None,
-    wire_model_id: str | None = None,
-) -> str | None:
+    wire_model_id: str,
+    revoked_grants: Mapping,
+) -> tuple[str | None, tuple[str, ...]]:
     authorization = credential["authorization"]
     if connection_id not in authorization["connection_ids"]:
-        return "credential_connection_denied"
+        return "credential_connection_denied", ()
+    account_grants = authorization.get("codex_account_grants") or {}
     if model_ref is None:
-        return None
+        # Legacy pending selections have no scoped identity to prove. A
+        # credential with automatic grants cannot use that path to bypass one.
+        return ("credential_model_denied" if account_grants else None), ()
+
+    def matches(grant):
+        return (grant["creator_id"] == model_ref.creator_id
+                and grant["model_id"] == model_ref.model_id)
+
     for grant in authorization["models"]:
-        if grant["creator_id"] != model_ref.creator_id:
-            continue
-        if grant["model_id"] != model_ref.model_id:
-            continue
-        if wire_model_id and wire_model_id in grant.get("excluded_wire_model_ids", ()):
-            return "credential_wire_denied"
-        return None
-    return "credential_model_denied"
+        if matches(grant):
+            if wire_model_id in grant.get("excluded_wire_model_ids", ()):
+                return "credential_wire_denied", ()
+            return None, ()
+    if not account_grants or credential["kind"] != "oauth":
+        return "credential_model_denied", ()
+    revoked = revoked_grants.get((credential["credential_id"], model_ref.creator_id, model_ref.model_id))
+    if revoked:
+        if revoked["model_revoked"]:
+            return "credential_model_denied", ()
+        if wire_model_id in revoked["excluded_wire_model_ids"]:
+            return "credential_wire_denied", ()
+    accounts = tuple(sorted(account for account, grants in account_grants.items()
+        if any(matches(grant) and wire_model_id == grant["wire_model_id"]
+               for grant in grants)))
+    if accounts:
+        return None, accounts
+    return "credential_model_denied", ()
 
 
 class RouteCandidateCompiler:
@@ -159,7 +190,8 @@ class RouteCandidateCompiler:
             excluded_deployment_ids=excluded_deployment_ids,
             excluded_connection_ids=excluded_connection_ids,
             excluded_credential_ids=excluded_credential_ids,
-            rejections=rejections, max_candidates=max_candidates,
+            rejections=rejections,
+            max_candidates=max_candidates,
         )
 
 
@@ -218,7 +250,8 @@ def _compile_candidates(
         excluded_deployment_ids=excluded_deployment_ids,
         excluded_connection_ids=excluded_connection_ids,
         excluded_credential_ids=excluded_credential_ids,
-        rejections=rejections, one_authorization_witness=one_authorization_witness,
+        rejections=rejections,
+        one_authorization_witness=one_authorization_witness,
     ), max_candidates=max_candidates, key=lambda candidate: candidate.score)
 
 
@@ -313,6 +346,11 @@ def _iter_candidates(
             continue
         access = idx["accesses"][offering["provider_access_id"]]
         provider = idx["providers"][access["provider_id"]]
+        # Discovery/probes may retain unresolved Codex rows for inspection,
+        # but ordinary inference requires an admitted model and model grant.
+        if provider["provider_id"] == "oauth_codex" and offering["identity_state"] != "confirmed":
+            reject("model_identity_pending")
+            continue
         if not access["enabled"]:
             reject("provider_access_disabled")
             continue
@@ -351,14 +389,19 @@ def _iter_candidates(
                 if credential["credential_id"] in excluded_credentials:
                     reject("credential_excluded")
                     continue
-                credential_rejection = _credential_rejection(
+                credential_rejection, account_fingerprints = _credential_authorization(
                     credential,
                     connection_id=connection["connection_id"],
                     model_ref=target_model if offering["identity_state"] == "confirmed" else None,
                     wire_model_id=deployment["wire_model_id"],
+                    revoked_grants=idx["revoked_grants"],
                 )
                 if credential_rejection:
                     reject(credential_rejection)
+                    continue
+                if account_fingerprints and (
+                        connection["protocol"] != "openai_responses" or connection.get("adapter")):
+                    reject("protocol_mismatch")
                     continue
                 partial = RouteCandidate(
                     model=(idx["models"].get(target_model) if target_model is not None else None),
@@ -369,7 +412,11 @@ def _iter_candidates(
                     connection=connection,
                     credential=credential,
                     score=(),
+                    codex_account_fingerprints=account_fingerprints,
                 )
+                if account_fingerprints and not policy.required_capabilities.issubset(partial.dispatch_capabilities):
+                    reject("capabilities_missing")
+                    continue
                 unavailable, health_penalty, health_reasons = (
                     health.candidate_state(partial) if health is not None
                     else (False, 0.0, [])
@@ -415,6 +462,7 @@ def _iter_candidates(
                     credential=credential,
                     score=score,
                     selection_reasons=tuple(reasons),
+                    codex_account_fingerprints=account_fingerprints,
                 )
 
                 if one_authorization_witness:
@@ -441,7 +489,8 @@ def compile_candidates(
         excluded_deployment_ids=excluded_deployment_ids,
         excluded_connection_ids=excluded_connection_ids,
         excluded_credential_ids=excluded_credential_ids,
-        rejections=rejections, max_candidates=max_candidates,
+        rejections=rejections,
+        max_candidates=max_candidates,
     )
 
 

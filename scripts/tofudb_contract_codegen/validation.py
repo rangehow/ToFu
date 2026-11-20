@@ -72,7 +72,10 @@ def load_ir(inputs: ContractInputs) -> dict:
         raise ValueError('inconsistent command receipt admission')
     validate_migration(document)
     catalog = inputs.contract("storage_operations_v1.json")
-    catalog_names = sorted(operation["name"] for operation in catalog["operations"])
+    # Registered for SQL receipt/dispatch, deliberately refused by native admission.
+    sql_only = {"swarm.session.delete_exact", "swarm.session.lifecycle.get"}
+    catalog_names = sorted(operation["name"] for operation in catalog["operations"]
+                           if operation["name"] not in sql_only)
     validate_engine(document, catalog_names)
     bounds = document.get("bounds")
     operations = document.get("executableOperations")

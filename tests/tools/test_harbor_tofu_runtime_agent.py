@@ -513,8 +513,11 @@ def test_custom_tool_channel_cannot_shadow_builtin_run_command(monkeypatch):
         dispose_tool_env(env)
 
 
-def test_production_catalog_contents_and_digests():
+def test_production_catalog_contents_and_digests(monkeypatch):
     from evaluations.swebench import tofu_kimi_runtime as contract
+
+    monkeypatch.setattr('lib.tools.search._vertical_domains', lambda: [
+        {'domain': 'academic', 'purpose': 'Papers and citations.'}])
 
     catalog = contract.tofu_kimi_production_tool_catalog()
     names = {tool["function"]["name"] for tool in catalog}
@@ -540,9 +543,10 @@ def test_production_catalog_contents_and_digests():
     } <= set(properties)
     with_search = contract.tofu_kimi_production_tool_catalog(
         search_enabled=True)
-    assert "web_search" in {
-        tool["function"]["name"] for tool in with_search
-    }
+    search = next(t['function'] for t in with_search if t['function']['name'] == 'web_search')
+    props = search['parameters']['properties']
+    assert props['vertical']['enum'] == ['auto', 'academic', 'off']
+    assert props['queries']['items']['properties']['vertical']['enum'] == props['vertical']['enum']
     # Digests are stable and distinct from the exclusive arm's.
     assert contract.tofu_kimi_production_tool_schema_sha256() == \
         hashlib.sha256(json.dumps(
@@ -578,6 +582,45 @@ def test_production_catalog_contents_and_digests():
         exclusive.manifest_record()).tool_surface == "exclusive"
     assert "tool_surface" in settings.agent_kwargs()
     assert settings.agent_kwargs()["tool_surface"] == "production"
+
+
+@pytest.mark.parametrize('model, protocol', [
+    ('kimi-k3', 'openai'),
+    ('gpt-6.2', 'openai'),
+    ('gpt-6.2', 'responses'),
+    ('claude-sonnet-4-6', 'anthropic'),
+    ('gemini-3-pro', 'openai'),
+    ('glm-5.3', 'openai'),
+])
+def test_executable_search_declaration_reaches_offline_provider_envelope(monkeypatch, model, protocol):
+    from evaluations.swebench.tofu_kimi_runtime import tofu_kimi_production_tool_catalog
+    from lib.llm._sse_core import prepare_request
+    from lib.tasks_pkg.model_config import _assemble_tool_list
+
+    monkeypatch.setattr('lib.tools.search._vertical_domains', lambda: [
+        {'domain': 'academic', 'purpose': 'Papers and citations.'}])
+    catalog = tofu_kimi_production_tool_catalog(search_enabled=True)
+    tools, _ = _assemble_tool_list(
+        {'_explicitToolSchemas': catalog}, '', False, 'fixture',
+        'multi', True, True, False, False, False)
+    original = json.dumps(catalog, sort_keys=True)
+    plan = prepare_request({'model': model, 'messages': [
+        {'role': 'user', 'content': 'Find citations.'}], 'tools': tools},
+        api_key='fake', base_url='https://models.example/v1', api_protocol=protocol)
+    declarations = [t['function'] for t in catalog]
+    wire = plan.body['tools']
+    functions = [t.get('function', t) for t in wire]
+    assert [t['name'] for t in functions] == [t['name'] for t in declarations]
+    for sent, declaration in zip(functions, declarations, strict=True):
+        assert sent['description'] == declaration['description']
+    search = next(t for t in functions if t['name'] == 'web_search')
+    parameters = search.get('parameters', search.get('input_schema'))
+    declaration = next(t for t in declarations if t['name'] == 'web_search')
+    assert parameters == declaration['parameters']
+    properties = parameters['properties']
+    assert properties['vertical']['enum'] == ['auto', 'academic', 'off']
+    assert properties['queries']['items']['properties']['vertical']['enum'] == properties['vertical']['enum']
+    assert json.dumps(catalog, sort_keys=True) == original
 
 
 def test_guest_cwd_mapping(monkeypatch):
@@ -727,7 +770,11 @@ def test_production_surface_run_wires_catalog_and_guest_exec(
             return SimpleNamespace(
                 return_code=0, stdout="tests passed", stderr="")
 
-    runtime_config = {"responses": {"promptProfile": "auto"}}
+    # A second metadata read would see different capabilities. Fingerprint the
+    # exact explicit catalogue passed to start, never reconstruct it for evidence.
+    capabilities = iter([[{'domain': 'academic', 'purpose': 'Papers and citations.'}], []])
+    monkeypatch.setattr('lib.tools.search._vertical_domains', lambda: next(capabilities))
+    runtime_config = {"responses": {"promptProfile": "auto"}, "searchMode": "multi"}
     agent = module.TofuKimiRuntimeAgent(
         logs_dir=tmp_path / "logs",
         model_name="kimi-k3",
@@ -802,15 +849,19 @@ def test_production_surface_run_wires_catalog_and_guest_exec(
     assert "exit_code=0" in captured["resolution"]["content"]
     # Evidence digests are the production-surface ones.
     from evaluations.swebench import tofu_kimi_runtime as contract
-    assert metadata["toolSchemaSha256"] == \
-        contract.tofu_kimi_production_tool_schema_sha256()
-    assert metadata["promptContractSha256"] == \
-        contract.tofu_kimi_prompt_contract_sha256(
-            runtime_config, tool_surface="production",
-            tool_catalog_sha256=contract
-            .tofu_kimi_production_tool_schema_sha256())
+    catalog = config['_explicitToolSchemas']
+    search = next(t['function'] for t in catalog if t['function']['name'] == 'web_search')
+    assert search['parameters']['properties']['vertical']['enum'] == ['auto', 'academic', 'off']
+    expected_digest = hashlib.sha256(json.dumps(
+        catalog, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False,
+    ).encode('utf-8')).hexdigest()
+    assert metadata['toolSchemaSha256'] == expected_digest
+    assert next(capabilities) == []  # only one read, at executable declaration assembly
+    assert metadata['promptContractSha256'] == contract.tofu_kimi_prompt_contract_sha256(
+        runtime_config, tool_surface='production', tool_catalog_sha256=expected_digest)
     trajectory = json.loads(
         (tmp_path / "logs" / "trajectory.json").read_text())
+    assert trajectory['agent']['tool_definitions'] == catalog
     assert trajectory["agent"]["extra"]["tool_surface"] == "production"
     assert trajectory["agent"]["extra"]["tool_schema_sha256"] == \
         metadata["toolSchemaSha256"]

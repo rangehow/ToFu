@@ -2,7 +2,8 @@
 
 Real processes only: an isolated Home (tests/chaos/instance.py: storage host,
 execution host, separate API host), real node processes running the one node
-program (tests/chaos/node.py → ``python -m lib.desktop_agent``), and a network
+program (tests/chaos/node.py → ``python -m lib.desktop_agent``, and the same suite again
+with the Rust ``tofu node``), and a network
 edge between them (tests/chaos/edge.py) that the node can cross only through
 its HTTP proxy and a CodeLab-style ``/proxy/<port>`` prefix. Model Turns are
 scripted (tests/chaos/fake_provider.py) and run node commands through the
@@ -23,9 +24,11 @@ Run with ``make test-chaos``.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import signal
+from threading import Barrier
 import time
 import urllib.error
 import urllib.request
@@ -49,8 +52,10 @@ POLL = '/api/desktop/poll'
 
 
 class Fleet:
-    def __init__(self, root: Path, instance: ChaosInstance, provider: fp.ScriptedProvider, edge: Edge):
+    def __init__(self, root: Path, instance: ChaosInstance, provider: fp.ScriptedProvider, edge: Edge,
+                 program: str = 'python'):
         self.root, self.instance, self.provider, self.edge = root, instance, provider, edge
+        self.program = program
         self.client = InstanceClient(instance.base_url)
         self.nodes: list[ChaosNode] = []
         self.effects = root / 'effects.log'
@@ -106,7 +111,8 @@ class Fleet:
 
     # nodes ---------------------------------------------------------------------
     def node(self, name: str, **kwargs) -> ChaosNode:
-        node = ChaosNode(self.root, name, tag=self.instance.tag, proxy=self.edge.proxy_url, **kwargs)
+        node = ChaosNode(self.root, name, tag=self.instance.tag, proxy=self.edge.proxy_url,
+                         program=self.program, **kwargs)
         self.nodes.append(node)
         return node
 
@@ -128,8 +134,10 @@ class Fleet:
         return node_id
 
     def ceiling(self, node_id: str, **tiers) -> dict:
+        status, snapshot = self.api('GET', '/api/v4/devices/permissions')
+        assert status == 200, snapshot
         status, body = self.api('PUT', f'/api/v4/devices/{node_id}/ceiling',
-                                {'tiers': {'read': True, **tiers}})
+                                {'expected_revision': snapshot['rev'], 'tiers': {'read': True, **tiers}})
         assert status == 200, body
         return body
 
@@ -196,9 +204,13 @@ class Fleet:
         assert self.effect_count(nonce) == 1, self.tool_result(nonce)
 
 
-@pytest.fixture(scope='module')
-def fleet(tmp_path_factory):
-    root = tmp_path_factory.mktemp('chaos-nodes')
+@pytest.fixture(scope='module', params=['python', 'rust'])
+def fleet(tmp_path_factory, request):
+    """One isolated Home and its nodes, for each implementation of the node program."""
+    if request.param == 'rust':
+        from tests.support.tofu_node import node_binary
+        node_binary()
+    root = tmp_path_factory.mktemp(f'chaos-nodes-{request.param}')
     provider = fp.ScriptedProvider().start()
     # Desktop tools in the execution host reach the API host's bridge through
     # the relay record both roles find under their one project (production shape).
@@ -208,7 +220,7 @@ def fleet(tmp_path_factory):
     try:
         instance.start()
         edge = Edge(instance.port).start()
-        harness = Fleet(root, instance, provider, edge)
+        harness = Fleet(root, instance, provider, edge, program=request.param)
         harness.client.install_route(provider.base_url)
         yield harness
     finally:
@@ -474,14 +486,125 @@ def _effect_here(fleet):
     return lambda n: f'echo {n} $HOME >> {fleet.effects}; echo effect-recorded'
 
 
+def _assert_selected(fleet, expected_home, *, device=None, refusal=None):
+    if device is None:
+        conversation, nonce = fleet.unaddressed_turn(_effect_here(fleet))
+    else:
+        conversation, nonce, _ = fleet.node_turn(device, _effect_here(fleet))
+    assert fleet.settled(conversation)['status'] == 'completed'
+    result = fleet.tool_result(nonce)
+    assert fleet.where(nonce) == ([] if expected_home is None else [str(expected_home)]), result
+    assert (refusal or 'effect-recorded') in result, result
+
+
+def _race_ceiling_and_default(fleet, node_id):
+    path = f'/api/v4/devices/{node_id}/ceiling'
+    rev = fleet.ceiling(node_id, exec=True)['rev']
+    edit = {'expected_revision': rev, 'tiers': {'read': True, 'exec': True, 'write': True}}
+    gate = Barrier(2, timeout=10)
+
+    def put_ceiling():
+        gate.wait()
+        return fleet.api('PUT', path, edit)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        competing = pool.submit(put_ceiling)
+        gate.wait()
+        status, defaults = fleet.api('PUT', '/api/v4/devices/defaults', {'computer': node_id})
+        assert status == 200, defaults
+        status, body = competing.result()
+    assert status == 200 or (status == 409 and 'stale_device_policy' in str(body)), body
+    # If the ceiling won, its successful ACK still cannot be replayed after
+    # the defaults commit; if it lost, it must not modify the winner's policy.
+    stale_status, stale = fleet.api('PUT', path, edit)
+    assert stale_status == 409 and 'stale_device_policy' in str(stale), stale
+    assert fleet.defaults()['computer'] == node_id
+    code, permissions = fleet.api('GET', '/api/v4/devices/permissions')
+    assert code == 200, permissions
+    assert defaults['rev'] == rev + (2 if status == 200 else 1)
+    assert permissions['rev'] == defaults['rev']
+    assert permissions['permissions'][node_id]['home']['write'] is (status == 200)
+
+    # Deterministic second interleaving: one settings client reads a revision,
+    # another commits a changed default, then the first submits its pending edit.
+    pending = {'expected_revision': permissions['rev'], 'tiers': {'read': True}}
+    code, switched = fleet.api('PUT', '/api/v4/devices/defaults', {'computer': None})
+    assert code == 200 and switched['rev'] == permissions['rev'] + 1, switched
+    code, stale = fleet.api('PUT', path, pending)
+    assert code == 409 and 'stale_device_policy' in str(stale), stale
+    code, after = fleet.api('GET', '/api/v4/devices/permissions')
+    assert code == 200 and after['rev'] == switched['rev'], after
+    assert after['permissions'][node_id]['home'] == permissions['permissions'][node_id]['home']
+    assert fleet.defaults()['computer'] is None
+    fleet.defaults(computer=node_id)
+
+
+def test_selected_device_lifecycle_fences_old_settings(fleet):
+    target = fleet.node('journey-target')
+    spare = fleet.node('journey-spare')
+    try:
+        target_id = fleet.pair(target)
+        spare_id = fleet.pair(spare)
+        home = target.root / 'home'
+        pids = {fleet.instance.api.pid, fleet.instance.execution_record()['pid'],
+                target.process.pid, spare.process.pid}
+        assert len(pids) == 4
+        _race_ceiling_and_default(fleet, target_id)
+        _assert_selected(fleet, spare.root / 'home', device=spare_id)
+        _assert_selected(fleet, home, device=target_id)
+        target.kill()
+        fleet.wait_node(target_id, lambda n: not n['online'], 'offline')
+        _assert_selected(fleet, None, refusal='device_offline')
+        _assert_selected(fleet, None, device=target_id, refusal='device_offline')
+        target.serve()
+        fleet.wait_node(target_id, lambda n: n['online'], 'reconnected')
+        _assert_selected(fleet, home)
+
+        # Toggle a tier so the write advances the revision regardless of who
+        # won the race. First prove this exact request really is replayable.
+        status, snapshot = fleet.api('GET', '/api/v4/devices/permissions')
+        assert status == 200, snapshot
+        ceiling = f'/api/v4/devices/{target_id}/ceiling'
+        write = not snapshot['permissions'][target_id]['home']['write']
+        old = {'expected_revision': snapshot['rev'],
+               'tiers': {'read': True, 'exec': True, 'write': write}}
+        status, saved = fleet.api('PUT', ceiling, old)
+        assert status == 200 and saved['rev'] == snapshot['rev'] + 1, saved
+        assert saved['home']['write'] is write
+        status, replay = fleet.api('PUT', ceiling, old)
+        assert status == 200 and replay['rev'] == saved['rev'], replay
+        assert replay['home'] == saved['home']
+        old_credential = fleet.nodes_listing()[target_id]['credential']['id']
+        status, removed = fleet.api('DELETE', f'/api/v4/desktop/nodes/{target_id}')
+        assert status == 200, removed
+        target.wait_log('Server returned 401', RECONNECT_DEADLINE_S)
+        fleet.wait_node(spare_id, lambda n: n['online'], 'spare still online')
+        assert target_id not in fleet.nodes_listing()
+        assert fleet.defaults()['computer'] is None
+        _assert_selected(fleet, None, device=target_id, refusal='device_not_found')
+
+        target.kill()
+        assert fleet.pair(target, confirm=False) == target_id
+        fleet.confirm(target_id)
+        active = fleet.wait_node(target_id, lambda n: n['online'], 'paired again')
+        assert active['credential']['id'] != old_credential
+        assert active['tiers']['exec'] is False
+        status, stale = fleet.api('PUT', ceiling, old)
+        assert status == 409 and 'stale_device_policy' in str(stale), stale
+        assert fleet.defaults()['computer'] is None
+        _assert_selected(fleet, None, device=target_id, refusal='permission_denied')
+        fleet.ceiling(target_id, exec=True)
+        _assert_selected(fleet, home, device=target_id)
+    finally:
+        target.kill()
+        spare.kill()
+
+
 def test_revoked_default_device_leaves_placement_across_a_home_restart(fleet):
     default = fleet.node('default-dev')
     default_id = fleet.pair(default)
     other = fleet.node('other-dev')
     other_id = fleet.pair(other)
-    # Its own second survivor: the module's fleet may hold no other online node.
-    spare = fleet.node('spare-dev')
-    spare_id = fleet.pair(spare)
     fleet.defaults(computer=default_id)
     # Unaddressed: placed on the marked default, never on another online device.
     conversation, nonce = fleet.unaddressed_turn(_effect_here(fleet))
@@ -499,14 +622,12 @@ def test_revoked_default_device_leaves_placement_across_a_home_restart(fleet):
     assert status == 200 and default_id not in permissions['permissions']
     # With no default and several devices online the call is refused, not sent anywhere.
     fleet.wait_node(other_id, lambda n: n['online'], 'online after the restart')
-    fleet.wait_node(spare_id, lambda n: n['online'], 'online after the restart')
     conversation, nonce = fleet.unaddressed_turn(_effect_here(fleet))
     fleet.settled(conversation)
     assert fleet.where(nonce) == []
     assert 'no default computer is marked' in fleet.tool_result(nonce), fleet.tool_result(nonce)
     default.kill()
     other.kill()
-    spare.kill()
 
 
 def test_an_offline_node_is_found_by_the_routing_boundary_and_keeps_its_ceiling(fleet):

@@ -1,6 +1,10 @@
 """Typed translation failures shared by engines and delivery adapters."""
 
 
+CONTENT_GUARD_REFUSAL = 'translation refused by content guard'
+CONTENT_GUARD_REFUSAL_KIND = 'content_refused'
+
+
 class TranslationContentRefused(ValueError):
     """Every candidate failed a translation content-quality guard.
 
@@ -14,7 +18,7 @@ class TranslationContentRefused(ValueError):
         self.attempts = attempts
         self.content_fails = content_fails
         super().__init__(
-            f'translation refused by content guard: verdict={verdict} '
+            f'{CONTENT_GUARD_REFUSAL}: verdict={verdict} '
             f'after {content_fails} content fails ({attempts} attempts) '
             f'— {reason}'
         )
@@ -69,6 +73,8 @@ class TranslationNoAdmissibleProvider(RuntimeError):
 
 
 __all__ = [
+    'CONTENT_GUARD_REFUSAL',
+    'CONTENT_GUARD_REFUSAL_KIND',
     'TranslationContentRefused',
     'TranslationDeadlineExhausted',
     'TranslationNoAdmissibleProvider',

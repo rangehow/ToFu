@@ -11,9 +11,21 @@ an undocumented second source of product policy.
 - Generators are deterministic, write only declared outputs, expose a check
   mode where practical, and identify generated files. Update source, generator,
   output, and drift test together.
-- `gen_storage_operation_catalog.py` derives the JSON/Rust operation catalog
-  and `generated_storage_operations.py` client schema from the sidecar registry;
-  never maintain a separate handshake version in the Python wire client.
+- Contract generators move to the Rust `packages/tofu-xtask` (Rust rewrite
+  Phase 7): `make contracts` renders everything `contracts/api_v1.yaml`,
+  `events_v1.json` and `storage_operations_v1.json` derive, `make
+  contracts-check` rejects a stale output. The scripts named after them
+  (`gen_api_v1_contract.py`, `gen_api_endpoint_index.py`,
+  `gen_event_contract.py`, `gen_storage_operation_catalog.py`) render nothing:
+  they check the Python owner that still implements each contract (route
+  assembly, event registry, sidecar registry) in both directions. Port a
+  generator by matching its outputs byte for byte, then delete its Python
+  renderer. `contracts/storage_operations_v1.json` is authored and never
+  written; never maintain a separate handshake version in the Python wire
+  client.
+- `gen_test_classification.py` derives the test classification manifest on
+  demand (stdout, `--output`, `--check` in `make contracts-check`); never
+  commit its output.
 - `gen_tofudb_ir_contract.py` also consumes `conversation_search_v2.json` for
   native projection limits. Search benchmarks measure a complete logical query,
   including every continuation needed to reach its requested result limit.

@@ -1,0 +1,50 @@
+{
+ "package": {
+  "$blob": "deck.pptx",
+  "kind": "ooxml"
+ },
+ "summary": {
+  "animatedSlides": 0,
+  "buildSteps": 0,
+  "embeddedFontFamilies": [
+   "MiSans",
+   "Noto Sans SC"
+  ],
+  "embeddedFontParts": 4,
+  "embeddedFontStyleSlots": [
+   "MiSans:bold",
+   "MiSans:regular",
+   "Noto Sans SC:italic",
+   "Noto Sans SC:regular"
+  ],
+  "embeddedFonts": 2,
+  "embeddedGlyphs": 151,
+  "fadeTransitions": 3,
+  "fontEmbeddingComplete": true,
+  "fontFamiliesUsed": [
+   "MiSans",
+   "Noto Sans SC"
+  ],
+  "fontStyleSlotsUsed": [
+   "MiSans:bold",
+   "MiSans:regular",
+   "Noto Sans SC:italic",
+   "Noto Sans SC:regular"
+  ],
+  "fontSubsetting": true,
+  "morphTransitions": 0,
+  "packageValidation": {
+   "animationSteps": 0,
+   "editableTextBoxes": 6,
+   "findings": [],
+   "nativeCharts": 3,
+   "nativeTables": 1,
+   "ok": true,
+   "parts": 56,
+   "slides": 3
+  },
+  "slides": 3,
+  "unembeddedFontFamilies": [],
+  "unembeddedFontStyleSlots": []
+ }
+}

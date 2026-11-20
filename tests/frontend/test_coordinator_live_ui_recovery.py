@@ -59,11 +59,7 @@ def test_project_coordinator_retry_stream_proxy_and_selection(
         page.on('pageerror', lambda error: errors.append(str(error)))
         page.on('request', lambda request: stream_requests.append(request.url)
                 if '/api/v4/conversation-events?' in request.url else None)
-        # The binding read fails until the user asks to read again: the shared
-        # revalidation also retries a failed read (25b86f5167), so a single
-        # failure could recover before the error is ever observed.
-        released = []
-        page.route(binding_url, lambda route: failed.append(1) or route.abort() if not released else route.fallback())
+        page.route(binding_url, lambda route: failed.append(1) or route.abort() if not failed else route.fallback())
         output = Path(__file__).resolve().parents[2] / 'output/playwright/live-ui-recovery'
         output.mkdir(parents=True, exist_ok=True)
         page.goto(live_server, wait_until='domcontentloaded')
@@ -73,7 +69,6 @@ def test_project_coordinator_retry_stream_proxy_and_selection(
         expect(entry.locator('.coordination-read-error')).to_be_visible(timeout=20000)
         expect(entry.locator('.coordination-leader-meta')).not_to_have_text('Loading…')
         page.screenshot(path=str(output / 'coordinator-retry.png'), animations='disabled')
-        released.append(1)
         entry.get_by_role('button', name='Read again', exact=True).click()
         expect(entry.locator('[data-coordinator-id]')).to_have_attribute('data-coordinator-id', leader)
         expect(entry.locator('.coordination-read-error')).to_have_count(0)

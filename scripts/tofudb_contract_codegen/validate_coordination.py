@@ -128,7 +128,7 @@ def validate_integration(integration) -> None:
         or integration.get("workspaceAdmission") != "demand-without-count-quota"
         or "maximumActiveWorkspacesPerAuthority" in integration
         or "maximumWorkspacesPerOwner" in integration
-        or integration.get("maximumStatusRows") != 1000
+        or "maximumStatusRows" in integration
         or integration.get("maximumEventsPerProject") != 300
         or integration.get("maximumStatusEvents") != 30
         or integration.get("maximumProjectRootCharacters") != 4096

@@ -32,7 +32,8 @@ import psutil
 from benchmarks.tofudb_context_read import fixture, history_proof, validate
 from lib.storage.protocol import PROTOCOL_VERSION, encode_frame
 from scripts.tofudb_bench import _mount_type
-from scripts.tofudb_perf_compare import BenchError, LegacyEngine, TofuDbEngine, _percentile
+from scripts.tofudb_perf_compare import BenchError, LegacyEngine, TofuDbEngine
+from scripts.tofudb_workloads.latency import _percentile
 
 ARMS = ("native-embedded", "sqlite-sidecar", "sqlite-object", "sqlite-json")
 SCHEMA = "tofu.context-controls.v1"

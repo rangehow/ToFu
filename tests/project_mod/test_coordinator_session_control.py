@@ -319,11 +319,16 @@ def _ended_worker(r, monkeypatch):
     return worker, row
 
 
-def test_follow_up_of_an_ended_worker_creates_its_next_turn_never_an_attempt(worker_runtime, monkeypatch):
+@pytest.mark.parametrize('override', ['', 'model-worker-override'])
+def test_follow_up_of_an_ended_worker_creates_its_next_turn_never_an_attempt(worker_runtime, monkeypatch, override):
     from lib.conversation_sync import runtime
     from lib.project_dispatch.admission import FOLLOW_UP_KEY
     r = worker_runtime
     worker, row = _ended_worker(r, monkeypatch)
+    r.c.conversations.rows['coordinator']['settings']['model'] = 'model-new-coordinator'
+    from lib.conversations import session_model
+    monkeypatch.setattr(session_model, '_conversation_settings', lambda conv, owner: (
+        {'modelOverride': override} if conv == worker['conversation_id'] else {}))
     execution = row['execution']
     created = []
 
@@ -359,6 +364,8 @@ def test_follow_up_of_an_ended_worker_creates_its_next_turn_never_an_attempt(wor
     assert args['instruction'] in body['inputTurn']['content']
     assert body['inputTurn']['_projectAssignmentId'] == row['id']
     assert follows['execution'] == execution
+    assert config['model'] == (override or row['request']['model'])
+    assert r.attempts[execution['attemptId']]['config']['model'] == row['request']['model']
     assert config[FOLLOW_UP_KEY] == {'attemptId': execution['attemptId'], 'turnId': execution['turnId'],
                                      'taskId': r.attempts[execution['attemptId']]['taskId'],
                                      'status': 'completed'}

@@ -55,6 +55,7 @@ pub struct Translator {
     response_id: String,
     provider_error: Option<Value>,
     unknown_events: u64,
+    cache_counts: (Option<u64>, Option<u64>),
 }
 fn truthy(value: &Value) -> bool {
     match value {
@@ -174,6 +175,12 @@ pub fn convert_usage(value: &Value) -> Result<Value, Error> {
     }
     Ok(result)
 }
+pub(crate) fn reported_cache_counts(usage: &Value) -> (Option<u64>, Option<u64>) {
+    let input = usage["input_tokens"].as_u64();
+    let cached = usage["input_tokens_details"]["cached_tokens"].as_u64()
+        .filter(|cached| input.is_some_and(|total| *cached <= total));
+    (input, cached)
+}
 struct Size {
     bytes: usize,
     limit: usize,
@@ -229,6 +236,7 @@ impl Translator {
             response_id: String::new(),
             provider_error: None,
             unknown_events: 0,
+            cache_counts: (None, None),
         })
     }
     fn reserve(&mut self, n: usize) -> Result<(), Error> {
@@ -744,6 +752,7 @@ impl Translator {
                 };
                 out.extend(self.terminal_text(items)?);
                 let mut usage = convert_usage(&response["usage"])?;
+                self.cache_counts = reported_cache_counts(&response["usage"]);
                 if items.iter().any(|i| i["type"] == "program_output")
                     && !items.iter().any(|i| i["type"] == "message")
                 {
@@ -929,6 +938,15 @@ impl Stream {
             .framing_issues(self.framer.drain_issues().count);
         let items = self.translator.replay_items();
         let mut result = self.canonical.finish(aborted)?;
+        if let Some(usage) = result.usage.as_object_mut() {
+            let (input, cached) = self.translator.cache_counts;
+            if let Some(input) = input {
+                usage.insert("_wire_responses_input_tokens".into(), input.into());
+            }
+            if let Some(cached) = cached {
+                usage.insert("_wire_responses_cached_tokens".into(), cached.into());
+            }
+        }
         if !items.is_empty() {
             result.message["_responses_items"] = items.into();
         }

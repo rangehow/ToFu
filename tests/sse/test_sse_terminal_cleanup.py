@@ -24,8 +24,8 @@ def _drain_sync(chunks, **kwargs):
             iter(chunks), response=None, watchdog=watcher, **kwargs)
     finally:
         watcher.cancel()
-        watcher.join(1)
-        assert watcher.join(0)
+        watcher._thread.join(1)
+        assert not watcher._thread.is_alive()
 
 
 @pytest.mark.parametrize('chunk', [b'x', b'x' * (32 << 10)])

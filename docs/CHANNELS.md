@@ -1134,7 +1134,7 @@ downloaded; 文枢-controlled files outside the SDK's file hosts are reported as
 not downloaded. A large download or a transcription delays the owner's later
 events, because ingest is sequential per owner (C1).
 
-### C10. Outbound attachments (大象)
+### C10. Outbound attachments (大象 and personal 微信)
 
 **Problem:** the owner reads Tofu on the phone, and decks, reports and charts
 arrived only as text or as server paths a phone cannot open. 大象 is a chat
@@ -1534,13 +1534,81 @@ using them get restricted or banned.
     goes out as chunks, each its own send with its own state (channel protocol
     P5): a chunk already sent is never sent again, and an unknown chunk is
     sent again like an unknown item before the chunks after it.
-  - Attachments and quote replies are refused when the item is enqueued
-    (`x-channelTraits`); the Global Router's receipt and final answer reach a
-    bot command chat without a quote.
+  - Personal 微信 means ClawBot iLink, not 企业微信. Files go as original
+    generic FILE items in private chats. The outbox requires the same bound
+    bot, owner and immutable vault credential generation at delivery, and an
+    inbound context for that generation and chat. Both caption and FILE are
+    fenced at shared network wire admission, as are upload setup and CDN
+    transfer. A replaced login never supplies credentials for old work;
+    an already-admitted request cannot be recalled by a new login.
+    Legacy filename-only 微信 originals and notices without a binding are
+    refused, including legacy drafts approved after a replacement login.
+    Existing chats need a new inbound message to bind their stored context
+    to the bot. 企业微信 and QQ retain the explicit filename-only fallback.
+  - A file uses `getuploadurl`, an encrypted HTTPS CDN POST, then a separate
+    `sendmessage` with the CDN acknowledgment reference. CDN requests go
+    only to the documented CDN origin, without the bot bearer or redirects.
+    The file's `provider_ack` means iLink accepted the file message, not that
+    the handset received it. No numeric file limit or suffix list is asserted
+    without a provider contract; provider refusals are not success. A transfer
+    that never got to `sendmessage` may defer safely; a lost send ACK stays
+    `unknown/delivery_unconfirmed`, is not automatically resent, and does not
+    block later items. The outbox durably marks each possible submission;
+    recovery resumes only unsubmitted parts, keeps acknowledged captions, and
+    rebuilds missing quote-index entries from durable ACK IDs. A same-thread
+    quote can use a committed ACK before its index is written. A host-scoped
+    OS lock excludes concurrent executors for the same owner on the same
+    runtime filesystem; process exit releases ownership without a lease timer.
+    A durable claim token fences submission and results, and a deferral clears
+    the token and requeues the part in one CAS. Text-only items
+    retain their existing retry behavior.
+  - The shared outbox view separates personal 微信 send evidence from queue
+    state. A queued item has no positive acceptance evidence. A `sent` item
+    reports `deliveryEvidence: acceptance_unverified`: recorded as sent,
+    but acceptance of the complete message is unverified. Text `sent` rows
+    do not retain whether the provider explicitly acknowledged them, including
+    the caption of an attachment. A FILE's durable `provider_ack` applies only
+    to that file, not its caption. The view conservatively labels all sent
+    items this way; it does not infer proof from state, IDs or migration history,
+    rewrite old rows, or claim handset delivery. An `unknown` item reports
+    `deliveryEvidence: delivery_unconfirmed`: check the chat before requesting
+    a new send. Settings labels this as unconfirmed, not as an ongoing delivery
+    check. The active list omits settled items; read their evidence with
+    `channel_outbox(item_id)`. Personal 微信 send results and item lookups give
+    the exact `channel_outbox({"item_id": "…"})` invocation, explain the active-only
+    default and the separate file/caption/handset evidence limits. Keep that item
+    ID to find a settled command-chat send: command-chat items are not part of the
+    audit for other people, and no settled-history search is offered. The note is
+    tool-result guidance only; it records no new provider evidence and changes
+    neither authorization nor retry behavior.
+    `tests/visual/test_visual_wechat_recorded_status.py` covers file-only and
+    file-plus-caption synthetic settled records in the full app at desktop and
+    phone widths. It restores the conversation, opens its tool results, reloads,
+    extracts the exact item lookup from the restored guidance, and re-reads it
+    through the existing same-owner `channel_outbox` tool; another owner cannot
+    read it. The fixture persists synthetic tool results through the existing
+    settled-Turn route, not a model-driven chat request. It starts no channel
+    session and holds no account token: this verifies history presentation and
+    read-only lookup, not iLink acceptance, handset receipt, or deployment.
+  - Incoming FILE items with a supported encrypted CDN reference and declared
+    length retain the original through C9; incomplete references are visibly
+    unavailable. AES-ECB padding and length checks detect malformed transfers
+    but do not authenticate the original bytes. A quote of a file shows only
+    metadata, not an extra download.
+    Quoted text remains separate from the sender's instruction (C13).
+  - Native outbound quotes are unsupported on personal 微信. The tool returns
+    `reply_to_unsupported`; omit `reply_to` for a separate plain reply. Automatic
+    receipts and final answers to bot command chats remain unquoted. Tencent's
+    [pinned iLink protocol](https://github.com/Tencent/openclaw-weixin/blob/c6643f6f0ac03574eb126f2d69569ea4267cc3c6/docs/protocol.md)
+    documents FILE and inbound references; its
+    [collaborator's clarification](https://github.com/Tencent/openclaw-weixin/issues/24#issuecomment-4618839018)
+    explicitly rules out native bot quote sends. Do not serialize a speculative
+    outbound `ref_msg` or substitute a filename for a successful file send.
 - **Secrets.**
   - A pasted secret is stored only in the owner's reserved vault entry
     `channel.u<owner>.<channel>.secret` (微信's bot token in
-    `channel.u<owner>.wechat.token`), never in channel records, logs or
+    `channel.u<owner>.wechat.token.<generation>`; old logins may still use the
+    legacy unsuffixed name), never in channel records, logs or
     views. Settings shows the entry name and the vault's redacted hint.
   - A QQ secret is verified with one token request before it is stored.
     企业微信 offers no side-effect-free check (a probe connection would replace

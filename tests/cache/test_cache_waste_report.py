@@ -24,7 +24,10 @@ hand-written, because a hand-derived constant was 27x off in the original audit.
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import importlib.util
+import json
 import os
 
 import pytest
@@ -88,6 +91,14 @@ class TestPercentileTreatsZeroAsANumber:
     def test_mixed_zero_and_nonzero_sorts_numerically(self):
         """A bucket mixing cold (0s) and warm rounds must not lose the zeros."""
         assert cwr.percentile([0.0, 0.0, 10.0, 20.0], 50) == 10.0
+
+
+def test_waste_report_requires_explicit_zero_and_observed_write():
+    records = [_rec('indeterminate', call=2, gap=1.0, read=read, write=write)
+               for read, write in [(None, 30_000), (0, None), (0, '30000'), (0, 30_000)]]
+    report = cwr.build_report(records, min_write=20_000, w_rate=0.001, r_rate=0.0001)
+    row, = report['rows']
+    assert row['n'] == 1 and row['wasted_tokens'] == 30_000
 
 
 class TestColdStartIsNotWaste:
@@ -529,3 +540,265 @@ class TestLostReuse:
         # the 2026-11-11 evidence priced opus-5.5 savings at opus-5 rates.
         assert 'records carry no model id' not in out
         assert 'lost reuse' in out
+
+
+_FRAME_A = hashlib.sha256(b'exact-frame-a').hexdigest()
+_FRAME_B = hashlib.sha256(b'exact-frame-b').hexdigest()
+
+
+def _frame_line(stamp, *, call, conv='conv-frame', model='claude-opus-5.5',
+                bucket='no_break', read=0, write=120_000, sha=_FRAME_A,
+                rid='r1', frame_kind='full', transport='http'):
+    """One synthetic ``[CacheRoundRecord]`` log line with frame evidence."""
+    payload = {'conv': conv, 'call': call, 'bucket': bucket, 'gap_s': 20.0,
+               'cache_read': read, 'cache_write': write, 'model': model}
+    if sha is not None:
+        payload['exchange'] = {
+            'transport': transport, 'protocol': 'anthropic', 'verified': True,
+            'logical_input_items': 10, 'sent_input_items': 10,
+            'incremental': frame_kind == 'incremental',
+            'reused_connection': True,
+            'reused_idle_connection': False, 'full_reason': None,
+            'provider_input_tokens': 10, 'provider_cached_tokens': 0,
+            'frame_sha256': sha, 'frame_bytes': 4096, 'frame_kind': frame_kind,
+            'frame_reason': None, 'frame_content_encoding': 'identity',
+        }
+    return (f'{stamp} [INFO] lib.tasks_pkg.cache_tracking._detect [worker]: '
+            f'[rid:{rid}] {cwr.RECORD_MARKER} {json.dumps(payload)}\n')
+
+
+class TestExactFrameEvidence:
+    """Exact sent-frame evidence, not a logical-request similarity guess.
+
+    ``exchange.frame_sha256`` names the bytes a transport actually sent. The
+    section may say "identical" only when both sides carry that digest; a
+    missing hash is unknown and must never be folded into identity. Pairing
+    follows the report's identity rule: same ``(_rid, conv)`` invocation
+    chain, consecutive records (call numbers) in log order, same model.
+    """
+
+    @staticmethod
+    def _build(tmp_path, lines):
+        log = tmp_path / 'app.log'
+        log.write_text(''.join(lines))
+        return cwr.build_report(cwr.load_records(str(log)),
+                                20_000, 0.001, 0.0001)
+
+    @staticmethod
+    def _rows(report):
+        return {row['model']: row for row in report['exactFrameEvidence']}
+
+    def test_frame_rows_pairs_and_identical_pairs(self, tmp_path):
+        rep = self._build(tmp_path, [
+            _frame_line('2026-11-19 10:00:00', call=1, sha=_FRAME_A),
+            _frame_line('2026-11-19 10:00:10', call=2, sha=_FRAME_A),
+            _frame_line('2026-11-19 10:00:20', call=3, sha=_FRAME_B),
+        ])
+        row = self._rows(rep)['claude-opus-5.5']
+        assert row['rounds'] == 3
+        assert row['frameRows'] == 3
+        assert row['framePairs'] == 2
+        assert row['identicalFramePairs'] == 1
+        assert row['deltaFramePairs'] == 0
+        assert row['uncomparableFramePairs'] == 0
+        assert row['unknownFramePairs'] == 0
+
+    def test_full_then_incremental_with_the_same_digest_is_not_identical(
+            self, tmp_path):
+        """A WebSocket incremental frame hashes only the delta it carried, so
+        an equal digest says nothing about the whole request."""
+        rep = self._build(tmp_path, [
+            _frame_line('2026-11-19 10:00:00', call=1, sha=_FRAME_A),
+            _frame_line('2026-11-19 10:00:10', call=2, sha=_FRAME_A,
+                        frame_kind='incremental'),
+        ])
+        row = self._rows(rep)['claude-opus-5.5']
+        assert row['frameRows'] == 2
+        assert row['framePairs'] == 0
+        assert row['identicalFramePairs'] == 0
+        assert row['deltaFramePairs'] == 1
+        assert row['uncomparableFramePairs'] == 0
+        assert row['unknownFramePairs'] == 0
+        assert row['byFrameKind'] == {
+            'full': 1, 'incremental': 1, 'reset': 0, 'unknown': 0}
+
+    def test_two_incremental_frames_with_the_same_digest_stay_deltas(
+            self, tmp_path):
+        rep = self._build(tmp_path, [
+            _frame_line('2026-11-19 10:00:00', call=1, sha=_FRAME_A,
+                        frame_kind='incremental'),
+            _frame_line('2026-11-19 10:00:10', call=2, sha=_FRAME_A,
+                        frame_kind='incremental'),
+        ])
+        row = self._rows(rep)['claude-opus-5.5']
+        assert row['framePairs'] == 0
+        assert row['identicalFramePairs'] == 0
+        assert row['deltaFramePairs'] == 1
+
+    def test_transport_mismatch_is_not_identical(self, tmp_path):
+        rep = self._build(tmp_path, [
+            _frame_line('2026-11-19 10:00:00', call=1, sha=_FRAME_A,
+                        transport='http'),
+            _frame_line('2026-11-19 10:00:10', call=2, sha=_FRAME_A,
+                        transport='websocket'),
+        ])
+        row = self._rows(rep)['claude-opus-5.5']
+        assert row['framePairs'] == 0
+        assert row['identicalFramePairs'] == 0
+        assert row['deltaFramePairs'] == 0
+        assert row['uncomparableFramePairs'] == 1
+
+    def test_reset_frame_is_not_identical_request_evidence(self, tmp_path):
+        rep = self._build(tmp_path, [
+            _frame_line('2026-11-19 10:00:00', call=1, sha=_FRAME_A),
+            _frame_line('2026-11-19 10:00:10', call=2, sha=_FRAME_A,
+                        frame_kind='reset'),
+        ])
+        row = self._rows(rep)['claude-opus-5.5']
+        assert row['framePairs'] == 0
+        assert row['identicalFramePairs'] == 0
+        assert row['uncomparableFramePairs'] == 1
+
+    def test_missing_or_malformed_hash_is_unknown_never_identical(self, tmp_path):
+        rep = self._build(tmp_path, [
+            _frame_line('2026-11-19 10:00:00', call=1, sha=_FRAME_A),
+            _frame_line('2026-11-19 10:00:10', call=2, sha=None),
+            _frame_line('2026-11-19 10:00:20', call=3, sha='z' * 64),
+            _frame_line('2026-11-19 10:00:30', call=4, sha=_FRAME_A[:63]),
+        ])
+        row = self._rows(rep)['claude-opus-5.5']
+        assert row['frameRows'] == 1
+        assert row['framePairs'] == 0
+        assert row['identicalFramePairs'] == 0
+        assert row['unknownFramePairs'] == 3
+
+    def test_pairs_stay_inside_a_conversation_and_a_model_in_log_order(self, tmp_path):
+        rep = self._build(tmp_path, [
+            # File order is not log order: the pair must come from _ts order.
+            _frame_line('2026-11-19 10:00:10', call=2, sha=_FRAME_A),
+            _frame_line('2026-11-19 10:00:00', call=1, sha=_FRAME_B),
+            _frame_line('2026-11-19 10:00:05', call=1, conv='conv-other',
+                        sha=_FRAME_A),
+            _frame_line('2026-11-19 10:00:20', call=3, sha=_FRAME_A,
+                        model='kimi-k3.1-pro'),
+        ])
+        rows = self._rows(rep)
+        claude = rows['claude-opus-5.5']
+        assert claude['rounds'] == 3
+        assert claude['framePairs'] == 1          # (call 1, call 2)
+        assert claude['identicalFramePairs'] == 0  # B != A
+        assert claude['unknownFramePairs'] == 0
+        kimi = rows['kimi-k3.1-pro']
+        assert kimi['rounds'] == 1 and kimi['framePairs'] == 0  # model switch
+
+    def test_conversations_sharing_an_id_prefix_do_not_pair(self, tmp_path):
+        """Whole conv IDs: siblings share long prefixes, never a conversation."""
+        rep = self._build(tmp_path, [
+            _frame_line('2026-11-19 10:00:00', call=1,
+                        conv='worker-aaaaaaaaaaaaaaaaaaaa', sha=_FRAME_A),
+            _frame_line('2026-11-19 10:00:10', call=2,
+                        conv='worker-bbbbbbbbbbbbbbbbbbbb', sha=_FRAME_A),
+        ])
+        row = self._rows(rep)['claude-opus-5.5']
+        assert row['framePairs'] == 0
+        assert row['unknownFramePairs'] == 0
+
+    def test_concurrent_invocation_lanes_in_one_conversation_do_not_pair(self, tmp_path):
+        """One conv can carry root/child lanes with independent call numbers.
+
+        Pairing by ``conv`` alone would invent root-call-1 -> child-call-2; the
+        existing read-source identity is the log line's ``[rid:]`` plus the
+        whole conv, so each lane keeps its own chain.
+        """
+        rep = self._build(tmp_path, [
+            _frame_line('2026-11-19 10:00:00', call=1, rid='root'),
+            _frame_line('2026-11-19 10:00:10', call=2, rid='child'),
+            _frame_line('2026-11-19 10:00:20', call=2, rid='root'),
+            _frame_line('2026-11-19 10:00:30', call=3, rid='child'),
+        ])
+        row = self._rows(rep)['claude-opus-5.5']
+        assert row['frameRows'] == 4
+        assert row['framePairs'] == 2          # root 1->2 and child 2->3
+        assert row['identicalFramePairs'] == 2
+
+    def test_call_number_gap_or_unparseable_record_breaks_the_pair(self, tmp_path):
+        rep = self._build(tmp_path, [
+            _frame_line('2026-11-19 10:00:00', call=1),
+            _frame_line('2026-11-19 10:00:10', call=3),   # gap: no pair
+            _frame_line('2026-11-19 10:00:20', call=4),
+            _frame_line('2026-11-19 10:00:30', call=None),  # unparseable call
+            _frame_line('2026-11-19 10:00:40', call=5),   # must not pair with 4
+        ])
+        row = self._rows(rep)['claude-opus-5.5']
+        assert row['frameRows'] == 5
+        assert row['framePairs'] == 1   # only call 3 -> call 4
+        assert row['identicalFramePairs'] == 1
+        assert row['unknownFramePairs'] == 0
+
+    def test_upstream_bucket_counts_frame_evidence_and_identical_pairs(self, tmp_path):
+        from lib.tasks_pkg.cache_tracking._policy import BUCKET_UPSTREAM
+        rep = self._build(tmp_path, [
+            _frame_line('2026-11-19 10:00:00', call=1),
+            _frame_line('2026-11-19 10:00:10', call=2, bucket=BUCKET_UPSTREAM),
+            _frame_line('2026-11-19 10:00:20', call=3, sha=_FRAME_B,
+                        bucket=BUCKET_UPSTREAM),
+            _frame_line('2026-11-19 10:00:30', call=4, sha=_FRAME_B,
+                        bucket=BUCKET_UPSTREAM),
+            _frame_line('2026-11-19 10:00:40', call=5, sha=None,
+                        bucket=BUCKET_UPSTREAM),
+        ])
+        row = self._rows(rep)['claude-opus-5.5']
+        assert row['upstreamRounds'] == 4
+        assert row['upstreamWithFrame'] == 3
+        assert row['upstreamFramePairs'] == 3      # (1,2) (2,3) (3,4)
+        assert row['upstreamIdenticalFramePairs'] == 2  # (1,2) and (3,4)
+        assert row['unknownFramePairs'] == 1       # (4,5): second hash missing
+
+    def test_frame_evidence_does_not_change_buckets_or_pricing(self, tmp_path):
+        """The section is descriptive: it must not move a bucket or a CNY."""
+        log = tmp_path / 'app.log'
+        log.write_text(''.join([
+            _frame_line('2026-11-19 11:00:00', call=1),
+            _frame_line('2026-11-19 11:00:10', call=2),
+            _frame_line('2026-11-19 11:00:20', call=3, sha=_FRAME_B,
+                        bucket='upstream_identical'),
+        ]))
+        records = cwr.load_records(str(log))
+        with_frames = cwr.build_report(copy.deepcopy(records), 20_000, 0.001, 0.0001)
+        without_frames = copy.deepcopy(records)
+        for record in without_frames:
+            record.pop('exchange', None)
+        baseline = cwr.build_report(without_frames, 20_000, 0.001, 0.0001)
+        for key in ('rows', 'by_model', 'true_recoverable_cny', 'excluded_cny',
+                    'zero_readback_rounds', 'read_sources', 'read_share_splits',
+                    'lost_reuse'):
+            assert with_frames[key] == baseline[key], key
+        assert self._rows(with_frames)['claude-opus-5.5']['frameRows'] == 3
+        assert self._rows(baseline)['claude-opus-5.5']['frameRows'] == 0
+
+    def test_json_and_human_report_carry_the_section(self, tmp_path, capsys):
+        log = tmp_path / 'app.log'
+        log.write_text(''.join([
+            _frame_line('2026-11-19 12:00:00', call=1),
+            _frame_line('2026-11-19 12:00:10', call=2),
+        ]))
+        assert cwr.main(['--glob', str(log), '--json']) == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert {'records_scanned', 'true_recoverable_cny', 'rows', 'by_model',
+                'read_share_splits', 'lost_reuse',
+                'exactFrameEvidence'} <= set(payload)
+        section, = payload['exactFrameEvidence']
+        assert {'rounds', 'frameRows', 'framePairs', 'identicalFramePairs',
+                'deltaFramePairs', 'uncomparableFramePairs', 'byFrameKind',
+                'byTransport', 'upstreamWithFrame',
+                'upstreamIdenticalFramePairs'} <= set(section)
+        assert section['framePairs'] == 1
+        assert section['identicalFramePairs'] == 1
+        assert section['deltaFramePairs'] == 0
+        assert section['uncomparableFramePairs'] == 0
+
+        assert cwr.main(['--glob', str(log)]) == 0
+        out = capsys.readouterr().out
+        assert 'Exact frame evidence' in out
+        assert 'incremental' in out and 'DELTA' in out
+        assert 'identical frames alone do not establish a provider-caused miss' in out

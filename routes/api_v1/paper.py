@@ -2,7 +2,7 @@
 
 This blueprint just *defines* ``api_v1_paper_bp``. The actual route
 handlers live in :mod:`routes.paper`, which imports this blueprint and
-registers 17 of its 22 routes here. The remaining 5 (``chat``,
+registers 19 of its 24 routes here. The remaining 5 (``chat``,
 ``fetch-arxiv-stream``, ``upload``, ``images/<phash>/<file>``,
 ``pdf/<file>``) stay on the legacy ``paper_bp`` because they're SSE /
 multipart / static asset endpoints, not JSON REST verbs.
@@ -24,6 +24,8 @@ Routes registered (paths owned by this blueprint, definitions in routes/paper.py
   POST   /api/v1/paper/translate/abort
   POST   /api/v1/paper/translate/lookup
   POST   /api/v1/paper/translate/cache
+  GET    /api/v1/paper/translate/pdf/status
+  POST   /api/v1/paper/translate/pdf
   POST   /api/v1/paper/fetch-arxiv
   POST   /api/v1/paper/reparse
   GET    /api/v1/paper/library

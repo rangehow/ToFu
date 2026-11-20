@@ -1,0 +1,292 @@
+{
+ "extractor": "pymupdf-raw",
+ "images": [
+  {
+   "base64": {
+    "$blob": "images/000.jpg",
+    "kind": "raster"
+   },
+   "bbox": [
+    52.55,
+    81.62,
+    542.43,
+    248.29
+   ],
+   "caption": "Table 1: Micro-F1 scores (µ-F1), training time (T) and number of parameters presented in Chalkidis et al. (2022). Ineach Micro-F1 column, the best result is bold-faced. “N/A” means not available in their work. For example, theauthors did not report the training time and the number of parameters of l",
+   "height": 136,
+   "mediaType": "image/jpeg",
+   "page": 2,
+   "pages": [
+    2
+   ],
+   "source": "table_clip",
+   "width": 400
+  },
+  {
+   "base64": {
+    "$blob": "images/001.jpg",
+    "kind": "raster"
+   },
+   "bbox": [
+    52.55,
+    208.85,
+    544.16,
+    369.52
+   ],
+   "caption": "Table 2: Micro-F1 (µ-F1) and Macro-F1 scores (m-F1) for our investigation on two types of approaches: linear SVMand BERT. For each type, we show results achieved by LibMultiLabel and scores reported in Chalkidis et al. (2022).In each column, the best result is bold-faced.",
+   "height": 139,
+   "mediaType": "image/jpeg",
+   "page": 4,
+   "pages": [
+    4
+   ],
+   "source": "table_clip",
+   "width": 400
+  },
+  {
+   "base64": {
+    "$blob": "images/002.jpg",
+    "kind": "raster"
+   },
+   "bbox": [
+    52.55,
+    394.96,
+    544.07,
+    497.32
+   ],
+   "caption": "Table 3: Training time for our multiple settings on linear SVM and BERT. We show results from running LibMul-tiLabel and values reported in Chalkidis et al. (2022). Note that Chalkidis et al. (2022) use fixed parameters forBERT, while for our BERT, we use 4 GPUs to conduct the hyper-parameter search",
+   "height": 89,
+   "mediaType": "image/jpeg",
+   "page": 4,
+   "pages": [
+    4
+   ],
+   "source": "table_clip",
+   "width": 400
+  },
+  {
+   "base64": {
+    "$blob": "images/003.jpg",
+    "kind": "raster"
+   },
+   "bbox": [
+    52.55,
+    443.62,
+    543.16,
+    556.11
+   ],
+   "caption": "Table 4: A comparison between the model size of linear methods and BERT variants. Note that all three linearmethods in LibMultiLabel have the same model size. For BERT variants, we borrow the calculation in Table 1by Chalkidis et al. (2022). More details are in Appendix D.",
+   "height": 89,
+   "mediaType": "image/jpeg",
+   "page": 4,
+   "pages": [
+    4
+   ],
+   "source": "table_clip",
+   "width": 400
+  },
+  {
+   "base64": {
+    "$blob": "images/004.jpg",
+    "kind": "raster"
+   },
+   "bbox": [
+    52.5,
+    154.09,
+    542.42,
+    265.98
+   ],
+   "caption": "Table 5: Key differences in the one-vs-rest linear method between the default setting of LibMultiLabel and theimplementation in Chalkidis et al. (2022). Any values covered by [] mean the hyper-parameter search space. SeeAppendix C for details of hyper-parameters.",
+   "height": 88,
+   "mediaType": "image/jpeg",
+   "page": 7,
+   "pages": [
+    7
+   ],
+   "source": "table_clip",
+   "width": 400
+  },
+  {
+   "base64": {
+    "$blob": "images/005.jpg",
+    "kind": "raster"
+   },
+   "bbox": [
+    2.0,
+    261.57,
+    593.28,
+    674.57
+   ],
+   "caption": "Table 5.",
+   "height": 346,
+   "mediaType": "image/jpeg",
+   "page": 7,
+   "pages": [
+    7
+   ],
+   "source": "table_clip",
+   "width": 400
+  },
+  {
+   "base64": {
+    "$blob": "images/006.jpg",
+    "kind": "raster"
+   },
+   "bbox": [
+    52.5,
+    71.6,
+    542.42,
+    172.51
+   ],
+   "caption": "Table 6: Data statistics for LexGLUE, the benchmark considered in Chalkidis et al. (2022). W means the average #words per instance of the whole set. The # features indicates the # TF-IDF features used by linear methods.",
+   "height": 88,
+   "mediaType": "image/jpeg",
+   "page": 8,
+   "pages": [
+    8
+   ],
+   "source": "table_clip",
+   "width": 400
+  },
+  {
+   "base64": {
+    "$blob": "images/007.jpg",
+    "kind": "raster"
+   },
+   "bbox": [
+    2.0,
+    154.51,
+    593.28,
+    367.79
+   ],
+   "caption": "Table 7: Parameter differences of BERT between LibMultiLabel and Chalkidis et al. (2022). For the meaning ofeach parameter, please refer to the software LibMultiLabel.",
+   "height": 184,
+   "mediaType": "image/jpeg",
+   "page": 8,
+   "pages": [
+    8
+   ],
+   "source": "table_clip",
+   "width": 400
+  },
+  {
+   "base64": {
+    "$blob": "images/008.jpg",
+    "kind": "raster"
+   },
+   "bbox": [
+    2.0,
+    459.7,
+    593.28,
+    841.89
+   ],
+   "caption": "Table 8: Hyper-parameter search space and the selected values of LibMultiLabel’s tuned setting.",
+   "height": 290,
+   "mediaType": "image/jpeg",
+   "page": 8,
+   "pages": [
+    8
+   ],
+   "source": "table_clip",
+   "width": 400
+  },
+  {
+   "base64": {
+    "$blob": "images/009.jpg",
+    "kind": "raster"
+   },
+   "bbox": [
+    60.25,
+    242.96,
+    534.72,
+    372.39
+   ],
+   "caption": "Table 10: Training time for our multiple settings on BERT. The average time of running five seeds is reported.",
+   "height": 109,
+   "mediaType": "image/jpeg",
+   "page": 9,
+   "pages": [
+    9
+   ],
+   "source": "table_clip",
+   "width": 400
+  },
+  {
+   "base64": {
+    "$blob": "images/010.jpg",
+    "kind": "raster"
+   },
+   "bbox": [
+    60.67,
+    99.09,
+    534.61,
+    214.97
+   ],
+   "caption": "Table 11: A performance comparison between the setting without and with re-training.",
+   "height": 95,
+   "mediaType": "image/jpeg",
+   "page": 10,
+   "pages": [
+    10
+   ],
+   "source": "table_clip",
+   "width": 400
+  },
+  {
+   "base64": {
+    "$blob": "images/011.jpg",
+    "kind": "raster"
+   },
+   "bbox": [
+    52.5,
+    217.92,
+    308.79,
+    332.22
+   ],
+   "caption": "Table 12: Data statistics for 20 Newsgroups. We con-duct a 90/10 split to obtain the validation data. W/Tmeans the average # words/tokens per instance of thewhole set, and Wmax/Tmax means the maximum #words/tokens of the whole set.",
+   "height": 179,
+   "mediaType": "image/jpeg",
+   "page": 11,
+   "pages": [
+    11
+   ],
+   "source": "table_clip",
+   "width": 376
+  },
+  {
+   "base64": {
+    "$blob": "images/012.jpg",
+    "kind": "raster"
+   },
+   "bbox": [
+    52.55,
+    375.83,
+    307.49,
+    559.46
+   ],
+   "caption": "Table 13: Experimental results of 20 Newsgroups bylinear methods and BERT. For the default setting, wefollow the default parameters in Table 7. For the tunedand hierarchical setting, we use the same parametersearch range as the one in Table 8. Further, to processthe set for the hierarchical setting,",
+   "height": 269,
+   "mediaType": "image/jpeg",
+   "page": 11,
+   "pages": [
+    11
+   ],
+   "source": "table_clip",
+   "width": 376
+  }
+ ],
+ "isScanned": false,
+ "limits": {
+  "maxImageWidth": 400,
+  "maxImages": null,
+  "maxPages": 0,
+  "maxTextChars": 0
+ },
+ "method": "pymupdf_raw",
+ "processedPages": 13,
+ "text": "Proceedings of the 61st Annual Meeting of the Association for Computational Linguistics\nVolume 2: Short Papers, pages 1876–1888\nJuly 9-14, 2023 ©2023 Association for Computational Linguistics\nLinear Classifier: An Often-Forgotten Baseline for Text Classification\nYu-Chen Lin1,2,3, Si-An Chen1, Jie-Jyun Liu1, and Chih-Jen Lin1,3\n1National Taiwan University\n2ASUS Intelligent Cloud Services\n3Mohamed bin Zayed University of Artificial Intelligence\n{b06504025,d09922007,d11922012,cjlin}@csie.ntu.edu.tw\nAbstract\nLarge-scale pre-trained language models such\nas BERT are popular solutions for text classi-\nfication. Due to the superior performance of\nthese advanced methods, nowadays, people of-\nten directly train them for a few epochs and de-\nploy the obtained model. In this opinion paper,\nwe point out that this way may only sometimes\nget satisfactory results. We argue the impor-\ntance of running a simple baseline like linear\nclassifiers on bag-of-words features along with\nadvanced methods. First, for many text data,\nlinear methods show competitive performance,\nhigh efficiency, and robustness. Second, ad-\nvanced models such as BERT may only achieve\nthe best results if properly applied. Simple\nbaselines help to confirm whether the results of\nadvanced models are acceptable. Our experi-\nmental results fully support these points.\n1\nIntroduction\nText classification is an essential topic in natural\nlanguage processing (NLP). Like the situations in\nmost NLP tasks, nowadays, large-scale pre-trained\nlanguage models (PLMs) such as BERT (Devlin\net al., 2019) have become popular solutions for text\nclassification. Therefore, we have seen that many\npractitioners directly run pre-trained language mod-\nels with a fixed number of epochs on their text\ndata. Unfortunately, this way may only sometimes\nlead to satisfactory results. In this opinion paper,\nthrough an intriguing illustration, we argue that\nfor text classification, a simple baseline like linear\nclassifiers on bag-of-words features should be used\nalong with the advanced models for the following\nreasons.\n• Training\nlinear\nclassifiers\nsuch\nas\nlinear\nSVM (Boser et al., 1992) or logistic regres-\nsion on bag-of-words features is simple and effi-\ncient. This approach may give competitive per-\nformance to advanced models for some problems.\nWhile various settings of bag-of-words features\nsuch as bi-gram or tri-gram can be considered,\nwe advocate that simple uni-gram TF-IDF fea-\ntures trained by linear classifiers can be a useful\nbaseline to start with for text classification.\n• Advanced architectures such as BERT may only\nachieve the best results if properly used. Linear\nmethods can help us check if advanced methods’\nresults are reasonable.\nIn the deep-learning era, the younger generation\noften thinks that linear classifiers should never be\nconsidered. Further, they may be unaware of some\nvariants of linear methods that are particularly use-\nful for text classification (see Section 3.1). There-\nfore, the paper serves as a reminder of this often-\nforgotten technique.\nFor our illustration, we re-investigate an existing\nwork (Chalkidis et al., 2022) that evaluates both\nlinear SVM and pre-trained language models, but\nthe authors pay more attention to the latter. The\nlinear method is somewhat ignored even though the\nperformance is competitive on some problems. We\ncarefully design experiments to compare the two\ntypes of methods. Our results fully demonstrate the\nusefulness of applying linear methods as simple\nbaselines.\nSome recent works (e.g., Yu et al., 2022; Gomes\net al., 2021) have shown the usefulness of linear\nclassifiers in the deep-learning era. However, they\neither consider sophisticated applications or inves-\ntigate advanced settings in which linear methods\nare only one component. In contrast, in this paper,\nwe consider the basic scenario of text classifica-\ntion. A more related work (Wahba et al., 2023) has\ndemonstrated the effectiveness of linear classifiers\nover PLMs on some problems. However, our inves-\ntigation on linear methods is more comprehensive.\nThe discussion also reminds us the trade-off be-\ntween performance gain and the cost including run-\nning time, model size, etc. Simple methods are\nuseful to benchmark and justify the usage of ad-\nvanced methods.\n1876\n\nMethod\nECtHR (A)\nECtHR (B)\nSCOTUS\nEUR-LEX\nLEDGAR\nUNFAIR-ToS #\nµ-F1\nT\nµ-F1\nT\nµ-F1\nT\nµ-F1\nT\nµ-F1\nT\nµ-F1\nT\nparams\nTF-IDF+SVM\n64.5\nN/A\n74.6\nN/A\n78.2\nN/A\n71.3\nN/A\n87.2\nN/A\n95.4\nN/A\nN/A\nBERT\n71.2 3h 42m 79.7\n3h 9m\n68.3 1h 24m 71.4\n3h 36m\n87.6\n6h 9m\n95.6\nN/A\n110M\nRoBERTa\n69.2 4h 11m 77.3 3h 43m 71.6 2h 46m 71.9\n3h 36m\n87.9\n6h 22m\n95.2\nN/A\n125M\nDeBERTa\n70.0 7h 43m 78.8 6h 48m 71.1 3h 42m 72.1\n5h 34m\n88.2\n9h 29m\n95.5\nN/A\n139M\nLongformer\n69.9 6h 47m 79.4 7h 31m 72.9 6h 27m 71.6 11h 10m 88.2 15h 47m 95.5\nN/A\n149M\nBigBird\n70.0 8h 41m 78.8 8h 17m 72.8 5h 51m 71.5\n3h 57m\n87.8\n8h 13m\n95.7\nN/A\n127M\nLegal-BERT\n70.0 3h 52m 80.4\n3h 2m\n76.4\n2h 2m\n72.1\n3h 22m\n88.2\n5h 23m\n96.0\nN/A\n110M\nCaseLaw-BERT 69.8\n3h 2m\n78.8 2h 57m 76.6 2h 34m 70.7\n3h 40m\n88.3\n6h 8m\n96.0\nN/A\n110M\nTable 1: Micro-F1 scores (µ-F1), training time (T) and number of parameters presented in Chalkidis et al. (2022). In\neach Micro-F1 column, the best result is bold-faced. “N/A” means not available in their work. For example, the\nauthors did not report the training time and the number of parameters of linear SVMs.\nThis paper is organized as follows.\nIn Sec-\ntion 2 we take a case study to point out the needs\nof considering linear methods as a baseline for\ntext classification.\nWe describe the linear and\nBERT-based methods used for investigation in\nSection 3.\nThe experimental results and main\nfindings are in Section 4, while Section 5 pro-\nvides some discussion. Additional details are in\nAppendix.\nPrograms used for experiments are\navailable at https://github.com/JamesLYC88/\ntext_classification_baseline_code.\n2\nText Classification These Days: Some\nIssues in Applying Training Methods\nLarge PLMs have shown dramatic progress on var-\nious NLP tasks. In the practical use, people often\ndirectly fine-tune PLMs such as BERT on their data\nfor a few epochs. However, for text classification,\nwe show that this way may not always get satis-\nfactory results. Some simple baselines should be\nconsidered to know if the obtained PLM model\nis satisfactory. We illustrate this point by consid-\nering the work on legal document classification\nby Chalkidis et al. (2022), which evaluates the fol-\nlowing sets.\n• Multi-class classification: SCOTUS, LEDGAR;\nfor this type of sets, each text is associated with\na single label.\n• Multi-label classification: ECtHR (A), ECtHR\n(B), EUR-LEX, UNFAIR-ToS; for this type of\nsets, each text is associated with multiple (or\nzero) labels.\n• Multiple choice QA: CaseHOLD.\nWe focus on text classification in this work, so\nCaseHOLD is not considered. For each problem,\ntraining and test sets are available.1\nThe study in Chalkidis et al. (2022) comprehen-\nsively evaluates both BERT-based PLMs and linear\nSVMs. They use Micro-F1 and Macro-F1 to mea-\nsure the test performance.2 In Table 1, we present\ntheir Micro-F1 results and running time of each\nmodel.\n2.1\nLinear Models Worth More Investigation\nThe investigation in Chalkidis et al. (2022) focuses\non BERT and its variants, even though from Ta-\nble 1, the performance of BERT-based methods\nmay not differ much. While they did not pay much\nattention to linear SVM, by a closer look at the\nresults, we get intriguing observations:\n• Linear SVM is competitive to BERT-based\nPLMs on four of the six data sets. For SCO-\nTUS, linear SVM even outperforms others with\na clear gap.\n• Surprisingly, given linear SVM’s decent per-\nformance, its training time was not shown in\nChalkidis et al. (2022), nor was the number of\nparameters; see the “N/A” entries in Table 1.\nWith the observations, we argue that the results of\nlinear models are worth more investigation.\n3\nSettings for Investigation\nTo better understand the performance of linear mod-\nels and BERT-based PLMs, we simulate how peo-\nple work on a new data set by training these meth-\nods. We consider a text classification package Lib-\nMultiLabel3 because it supports both types of train-\n1Indeed, training, validation, and test sets are available.\nSee details in Appendix H about how these sets are used.\n2Some data instances are not associated with any labels;\nsee Appendix A about how Chalkidis et al. (2022) handle such\nsituations.\n3https://github.com/ASUS-AICS/LibMultiLabel\n1877\n\ning methods.\n3.1\nLinear Methods for Text Classification\nTo use a linear method, LibMultiLabel first gener-\nates uni-gram TF-IDF features (Luhn, 1958; Jones,\n1972) according to texts in the training set, and\nthe obtained factors are used to get TF-IDF for the\ntest set. It then provides three classic methods that\nadopt binary linear SVM and logistic regression\nfor multi-class and multi-label scenarios.4 Here we\nconsider linear SVM as the binary classifier behind\nthese methods.\n• One-vs-rest: This method learns a binary linear\nSVM for each label, so data with/without this la-\nbel are positive/negative, respectively. Let fℓ(x)\nbe the decision value of the ℓ-th label, where x is\nthe feature vector. For multi-class classification,\nˆy = argmaxℓfℓ(x) is predicted as the single as-\nsociated label of x. For multi-label classification,\nall labels ℓwith positive fℓ(x) are considered to\nbe associated with x. This method is also what\n“TF-IDF+SVM” in Chalkidis et al. (2022) did,\nthough our TF-IDF feature generation is simpler\nthan theirs by considering only uni-gram.5\n• Thresholding (Yang, 2001; Lewis et al., 2004;\nFan and Lin, 2007): This method extends one-vs-\nrest by modifying the decision value for optimiz-\ning Macro-F1. That is, we change the decision\nvalue to fℓ(x) + ∆ℓ, where ∆ℓis a threshold\ndecided by cross validation.\n• Cost-sensitive (Parambath et al., 2014): For\neach binary problem, this method re-weights\nthe losses on positive data. We decide the re-\nweighting factor by cross validation to optimize\nMicro-F1 or Macro-F1.\nThese methods basically need no further hyper-\nparameter tuning, so we can directly run them. The\nlast two methods are extensions of one-vs-rest to\naddress the imbalance of each binary problem (i.e.,\nfew positives and many negatives). The design\nrelies on the fact that the binary problems are in-\ndependent, so such approaches cannot be easily\napplied to deep learning, which considers all labels\ntogether in a single network.\n4Besides descriptions in this section, some additional de-\ntails are in Appendix B.\n5See details in Appendix C.\n3.2\nBERT-based Methods for Text\nClassification\nLibMultiLabel also provides BERT-based meth-\nods, which involve several hyper-parameters, such\nas the learning rate. While practitioners may di-\nrectly choose hyper-parameters, to seriously com-\npare with linear methods, we run BERT by con-\nducting hyper-parameter selection. More details\nare in Appendix F.\n4\nExperimental Results and Analysis\nIn Table 2, we follow Chalkidis et al. (2022) to\nreport Micro-F1 and Macro-F1 on the test set. The\ntraining time is in Table 3.\n4.1\nLinear Methods are Good Baselines\nIn Table 2, our one-vs-rest results are slightly worse\nthan the linear SVM results in Chalkidis et al.\n(2022), which also applies the one-vs-rest strat-\negy. As mentioned in Section 3.1, the difference is\nmainly due to our use of simple uni-gram TF-IDF\nfeatures. Anyway, our one-vs-rest is still competi-\ntive to BERT results in Chalkidis et al. (2022) on\nthe last four problems.\nMore importantly, the two extensions of one-vs-\nrest (i.e., thresholding and cost-sensitive) improve\nalmost all situations. For data sets ECtHR (A)\nand ECtHR (B), where originally one-vs-rest is\nsignificantly lower than BERT results in Chalkidis\net al. (2022), the gap reduced considerably.\nFor the training time in Table 3, though the two\nextensions take more time than the basic one-vs-\nrest strategy, all the linear methods are still hun-\ndreds of times faster than BERT. Further, linear\nmethods were run on a CPU (Intel Xeon E5-2690),\nwhile for BERT we need a GPU (Nvidia V100).\nThe model sizes listed in Table 4 also show that\nlinear SVM requires a much smaller model than\nBERT, where details of our calculation are in Ap-\npendix D.\nThe results demonstrate that linear methods are\nuseful baselines. They are extremely simple and ef-\nficient, but may yield competitive test performance.\n4.2\nLinear Methods can Help to See if\nAdvanced Methods Are Properly Used\nSurprisingly, our running of LibMultiLabel’s BERT\nleads to worse test performance than linear meth-\nods on almost all data sets. More surprisingly, a\ncomparison between the BERT results by LibMul-\ntiLabel and those in Chalkidis et al. (2022) shows\n1878\n\nMethod\nECtHR (A) ECtHR (B)\nSCOTUS\nEUR-LEX\nLEDGAR\nUNFAIR-ToS\nµ-F1 m-F1 µ-F1 m-F1 µ-F1 m-F1 µ-F1 m-F1 µ-F1 m-F1 µ-F1\nm-F1\nLinear\none-vs-rest\n64.0\n53.1\n72.8\n63.9\n78.1\n68.9\n72.0\n55.4\n86.4\n80.0\n94.9\n75.1\nthresholding\n68.6\n64.9\n76.1\n68.7\n78.9\n71.5\n74.7\n62.7\n86.2\n79.9\n95.1\n79.9\ncost-sensitive\n67.4\n60.5\n75.5\n67.3\n78.3\n71.5\n73.4\n60.5\n86.2\n80.1\n95.3\n77.9\nChalkidis et al. (2022) 64.5\n51.7\n74.6\n65.1\n78.2\n69.5\n71.3\n51.4\n87.2\n82.4\n95.4\n78.8\nBERT\nOurs\n61.9\n55.6\n69.8\n60.5\n67.1\n55.9\n70.8\n55.3\n87.0\n80.7\n95.4\n80.3\nChalkidis et al. (2022) 71.2\n63.6\n79.7\n73.4\n68.3\n58.3\n71.4\n57.2\n87.6\n81.8\n95.6\n81.3\nTable 2: Micro-F1 (µ-F1) and Macro-F1 scores (m-F1) for our investigation on two types of approaches: linear SVM\nand BERT. For each type, we show results achieved by LibMultiLabel and scores reported in Chalkidis et al. (2022).\nIn each column, the best result is bold-faced.\nMethod\nECtHR (A)\nECtHR (B)\nSCOTUS\nEUR-LEX\nLEDGAR\nUNFAIR-ToS\nLinear\none-vs-rest\n28s\n29s\n1m 11s\n4m 2s\n28s\n2s\nthresholding\n59s\n1m 0s\n2m 11s\n28m 8s\n3m 26s\n3s\ncost-sensitive\n1m 38s\n1m 43s\n3m 28s\n50m 36s\n4m 45s\n4s\nChalkidis et al. (2022)\nN/A\nN/A\nN/A\nN/A\nN/A\nN/A\nBERT\nOurs\n5h 8m\n5h 51m\n3h 21m\n38h 14m\n43h 48m\n4h 5m\nChalkidis et al. (2022)\n3h 42m\n3h 9m\n1h 24m\n3h 36m\n6h 9m\nN/A\nTable 3: Training time for our multiple settings on linear SVM and BERT. We show results from running LibMul-\ntiLabel and values reported in Chalkidis et al. (2022). Note that Chalkidis et al. (2022) use fixed parameters for\nBERT, while for our BERT, we use 4 GPUs to conduct the hyper-parameter search and report the total time used.\nMethod\nECtHR (A)\nECtHR (B)\nSCOTUS\nEUR-LEX\nLEDGAR\nUNFAIR-ToS\nLinear\n924K\n924K\n2M\n15M\n2M\n50K\nBERT variants\n110M ∼149M\nTable 4: A comparison between the model size of linear methods and BERT variants. Note that all three linear\nmethods in LibMultiLabel have the same model size. For BERT variants, we borrow the calculation in Table 1\nby Chalkidis et al. (2022). More details are in Appendix D.\nthat the former is much worse on data sets EC-\ntHR (A) and ECtHR (B). Interestingly, from Sec-\ntion 4.1, only for these two sets the BERT results\nin Chalkidis et al. (2022) are much better than lin-\near methods. Thus, our direct run of BERT in Lib-\nMultiLabel is a total failure. The training time is\nmuch longer than linear methods, but the resulting\nmodel is worse.\nIt is essential to check the discrepancy between\nthe two BERT results. We find that Chalkidis et al.\n(2022) use some sophisticated settings to run BERT\nfor the first three sets (i.e., ECtHR (A), ECtHR (B),\nand SCOTUS). They split every document into 64\nsegments, each of which has no more than 128\ntokens, and apply BERT on each segment. Then,\nthey collect the intermediate results as inputs to an\nupper-level transformer. After repeating the same\nprocess via LibMultiLabel, we can reproduce the\nresults in Chalkidis et al. (2022); see details in\nAppendices E, F, and G.\nWe learned that they considered the more sophis-\nticated setting of running BERT because by default,\nBERT considers only the first 512 tokens. Thus,\nfor long documents, the training process may miss\nsome important information. However, in practice,\nusers may forget to check the document length and\nare not aware of the need to apply suitable settings.\nThe above experiments demonstrate that BERT can\nachieve superior results if properly used, but some-\ntimes, a direct run lead to poor outcomes. Linear\n1879\n\nmethods can serve as efficient and robust baselines\nto confirm the proper use of an advanced approach.\n5\nDiscussion and Conclusions\nIn our experiments, we encounter an issue of\nwhether to incorporate the validation set for train-\ning the final model, which is used for predicting the\ntest set. For linear methods, we follow the common\npractice to include the validation set for obtaining\nthe final model. However, for BERT or some other\ndeep learning models, the validation set is often\nused only for selecting the best epoch and/or the\nbest hyper-parameters. To fully use the available\ndata, we have investigated how to incorporate the\nvalidation set for BERT. Experimental results and\nmore details are in Appendix H.\nFor some text sets evaluated in this work, we\nhave seen that simple linear methods give compet-\nitive performance. The reason might be that each\ndocument in these sets is not short.6 Then TF-IDF\nfeatures are sufficiently informative so that linear\nmethods work well. Across all NLP areas, an im-\nportant issue now is when to use PLMs and when\nnot. We demonstrate that when PLMs may not per-\nform significantly better, traditional methods are\nmuch simpler and require fewer resources. How-\never, having a simple quantitative measurement to\npre-determine when to use which remains a chal-\nlenging future research problem. In summary, the\nstudy reminds us of the importance of employing\nsimple baselines in NLP applications.\n6See details in Appendix Table 6.\n1880\n\nLimitations\nIn this work, we do not propose any new methods\nbecause, as an opinion paper, we focus on rais-\ning the problems and making vivid demonstrations\nto readers. The experiments are limited to linear\nSVM and BERT on data sets in the benchmark\nLexGLUE. We hope that, within the page limit,\nour experiments sufficiently convey the points to\nreaders.\nEthics Statement\nWe ensure that our work complies with the ACL\nEthics Policy.\nAcknowledgements\nThis work was supported by NSTC of Taiwan\ngrant 110-2221-E-002-115-MY3 and ASUS Intelli-\ngent Cloud Services. The authors thank Ming-Wei\nChang and reviewers for constructive comments.\nReferences\nBernhard E. Boser, Isabelle Guyon, and Vladimir Vap-\nnik. 1992. A training algorithm for optimal mar-\ngin classifiers. In Proceedings of the Fifth Annual\nWorkshop on Computational Learning Theory, pages\n144–152. ACM Press.\nIlias Chalkidis, Abhik Jana, Dirk Hartung, Michael\nBommarito, Ion Androutsopoulos, Daniel Katz, and\nNikolaos Aletras. 2022. LexGLUE: A benchmark\ndataset for legal language understanding in English.\nIn Proceedings of the 60th Annual Meeting of the As-\nsociation for Computational Linguistics, pages 4310–\n4330.\nJacob Devlin, Ming-Wei Chang, Kenton Lee, and\nKristina Toutanova. 2019. BERT: pre-training of\ndeep bidirectional transformers for language under-\nstanding. In Proceedings of the 2019 Conference\nof the North American Chapter of the Association\nfor Computational Linguistics: Human Language\nTechnologies, NAACL-HLT, pages 4171–4186.\nRong-En Fan, Kai-Wei Chang, Cho-Jui Hsieh, Xiang-\nRui Wang, and Chih-Jen Lin. 2008. LIBLINEAR:\na library for large linear classification. Journal of\nMachine Learning Research, 9:1871–1874.\nRong-En Fan and Chih-Jen Lin. 2007.\nA study\non threshold selection for multi-label classification.\nTechnical report, Department of Computer Science,\nNational Taiwan University.\nChristian Gomes, Marcos André Gonçalves, Leonardo\nRocha, and Sérgio D. Canuto. 2021. On the cost-\neffectiveness of stacking of neural and non-neural\nmethods for text classification: Scenarios and per-\nformance prediction. In Findings of the Association\nfor Computational Linguistics: ACL/IJCNLP, pages\n4003–4014.\nIan J. Goodfellow, Yoshua Bengio, and Aaron Courville.\n2016. Deep Learning. The MIT Press.\nKaren S. Jones. 1972. A statistical interpretation of term\nspecificity and its application in retrieval. Journal of\nDocumentation, 28(1):11–20.\nKen Lang. 1995. Newsweeder: Learning to filter net-\nnews. In Proceedings of the Twelfth International\nConference on Machine Learning, pages 331–339.\nDavid D. Lewis, Yiming Yang, Tony G. Rose, and Fan\nLi. 2004. RCV1: A new benchmark collection for\ntext categorization research.\nJournal of Machine\nLearning Research, 5:361–397.\nLi-Chung Lin, Cheng-Hung Liu, Chih-Ming Chen, Kai-\nChin Hsu, I-Feng Wu, Ming-Feng Tsai, and Chih-Jen\nLin. 2022. On the use of unrealistic predictions in\nhundreds of papers evaluating graph representations.\nIn Proceedings of the Thirty-Sixth AAAI Conference\non Artificial Intelligence (AAAI).\nHans Peter Luhn. 1958. The automatic creation of liter-\nature abstracts. IBM Journal of Research and Devel-\nopment, 2(2):159–165.\nShameem A. Puthiya Parambath, Nicolas Usunier, and\nYves Grandvalet. 2014. Optimizing f-measures by\ncost-sensitive classification. In Advances in Neural\nInformation Processing Systems, volume 27.\nYasmen Wahba, Nazim Madhavji, and John Steinbacher.\n2023. A comparison of svm against pre-trained lan-\nguage models (plms) for text classification tasks. In\nMachine Learning, Optimization, and Data Science,\npages 304–313. Springer Nature Switzerland.\nYiming Yang. 2001. A study on thresholding strategies\nfor text categorization. In Proceedings of the 24th\nACM International Conference on Research and De-\nvelopment in Information Retrieval, pages 137–145,\nNew Orleans, US. ACM Press, New York, US.\nHsiang-Fu Yu, Kai Zhong, Jiong Zhang, Wei-Cheng\nChang, and Inderjit S. Dhillon. 2022. PECOS: Pre-\ndiction for enormous and correlated output spaces.\nJournal of Machine Learning Research, 23(98):1–32.\nA\nIssue about Data without Labels\nFor multi-label problems considered in Chalkidis\net al. (2022), instances that are not associated with\nany labels, called unlabeled instances as follows,\naccount for a considerable portion in some data\nsets: ECtHR (A) (11.3%), ECtHR (B) (1.6%)\nand UNFAIR-ToS (89.0%). In the training pro-\ncess, Chalkidis et al. (2022) keep the unlabeled\n1881\n\nParameter\nLibMultiLabel\nChalkidis et al. (2022)\nData pre-processing (TF-IDF feature generation)\nstop_words\nNone\nenglish\nngram_range\n(1, 1)\n(1, 3)\nmin_df\n1\n5\nmax_features\nNone\n[10000, 20000, 40000]\nModel\nloss\nsquared_hinge\n[’hinge’, ’squared_hinge’]\nsolving primal/dual\nprimal\ndual\nC\n1.0\n[0.1, 1.0, 10.0]\nTable 5: Key differences in the one-vs-rest linear method between the default setting of LibMultiLabel and the\nimplementation in Chalkidis et al. (2022). Any values covered by [] mean the hyper-parameter search space. See\nAppendix C for details of hyper-parameters.\ntraining instances without any modification. Thus,\nin, for example, the one-vs-rest setting described\nin Section 3.1, an unlabeled instance is on the\nnegative side in every binary problem. However,\nin evaluating the validation and test sets, they in-\ntroduce an additional class to indicate the unla-\nbeled data. Specifically, an unlabeled instance is\nassociated with this “unlabeled” class, but not oth-\ners. Chalkidis et al. (2022) consider this way to\nmore seriously evaluate the model predictability on\nunlabeled instances. However, this setting is not a\nstandard practice in multi-label classification, nor\nis it supported by LibMultiLabel. Thus we mod-\nify the scripts in LibMultiLabel to have the same\nevaluation setting as Chalkidis et al. (2022).\nB\nAdditional Details of Linear Methods\nThe binary linear SVM is in the following form.\nmin\nw\n1\n2w⊤w + C\nX\ni\nξ(yiw⊤xi),\n(1)\nwhere (xi, yi) are data-label pairs in the data set,\nyi = ±1, w is the parameters of the linear model,\nand ξ(·) is the loss function. The decision value\nfunction is f(x) = w⊤x.\nFor one-vs-rest, please see descriptions in Sec-\ntion 3.1. We follow the default setting in LibMul-\ntiLabel by using C = 1. For more details about\nthresholding and cost-sensitive, please refer to the\nexplanations in Lin et al. (2022).\nC\nDifferences Between Our\nImplementation of Linear Methods\nand Chalkidis et al. (2022)\nWe summarize the implementation differences be-\ntween LibMultiLabel and Chalkidis et al. (2022) in\nTable 5.\nFor the data-preprocessing part, both use scikit-\nlearn for TF-IDF feature generations. The mean-\nings of each parameter are listed as follows.\nstop_words: Specify the list of stop words to be\nremoved. For example, Chalkidis et al. (2022) set\nstop_words to “english,” so tokens that include in\nthe “english” list are filtered.\nngram_range: Specify the range of n-grams to\nbe extracted. For example, LibMultiLabel only\nuses uni-gram, while Chalkidis et al. (2022) set\nngram_range to (1, 3), so uni-gram, bi-gram, and\ntri-gram are extracted into the vocabulary list for a\nricher representation of the document.\nmin_df: The parameter is used for removing infre-\nquent tokens. Chalkidis et al. (2022) remove tokens\nthat appear in less than five documents, while Lib-\nMultiLabel does not remove any tokens.\nmax_features: The parameter decides the number\nof features to use by term frequency. For exam-\nple, Chalkidis et al. (2022) consider the top 10,000,\n20,000, and 40,000 frequent terms as the search\nspace of the parameter.\nFor more detailed explanations, please refer to\nthe TfidfVectorizer function in scikit-learn.\nThe binary classification problem in (1) is re-\nferred to as the primal form. The optimization\nproblem can be transferred to the dual form and the\noptimal solutions of the two forms lead to the same\ndecision function. Thus we can choose to solve the\nprimal or the dual problem; see Table 5. For the\nmodel training, they both use the solver provided\nby LIBLINEAR (Fan et al., 2008).\n1882\n\nProperty\nECtHR (A)\nECtHR (B)\nSCOTUS\nEUR-LEX\nLEDGAR\nUNFAIR-ToS\n# labels\n10\n10\n13\n100\n100\n8\nW\n1,662.08\n1,662.08\n6,859.87\n1,203.92\n112.98\n32.70\n# features\n92,402\n92,402\n126,406\n147,465\n19,997\n6,291\nTable 6: Data statistics for LexGLUE, the benchmark considered in Chalkidis et al. (2022). W means the average #\nwords per instance of the whole set. The # features indicates the # TF-IDF features used by linear methods.\nParameter\nLibMultiLabel\nChalkidis et al. (2022)\ndefault\ntuned\nreproduced\nSCOTUS\nother\nLEDGAR\nproblems\nmaximum #epochs\n15\n15\n20\n15\n20\nweight_decay\n0.001\n0\n0\n0\n0\npatience\n5\n5\n5\n5\n3\nval_metric\nMicro-F1\nMicro-F1\nMicro-F1\nMicro-F1\nMicro-F1\nearly_stopping_metric\nMicro-F1\nMicro-F1\nloss\nMicro-F1\nloss\nlearning_rate\n5e-5\nSee Table 8\n3e-5\n3e-5\n3e-5\ndropout\n0.1\n0.1\n0.1\n0.1\nTable 7: Parameter differences of BERT between LibMultiLabel and Chalkidis et al. (2022). For the meaning of\neach parameter, please refer to the software LibMultiLabel.\nParameter\nECtHR (A) ECtHR (B) SCOTUS EUR-LEX LEDGAR UNFAIR-ToS\nmax_seq_length space\n[128, 512]\nselected\n512\n512\n512\n512\n512\n512\nlearning_rate\nspace\n[2e-5, 3e-5, 5e-5]\nselected\n2e-5\n3e-5\n2e-5\n5e-5\n2e-5\n3e-5\ndropout\nspace\n[0.1, 0.2]\nselected\n0.1\n0.2\n0.1\n0.1\n0.2\n0.1\nTable 8: Hyper-parameter search space and the selected values of LibMultiLabel’s tuned setting.\nD\nAdditional Details about Model Size\nWe calculate the model size of linear SVM by\nmultiplying the number of TF-IDF features by\nthe number of labels; see details in Table 6. For\nBERT, we directly copy the number of parameters\nfrom Chalkidis et al. (2022).\nE\nAdditional Details about BERT Design\nin Chalkidis et al. (2022)\nE.1\nStandard BERT for Classification\nThe setting considers the original implementation\nin Devlin et al. (2019). They truncate the docu-\nments to have at most 512 tokens. We then take\na pre-trained BERT appended with an additional\nlinear layer for fine-tuning.\nE.2\nDocument Lengths\nIn Table 6, we present the document length for\neach data set in LexGLUE, the benchmark consid-\nered in Chalkidis et al. (2022). For ECtHR (A),\nECtHR (B), SCOTUS, and EUR-LEX, the docu-\nment lengths all exceed 512, the length limitation\nof BERT. Note that the numbers are underestimated\nbecause BERT uses a sub-word tokenizer that fur-\nther tokenizes some words into sub-words.\nE.3\nHierarchical BERT\nChalkidis et al. (2022) design a variant of the stan-\ndard BERT for ECtHR (A), ECtHR (B), and SCO-\nTUS to deal with long document lengths. The de-\ntailed steps are as follows.\n• Each document is split into 64 segments, where\neach segment contains at most 128 tokens.\n• Each segment is then fed into BERT.\n• The [CLS] tokens generated from each segment\n1883\n\nMethod\nECtHR (A)\nECtHR (B)\nSCOTUS\nEUR-LEX\nLEDGAR\nUNFAIR-ToS\nµ-F1\nm-F1\nµ-F1\nm-F1\nµ-F1\nm-F1\nµ-F1\nm-F1\nµ-F1\nm-F1\nµ-F1\nm-F1\nBERT in LibMultiLabel\ndefault\n60.5\n53.4\n68.9\n60.8\n66.3\n54.8\n70.8\n55.3\n85.2\n77.9\n95.2\n78.2\ntuned\n61.9\n55.6\n69.8\n60.5\n67.1\n55.9\n70.8\n55.3\n87.0\n80.7\n95.4\n80.3\nreproduced\n70.2\n63.7\n78.8\n73.1\n70.8\n62.6\n71.6\n56.1\n88.1\n82.6\n95.3\n80.6\nBERT in Chalkidis et al. (2022)\npaper\n71.2\n63.6\n79.7\n73.4\n68.3\n58.3\n71.4\n57.2\n87.6\n81.8\n95.6\n81.3\nreproduced\n70.8\n64.8\n78.7\n72.5\n70.9\n61.9\n71.7\n57.9\n87.7\n82.1\n95.6\n80.3\nTable 9: Micro-F1 (µ-F1) and Macro-F1 scores (m-F1) for our investigation on BERT.\nMethod\nECtHR (A)\nECtHR (B)\nSCOTUS\nEUR-LEX\nLEDGAR\nUNFAIR-ToS\nBERT in LibMultiLabel\ndefault\n59m 48s\n1h 2m\n39m 49s\n6h 38m\n8h 44m\n47m 48s\ntuned\n5h 8m\n5h 51m\n3h 21m\n38h 14m\n43h 48m\n4h 5m\nreproduced\n10h 27m\n9h 41m\n9h 26m\n6h 37m\n5h 49m\n15m 9s\nBERT in Chalkidis et al. (2022)\npaper\n3h 42m\n3h 9m\n1h 24m\n3h 36m\n6h 9m\nN/A\nreproduced\n7h 56m\n6h 59m\n7h 5m\n4h 30m\n5h 11m\n7m 3s\nTable 10: Training time for our multiple settings on BERT. The average time of running five seeds is reported.\nare collected and fed into an upper-level trans-\nformer encoder.\n• Max pooling is applied to the output of the trans-\nformer encoder.\n• The pooled results are then fed into a linear layer\nfor the final prediction.\nF\nDifferences between the Two BERT\nImplementations\nWe summarize the implementation differences of\nBERT between LibMultiLabel and Chalkidis et al.\n(2022) in Table 7. Here we also try to reproduce\nresults in Chalkidis et al. (2022) by using LibMul-\ntiLabel.\nFor LibMultiLabel, we explain our choices of\nhyper-parameters as follows.\ndefault: This method references the parameters\nchosen in an example configuration7 from LibMul-\ntiLabel.\ntuned: This method performs a parameter search\nand is marked as “our BERT” in the main paper;\nsee Table 8 for the search space and the chosen\nvalues.\nreproduced: This method aims to reproduce the\nBERT results from Chalkidis et al. (2022) using\nLibMultiLabel. We begin with imposing the same\n7https://github.com/ASUS-AICS/LibMultiLabel/\nblob/master/example_config/EUR-Lex-57k/bert.yml\nweight_decay, learning_rate, and dropout values\nas Chalkidis et al. (2022) and also the same valida-\ntion metric. However, for other parameters, which\nmay less affect the results, we use the same val-\nues as default and tuned; see Table 7. Except\nSCOTUS and LEDGAR, we were able to gen-\nerate similar results to those in Chalkidis et al.\n(2022). To fully reproduce the results on SCO-\nTUS and LEDGAR, we try to follow every setting\ndid in Chalkidis et al. (2022). Specifically, we\nreplace the PyTorch trainer originally used in Lib-\nMultiLabel with the Hugging Face trainer adopted\nin Chalkidis et al. (2022) and align some of the\nparameters with the ones used in Chalkidis et al.\n(2022); see a column in Table 7 for these two sets.\nLibMultiLabel supports standard BERT dis-\ncussed in Appendix E.1. For the “default” and\n“tuned” settings, we directly run standard BERT.\nFor the “reproduced” method, we follow Chalkidis\net al. (2022) to use hierarchical BERT explained\nin Appendix E.3 for ECtHR (A), ECtHR (B), and\nSCOTUS and use standard BERT for other data\nsets.\nG\nDetailed BERT Results\nIn Tables 9 and 10, we respectively present the test\nperformance and the training time. For settings of\nrunning LibMultiLabel, see Appendix F. For BERT\n1884\n\nMethod\nECtHR (A)\nECtHR (B)\nSCOTUS\nEUR-LEX\nLEDGAR\nUNFAIR-ToS\nµ-F1\nm-F1\nµ-F1\nm-F1\nµ-F1\nm-F1\nµ-F1\nm-F1\nµ-F1\nm-F1\nµ-F1\nm-F1\nBERT in LibMultiLabel\ndefault\n60.5\n53.4\n68.9\n60.8\n66.3\n54.8\n70.8\n55.3\n85.2\n77.9\n95.2\n78.2\ntuned\n61.9\n55.6\n69.8\n60.5\n67.1\n55.9\n70.8\n55.3\n87.0\n80.7\n95.4\n80.3\nBERT in LibMultiLabel (re-trained)\ndefault\n63.0\n56.1\n69.6\n62.8\n69.5\n58.8\n75.6\n59.2\n85.3\n78.4\n94.0\n65.4\ntuned\n62.4\n55.9\n70.3\n62.3\n71.4\n61.9\n75.6\n59.2\n87.2\n81.5\n95.2\n79.8\nTable 11: A performance comparison between the setting without and with re-training.\nin Chalkidis et al. (2022), we present the following\ntwo results.\npaper: Results in the paper by Chalkidis et al.\n(2022) are directly copied.\nreproduced: Results from our running of their\nscripts.8\nFor ECtHR (A), ECtHR (B), and SCOTUS, be-\ncause there exist some issues when running the\nfp16 setting in our environment, we run the code\nof Chalkidis et al. (2022) by using fp32 instead.\nThis change causes the time difference between the\n“paper” and “reproduced” settings in Table 10.\nExcept numbers borrowed from Chalkidis et al.\n(2022), we run five seeds for all BERT experi-\nments and report the mean test performance over\nall seeds. Chalkidis et al. (2022) also run five seeds,\nbut their test scores are based on the top three seeds\nwith the best Macro-F1 on validation data.\nFor the “tuned” setting, because the version of\nLibMultiLabel that we used does not store the\ncheckpoint after hyper-parameter search, we must\nconduct the training again using the best hyper-\nparameters. Thus, the total time includes hyper-\nparameter search and the additional training.9\nIn Appendix I, we give an additional case study\nto assess the performance of the hierarchical BERT\nwhen documents are long.\nH\nIssue of Using Training, Validation,\nand Test Sets\nFor each problem in LexGLUE, training, validation,\nand test sets are available. In our experiments, of\ncourse the test set is independent from the training\nprocess. However, some issues occur in the use of\nthe training and validation sets.\nFor linear methods, in contrast to deep learn-\ning methods, they do not need a validation set\n8https://github.com/coastalcph/lex-glue\n9We run five seeds in the part of additional training. Thus,\nwe obtain five values of the total time and report the average.\nfor the termination of the optimization process\nor for selecting the iteration that yields the best\nmodel. Further, they may internally conduct cross-\nvalidation to select hyper-parameters (e.g., thresh-\nolds in the thresholding method). Therefore, we\ncombine training and validation subsets as the new\ntraining set used by the linear methods. This is the\nstandard setting in traditional supervised learning.\nFor BERT training, the validation set is used\nfor selecting the best epoch and/or the best hyper-\nparameters. We follow the common practice to\ndeploy the model achieving the best validation per-\nformance for prediction. However, in linear meth-\nods, the model used for prediction, regardless of\nwhether internal cross-validation is needed, is al-\nways obtained by training on all available data (i.e.,\nthe combination of training and validation sets).\nTherefore, for BERT we may also want to incorpo-\nrate the validation set for the final model training.\nWe refer to such a setting as the re-training process.\nUnfortunately, an obstacle is that the optimization\nprocess cannot rely on a validation set for terminat-\ning the process or selecting the best model in all\niterations. Following Goodfellow et al. (2016), we\nconsider the following setting to train the combined\nset.\n1. Record the number of training steps that leads to\nthe best validation Micro-F1 as e∗.\n2. Re-train the final model using the combination\nof training and validation sets for e∗epochs.\nBERT results without/with re-training are shown\nin Table 11. In general, the re-training process\nimproves the performance, especially for the data\nsets SCOTUS and EUR-LEX. However, results\nare slightly worse in both the default and tuned\nsettings for the data set UNFAIR-ToS. Thus the\noutcome of re-training may be data-dependent.\nA comparison between linear methods and\nBERT with re-training shows that conclusions\nmade earlier remain the same. Because re-training\n1885\n\nProperty\nValue\n# training instances\n10,182\n# validation instances\n1,132\n# test instances\n7,532\n# classes\n20\nW\n283.66\nWmax\n11,821\nT\n552.82\nTmax\n138,679\n# documents\n4,927 (26.14%)\nexceeding 512 tokens\nTable 12: Data statistics for 20 Newsgroups. We con-\nduct a 90/10 split to obtain the validation data. W/T\nmeans the average # words/tokens per instance of the\nwhole set, and Wmax/Tmax means the maximum #\nwords/tokens of the whole set.\nMethod\nµ-F1\nm-F1\nLinear\none-vs-rest\n85.3\n84.6\nthresholding\n85.3\n84.6\ncost-sensitive\n85.2\n84.5\nBERT\ndefault\n84.0\n83.3\ntuned\n85.6\n84.9\nhierarchical\n84.9\n84.2\nTable 13: Experimental results of 20 Newsgroups by\nlinear methods and BERT. For the default setting, we\nfollow the default parameters in Table 7. For the tuned\nand hierarchical setting, we use the same parameter\nsearch range as the one in Table 8. Further, to process\nthe set for the hierarchical setting, each document is split\ninto 40 segments based on the presence of consecutive\nnewline characters, where each segment contains at\nmost 128 tokens.\nis not conducted in Chalkidis et al. (2022), in\nthe main paper we report the results without re-\ntraining.\nI\nA Case Study of BERT on 20\nNewsgroups\nWahba et al. (2023) applied BERT for training the\ndata set 20 Newsgroups (Lang, 1995) but did not\ncheck the document length. To assess the impor-\ntance of the document length, we downloaded the\n20 Newsgroups set from scikit-learn10 with default\n10See\nhttps://scikit-learn.org/stable/modules/\ngenerated/sklearn.datasets.fetch_20newsgroups.\nhtml for more details.\nWe have checked that the\nset used in scikit-learn is the same as the “20 News-\nparameters. Further, we checked the document\nlength from the word and token levels where the\ntokens are obtained by the “bert-base-uncased” tok-\nenizer. The data statistics are presented in Table 12.\nWe found that the 20 Newsgroups data set includes\na considerable number of documents that exceed\n512 tokens. This may be an issue because BERT\ncan only process up to 512 tokens without further\ndesign; see Appendix E for more details. To in-\nvestigate this problem, we conducted experiments\nusing both linear classifiers and BERT. Results are\nin Table 13. The observations are summarized as\nfollows.\n• The results of linear classifiers do not improve by\nusing thresholding and cost-sensitive techniques\nto handle class imbalance. The reason is that the\ndata set has a small number of labels and a more\nbalanced class distribution. In addition, linear\nmethods are still competitive with BERT.\n• The tuned setting of BERT has the best Micro-F1\namong all the methods. Thus, for running BERT\non this set, parameter selection seems to be im-\nportant. Interestingly, when we considered the\ndocument length using the hierarchical methods\nin Appendix E.3, the performance was not better\nthan the tuned setting.\nIn conclusion, linear methods are still a simple\nand efficient solution to this problem. For BERT,\nwe showed that using the hierarchical setting to\nhandle long document length may not always lead\nto the best performance. The result of applying\nhierarchical BERT may be data-dependent. Thus\na general setting for handling long documents still\nneed to be investigated.\ngroups sorted by date” set from the original source\nat http://qwone.com/~jason/20Newsgroups/.\n1886\n\nACL 2023 Responsible NLP Checklist\nA\nFor every submission:\n□\u0013 A1. Did you describe the limitations of your work?\nSection Limitations.\n□\u0017 A2. Did you discuss any potential risks of your work?\nLeft blank.\n□\u0013 A3. Do the abstract and introduction summarize the paper’s main claims?\nSections Abstract and 1.\n□\u0017 A4. Have you used AI writing assistants when working on this paper?\nLeft blank.\nB\n□\u0013 Did you use or create scientiﬁc artifacts?\nSection 3.\n□\u0013 B1. Did you cite the creators of artifacts you used?\nSection 3.\n□\u0017 B2. Did you discuss the license or terms for use and / or distribution of any artifacts?\nLeft blank.\n□\u0017 B3. Did you discuss if your use of existing artifact(s) was consistent with their intended use, provided\nthat it was speciﬁed? For the artifacts you create, do you specify intended use and whether that is\ncompatible with the original access conditions (in particular, derivatives of data accessed for research\npurposes should not be used outside of research contexts)?\nLeft blank.\n□\u0017 B4. Did you discuss the steps taken to check whether the data that was collected / used contains any\ninformation that names or uniquely identiﬁes individual people or offensive content, and the steps\ntaken to protect / anonymize it?\nLeft blank.\n□\u0017 B5. Did you provide documentation of the artifacts, e.g., coverage of domains, languages, and\nlinguistic phenomena, demographic groups represented, etc.?\nLeft blank.\n□\u0017 B6. Did you report relevant statistics like the number of examples, details of train / test / dev splits,\netc. for the data that you used / created? Even for commonly-used benchmark datasets, include the\nnumber of examples in train / validation / test splits, as these provide necessary context for a reader\nto understand experimental results. For example, small differences in accuracy on large test sets may\nbe signiﬁcant, while on small test sets they may not be.\nLeft blank.\nC\n□\u0013 Did you run computational experiments?\nSection 4.\n□\u0013 C1. Did you report the number of parameters in the models used, the total computational budget\n(e.g., GPU hours), and computing infrastructure used?\nSection 4.\nThe Responsible NLP Checklist used at ACL 2023 is adopted from NAACL 2022, with the addition of a question on AI writing\nassistance.\n1887\n\n□\u0013 C2. Did you discuss the experimental setup, including hyperparameter search and best-found\nhyperparameter values?\nAppendix F.\n□\u0013 C3. Did you report descriptive statistics about your results (e.g., error bars around results, summary\nstatistics from sets of experiments), and is it transparent whether you are reporting the max, mean,\netc. or just a single run?\nAppendix G.\n□\u0013 C4. If you used existing packages (e.g., for preprocessing, for normalization, or for evaluation), did\nyou report the implementation, model, and parameter settings used (e.g., NLTK, Spacy, ROUGE,\netc.)?\nAppendix C.\nD\n□\u0017 Did you use human annotators (e.g., crowdworkers) or research with human participants?\nLeft blank.\n□D1. Did you report the full text of instructions given to participants, including e.g., screenshots,\ndisclaimers of any risks to participants or annotators, etc.?\nNo response.\n□D2. Did you report information about how you recruited (e.g., crowdsourcing platform, students)\nand paid participants, and discuss if such payment is adequate given the participants’ demographic\n(e.g., country of residence)?\nNo response.\n□D3. Did you discuss whether and how consent was obtained from people whose data you’re\nusing/curating? For example, if you collected data via crowdsourcing, did your instructions to\ncrowdworkers explain how the data would be used?\nNo response.\n□D4. Was the data collection protocol approved (or determined exempt) by an ethics review board?\nNo response.\n□D5. Did you report the basic demographic and geographic characteristics of the annotator population\nthat is the source of the data?\nNo response.\n1888\n",
+ "textLength": 42984,
+ "totalPages": 13,
+ "truncated": false,
+ "warnings": []
+}

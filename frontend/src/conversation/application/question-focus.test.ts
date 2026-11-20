@@ -30,6 +30,12 @@ describe('"answer in conversation" lands on the question and replies to it', () 
     expect(findQuestionFocus(withdrawn, 'hg_withdrawn')).toMatchObject({ turnId: 't5' });
   });
 
+  it('skips a non-blocking question the owner settled on its default', () => {
+    const confirmed = [...turns, ask('t5', 5, { guidanceId: 'hg_confirmed', status: 'done', guidanceBlocking: false,
+      guidanceQuestion: 'Venue?', guidanceDefaultAccepted: { at: 1, by: 1 } })];
+    expect(findQuestionFocus(confirmed)).toMatchObject({ guidanceId: 'hg_queue' });
+  });
+
   it('numbers a form question like its form', () => {
     const form = [ask('t9', 9, { guidanceId: 'hg_form', status: 'awaiting_human', guidanceQuestion: 'summary',
       guidanceBatchQuestions: [{ question: 'Budget?' }, { question: 'Venue?' }] })];

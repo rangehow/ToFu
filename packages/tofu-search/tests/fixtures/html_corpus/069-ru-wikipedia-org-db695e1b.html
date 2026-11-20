@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html class="client-nojs vector-feature-language-in-header-enabled vector-feature-language-in-main-menu-enabled vector-feature-language-in-main-page-header-disabled vector-feature-page-tools-pinned-disabled vector-feature-toc-pinned-clientpref-1 vector-feature-main-menu-pinned-disabled vector-feature-limited-width-clientpref-1 vector-feature-limited-width-content-enabled vector-feature-custom-font-size-clientpref-1 vector-feature-appearance-pinned-clientpref-1 skin-theme-clientpref-day vector-sticky-header-enabled vector-toc-available skin-thumbsize-clientpref-standard skin-underline-clientpref-browser" lang="ru" dir="ltr">
+<head>
+<meta charset="UTF-8">
+<title>Rust (язык программирования) — Википедия</title>
+<script>/* stub */</script>
+<script>/* stub */</script>
+<link rel="stylesheet" href="/w/load.php?lang=ru&amp;modules=ext.cite.parsoid.styles%7Cext.cite.styles%7Cext.flaggedRevs.basic%7Cext.pygments%2CwikimediaBadges%7Cext.readingLists.bookmark.icons%2Cstyles%7Cext.uls.interlanguage%7Cext.visualEditor.desktopArticleTarget.noscript%7Cext.wikimediaBadges.ulsV2%7Cext.wikimediamessages.styles%7Cmediawiki.codex.messagebox.styles%7Cskins.vector.icons%2Cstyles%7Cskins.vector.search.codex.styles%7Cwikibase.client.init&amp;only=styles&amp;skin=vector-2022">
+<script async="" src="/w/load.php?lang=ru&amp;modules=startup&amp;only=scripts&amp;raw=1&amp;skin=vector-2022">/* stub */</script>
+<meta name="ResourceLoaderDynamicStyles" content="">
+<link rel="stylesheet" href="/w/load.php?lang=ru&amp;modules=ext.gadget.common-site%2CdarkModeFixes&amp;only=styles&amp;skin=vector-2022">
+<link rel="stylesheet" href="/w/load.php?lang=ru&amp;modules=site.styles&amp;only=styles&amp;skin=vector-2022">
+<noscript><link rel="stylesheet" href="/w/load.php?lang=ru&amp;modules=noscript&amp;only=styles&amp;skin=vector-2022"></noscript>
+<meta name="generator" content="MediaWiki 1.48.0-wmf.4">
+<meta name="referrer" content="origin">
+<meta name="referrer" content="origin-when-cross-origin">
+<meta name="robots" content="max-image-preview:standard">
+<meta name="format-detection" content="telephone=no">
+<meta property="og:image" content="https://thumb.wikimedia.org/wikipedia/commons/thumb/d/d5/Rust_programming_language_black_logo.svg/1280px-Rust_programming_language_black_logo.svg.png?utm_source=ru.wikipedia.org&amp;utm_campaign=index&amp;utm_content=thumbnail">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="1200">
+<meta name="viewport" content="width=1120">
+<meta property="og:title" content="Rust (язык программирования) — Википедия">
+<meta property="og:type" content="website">
+<link rel="preconnect" href="//thumb.wikimedia.org">
+<link rel="alternate" type="application/x-wiki" title="Править" href="/w/index.php?title=Rust_(%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)&amp;action=edit">
+<link rel="apple-touch-icon" href="/static/apple-touch/wikipedia.png">
+<link rel="icon" href="/static/favicon/wikipedia.ico">
+<link rel="search" type="application/opensearchdescription+xml" href="/w/rest.php/v1/search" title="Википедия (ru)">
+<link rel="EditURI" type="application/rsd+xml" href="//ru.wikipedia.org/w/api.php?action=rsd">
+<link rel="canonical" href="https://ru.wikipedia.org/wiki/Rust_(%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)">
+<link rel="license" href="https://creativecommons.org/licenses/by-sa/4.0/deed.ru">
+<link rel="alternate" type="application/atom+xml" title="Википедия — Atom-лента" href="/w/index.php?title=%D0%A1%D0%BB%D1%83%D0%B6%D0%B5%D0%B1%D0%BD%D0%B0%D1%8F:%D0%A1%D0%B2%D0%B5%D0%B6%D0%B8%D0%B5_%D0%BF%D1%80%D0%B0%D0%B2%D0%BA%D0%B8&amp;feed=atom">
+<link rel="dns-prefetch" href="//meta.wikimedia.org" />
+<link rel="dns-prefetch" href="auth.wikimedia.org">
+</head>
+<body class="mediawiki ltr sitedir-ltr mw-hide-empty-elt action-view skin-vector-2022 ns-0 ns-subject mw-editable page-Rust_язык_программирования rootpage-Rust_язык_программирования skin--responsive skin-vector skin-vector-search-vue">
+<div id="mw-aria-live-region" class="mw-aria-live-region" aria-live="polite"></div><a class="mw-jump-link" href="#bodyContent">Перейти к содержанию</a>
+<div class="vector-header-container">
+	<header class="vector-header mw-header no-font-mode-scale">
+		<div class="vector-header-start">
+			<nav class="vector-main-menu-landmark" aria-label="Сайт">
+				
+<div id="vector-main-menu-dropdown" class="vector-dropdown vector-main-menu-dropdown vector-button-flush-left vector-button-flush-right"  title="Главное меню" >
+	<input type="checkbox" id="vector-main-menu-dropdown-checkbox" role="button" aria-haspopup="true" data-event-name="ui.dropdown-vector-main-menu-dropdown" class="vector-dropdown-checkbox "  aria-label="Главное меню"   >
+	<label id="vector-main-menu-dropdown-label" for="vector-main-menu-dropdown-checkbox" class="vector-dropdown-label cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--icon-only " aria-hidden="true"  ><span class="vector-icon mw-ui-icon-menu mw-ui-icon-wikimedia-menu cdx-button__icon"></span>
+
+<span class="vector-dropdown-label-text">Главное меню</span>
+	</label>
+	<div class="vector-dropdown-content">
+
+
+				<div id="vector-main-menu-unpinned-container" class="vector-unpinned-container">
+		
+<div id="vector-main-menu" class="vector-main-menu vector-pinnable-element">
+	<div
+	class="vector-pinnable-header vector-main-menu-pinnable-header vector-pinnable-header-unpinned"
+	data-feature-name="main-menu-pinned"
+	data-pinnable-element-id="vector-main-menu"
+	data-pinned-container-id="vector-main-menu-pinned-container"
+	data-unpinned-container-id="vector-main-menu-unpinned-container"
+>
+	<div class="vector-pinnable-header-label">Главное меню</div>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-pin-button" data-event-name="pinnable-header.vector-main-menu.pin" aria-label="Move Главное меню to sidebar">переместить в боковую панель</button>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-unpin-button" data-event-name="pinnable-header.vector-main-menu.unpin" aria-label="Hide Главное меню">скрыть</button>
+</div>
+
+	
+<div id="p-navigation" class="vector-menu mw-portlet mw-portlet-navigation"  >
+	<div class="vector-menu-heading">
+		Навигация
+	</div>
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			<li id="n-mainpage-description" class="mw-list-item"><a href="/wiki/%D0%97%D0%B0%D0%B3%D0%BB%D0%B0%D0%B2%D0%BD%D0%B0%D1%8F_%D1%81%D1%82%D1%80%D0%B0%D0%BD%D0%B8%D1%86%D0%B0" title="Перейти на заглавную страницу [z]" accesskey="z"><span>Заглавная страница</span></a></li><li id="n-content" class="mw-list-item"><a href="/wiki/%D0%92%D0%B8%D0%BA%D0%B8%D0%BF%D0%B5%D0%B4%D0%B8%D1%8F:%D0%A1%D0%BE%D0%B4%D0%B5%D1%80%D0%B6%D0%B0%D0%BD%D0%B8%D0%B5"><span>Содержание</span></a></li><li id="n-featured" class="mw-list-item"><a href="/wiki/%D0%92%D0%B8%D0%BA%D0%B8%D0%BF%D0%B5%D0%B4%D0%B8%D1%8F:%D0%98%D0%B7%D0%B1%D1%80%D0%B0%D0%BD%D0%BD%D1%8B%D0%B5_%D1%81%D1%82%D0%B0%D1%82%D1%8C%D0%B8" title="Статьи, считающиеся лучшими статьями проекта"><span>Избранные статьи</span></a></li><li id="n-randompage" class="mw-list-item"><a href="/wiki/%D0%A1%D0%BB%D1%83%D0%B6%D0%B5%D0%B1%D0%BD%D0%B0%D1%8F:%D0%A1%D0%BB%D1%83%D1%87%D0%B0%D0%B9%D0%BD%D0%B0%D1%8F_%D1%81%D1%82%D1%80%D0%B0%D0%BD%D0%B8%D1%86%D0%B0" title="Посмотреть случайно выбранную страницу [x]" accesskey="x"><span>Случайная статья</span></a></li><li id="n-currentevents" class="mw-list-item"><a href="/wiki/%D0%9F%D0%BE%D1%80%D1%82%D0%B0%D0%BB:%D0%A2%D0%B5%D0%BA%D1%83%D1%89%D0%B8%D0%B5_%D1%81%D0%BE%D0%B1%D1%8B%D1%82%D0%B8%D1%8F" title="Статьи о текущих событиях в мире"><span>Текущие события</span></a></li>
+		</ul>
+		
+	</div>
+</div>
+
+	
+<div id="p-participation" class="vector-menu mw-portlet mw-portlet-participation"  >
+	<div class="vector-menu-heading">
+		Участие
+	</div>
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			<li id="n-bug_in_article" class="mw-list-item"><a href="/wiki/%D0%92%D0%B8%D0%BA%D0%B8%D0%BF%D0%B5%D0%B4%D0%B8%D1%8F:%D0%A1%D0%BE%D0%BE%D0%B1%D1%89%D0%B5%D0%BD%D0%B8%D1%8F_%D0%BE%D0%B1_%D0%BE%D1%88%D0%B8%D0%B1%D0%BA%D0%B0%D1%85" title="Сообщить об ошибке в этой статье"><span>Сообщить об ошибке</span></a></li><li id="n-introduction" class="mw-list-item"><a href="/wiki/%D0%A1%D0%BF%D1%80%D0%B0%D0%B2%D0%BA%D0%B0:%D0%92%D0%B2%D0%B5%D0%B4%D0%B5%D0%BD%D0%B8%D0%B5"><span>Как править статьи</span></a></li><li id="n-portal" class="mw-list-item"><a href="/wiki/%D0%92%D0%B8%D0%BA%D0%B8%D0%BF%D0%B5%D0%B4%D0%B8%D1%8F:%D0%A1%D0%BE%D0%BE%D0%B1%D1%89%D0%B5%D1%81%D1%82%D0%B2%D0%BE" title="О проекте, о том, чем здесь можно заниматься, а также — где что находится"><span>Сообщество</span></a></li><li id="n-forum" class="mw-list-item"><a href="/wiki/%D0%92%D0%B8%D0%BA%D0%B8%D0%BF%D0%B5%D0%B4%D0%B8%D1%8F:%D0%A4%D0%BE%D1%80%D1%83%D0%BC" title="Форум участников Википедии"><span>Форум</span></a></li><li id="n-help" class="mw-list-item"><a href="/wiki/%D0%92%D0%B8%D0%BA%D0%B8%D0%BF%D0%B5%D0%B4%D0%B8%D1%8F:%D0%A1%D0%BF%D1%80%D0%B0%D0%B2%D0%BA%D0%B0" title="Место расположения Справки"><span>Справка</span></a></li><li id="n-recentchanges" class="mw-list-item"><a href="/wiki/%D0%A1%D0%BB%D1%83%D0%B6%D0%B5%D0%B1%D0%BD%D0%B0%D1%8F:%D0%A1%D0%B2%D0%B5%D0%B6%D0%B8%D0%B5_%D0%BF%D1%80%D0%B0%D0%B2%D0%BA%D0%B8" title="Список последних изменений [r]" accesskey="r"><span>Свежие правки</span></a></li><li id="n-newpages" class="mw-list-item"><a href="/wiki/%D0%A1%D0%BB%D1%83%D0%B6%D0%B5%D0%B1%D0%BD%D0%B0%D1%8F:%D0%9D%D0%BE%D0%B2%D1%8B%D0%B5_%D1%81%D1%82%D1%80%D0%B0%D0%BD%D0%B8%D1%86%D1%8B" title="Список недавно созданных страниц"><span>Новые страницы</span></a></li><li id="n-specialpages" class="mw-list-item"><a href="/wiki/%D0%A1%D0%BB%D1%83%D0%B6%D0%B5%D0%B1%D0%BD%D0%B0%D1%8F:%D0%A1%D0%BF%D0%B5%D1%86%D1%81%D1%82%D1%80%D0%B0%D0%BD%D0%B8%D1%86%D1%8B" title="Список служебных страниц [q]" accesskey="q"><span>Служебные страницы</span></a></li>
+		</ul>
+		
+	</div>
+</div>
+
+	
+<div id="p-lang" class="vector-menu mw-portlet mw-portlet-lang"  >
+	<div class="vector-menu-heading">
+		На других языках
+	</div>
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			<li class="interlanguage-link interwiki-af mw-list-item"><a href="https://af.wikipedia.org/wiki/Rust_(programmeertaal)" title="Rust (programmeertaal) — африкаанс" lang="af" hreflang="af" data-title="Rust (programmeertaal)" data-language-autonym="Afrikaans" data-language-local-name="африкаанс" class="interlanguage-link-target"><span>Afrikaans</span></a></li><li class="interlanguage-link interwiki-ar mw-list-item"><a href="https://ar.wikipedia.org/wiki/%D8%B1%D8%B3%D8%AA_(%D9%84%D8%BA%D8%A9_%D8%A8%D8%B1%D9%85%D8%AC%D8%A9)" title="رست (لغة برمجة) — арабский" lang="ar" hreflang="ar" data-title="رست (لغة برمجة)" data-language-autonym="العربية" data-language-local-name="арабский" class="interlanguage-link-target"><span>العربية</span></a></li><li class="interlanguage-link interwiki-az mw-list-item"><a href="https://az.wikipedia.org/wiki/Rust_(proqramla%C5%9Fd%C4%B1rma_dili)" title="Rust (proqramlaşdırma dili) — азербайджанский" lang="az" hreflang="az" data-title="Rust (proqramlaşdırma dili)" data-language-autonym="Azərbaycanca" data-language-local-name="азербайджанский" class="interlanguage-link-target"><span>Azərbaycanca</span></a></li><li class="interlanguage-link interwiki-be mw-list-item"><a href="https://be.wikipedia.org/wiki/Rust" title="Rust — белорусский" lang="be" hreflang="be" data-title="Rust" data-language-autonym="Беларуская" data-language-local-name="белорусский" class="interlanguage-link-target"><span>Беларуская</span></a></li><li class="interlanguage-link interwiki-bg mw-list-item"><a href="https://bg.wikipedia.org/wiki/Rust" title="Rust — болгарский" lang="bg" hreflang="bg" data-title="Rust" data-language-autonym="Български" data-language-local-name="болгарский" class="interlanguage-link-target"><span>Български</span></a></li><li class="interlanguage-link interwiki-bh mw-list-item"><a href="https://bh.wikipedia.org/wiki/%E0%A4%B0%E0%A4%B8%E0%A5%8D%E0%A4%9F_(%E0%A4%AA%E0%A5%8D%E0%A4%B0%E0%A5%8B%E0%A4%97%E0%A5%8D%E0%A4%B0%E0%A4%BE%E0%A4%AE%E0%A4%BF%E0%A4%82%E0%A4%97_%E0%A4%AD%E0%A4%BE%E0%A4%B7%E0%A4%BE)" title="रस्ट (प्रोग्रामिंग भाषा) — Bhojpuri" lang="bh" hreflang="bh" data-title="रस्ट (प्रोग्रामिंग भाषा)" data-language-autonym="भोजपुरी" data-language-local-name="Bhojpuri" class="interlanguage-link-target"><span>भोजपुरी</span></a></li><li class="interlanguage-link interwiki-bn mw-list-item"><a href="https://bn.wikipedia.org/wiki/%E0%A6%B0%E0%A6%BE%E0%A6%B8%E0%A7%8D%E0%A6%9F_(%E0%A6%AA%E0%A7%8D%E0%A6%B0%E0%A7%8B%E0%A6%97%E0%A7%8D%E0%A6%B0%E0%A6%BE%E0%A6%AE%E0%A6%BF%E0%A6%82_%E0%A6%AD%E0%A6%BE%E0%A6%B7%E0%A6%BE)" title="রাস্ট (প্রোগ্রামিং ভাষা) — бенгальский" lang="bn" hreflang="bn" data-title="রাস্ট (প্রোগ্রামিং ভাষা)" data-language-autonym="বাংলা" data-language-local-name="бенгальский" class="interlanguage-link-target"><span>বাংলা</span></a></li><li class="interlanguage-link interwiki-ca mw-list-item"><a href="https://ca.wikipedia.org/wiki/Rust_(llenguatge_de_programaci%C3%B3)" title="Rust (llenguatge de programació) — каталанский" lang="ca" hreflang="ca" data-title="Rust (llenguatge de programació)" data-language-autonym="Català" data-language-local-name="каталанский" class="interlanguage-link-target"><span>Català</span></a></li><li class="interlanguage-link interwiki-ckb mw-list-item"><a href="https://ckb.wikipedia.org/wiki/%DA%95%DB%95%D8%B3%D8%AA_(%D8%B2%D9%85%D8%A7%D9%86%DB%8C_%D8%A8%DB%95%D8%B1%D9%86%D8%A7%D9%85%DB%95%D8%B3%D8%A7%D8%B2%DB%8C)" title="ڕەست (زمانی بەرنامەسازی) — центральнокурдский" lang="ckb" hreflang="ckb" data-title="ڕەست (زمانی بەرنامەسازی)" data-language-autonym="کوردی" data-language-local-name="центральнокурдский" class="interlanguage-link-target"><span>کوردی</span></a></li><li class="interlanguage-link interwiki-cs mw-list-item"><a href="https://cs.wikipedia.org/wiki/Rust_(programovac%C3%AD_jazyk)" title="Rust (programovací jazyk) — чешский" lang="cs" hreflang="cs" data-title="Rust (programovací jazyk)" data-language-autonym="Čeština" data-language-local-name="чешский" class="interlanguage-link-target"><span>Čeština</span></a></li><li class="interlanguage-link interwiki-da mw-list-item"><a href="https://da.wikipedia.org/wiki/Rust_(programmeringssprog)" title="Rust (programmeringssprog) — датский" lang="da" hreflang="da" data-title="Rust (programmeringssprog)" data-language-autonym="Dansk" data-language-local-name="датский" class="interlanguage-link-target"><span>Dansk</span></a></li><li class="interlanguage-link interwiki-de mw-list-item"><a href="https://de.wikipedia.org/wiki/Rust_(Programmiersprache)" title="Rust (Programmiersprache) — немецкий" lang="de" hreflang="de" data-title="Rust (Programmiersprache)" data-language-autonym="Deutsch" data-language-local-name="немецкий" class="interlanguage-link-target"><span>Deutsch</span></a></li><li class="interlanguage-link interwiki-dtp mw-list-item"><a href="https://dtp.wikipedia.org/wiki/Rust_(boros_tokud)" title="Rust (boros tokud) — Central Dusun" lang="dtp" hreflang="dtp" data-title="Rust (boros tokud)" data-language-autonym="Kadazandusun" data-language-local-name="Central Dusun" class="interlanguage-link-target"><span>Kadazandusun</span></a></li><li class="interlanguage-link interwiki-en badge-Q17437798 badge-goodarticle mw-list-item" title="хорошая статья"><a href="https://en.wikipedia.org/wiki/Rust_(programming_language)" title="Rust (programming language) — английский" lang="en" hreflang="en" data-title="Rust (programming language)" data-language-autonym="English" data-language-local-name="английский" class="interlanguage-link-target"><span>English</span></a></li><li class="interlanguage-link interwiki-eo mw-list-item"><a href="https://eo.wikipedia.org/wiki/Rust_(programlingvo)" title="Rust (programlingvo) — эсперанто" lang="eo" hreflang="eo" data-title="Rust (programlingvo)" data-language-autonym="Esperanto" data-language-local-name="эсперанто" class="interlanguage-link-target"><span>Esperanto</span></a></li><li class="interlanguage-link interwiki-es mw-list-item"><a href="https://es.wikipedia.org/wiki/Rust_(lenguaje_de_programaci%C3%B3n)" title="Rust (lenguaje de programación) — испанский" lang="es" hreflang="es" data-title="Rust (lenguaje de programación)" data-language-autonym="Español" data-language-local-name="испанский" class="interlanguage-link-target"><span>Español</span></a></li><li class="interlanguage-link interwiki-et mw-list-item"><a href="https://et.wikipedia.org/wiki/Rust" title="Rust — эстонский" lang="et" hreflang="et" data-title="Rust" data-language-autonym="Eesti" data-language-local-name="эстонский" class="interlanguage-link-target"><span>Eesti</span></a></li><li class="interlanguage-link interwiki-eu mw-list-item"><a href="https://eu.wikipedia.org/wiki/Rust_(programazio-lengoaia)" title="Rust (programazio-lengoaia) — баскский" lang="eu" hreflang="eu" data-title="Rust (programazio-lengoaia)" data-language-autonym="Euskara" data-language-local-name="баскский" class="interlanguage-link-target"><span>Euskara</span></a></li><li class="interlanguage-link interwiki-fa mw-list-item"><a href="https://fa.wikipedia.org/wiki/%D8%B1%D8%A7%D8%B3%D8%AA_(%D8%B2%D8%A8%D8%A7%D9%86_%D8%A8%D8%B1%D9%86%D8%A7%D9%85%D9%87%E2%80%8C%D9%86%D9%88%DB%8C%D8%B3%DB%8C)" title="راست (زبان برنامه‌نویسی) — персидский" lang="fa" hreflang="fa" data-title="راست (زبان برنامه‌نویسی)" data-language-autonym="فارسی" data-language-local-name="персидский" class="interlanguage-link-target"><span>فارسی</span></a></li><li class="interlanguage-link interwiki-fi mw-list-item"><a href="https://fi.wikipedia.org/wiki/Rust_(ohjelmointikieli)" title="Rust (ohjelmointikieli) — финский" lang="fi" hreflang="fi" data-title="Rust (ohjelmointikieli)" data-language-autonym="Suomi" data-language-local-name="финский" class="interlanguage-link-target"><span>Suomi</span></a></li><li class="interlanguage-link interwiki-fr mw-list-item"><a href="https://fr.wikipedia.org/wiki/Rust_(langage)" title="Rust (langage) — французский" lang="fr" hreflang="fr" data-title="Rust (langage)" data-language-autonym="Français" data-language-local-name="французский" class="interlanguage-link-target"><span>Français</span></a></li><li class="interlanguage-link interwiki-ga mw-list-item"><a href="https://ga.wikipedia.org/wiki/Rust_(teanga_r%C3%ADomhchl%C3%A1r%C3%BAch%C3%A1in)" title="Rust (teanga ríomhchlárúcháin) — ирландский" lang="ga" hreflang="ga" data-title="Rust (teanga ríomhchlárúcháin)" data-language-autonym="Gaeilge" data-language-local-name="ирландский" class="interlanguage-link-target"><span>Gaeilge</span></a></li><li class="interlanguage-link interwiki-gl mw-list-item"><a href="https://gl.wikipedia.org/wiki/Rust_(linguaxe_de_programaci%C3%B3n)" title="Rust (linguaxe de programación) — галисийский" lang="gl" hreflang="gl" data-title="Rust (linguaxe de programación)" data-language-autonym="Galego" data-language-local-name="галисийский" class="interlanguage-link-target"><span>Galego</span></a></li><li class="interlanguage-link interwiki-he mw-list-item"><a href="https://he.wikipedia.org/wiki/%D7%A8%D7%90%D7%A1%D7%98_(%D7%A9%D7%A4%D7%AA_%D7%AA%D7%9B%D7%A0%D7%95%D7%AA)" title="ראסט (שפת תכנות) — иврит" lang="he" hreflang="he" data-title="ראסט (שפת תכנות)" data-language-autonym="עברית" data-language-local-name="иврит" class="interlanguage-link-target"><span>עברית</span></a></li><li class="interlanguage-link interwiki-hr mw-list-item"><a href="https://hr.wikipedia.org/wiki/Rust_(programski_jezik)" title="Rust (programski jezik) — хорватский" lang="hr" hreflang="hr" data-title="Rust (programski jezik)" data-language-autonym="Hrvatski" data-language-local-name="хорватский" class="interlanguage-link-target"><span>Hrvatski</span></a></li><li class="interlanguage-link interwiki-hu mw-list-item"><a href="https://hu.wikipedia.org/wiki/Rust_(programoz%C3%A1si_nyelv)" title="Rust (programozási nyelv) — венгерский" lang="hu" hreflang="hu" data-title="Rust (programozási nyelv)" data-language-autonym="Magyar" data-language-local-name="венгерский" class="interlanguage-link-target"><span>Magyar</span></a></li><li class="interlanguage-link interwiki-id mw-list-item"><a href="https://id.wikipedia.org/wiki/Rust_(bahasa_pemrograman)" title="Rust (bahasa pemrograman) — индонезийский" lang="id" hreflang="id" data-title="Rust (bahasa pemrograman)" data-language-autonym="Bahasa Indonesia" data-language-local-name="индонезийский" class="interlanguage-link-target"><span>Bahasa Indonesia</span></a></li><li class="interlanguage-link interwiki-io mw-list-item"><a href="https://io.wikipedia.org/wiki/Rust_(programifo-linguo)" title="Rust (programifo-linguo) — идо" lang="io" hreflang="io" data-title="Rust (programifo-linguo)" data-language-autonym="Ido" data-language-local-name="идо" class="interlanguage-link-target"><span>Ido</span></a></li><li class="interlanguage-link interwiki-is mw-list-item"><a href="https://is.wikipedia.org/wiki/Rust_(forritunarm%C3%A1l)" title="Rust (forritunarmál) — исландский" lang="is" hreflang="is" data-title="Rust (forritunarmál)" data-language-autonym="Íslenska" data-language-local-name="исландский" class="interlanguage-link-target"><span>Íslenska</span></a></li><li class="interlanguage-link interwiki-isv mw-list-item"><a href="https://isv.wikipedia.org/wiki/Rust" title="Rust — Interslavic" lang="isv" hreflang="isv" data-title="Rust" data-language-autonym="Medžuslovjansky" data-language-local-name="Interslavic" class="interlanguage-link-target"><span>Medžuslovjansky</span></a></li><li class="interlanguage-link interwiki-it mw-list-item"><a href="https://it.wikipedia.org/wiki/Rust_(linguaggio_di_programmazione)" title="Rust (linguaggio di programmazione) — итальянский" lang="it" hreflang="it" data-title="Rust (linguaggio di programmazione)" data-language-autonym="Italiano" data-language-local-name="итальянский" class="interlanguage-link-target"><span>Italiano</span></a></li><li class="interlanguage-link interwiki-ja mw-list-item"><a href="https://ja.wikipedia.org/wiki/Rust_(%E3%83%97%E3%83%AD%E3%82%B0%E3%83%A9%E3%83%9F%E3%83%B3%E3%82%B0%E8%A8%80%E8%AA%9E)" title="Rust (プログラミング言語) — японский" lang="ja" hreflang="ja" data-title="Rust (プログラミング言語)" data-language-autonym="日本語" data-language-local-name="японский" class="interlanguage-link-target"><span>日本語</span></a></li><li class="interlanguage-link interwiki-kab mw-list-item"><a href="https://kab.wikipedia.org/wiki/Rust_(Tutlayt_Usihel)" title="Rust (Tutlayt Usihel) — кабильский" lang="kab" hreflang="kab" data-title="Rust (Tutlayt Usihel)" data-language-autonym="Taqbaylit" data-language-local-name="кабильский" class="interlanguage-link-target"><span>Taqbaylit</span></a></li><li class="interlanguage-link interwiki-ko mw-list-item"><a href="https://ko.wikipedia.org/wiki/%EB%9F%AC%EC%8A%A4%ED%8A%B8_(%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4)" title="러스트 (프로그래밍 언어) — корейский" lang="ko" hreflang="ko" data-title="러스트 (프로그래밍 언어)" data-language-autonym="한국어" data-language-local-name="корейский" class="interlanguage-link-target"><span>한국어</span></a></li><li class="interlanguage-link interwiki-lmo mw-list-item"><a href="https://lmo.wikipedia.org/wiki/Rust_(lenguagg_de_programazzion)" title="Rust (lenguagg de programazzion) — ломбардский" lang="lmo" hreflang="lmo" data-title="Rust (lenguagg de programazzion)" data-language-autonym="Lombard" data-language-local-name="ломбардский" class="interlanguage-link-target"><span>Lombard</span></a></li><li class="interlanguage-link interwiki-lv mw-list-item"><a href="https://lv.wikipedia.org/wiki/Rust" title="Rust — латышский" lang="lv" hreflang="lv" data-title="Rust" data-language-autonym="Latviešu" data-language-local-name="латышский" class="interlanguage-link-target"><span>Latviešu</span></a></li><li class="interlanguage-link interwiki-ml mw-list-item"><a href="https://ml.wikipedia.org/wiki/%E0%B4%B1%E0%B4%B8%E0%B5%8D%E0%B4%B1%E0%B5%8D%E0%B4%B1%E0%B5%8D_(%E0%B4%AA%E0%B5%8D%E0%B4%B0%E0%B5%8B%E0%B4%97%E0%B5%8D%E0%B4%B0%E0%B4%BE%E0%B4%AE%E0%B4%BF%E0%B4%82%E0%B4%97%E0%B5%8D_%E0%B4%AD%E0%B4%BE%E0%B4%B7)" title="റസ്റ്റ് (പ്രോഗ്രാമിംഗ് ഭാഷ) — малаялам" lang="ml" hreflang="ml" data-title="റസ്റ്റ് (പ്രോഗ്രാമിംഗ് ഭാഷ)" data-language-autonym="മലയാളം" data-language-local-name="малаялам" class="interlanguage-link-target"><span>മലയാളം</span></a></li><li class="interlanguage-link interwiki-ms mw-list-item"><a href="https://ms.wikipedia.org/wiki/Rust_(bahasa_pengaturcaraan)" title="Rust (bahasa pengaturcaraan) — малайский" lang="ms" hreflang="ms" data-title="Rust (bahasa pengaturcaraan)" data-language-autonym="Bahasa Melayu" data-language-local-name="малайский" class="interlanguage-link-target"><span>Bahasa Melayu</span></a></li><li class="interlanguage-link interwiki-nl mw-list-item"><a href="https://nl.wikipedia.org/wiki/Rust_(programmeertaal)" title="Rust (programmeertaal) — нидерландский" lang="nl" hreflang="nl" data-title="Rust (programmeertaal)" data-language-autonym="Nederlands" data-language-local-name="нидерландский" class="interlanguage-link-target"><span>Nederlands</span></a></li><li class="interlanguage-link interwiki-no mw-list-item"><a href="https://no.wikipedia.org/wiki/Rust_(programmeringsspr%C3%A5k)" title="Rust (programmeringsspråk) — норвежский букмол" lang="nb" hreflang="nb" data-title="Rust (programmeringsspråk)" data-language-autonym="Norsk bokmål" data-language-local-name="норвежский букмол" class="interlanguage-link-target"><span>Norsk bokmål</span></a></li><li class="interlanguage-link interwiki-pl mw-list-item"><a href="https://pl.wikipedia.org/wiki/Rust_(j%C4%99zyk_programowania)" title="Rust (język programowania) — польский" lang="pl" hreflang="pl" data-title="Rust (język programowania)" data-language-autonym="Polski" data-language-local-name="польский" class="interlanguage-link-target"><span>Polski</span></a></li><li class="interlanguage-link interwiki-pt mw-list-item"><a href="https://pt.wikipedia.org/wiki/Rust_(linguagem_de_programa%C3%A7%C3%A3o)" title="Rust (linguagem de programação) — португальский" lang="pt" hreflang="pt" data-title="Rust (linguagem de programação)" data-language-autonym="Português" data-language-local-name="португальский" class="interlanguage-link-target"><span>Português</span></a></li><li class="interlanguage-link interwiki-qu mw-list-item"><a href="https://qu.wikipedia.org/wiki/Rust" title="Rust — кечуа" lang="qu" hreflang="qu" data-title="Rust" data-language-autonym="Runa Simi" data-language-local-name="кечуа" class="interlanguage-link-target"><span>Runa Simi</span></a></li><li class="interlanguage-link interwiki-ro mw-list-item"><a href="https://ro.wikipedia.org/wiki/Rust_(limbaj_de_programare)" title="Rust (limbaj de programare) — румынский" lang="ro" hreflang="ro" data-title="Rust (limbaj de programare)" data-language-autonym="Română" data-language-local-name="румынский" class="interlanguage-link-target"><span>Română</span></a></li><li class="interlanguage-link interwiki-si mw-list-item"><a href="https://si.wikipedia.org/wiki/Rust_(%E0%B6%9A%E0%B7%8A%E2%80%8D%E0%B6%BB%E0%B6%B8%E0%B6%BD%E0%B7%9A%E0%B6%9B%E0%B6%B1_%E0%B6%B7%E0%B7%8F%E0%B7%82%E0%B7%8F%E0%B7%80)" title="Rust (ක්‍රමලේඛන භාෂාව) — сингальский" lang="si" hreflang="si" data-title="Rust (ක්‍රමලේඛන භාෂාව)" data-language-autonym="සිංහල" data-language-local-name="сингальский" class="interlanguage-link-target"><span>සිංහල</span></a></li><li class="interlanguage-link interwiki-simple mw-list-item"><a href="https://simple.wikipedia.org/wiki/Rust_(programming_language)" title="Rust (programming language) — Simple English" lang="en-simple" hreflang="en-simple" data-title="Rust (programming language)" data-language-autonym="Simple English" data-language-local-name="Simple English" class="interlanguage-link-target"><span>Simple English</span></a></li><li class="interlanguage-link interwiki-sk mw-list-item"><a href="https://sk.wikipedia.org/wiki/Rust_(programovac%C3%AD_jazyk)" title="Rust (programovací jazyk) — словацкий" lang="sk" hreflang="sk" data-title="Rust (programovací jazyk)" data-language-autonym="Slovenčina" data-language-local-name="словацкий" class="interlanguage-link-target"><span>Slovenčina</span></a></li><li class="interlanguage-link interwiki-sq mw-list-item"><a href="https://sq.wikipedia.org/wiki/Rust_(gjuh%C3%AB_programimi)" title="Rust (gjuhë programimi) — албанский" lang="sq" hreflang="sq" data-title="Rust (gjuhë programimi)" data-language-autonym="Shqip" data-language-local-name="албанский" class="interlanguage-link-target"><span>Shqip</span></a></li><li class="interlanguage-link interwiki-sr mw-list-item"><a href="https://sr.wikipedia.org/wiki/Rust_(%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D1%81%D0%BA%D0%B8_%D1%98%D0%B5%D0%B7%D0%B8%D0%BA)" title="Rust (програмски језик) — сербский" lang="sr" hreflang="sr" data-title="Rust (програмски језик)" data-language-autonym="Српски / srpski" data-language-local-name="сербский" class="interlanguage-link-target"><span>Српски / srpski</span></a></li><li class="interlanguage-link interwiki-sv mw-list-item"><a href="https://sv.wikipedia.org/wiki/Rust_(programspr%C3%A5k)" title="Rust (programspråk) — шведский" lang="sv" hreflang="sv" data-title="Rust (programspråk)" data-language-autonym="Svenska" data-language-local-name="шведский" class="interlanguage-link-target"><span>Svenska</span></a></li><li class="interlanguage-link interwiki-sw mw-list-item"><a href="https://sw.wikipedia.org/wiki/Rust" title="Rust — суахили" lang="sw" hreflang="sw" data-title="Rust" data-language-autonym="Kiswahili" data-language-local-name="суахили" class="interlanguage-link-target"><span>Kiswahili</span></a></li><li class="interlanguage-link interwiki-te mw-list-item"><a href="https://te.wikipedia.org/wiki/%E0%B0%B0%E0%B0%B8%E0%B1%8D%E0%B0%9F%E0%B1%8D_(%E0%B0%AA%E0%B1%8D%E0%B0%B0%E0%B1%8B%E0%B0%97%E0%B1%8D%E0%B0%B0%E0%B0%BE%E0%B0%AE%E0%B0%BF%E0%B0%82%E0%B0%97%E0%B1%8D_%E0%B0%AD%E0%B0%BE%E0%B0%B7)" title="రస్ట్ (ప్రోగ్రామింగ్ భాష) — телугу" lang="te" hreflang="te" data-title="రస్ట్ (ప్రోగ్రామింగ్ భాష)" data-language-autonym="తెలుగు" data-language-local-name="телугу" class="interlanguage-link-target"><span>తెలుగు</span></a></li><li class="interlanguage-link interwiki-th mw-list-item"><a href="https://th.wikipedia.org/wiki/%E0%B8%A0%E0%B8%B2%E0%B8%A9%E0%B8%B2%E0%B8%A3%E0%B8%B1%E0%B8%AA%E0%B8%95%E0%B9%8C" title="ภาษารัสต์ — тайский" lang="th" hreflang="th" data-title="ภาษารัสต์" data-language-autonym="ไทย" data-language-local-name="тайский" class="interlanguage-link-target"><span>ไทย</span></a></li><li class="interlanguage-link interwiki-tok mw-list-item"><a href="https://tok.wikipedia.org/wiki/toki_ilo_Wasi" title="toki ilo Wasi — токипона" lang="tok" hreflang="tok" data-title="toki ilo Wasi" data-language-autonym="Toki pona" data-language-local-name="токипона" class="interlanguage-link-target"><span>Toki pona</span></a></li><li class="interlanguage-link interwiki-tr mw-list-item"><a href="https://tr.wikipedia.org/wiki/Rust_(programlama_dili)" title="Rust (programlama dili) — турецкий" lang="tr" hreflang="tr" data-title="Rust (programlama dili)" data-language-autonym="Türkçe" data-language-local-name="турецкий" class="interlanguage-link-target"><span>Türkçe</span></a></li><li class="interlanguage-link interwiki-uk mw-list-item"><a href="https://uk.wikipedia.org/wiki/Rust_(%D0%BC%D0%BE%D0%B2%D0%B0_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D1%83%D0%B2%D0%B0%D0%BD%D0%BD%D1%8F)" title="Rust (мова програмування) — украинский" lang="uk" hreflang="uk" data-title="Rust (мова програмування)" data-language-autonym="Українська" data-language-local-name="украинский" class="interlanguage-link-target"><span>Українська</span></a></li><li class="interlanguage-link interwiki-vi mw-list-item"><a href="https://vi.wikipedia.org/wiki/Rust_(ng%C3%B4n_ng%E1%BB%AF_l%E1%BA%ADp_tr%C3%ACnh)" title="Rust (ngôn ngữ lập trình) — вьетнамский" lang="vi" hreflang="vi" data-title="Rust (ngôn ngữ lập trình)" data-language-autonym="Tiếng Việt" data-language-local-name="вьетнамский" class="interlanguage-link-target"><span>Tiếng Việt</span></a></li><li class="interlanguage-link interwiki-zh-min-nan mw-list-item"><a href="https://zh-min-nan.wikipedia.org/wiki/Rust_(pian-t%C3%AAng_g%C3%BA-gi%C3%A2n)" title="Rust (pian-têng gú-giân) — миньнань" lang="nan" hreflang="nan" data-title="Rust (pian-têng gú-giân)" data-language-autonym="閩南語 / Bân-lâm-gí" data-language-local-name="миньнань" class="interlanguage-link-target"><span>閩南語 / Bân-lâm-gí</span></a></li><li class="interlanguage-link interwiki-zh-yue mw-list-item"><a href="https://zh-yue.wikipedia.org/wiki/Rust" title="Rust — кантонский" lang="yue" hreflang="yue" data-title="Rust" data-language-autonym="粵語" data-language-local-name="кантонский" class="interlanguage-link-target"><span>粵語</span></a></li><li class="interlanguage-link interwiki-zh mw-list-item"><a href="https://zh.wikipedia.org/wiki/Rust_(%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80)" title="Rust (编程语言) — китайский" lang="zh" hreflang="zh" data-title="Rust (编程语言)" data-language-autonym="中文" data-language-local-name="китайский" class="interlanguage-link-target"><span>中文</span></a></li>
+		</ul>
+		<div class="after-portlet after-portlet-lang"><span class="wb-langlinks-edit wb-langlinks-link"><a href="https://www.wikidata.org/wiki/Special:EntityPage/Q575650#sitelinks-wikipedia" title="Править ссылки на другие языки" class="wbc-editpage">Править ссылки</a></span></div>
+	</div>
+</div>
+
+</div>
+
+				</div>
+
+	</div>
+</div>
+
+		</nav>
+			
+<a href="/wiki/%D0%97%D0%B0%D0%B3%D0%BB%D0%B0%D0%B2%D0%BD%D0%B0%D1%8F_%D1%81%D1%82%D1%80%D0%B0%D0%BD%D0%B8%D1%86%D0%B0" class="mw-logo">
+	<img class="mw-logo-icon" src="/static/images/icons/wikipedia.png" alt="" aria-hidden="true" height="50" width="50">
+	<span class="mw-logo-container skin-invert">
+		<img class="mw-logo-wordmark" alt="Википедия" src="/static/images/mobile/copyright/wikipedia-wordmark-ru.svg" style="width: 7.5em; height: 1.25em;">
+		<img class="mw-logo-tagline" alt="свободная энциклопедия" src="/static/images/mobile/copyright/wikipedia-tagline-ru.svg" width="120" height="11" style="width: 7.5em; height: 0.6875em;">
+	</span>
+</a>
+
+		</div>
+		<div class="vector-header-end">
+			
+<div id="p-search" role="search" class="vector-search-box-vue  vector-search-box-collapses vector-search-box-show-thumbnail vector-search-box-auto-expand-width vector-search-box">
+	<a href="/wiki/%D0%A1%D0%BB%D1%83%D0%B6%D0%B5%D0%B1%D0%BD%D0%B0%D1%8F:%D0%9F%D0%BE%D0%B8%D1%81%D0%BA" class="cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--icon-only search-toggle" title="Искать в Википедии [f]" accesskey="f"><span class="vector-icon mw-ui-icon-search mw-ui-icon-wikimedia-search cdx-button__icon"></span>
+
+<span>Поиск</span>
+	</a>
+	<div class="vector-typeahead-search-container">
+		<div class="cdx-typeahead-search cdx-typeahead-search--show-thumbnail cdx-typeahead-search--auto-expand-width">
+			<form action="/w/index.php" id="searchform" class="cdx-search-input cdx-search-input--has-end-button">
+				<div id="simpleSearch" class="cdx-search-input__input-wrapper"  data-search-loc="header-moved">
+					<div class="cdx-text-input cdx-text-input--has-start-icon">
+						<input
+							class="cdx-text-input__input mw-searchInput" autocomplete="off"
+							 type="search" name="search" placeholder="Искать в Википедии" aria-label="Искать в Википедии" autocapitalize="none" spellcheck="false" title="Искать в Википедии [f]" accesskey="f" id="searchInput"
+							>
+						<span class="cdx-text-input__icon cdx-text-input__start-icon"></span>
+					</div>
+					<input type="hidden" name="title" value="Служебная:Поиск">
+				</div>
+				<button class="cdx-button cdx-search-input__end-button">Найти</button>
+			</form>
+		</div>
+	</div>
+</div>
+
+			<nav class="vector-user-links vector-user-links-wide" aria-label="Персональные инструменты">
+	<div class="vector-user-links-main">
+	
+<div id="p-vector-user-menu-preferences" class="vector-menu mw-portlet emptyPortlet"  >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			
+		</ul>
+		
+	</div>
+</div>
+
+	
+<div id="p-vector-user-menu-userpage" class="vector-menu mw-portlet emptyPortlet"  >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			
+		</ul>
+		
+	</div>
+</div>
+
+	<nav class="vector-appearance-landmark" aria-label="Внешний вид">
+		
+<div id="vector-appearance-dropdown" class="vector-dropdown "  title="Измените внешний вид страницы, размер, ширину и цвет шрифта." >
+	<input type="checkbox" id="vector-appearance-dropdown-checkbox" role="button" aria-haspopup="true" data-event-name="ui.dropdown-vector-appearance-dropdown" class="vector-dropdown-checkbox "  aria-label="Внешний вид"   >
+	<label id="vector-appearance-dropdown-label" for="vector-appearance-dropdown-checkbox" class="vector-dropdown-label cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--icon-only " aria-hidden="true"  ><span class="vector-icon mw-ui-icon-appearance mw-ui-icon-wikimedia-appearance cdx-button__icon"></span>
+
+<span class="vector-dropdown-label-text">Внешний вид</span>
+	</label>
+	<div class="vector-dropdown-content">
+
+
+			<div id="vector-appearance-unpinned-container" class="vector-unpinned-container">
+				
+			</div>
+		
+	</div>
+</div>
+
+	</nav>
+	
+<div id="p-vector-user-menu-notifications" class="vector-menu mw-portlet emptyPortlet"  >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			
+		</ul>
+		
+	</div>
+</div>
+
+	
+<div id="p-vector-user-menu-overflow" class="vector-menu mw-portlet"  >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			<li id="pt-sitesupport-2" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="https://donate.wikimedia.org/?wmf_source=donate&amp;wmf_medium=sidebar&amp;wmf_campaign=ru.wikipedia.org&amp;uselang=ru" data-mw-donate-attempt="top_link" class=""><span>Пожертвовать</span></a>
+</li>
+<li id="pt-createaccount-2" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/w/index.php?title=%D0%A1%D0%BB%D1%83%D0%B6%D0%B5%D0%B1%D0%BD%D0%B0%D1%8F:%D0%A1%D0%BE%D0%B7%D0%B4%D0%B0%D1%82%D1%8C_%D1%83%D1%87%D1%91%D1%82%D0%BD%D1%83%D1%8E_%D0%B7%D0%B0%D0%BF%D0%B8%D1%81%D1%8C&amp;returnto=Rust+%28%D1%8F%D0%B7%D1%8B%D0%BA+%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F%29" title="Мы предлагаем вам создать учётную запись и войти в систему, хотя это и не обязательно." class=""><span>Создать учётную запись</span></a>
+</li>
+<li id="pt-login-2" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/w/index.php?title=%D0%A1%D0%BB%D1%83%D0%B6%D0%B5%D0%B1%D0%BD%D0%B0%D1%8F:%D0%92%D1%85%D0%BE%D0%B4&amp;returnto=Rust+%28%D1%8F%D0%B7%D1%8B%D0%BA+%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F%29" title="Здесь можно зарегистрироваться в системе, но это необязательно. [o]" accesskey="o" class=""><span>Войти</span></a>
+</li>
+
+			
+		</ul>
+		
+	</div>
+</div>
+
+	</div>
+	
+<div id="vector-user-links-dropdown" class="vector-dropdown vector-user-menu vector-button-flush-right vector-user-menu-logged-out vector-user-links-dropdown--collapsible"  title="Больше возможностей" >
+	<input type="checkbox" id="vector-user-links-dropdown-checkbox" role="button" aria-haspopup="true" data-event-name="ui.dropdown-vector-user-links-dropdown" class="vector-dropdown-checkbox "  aria-label="Персональные инструменты"   >
+	<label id="vector-user-links-dropdown-label" for="vector-user-links-dropdown-checkbox" class="vector-dropdown-label cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--icon-only " aria-hidden="true"  ><span class="vector-icon mw-ui-icon-userAvatar mw-ui-icon-wikimedia-userAvatar cdx-button__icon"></span>
+
+<span class="vector-dropdown-label-text">Персональные инструменты</span>
+	</label>
+	<div class="vector-dropdown-content">
+
+
+		
+<div id="p-personal" class="vector-menu mw-portlet mw-portlet-personal"  title="Пользовательское меню" >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			<li id="pt-sitesupport" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="https://donate.wikimedia.org/?wmf_source=donate&amp;wmf_medium=sidebar&amp;wmf_campaign=ru.wikipedia.org&amp;uselang=ru" data-mw-donate-attempt="top_link" class=""><span class="vector-icon mw-ui-icon-heart mw-ui-icon-wikimedia-heart cdx-button__icon"></span>
+
+<span>Пожертвовать</span></a>
+</li>
+<li id="pt-createaccount" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/w/index.php?title=%D0%A1%D0%BB%D1%83%D0%B6%D0%B5%D0%B1%D0%BD%D0%B0%D1%8F:%D0%A1%D0%BE%D0%B7%D0%B4%D0%B0%D1%82%D1%8C_%D1%83%D1%87%D1%91%D1%82%D0%BD%D1%83%D1%8E_%D0%B7%D0%B0%D0%BF%D0%B8%D1%81%D1%8C&amp;returnto=Rust+%28%D1%8F%D0%B7%D1%8B%D0%BA+%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F%29" title="Мы предлагаем вам создать учётную запись и войти в систему, хотя это и не обязательно." class=""><span class="vector-icon mw-ui-icon-userAvatar mw-ui-icon-wikimedia-userAvatar cdx-button__icon"></span>
+
+<span>Создать учётную запись</span></a>
+</li>
+<li id="pt-login" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/w/index.php?title=%D0%A1%D0%BB%D1%83%D0%B6%D0%B5%D0%B1%D0%BD%D0%B0%D1%8F:%D0%92%D1%85%D0%BE%D0%B4&amp;returnto=Rust+%28%D1%8F%D0%B7%D1%8B%D0%BA+%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F%29" title="Здесь можно зарегистрироваться в системе, но это необязательно. [o]" accesskey="o" class=""><span class="vector-icon mw-ui-icon-logIn mw-ui-icon-wikimedia-logIn cdx-button__icon"></span>
+
+<span>Войти</span></a>
+</li>
+
+			
+		</ul>
+		
+	</div>
+</div>
+
+	
+	</div>
+</div>
+
+</nav>
+
+		</div>
+	</header>
+</div>
+<div class="mw-page-container">
+	<div class="mw-page-container-inner">
+		<div class="vector-sitenotice-container">
+			<div id="siteNotice"></div>
+		</div>
+		<div class="vector-column-start">
+			<div class="vector-main-menu-container">
+		<div id="mw-navigation">
+			<nav id="mw-panel" class="vector-main-menu-landmark" aria-label="Сайт">
+				<div id="vector-main-menu-pinned-container" class="vector-pinned-container">
+				
+				</div>
+		</nav>
+		</div>
+	</div>
+	<div class="vector-sticky-pinned-container">
+				<nav id="mw-panel-toc" aria-label="Содержание" data-event-name="ui.sidebar-toc" class="mw-table-of-contents-container vector-toc-landmark">
+					<div id="vector-toc-pinned-container" class="vector-pinned-container">
+					<div id="vector-toc" class="vector-toc vector-pinnable-element">
+	<div
+	class="vector-pinnable-header vector-toc-pinnable-header vector-pinnable-header-pinned"
+	data-feature-name="toc-pinned"
+	data-pinnable-element-id="vector-toc"
+	data-pinned-container-id="vector-toc-pinned-container"
+	data-unpinned-container-id="vector-toc-unpinned-container"
+>
+	<h2 class="vector-pinnable-header-label">Содержание</h2>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-pin-button" data-event-name="pinnable-header.vector-toc.pin" aria-label="Move Содержание to sidebar">переместить в боковую панель</button>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-unpin-button" data-event-name="pinnable-header.vector-toc.unpin" aria-label="Hide Содержание">скрыть</button>
+</div>
+
+
+	<ul class="vector-toc-contents" id="mw-panel-toc-list">
+		<li id="toc-mw-content-text"
+			class="vector-toc-list-item vector-toc-level-1">
+			<a href="#" class="vector-toc-link">
+				<div class="vector-toc-text">Начало</div>
+			</a>
+		</li>
+		<li id="toc-История"
+		class="vector-toc-list-item vector-toc-level-1 vector-toc-list-item-expanded">
+		<a class="vector-toc-link" href="#История">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">1</span>
+				<span>История</span>
+			</div>
+		</a>
+		
+		<ul id="toc-История-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+	<li id="toc-Система_типов"
+		class="vector-toc-list-item vector-toc-level-1 vector-toc-list-item-expanded">
+		<a class="vector-toc-link" href="#Система_типов">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">2</span>
+				<span>Система типов</span>
+			</div>
+		</a>
+		
+		<ul id="toc-Система_типов-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+	<li id="toc-Управление_памятью"
+		class="vector-toc-list-item vector-toc-level-1 vector-toc-list-item-expanded">
+		<a class="vector-toc-link" href="#Управление_памятью">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">3</span>
+				<span>Управление памятью</span>
+			</div>
+		</a>
+		
+		<ul id="toc-Управление_памятью-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+	<li id="toc-Синтаксис"
+		class="vector-toc-list-item vector-toc-level-1 vector-toc-list-item-expanded">
+		<a class="vector-toc-link" href="#Синтаксис">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">4</span>
+				<span>Синтаксис</span>
+			</div>
+		</a>
+		
+			<button aria-controls="toc-Синтаксис-sublist" class="cdx-button cdx-button--weight-quiet cdx-button--icon-only vector-toc-toggle">
+				<span class="vector-icon mw-ui-icon-wikimedia-expand"></span>
+				<span>Отобразить/Скрыть подраздел Синтаксис</span>
+			</button>
+		
+		<ul id="toc-Синтаксис-sublist" class="vector-toc-list">
+			<li id="toc-Связывание_имён"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Связывание_имён">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">4.1</span>
+					<span>Связывание имён</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Связывание_имён-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-Сопоставление_с_образцом_(match)"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Сопоставление_с_образцом_(match)">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">4.2</span>
+					<span>Сопоставление с образцом (match)</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Сопоставление_с_образцом_(match)-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-Деструктуризация"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Деструктуризация">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">4.3</span>
+					<span>Деструктуризация</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Деструктуризация-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-Условные_выражения_(if_let)"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#Условные_выражения_(if_let)">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">4.4</span>
+					<span>Условные выражения (if let)</span>
+				</div>
+			</a>
+			
+			<ul id="toc-Условные_выражения_(if_let)-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+		<li id="toc-unsafe"
+			class="vector-toc-list-item vector-toc-level-2">
+			<a class="vector-toc-link" href="#unsafe">
+				<div class="vector-toc-text">
+					<span class="vector-toc-numb">4.5</span>
+					<span>unsafe</span>
+				</div>
+			</a>
+			
+			<ul id="toc-unsafe-sublist" class="vector-toc-list">
+			</ul>
+		</li>
+	</ul>
+	</li>
+	<li id="toc-Объектная_система"
+		class="vector-toc-list-item vector-toc-level-1 vector-toc-list-item-expanded">
+		<a class="vector-toc-link" href="#Объектная_система">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">5</span>
+				<span>Объектная система</span>
+			</div>
+		</a>
+		
+		<ul id="toc-Объектная_система-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+	<li id="toc-Параллельные_вычисления"
+		class="vector-toc-list-item vector-toc-level-1 vector-toc-list-item-expanded">
+		<a class="vector-toc-link" href="#Параллельные_вычисления">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">6</span>
+				<span>Параллельные вычисления</span>
+			</div>
+		</a>
+		
+		<ul id="toc-Параллельные_вычисления-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+	<li id="toc-Другие_особенности"
+		class="vector-toc-list-item vector-toc-level-1 vector-toc-list-item-expanded">
+		<a class="vector-toc-link" href="#Другие_особенности">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">7</span>
+				<span>Другие особенности</span>
+			</div>
+		</a>
+		
+		<ul id="toc-Другие_особенности-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+	<li id="toc-Примеры"
+		class="vector-toc-list-item vector-toc-level-1 vector-toc-list-item-expanded">
+		<a class="vector-toc-link" href="#Примеры">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">8</span>
+				<span>Примеры</span>
+			</div>
+		</a>
+		
+		<ul id="toc-Примеры-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+	<li id="toc-Сравнение_с_другими_языками"
+		class="vector-toc-list-item vector-toc-level-1 vector-toc-list-item-expanded">
+		<a class="vector-toc-link" href="#Сравнение_с_другими_языками">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">9</span>
+				<span>Сравнение с другими языками</span>
+			</div>
+		</a>
+		
+		<ul id="toc-Сравнение_с_другими_языками-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+	<li id="toc-Примечания"
+		class="vector-toc-list-item vector-toc-level-1 vector-toc-list-item-expanded">
+		<a class="vector-toc-link" href="#Примечания">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">10</span>
+				<span>Примечания</span>
+			</div>
+		</a>
+		
+		<ul id="toc-Примечания-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+	<li id="toc-Литература"
+		class="vector-toc-list-item vector-toc-level-1 vector-toc-list-item-expanded">
+		<a class="vector-toc-link" href="#Литература">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">11</span>
+				<span>Литература</span>
+			</div>
+		</a>
+		
+		<ul id="toc-Литература-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+	<li id="toc-Ссылки"
+		class="vector-toc-list-item vector-toc-level-1 vector-toc-list-item-expanded">
+		<a class="vector-toc-link" href="#Ссылки">
+			<div class="vector-toc-text">
+				<span class="vector-toc-numb">12</span>
+				<span>Ссылки</span>
+			</div>
+		</a>
+		
+		<ul id="toc-Ссылки-sublist" class="vector-toc-list">
+		</ul>
+	</li>
+</ul>
+</div>
+
+					</div>
+		</nav>
+			</div>
+		</div>
+		<div class="mw-content-container">
+			<main id="content" class="mw-body">
+				<header class="mw-body-header vector-page-titlebar no-font-mode-scale">
+					<nav aria-label="Содержание" class="vector-toc-landmark">
+						
+<div id="vector-page-titlebar-toc" class="vector-dropdown vector-page-titlebar-toc vector-button-flush-left"  title="Содержание" >
+	<input type="checkbox" id="vector-page-titlebar-toc-checkbox" role="button" aria-haspopup="true" data-event-name="ui.dropdown-vector-page-titlebar-toc" class="vector-dropdown-checkbox "  aria-label="Отобразить/Скрыть содержание"   >
+	<label id="vector-page-titlebar-toc-label" for="vector-page-titlebar-toc-checkbox" class="vector-dropdown-label cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--icon-only " aria-hidden="true"  ><span class="vector-icon mw-ui-icon-listBullet mw-ui-icon-wikimedia-listBullet cdx-button__icon"></span>
+
+<span class="vector-dropdown-label-text">Отобразить/Скрыть содержание</span>
+	</label>
+	<div class="vector-dropdown-content">
+
+
+							<div id="vector-page-titlebar-toc-unpinned-container" class="vector-unpinned-container">
+			</div>
+		
+	</div>
+</div>
+
+					</nav>
+					<h1 id="firstHeading" class="firstHeading mw-first-heading"><span lang="ru" dir="ltr"><span class="mw-page-title-main">Rust (язык программирования)</span></span></h1>
+			
+<div id="p-lang-btn" class="vector-dropdown mw-portlet mw-portlet-lang"  >
+	<input type="checkbox" id="p-lang-btn-checkbox" role="button" aria-haspopup="true" data-event-name="ui.dropdown-p-lang-btn" class="vector-dropdown-checkbox mw-interlanguage-selector"  aria-label="60 языков" aria-description="Перейти к статье на другом языке. Доступно на 60 языках"  >
+	<label id="p-lang-btn-label" for="p-lang-btn-checkbox" class="vector-dropdown-label cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--action-progressive mw-portlet-lang-heading-60" aria-hidden="true"  ><span class="vector-icon mw-ui-icon-language-progressive mw-ui-icon-wikimedia-language-progressive cdx-button__icon"></span>
+
+<span class="vector-dropdown-label-text">60 языков</span>
+	</label>
+	<div class="vector-dropdown-content">
+
+		<div class="vector-menu-content">
+			
+			<ul class="vector-menu-content-list">
+				
+				<li class="interlanguage-link interwiki-af mw-list-item"><a href="https://af.wikipedia.org/wiki/Rust_(programmeertaal)" title="Rust (programmeertaal) — африкаанс" lang="af" hreflang="af" data-title="Rust (programmeertaal)" data-language-autonym="Afrikaans" data-language-local-name="африкаанс" class="interlanguage-link-target"><span>Afrikaans</span></a></li><li class="interlanguage-link interwiki-ar mw-list-item"><a href="https://ar.wikipedia.org/wiki/%D8%B1%D8%B3%D8%AA_(%D9%84%D8%BA%D8%A9_%D8%A8%D8%B1%D9%85%D8%AC%D8%A9)" title="رست (لغة برمجة) — арабский" lang="ar" hreflang="ar" data-title="رست (لغة برمجة)" data-language-autonym="العربية" data-language-local-name="арабский" class="interlanguage-link-target"><span>العربية</span></a></li><li class="interlanguage-link interwiki-az mw-list-item"><a href="https://az.wikipedia.org/wiki/Rust_(proqramla%C5%9Fd%C4%B1rma_dili)" title="Rust (proqramlaşdırma dili) — азербайджанский" lang="az" hreflang="az" data-title="Rust (proqramlaşdırma dili)" data-language-autonym="Azərbaycanca" data-language-local-name="азербайджанский" class="interlanguage-link-target"><span>Azərbaycanca</span></a></li><li class="interlanguage-link interwiki-be mw-list-item"><a href="https://be.wikipedia.org/wiki/Rust" title="Rust — белорусский" lang="be" hreflang="be" data-title="Rust" data-language-autonym="Беларуская" data-language-local-name="белорусский" class="interlanguage-link-target"><span>Беларуская</span></a></li><li class="interlanguage-link interwiki-bg mw-list-item"><a href="https://bg.wikipedia.org/wiki/Rust" title="Rust — болгарский" lang="bg" hreflang="bg" data-title="Rust" data-language-autonym="Български" data-language-local-name="болгарский" class="interlanguage-link-target"><span>Български</span></a></li><li class="interlanguage-link interwiki-bh mw-list-item"><a href="https://bh.wikipedia.org/wiki/%E0%A4%B0%E0%A4%B8%E0%A5%8D%E0%A4%9F_(%E0%A4%AA%E0%A5%8D%E0%A4%B0%E0%A5%8B%E0%A4%97%E0%A5%8D%E0%A4%B0%E0%A4%BE%E0%A4%AE%E0%A4%BF%E0%A4%82%E0%A4%97_%E0%A4%AD%E0%A4%BE%E0%A4%B7%E0%A4%BE)" title="रस्ट (प्रोग्रामिंग भाषा) — Bhojpuri" lang="bh" hreflang="bh" data-title="रस्ट (प्रोग्रामिंग भाषा)" data-language-autonym="भोजपुरी" data-language-local-name="Bhojpuri" class="interlanguage-link-target"><span>भोजपुरी</span></a></li><li class="interlanguage-link interwiki-bn mw-list-item"><a href="https://bn.wikipedia.org/wiki/%E0%A6%B0%E0%A6%BE%E0%A6%B8%E0%A7%8D%E0%A6%9F_(%E0%A6%AA%E0%A7%8D%E0%A6%B0%E0%A7%8B%E0%A6%97%E0%A7%8D%E0%A6%B0%E0%A6%BE%E0%A6%AE%E0%A6%BF%E0%A6%82_%E0%A6%AD%E0%A6%BE%E0%A6%B7%E0%A6%BE)" title="রাস্ট (প্রোগ্রামিং ভাষা) — бенгальский" lang="bn" hreflang="bn" data-title="রাস্ট (প্রোগ্রামিং ভাষা)" data-language-autonym="বাংলা" data-language-local-name="бенгальский" class="interlanguage-link-target"><span>বাংলা</span></a></li><li class="interlanguage-link interwiki-ca mw-list-item"><a href="https://ca.wikipedia.org/wiki/Rust_(llenguatge_de_programaci%C3%B3)" title="Rust (llenguatge de programació) — каталанский" lang="ca" hreflang="ca" data-title="Rust (llenguatge de programació)" data-language-autonym="Català" data-language-local-name="каталанский" class="interlanguage-link-target"><span>Català</span></a></li><li class="interlanguage-link interwiki-ckb mw-list-item"><a href="https://ckb.wikipedia.org/wiki/%DA%95%DB%95%D8%B3%D8%AA_(%D8%B2%D9%85%D8%A7%D9%86%DB%8C_%D8%A8%DB%95%D8%B1%D9%86%D8%A7%D9%85%DB%95%D8%B3%D8%A7%D8%B2%DB%8C)" title="ڕەست (زمانی بەرنامەسازی) — центральнокурдский" lang="ckb" hreflang="ckb" data-title="ڕەست (زمانی بەرنامەسازی)" data-language-autonym="کوردی" data-language-local-name="центральнокурдский" class="interlanguage-link-target"><span>کوردی</span></a></li><li class="interlanguage-link interwiki-cs mw-list-item"><a href="https://cs.wikipedia.org/wiki/Rust_(programovac%C3%AD_jazyk)" title="Rust (programovací jazyk) — чешский" lang="cs" hreflang="cs" data-title="Rust (programovací jazyk)" data-language-autonym="Čeština" data-language-local-name="чешский" class="interlanguage-link-target"><span>Čeština</span></a></li><li class="interlanguage-link interwiki-da mw-list-item"><a href="https://da.wikipedia.org/wiki/Rust_(programmeringssprog)" title="Rust (programmeringssprog) — датский" lang="da" hreflang="da" data-title="Rust (programmeringssprog)" data-language-autonym="Dansk" data-language-local-name="датский" class="interlanguage-link-target"><span>Dansk</span></a></li><li class="interlanguage-link interwiki-de mw-list-item"><a href="https://de.wikipedia.org/wiki/Rust_(Programmiersprache)" title="Rust (Programmiersprache) — немецкий" lang="de" hreflang="de" data-title="Rust (Programmiersprache)" data-language-autonym="Deutsch" data-language-local-name="немецкий" class="interlanguage-link-target"><span>Deutsch</span></a></li><li class="interlanguage-link interwiki-dtp mw-list-item"><a href="https://dtp.wikipedia.org/wiki/Rust_(boros_tokud)" title="Rust (boros tokud) — Central Dusun" lang="dtp" hreflang="dtp" data-title="Rust (boros tokud)" data-language-autonym="Kadazandusun" data-language-local-name="Central Dusun" class="interlanguage-link-target"><span>Kadazandusun</span></a></li><li class="interlanguage-link interwiki-en badge-Q17437798 badge-goodarticle mw-list-item" title="хорошая статья"><a href="https://en.wikipedia.org/wiki/Rust_(programming_language)" title="Rust (programming language) — английский" lang="en" hreflang="en" data-title="Rust (programming language)" data-language-autonym="English" data-language-local-name="английский" class="interlanguage-link-target"><span>English</span></a></li><li class="interlanguage-link interwiki-eo mw-list-item"><a href="https://eo.wikipedia.org/wiki/Rust_(programlingvo)" title="Rust (programlingvo) — эсперанто" lang="eo" hreflang="eo" data-title="Rust (programlingvo)" data-language-autonym="Esperanto" data-language-local-name="эсперанто" class="interlanguage-link-target"><span>Esperanto</span></a></li><li class="interlanguage-link interwiki-es mw-list-item"><a href="https://es.wikipedia.org/wiki/Rust_(lenguaje_de_programaci%C3%B3n)" title="Rust (lenguaje de programación) — испанский" lang="es" hreflang="es" data-title="Rust (lenguaje de programación)" data-language-autonym="Español" data-language-local-name="испанский" class="interlanguage-link-target"><span>Español</span></a></li><li class="interlanguage-link interwiki-et mw-list-item"><a href="https://et.wikipedia.org/wiki/Rust" title="Rust — эстонский" lang="et" hreflang="et" data-title="Rust" data-language-autonym="Eesti" data-language-local-name="эстонский" class="interlanguage-link-target"><span>Eesti</span></a></li><li class="interlanguage-link interwiki-eu mw-list-item"><a href="https://eu.wikipedia.org/wiki/Rust_(programazio-lengoaia)" title="Rust (programazio-lengoaia) — баскский" lang="eu" hreflang="eu" data-title="Rust (programazio-lengoaia)" data-language-autonym="Euskara" data-language-local-name="баскский" class="interlanguage-link-target"><span>Euskara</span></a></li><li class="interlanguage-link interwiki-fa mw-list-item"><a href="https://fa.wikipedia.org/wiki/%D8%B1%D8%A7%D8%B3%D8%AA_(%D8%B2%D8%A8%D8%A7%D9%86_%D8%A8%D8%B1%D9%86%D8%A7%D9%85%D9%87%E2%80%8C%D9%86%D9%88%DB%8C%D8%B3%DB%8C)" title="راست (زبان برنامه‌نویسی) — персидский" lang="fa" hreflang="fa" data-title="راست (زبان برنامه‌نویسی)" data-language-autonym="فارسی" data-language-local-name="персидский" class="interlanguage-link-target"><span>فارسی</span></a></li><li class="interlanguage-link interwiki-fi mw-list-item"><a href="https://fi.wikipedia.org/wiki/Rust_(ohjelmointikieli)" title="Rust (ohjelmointikieli) — финский" lang="fi" hreflang="fi" data-title="Rust (ohjelmointikieli)" data-language-autonym="Suomi" data-language-local-name="финский" class="interlanguage-link-target"><span>Suomi</span></a></li><li class="interlanguage-link interwiki-fr mw-list-item"><a href="https://fr.wikipedia.org/wiki/Rust_(langage)" title="Rust (langage) — французский" lang="fr" hreflang="fr" data-title="Rust (langage)" data-language-autonym="Français" data-language-local-name="французский" class="interlanguage-link-target"><span>Français</span></a></li><li class="interlanguage-link interwiki-ga mw-list-item"><a href="https://ga.wikipedia.org/wiki/Rust_(teanga_r%C3%ADomhchl%C3%A1r%C3%BAch%C3%A1in)" title="Rust (teanga ríomhchlárúcháin) — ирландский" lang="ga" hreflang="ga" data-title="Rust (teanga ríomhchlárúcháin)" data-language-autonym="Gaeilge" data-language-local-name="ирландский" class="interlanguage-link-target"><span>Gaeilge</span></a></li><li class="interlanguage-link interwiki-gl mw-list-item"><a href="https://gl.wikipedia.org/wiki/Rust_(linguaxe_de_programaci%C3%B3n)" title="Rust (linguaxe de programación) — галисийский" lang="gl" hreflang="gl" data-title="Rust (linguaxe de programación)" data-language-autonym="Galego" data-language-local-name="галисийский" class="interlanguage-link-target"><span>Galego</span></a></li><li class="interlanguage-link interwiki-he mw-list-item"><a href="https://he.wikipedia.org/wiki/%D7%A8%D7%90%D7%A1%D7%98_(%D7%A9%D7%A4%D7%AA_%D7%AA%D7%9B%D7%A0%D7%95%D7%AA)" title="ראסט (שפת תכנות) — иврит" lang="he" hreflang="he" data-title="ראסט (שפת תכנות)" data-language-autonym="עברית" data-language-local-name="иврит" class="interlanguage-link-target"><span>עברית</span></a></li><li class="interlanguage-link interwiki-hr mw-list-item"><a href="https://hr.wikipedia.org/wiki/Rust_(programski_jezik)" title="Rust (programski jezik) — хорватский" lang="hr" hreflang="hr" data-title="Rust (programski jezik)" data-language-autonym="Hrvatski" data-language-local-name="хорватский" class="interlanguage-link-target"><span>Hrvatski</span></a></li><li class="interlanguage-link interwiki-hu mw-list-item"><a href="https://hu.wikipedia.org/wiki/Rust_(programoz%C3%A1si_nyelv)" title="Rust (programozási nyelv) — венгерский" lang="hu" hreflang="hu" data-title="Rust (programozási nyelv)" data-language-autonym="Magyar" data-language-local-name="венгерский" class="interlanguage-link-target"><span>Magyar</span></a></li><li class="interlanguage-link interwiki-id mw-list-item"><a href="https://id.wikipedia.org/wiki/Rust_(bahasa_pemrograman)" title="Rust (bahasa pemrograman) — индонезийский" lang="id" hreflang="id" data-title="Rust (bahasa pemrograman)" data-language-autonym="Bahasa Indonesia" data-language-local-name="индонезийский" class="interlanguage-link-target"><span>Bahasa Indonesia</span></a></li><li class="interlanguage-link interwiki-io mw-list-item"><a href="https://io.wikipedia.org/wiki/Rust_(programifo-linguo)" title="Rust (programifo-linguo) — идо" lang="io" hreflang="io" data-title="Rust (programifo-linguo)" data-language-autonym="Ido" data-language-local-name="идо" class="interlanguage-link-target"><span>Ido</span></a></li><li class="interlanguage-link interwiki-is mw-list-item"><a href="https://is.wikipedia.org/wiki/Rust_(forritunarm%C3%A1l)" title="Rust (forritunarmál) — исландский" lang="is" hreflang="is" data-title="Rust (forritunarmál)" data-language-autonym="Íslenska" data-language-local-name="исландский" class="interlanguage-link-target"><span>Íslenska</span></a></li><li class="interlanguage-link interwiki-isv mw-list-item"><a href="https://isv.wikipedia.org/wiki/Rust" title="Rust — Interslavic" lang="isv" hreflang="isv" data-title="Rust" data-language-autonym="Medžuslovjansky" data-language-local-name="Interslavic" class="interlanguage-link-target"><span>Medžuslovjansky</span></a></li><li class="interlanguage-link interwiki-it mw-list-item"><a href="https://it.wikipedia.org/wiki/Rust_(linguaggio_di_programmazione)" title="Rust (linguaggio di programmazione) — итальянский" lang="it" hreflang="it" data-title="Rust (linguaggio di programmazione)" data-language-autonym="Italiano" data-language-local-name="итальянский" class="interlanguage-link-target"><span>Italiano</span></a></li><li class="interlanguage-link interwiki-ja mw-list-item"><a href="https://ja.wikipedia.org/wiki/Rust_(%E3%83%97%E3%83%AD%E3%82%B0%E3%83%A9%E3%83%9F%E3%83%B3%E3%82%B0%E8%A8%80%E8%AA%9E)" title="Rust (プログラミング言語) — японский" lang="ja" hreflang="ja" data-title="Rust (プログラミング言語)" data-language-autonym="日本語" data-language-local-name="японский" class="interlanguage-link-target"><span>日本語</span></a></li><li class="interlanguage-link interwiki-kab mw-list-item"><a href="https://kab.wikipedia.org/wiki/Rust_(Tutlayt_Usihel)" title="Rust (Tutlayt Usihel) — кабильский" lang="kab" hreflang="kab" data-title="Rust (Tutlayt Usihel)" data-language-autonym="Taqbaylit" data-language-local-name="кабильский" class="interlanguage-link-target"><span>Taqbaylit</span></a></li><li class="interlanguage-link interwiki-ko mw-list-item"><a href="https://ko.wikipedia.org/wiki/%EB%9F%AC%EC%8A%A4%ED%8A%B8_(%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%98%EB%B0%8D_%EC%96%B8%EC%96%B4)" title="러스트 (프로그래밍 언어) — корейский" lang="ko" hreflang="ko" data-title="러스트 (프로그래밍 언어)" data-language-autonym="한국어" data-language-local-name="корейский" class="interlanguage-link-target"><span>한국어</span></a></li><li class="interlanguage-link interwiki-lmo mw-list-item"><a href="https://lmo.wikipedia.org/wiki/Rust_(lenguagg_de_programazzion)" title="Rust (lenguagg de programazzion) — ломбардский" lang="lmo" hreflang="lmo" data-title="Rust (lenguagg de programazzion)" data-language-autonym="Lombard" data-language-local-name="ломбардский" class="interlanguage-link-target"><span>Lombard</span></a></li><li class="interlanguage-link interwiki-lv mw-list-item"><a href="https://lv.wikipedia.org/wiki/Rust" title="Rust — латышский" lang="lv" hreflang="lv" data-title="Rust" data-language-autonym="Latviešu" data-language-local-name="латышский" class="interlanguage-link-target"><span>Latviešu</span></a></li><li class="interlanguage-link interwiki-ml mw-list-item"><a href="https://ml.wikipedia.org/wiki/%E0%B4%B1%E0%B4%B8%E0%B5%8D%E0%B4%B1%E0%B5%8D%E0%B4%B1%E0%B5%8D_(%E0%B4%AA%E0%B5%8D%E0%B4%B0%E0%B5%8B%E0%B4%97%E0%B5%8D%E0%B4%B0%E0%B4%BE%E0%B4%AE%E0%B4%BF%E0%B4%82%E0%B4%97%E0%B5%8D_%E0%B4%AD%E0%B4%BE%E0%B4%B7)" title="റസ്റ്റ് (പ്രോഗ്രാമിംഗ് ഭാഷ) — малаялам" lang="ml" hreflang="ml" data-title="റസ്റ്റ് (പ്രോഗ്രാമിംഗ് ഭാഷ)" data-language-autonym="മലയാളം" data-language-local-name="малаялам" class="interlanguage-link-target"><span>മലയാളം</span></a></li><li class="interlanguage-link interwiki-ms mw-list-item"><a href="https://ms.wikipedia.org/wiki/Rust_(bahasa_pengaturcaraan)" title="Rust (bahasa pengaturcaraan) — малайский" lang="ms" hreflang="ms" data-title="Rust (bahasa pengaturcaraan)" data-language-autonym="Bahasa Melayu" data-language-local-name="малайский" class="interlanguage-link-target"><span>Bahasa Melayu</span></a></li><li class="interlanguage-link interwiki-nl mw-list-item"><a href="https://nl.wikipedia.org/wiki/Rust_(programmeertaal)" title="Rust (programmeertaal) — нидерландский" lang="nl" hreflang="nl" data-title="Rust (programmeertaal)" data-language-autonym="Nederlands" data-language-local-name="нидерландский" class="interlanguage-link-target"><span>Nederlands</span></a></li><li class="interlanguage-link interwiki-no mw-list-item"><a href="https://no.wikipedia.org/wiki/Rust_(programmeringsspr%C3%A5k)" title="Rust (programmeringsspråk) — норвежский букмол" lang="nb" hreflang="nb" data-title="Rust (programmeringsspråk)" data-language-autonym="Norsk bokmål" data-language-local-name="норвежский букмол" class="interlanguage-link-target"><span>Norsk bokmål</span></a></li><li class="interlanguage-link interwiki-pl mw-list-item"><a href="https://pl.wikipedia.org/wiki/Rust_(j%C4%99zyk_programowania)" title="Rust (język programowania) — польский" lang="pl" hreflang="pl" data-title="Rust (język programowania)" data-language-autonym="Polski" data-language-local-name="польский" class="interlanguage-link-target"><span>Polski</span></a></li><li class="interlanguage-link interwiki-pt mw-list-item"><a href="https://pt.wikipedia.org/wiki/Rust_(linguagem_de_programa%C3%A7%C3%A3o)" title="Rust (linguagem de programação) — португальский" lang="pt" hreflang="pt" data-title="Rust (linguagem de programação)" data-language-autonym="Português" data-language-local-name="португальский" class="interlanguage-link-target"><span>Português</span></a></li><li class="interlanguage-link interwiki-qu mw-list-item"><a href="https://qu.wikipedia.org/wiki/Rust" title="Rust — кечуа" lang="qu" hreflang="qu" data-title="Rust" data-language-autonym="Runa Simi" data-language-local-name="кечуа" class="interlanguage-link-target"><span>Runa Simi</span></a></li><li class="interlanguage-link interwiki-ro mw-list-item"><a href="https://ro.wikipedia.org/wiki/Rust_(limbaj_de_programare)" title="Rust (limbaj de programare) — румынский" lang="ro" hreflang="ro" data-title="Rust (limbaj de programare)" data-language-autonym="Română" data-language-local-name="румынский" class="interlanguage-link-target"><span>Română</span></a></li><li class="interlanguage-link interwiki-si mw-list-item"><a href="https://si.wikipedia.org/wiki/Rust_(%E0%B6%9A%E0%B7%8A%E2%80%8D%E0%B6%BB%E0%B6%B8%E0%B6%BD%E0%B7%9A%E0%B6%9B%E0%B6%B1_%E0%B6%B7%E0%B7%8F%E0%B7%82%E0%B7%8F%E0%B7%80)" title="Rust (ක්‍රමලේඛන භාෂාව) — сингальский" lang="si" hreflang="si" data-title="Rust (ක්‍රමලේඛන භාෂාව)" data-language-autonym="සිංහල" data-language-local-name="сингальский" class="interlanguage-link-target"><span>සිංහල</span></a></li><li class="interlanguage-link interwiki-simple mw-list-item"><a href="https://simple.wikipedia.org/wiki/Rust_(programming_language)" title="Rust (programming language) — Simple English" lang="en-simple" hreflang="en-simple" data-title="Rust (programming language)" data-language-autonym="Simple English" data-language-local-name="Simple English" class="interlanguage-link-target"><span>Simple English</span></a></li><li class="interlanguage-link interwiki-sk mw-list-item"><a href="https://sk.wikipedia.org/wiki/Rust_(programovac%C3%AD_jazyk)" title="Rust (programovací jazyk) — словацкий" lang="sk" hreflang="sk" data-title="Rust (programovací jazyk)" data-language-autonym="Slovenčina" data-language-local-name="словацкий" class="interlanguage-link-target"><span>Slovenčina</span></a></li><li class="interlanguage-link interwiki-sq mw-list-item"><a href="https://sq.wikipedia.org/wiki/Rust_(gjuh%C3%AB_programimi)" title="Rust (gjuhë programimi) — албанский" lang="sq" hreflang="sq" data-title="Rust (gjuhë programimi)" data-language-autonym="Shqip" data-language-local-name="албанский" class="interlanguage-link-target"><span>Shqip</span></a></li><li class="interlanguage-link interwiki-sr mw-list-item"><a href="https://sr.wikipedia.org/wiki/Rust_(%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D1%81%D0%BA%D0%B8_%D1%98%D0%B5%D0%B7%D0%B8%D0%BA)" title="Rust (програмски језик) — сербский" lang="sr" hreflang="sr" data-title="Rust (програмски језик)" data-language-autonym="Српски / srpski" data-language-local-name="сербский" class="interlanguage-link-target"><span>Српски / srpski</span></a></li><li class="interlanguage-link interwiki-sv mw-list-item"><a href="https://sv.wikipedia.org/wiki/Rust_(programspr%C3%A5k)" title="Rust (programspråk) — шведский" lang="sv" hreflang="sv" data-title="Rust (programspråk)" data-language-autonym="Svenska" data-language-local-name="шведский" class="interlanguage-link-target"><span>Svenska</span></a></li><li class="interlanguage-link interwiki-sw mw-list-item"><a href="https://sw.wikipedia.org/wiki/Rust" title="Rust — суахили" lang="sw" hreflang="sw" data-title="Rust" data-language-autonym="Kiswahili" data-language-local-name="суахили" class="interlanguage-link-target"><span>Kiswahili</span></a></li><li class="interlanguage-link interwiki-te mw-list-item"><a href="https://te.wikipedia.org/wiki/%E0%B0%B0%E0%B0%B8%E0%B1%8D%E0%B0%9F%E0%B1%8D_(%E0%B0%AA%E0%B1%8D%E0%B0%B0%E0%B1%8B%E0%B0%97%E0%B1%8D%E0%B0%B0%E0%B0%BE%E0%B0%AE%E0%B0%BF%E0%B0%82%E0%B0%97%E0%B1%8D_%E0%B0%AD%E0%B0%BE%E0%B0%B7)" title="రస్ట్ (ప్రోగ్రామింగ్ భాష) — телугу" lang="te" hreflang="te" data-title="రస్ట్ (ప్రోగ్రామింగ్ భాష)" data-language-autonym="తెలుగు" data-language-local-name="телугу" class="interlanguage-link-target"><span>తెలుగు</span></a></li><li class="interlanguage-link interwiki-th mw-list-item"><a href="https://th.wikipedia.org/wiki/%E0%B8%A0%E0%B8%B2%E0%B8%A9%E0%B8%B2%E0%B8%A3%E0%B8%B1%E0%B8%AA%E0%B8%95%E0%B9%8C" title="ภาษารัสต์ — тайский" lang="th" hreflang="th" data-title="ภาษารัสต์" data-language-autonym="ไทย" data-language-local-name="тайский" class="interlanguage-link-target"><span>ไทย</span></a></li><li class="interlanguage-link interwiki-tok mw-list-item"><a href="https://tok.wikipedia.org/wiki/toki_ilo_Wasi" title="toki ilo Wasi — токипона" lang="tok" hreflang="tok" data-title="toki ilo Wasi" data-language-autonym="Toki pona" data-language-local-name="токипона" class="interlanguage-link-target"><span>Toki pona</span></a></li><li class="interlanguage-link interwiki-tr mw-list-item"><a href="https://tr.wikipedia.org/wiki/Rust_(programlama_dili)" title="Rust (programlama dili) — турецкий" lang="tr" hreflang="tr" data-title="Rust (programlama dili)" data-language-autonym="Türkçe" data-language-local-name="турецкий" class="interlanguage-link-target"><span>Türkçe</span></a></li><li class="interlanguage-link interwiki-uk mw-list-item"><a href="https://uk.wikipedia.org/wiki/Rust_(%D0%BC%D0%BE%D0%B2%D0%B0_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D1%83%D0%B2%D0%B0%D0%BD%D0%BD%D1%8F)" title="Rust (мова програмування) — украинский" lang="uk" hreflang="uk" data-title="Rust (мова програмування)" data-language-autonym="Українська" data-language-local-name="украинский" class="interlanguage-link-target"><span>Українська</span></a></li><li class="interlanguage-link interwiki-vi mw-list-item"><a href="https://vi.wikipedia.org/wiki/Rust_(ng%C3%B4n_ng%E1%BB%AF_l%E1%BA%ADp_tr%C3%ACnh)" title="Rust (ngôn ngữ lập trình) — вьетнамский" lang="vi" hreflang="vi" data-title="Rust (ngôn ngữ lập trình)" data-language-autonym="Tiếng Việt" data-language-local-name="вьетнамский" class="interlanguage-link-target"><span>Tiếng Việt</span></a></li><li class="interlanguage-link interwiki-zh-min-nan mw-list-item"><a href="https://zh-min-nan.wikipedia.org/wiki/Rust_(pian-t%C3%AAng_g%C3%BA-gi%C3%A2n)" title="Rust (pian-têng gú-giân) — миньнань" lang="nan" hreflang="nan" data-title="Rust (pian-têng gú-giân)" data-language-autonym="閩南語 / Bân-lâm-gí" data-language-local-name="миньнань" class="interlanguage-link-target"><span>閩南語 / Bân-lâm-gí</span></a></li><li class="interlanguage-link interwiki-zh-yue mw-list-item"><a href="https://zh-yue.wikipedia.org/wiki/Rust" title="Rust — кантонский" lang="yue" hreflang="yue" data-title="Rust" data-language-autonym="粵語" data-language-local-name="кантонский" class="interlanguage-link-target"><span>粵語</span></a></li><li class="interlanguage-link interwiki-zh mw-list-item"><a href="https://zh.wikipedia.org/wiki/Rust_(%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80)" title="Rust (编程语言) — китайский" lang="zh" hreflang="zh" data-title="Rust (编程语言)" data-language-autonym="中文" data-language-local-name="китайский" class="interlanguage-link-target"><span>中文</span></a></li>
+			</ul>
+			<div class="after-portlet after-portlet-lang"><span class="wb-langlinks-edit wb-langlinks-link"><a href="https://www.wikidata.org/wiki/Special:EntityPage/Q575650#sitelinks-wikipedia" title="Править ссылки на другие языки" class="wbc-editpage">Править ссылки</a></span></div>
+		</div>
+
+	</div>
+</div>
+</header>
+				<div class="vector-page-toolbar">
+					<div class="vector-page-toolbar-container">
+						<div id="left-navigation">
+							<nav aria-label="Пространства имён">
+								
+<div id="p-associated-pages" class="vector-menu vector-menu-tabs mw-portlet mw-portlet-associated-pages"  >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			<li id="ca-nstab-main" class="selected mw-list-item vector-tab-noicon"><a data-mw-interface  href="/wiki/Rust_(%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)" title="Просмотреть контентную страницу [c]" accesskey="c" class=""><span>Статья</span></a>
+</li>
+<li id="ca-talk" class="mw-list-item vector-tab-noicon"><a data-mw-interface  href="/wiki/%D0%9E%D0%B1%D1%81%D1%83%D0%B6%D0%B4%D0%B5%D0%BD%D0%B8%D0%B5:Rust_(%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)" rel="discussion" title="Обсуждение основной страницы [t]" accesskey="t" class=""><span>Обсуждение</span></a>
+</li>
+
+			
+		</ul>
+		
+	</div>
+</div>
+
+								
+<div id="vector-variants-dropdown" class="vector-dropdown emptyPortlet"  >
+	<input type="checkbox" id="vector-variants-dropdown-checkbox" role="button" aria-haspopup="true" data-event-name="ui.dropdown-vector-variants-dropdown" class="vector-dropdown-checkbox " aria-label="Изменить вариант языка"    >
+	<label id="vector-variants-dropdown-label" for="vector-variants-dropdown-checkbox" class="vector-dropdown-label cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet" aria-hidden="true"  ><span class="vector-dropdown-label-text">русский</span>
+	</label>
+	<div class="vector-dropdown-content">
+
+
+					
+<div id="p-variants" class="vector-menu mw-portlet mw-portlet-variants emptyPortlet"  >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			
+		</ul>
+		
+	</div>
+</div>
+
+				
+	</div>
+</div>
+
+							</nav>
+						</div>
+						<div id="right-navigation" class="vector-collapsible">
+							<nav aria-label="Просмотры">
+			    
+<div id="p-views" class="vector-menu vector-menu-tabs mw-portlet mw-portlet-views"  >
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			<li id="ca-view" class="selected mw-list-item vector-menu-item--collapsible vector-tab-noicon"><a data-mw-interface  href="/wiki/Rust_(%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)" class=""><span>Читать</span></a>
+</li>
+<li id="ca-ve-edit" class="mw-list-item vector-menu-item--collapsible vector-tab-noicon"><a data-mw-interface  href="/w/index.php?title=Rust_(%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)&amp;veaction=edit" title="Редактировать данную страницу [v]" accesskey="v" class=""><span>Править</span></a>
+</li>
+<li id="ca-edit" class="collapsible mw-list-item vector-menu-item--collapsible vector-tab-noicon"><a data-mw-interface  href="/w/index.php?title=Rust_(%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)&amp;action=edit" title="Править исходный текст этой страницы [e]" accesskey="e" class=""><span>Править код</span></a>
+</li>
+<li id="ca-history" class="mw-list-item vector-menu-item--collapsible vector-tab-noicon"><a data-mw-interface  href="/w/index.php?title=Rust_(%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)&amp;action=history" title="Журнал изменений страницы [h]" accesskey="h" class=""><span>История</span></a>
+</li>
+<li id="ca-bookmark" class="mw-list-item vector-menu-item--collapsible"><a href="#" class="cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--icon-only reading-lists-bookmark" id="" title="Добавьте эту страницу в список сохранённого"><span class="vector-icon mw-ui-icon-bookmarkOutline mw-ui-icon-wikimedia-bookmarkOutline cdx-button__icon"></span>
+
+<span>Сохранить</span>
+</a>
+</li>
+
+			
+		</ul>
+		
+	</div>
+</div>
+
+			</nav>
+
+							<nav class="vector-page-tools-landmark" aria-label="Инструменты для страниц">
+								
+<div id="vector-page-tools-dropdown" class="vector-dropdown vector-page-tools-dropdown"  >
+	<input type="checkbox" id="vector-page-tools-dropdown-checkbox" role="button" aria-haspopup="true" data-event-name="ui.dropdown-vector-page-tools-dropdown" class="vector-dropdown-checkbox "  aria-label="Инструменты"   >
+	<label id="vector-page-tools-dropdown-label" for="vector-page-tools-dropdown-checkbox" class="vector-dropdown-label cdx-button cdx-button--fake-button cdx-button--fake-button--enabled cdx-button--weight-quiet cdx-button--icon-only " aria-hidden="true"  ><span class="vector-icon mw-ui-icon-verticalEllipsis mw-ui-icon-wikimedia-verticalEllipsis cdx-button__icon"></span>
+
+<span class="vector-dropdown-label-text">Инструменты</span>
+	</label>
+	<div class="vector-dropdown-content">
+
+
+									<div id="vector-page-tools-unpinned-container" class="vector-unpinned-container">
+						
+<div id="vector-page-tools" class="vector-page-tools vector-pinnable-element">
+	<div
+	class="vector-pinnable-header vector-page-tools-pinnable-header vector-pinnable-header-unpinned"
+	data-feature-name="page-tools-pinned"
+	data-pinnable-element-id="vector-page-tools"
+	data-pinned-container-id="vector-page-tools-pinned-container"
+	data-unpinned-container-id="vector-page-tools-unpinned-container"
+>
+	<div class="vector-pinnable-header-label">Инструменты</div>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-pin-button" data-event-name="pinnable-header.vector-page-tools.pin" aria-label="Move Инструменты to sidebar">переместить в боковую панель</button>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-unpin-button" data-event-name="pinnable-header.vector-page-tools.unpin" aria-label="Hide Инструменты">скрыть</button>
+</div>
+
+	
+<div id="p-cactions" class="vector-menu mw-portlet mw-portlet-cactions emptyPortlet vector-has-collapsible-items"  >
+	<div class="vector-menu-heading">
+		Действия
+	</div>
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			<li id="ca-view-more" class="selected mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/wiki/Rust_(%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)" class=""><span class="vector-icon mw-ui-icon-eye mw-ui-icon-wikimedia-eye cdx-button__icon"></span>
+
+<span>Читать</span></a>
+</li>
+<li id="ca-ve-edit-more" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/w/index.php?title=Rust_(%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)&amp;veaction=edit" title="Редактировать данную страницу [v]" accesskey="v" class=""><span class="vector-icon mw-ui-icon-edit mw-ui-icon-wikimedia-edit cdx-button__icon"></span>
+
+<span>Править</span></a>
+</li>
+<li id="ca-edit-more" class="collapsible mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/w/index.php?title=Rust_(%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)&amp;action=edit" title="Править исходный текст этой страницы [e]" accesskey="e" class=""><span class="vector-icon mw-ui-icon-wikiText mw-ui-icon-wikimedia-wikiText cdx-button__icon"></span>
+
+<span>Править код</span></a>
+</li>
+<li id="ca-history-more" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="/w/index.php?title=Rust_(%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)&amp;action=history" title="Журнал изменений страницы [h]" accesskey="h" class=""><span class="vector-icon mw-ui-icon-history mw-ui-icon-wikimedia-history cdx-button__icon"></span>
+
+<span>История</span></a>
+</li>
+<li id="ca-bookmark-more" class="mw-list-item vector-menu-item--collapsible"><a data-mw-interface  href="#" class="reading-lists-bookmark" title="Добавьте эту страницу в список сохранённого"><span class="vector-icon mw-ui-icon-bookmarkOutline mw-ui-icon-wikimedia-bookmarkOutline cdx-button__icon"></span>
+
+<span>Сохранить</span></a>
+</li>
+
+			
+		</ul>
+		
+	</div>
+</div>
+
+<div id="p-tb" class="vector-menu mw-portlet mw-portlet-tb"  >
+	<div class="vector-menu-heading">
+		Основное
+	</div>
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			<li id="t-whatlinkshere" class="mw-list-item"><a href="/wiki/%D0%A1%D0%BB%D1%83%D0%B6%D0%B5%D0%B1%D0%BD%D0%B0%D1%8F:%D0%A1%D1%81%D1%8B%D0%BB%D0%BA%D0%B8_%D1%81%D1%8E%D0%B4%D0%B0/Rust_(%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)" title="Список всех страниц, ссылающихся на данную [j]" accesskey="j"><span>Ссылки сюда</span></a></li><li id="t-recentchangeslinked" class="mw-list-item"><a href="/wiki/%D0%A1%D0%BB%D1%83%D0%B6%D0%B5%D0%B1%D0%BD%D0%B0%D1%8F:%D0%A1%D0%B2%D1%8F%D0%B7%D0%B0%D0%BD%D0%BD%D1%8B%D0%B5_%D0%BF%D1%80%D0%B0%D0%B2%D0%BA%D0%B8/Rust_(%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)" rel="nofollow" title="Последние изменения в страницах, на которые ссылается эта страница [k]" accesskey="k"><span>Связанные правки</span></a></li><li id="t-permalink" class="mw-list-item"><a href="/w/index.php?title=Rust_(%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)&amp;oldid=155736281" title="Постоянная ссылка на эту версию страницы"><span>Постоянная ссылка</span></a></li><li id="t-info" class="mw-list-item"><a href="/w/index.php?title=Rust_(%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)&amp;action=info" title="Подробнее об этой странице"><span>Сведения о странице</span></a></li><li id="t-cite" class="mw-list-item"><a href="/w/index.php?title=%D0%A1%D0%BB%D1%83%D0%B6%D0%B5%D0%B1%D0%BD%D0%B0%D1%8F:%D0%A6%D0%B8%D1%82%D0%B0%D1%82%D0%B0&amp;page=Rust_%28%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F%29&amp;id=155736281&amp;wpFormIdentifier=titleform" title="Информация о том, как цитировать эту страницу"><span>Цитировать страницу</span></a></li><li id="t-urlshortener" class="mw-list-item"><a href="/w/index.php?title=%D0%A1%D0%BB%D1%83%D0%B6%D0%B5%D0%B1%D0%BD%D0%B0%D1%8F:UrlShortener&amp;url=https%3A%2F%2Fru.wikipedia.org%2Fwiki%2FRust_%28%25D1%258F%25D0%25B7%25D1%258B%25D0%25BA_%25D0%25BF%25D1%2580%25D0%25BE%25D0%25B3%25D1%2580%25D0%25B0%25D0%25BC%25D0%25BC%25D0%25B8%25D1%2580%25D0%25BE%25D0%25B2%25D0%25B0%25D0%25BD%25D0%25B8%25D1%258F%29"><span>Получить сокращённый URL</span></a></li><li id="parsermigration-switch-to-legacy" class="mw-list-item"><a href="/w/index.php?title=Rust_(%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)&amp;useparsoid=0"><span>Переключиться на устаревший парсер</span></a></li>
+		</ul>
+		
+	</div>
+</div>
+
+<div id="p-coll-print_export" class="vector-menu mw-portlet mw-portlet-coll-print_export"  >
+	<div class="vector-menu-heading">
+		Печать/экспорт
+	</div>
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			<li id="coll-download-as-rl" class="mw-list-item"><a href="/w/index.php?title=%D0%A1%D0%BB%D1%83%D0%B6%D0%B5%D0%B1%D0%BD%D0%B0%D1%8F:DownloadAsPdf&amp;page=Rust_%28%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F%29&amp;action=show-download-screen" title="Скачать эту страницу как файл PDF"><span>Скачать как PDF</span></a></li><li id="t-print" class="mw-list-item"><a href="javascript:print();" rel="alternate" title="Версия этой страницы для печати [p]" accesskey="p"><span>Версия для печати</span></a></li>
+		</ul>
+		
+	</div>
+</div>
+
+<div id="p-wikibase-otherprojects" class="vector-menu mw-portlet mw-portlet-wikibase-otherprojects"  >
+	<div class="vector-menu-heading">
+		В других проектах
+	</div>
+	<div class="vector-menu-content">
+		
+		<ul class="vector-menu-content-list">
+			
+			<li class="wb-otherproject-link wb-otherproject-abstract mw-list-item"><a href="https://abstract.wikipedia.org/wiki/Q575650" hreflang="en"><span>Abstract Wikipedia</span></a></li><li class="wb-otherproject-link wb-otherproject-commons mw-list-item"><a href="https://commons.wikimedia.org/wiki/Category:Rust_(programming_language)" hreflang="en"><span>Викисклад</span></a></li><li class="wb-otherproject-link wb-otherproject-wikinews mw-list-item"><a href="https://ru.wikinews.org/wiki/%D0%9A%D0%B0%D1%82%D0%B5%D0%B3%D0%BE%D1%80%D0%B8%D1%8F:Rust_(%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)" hreflang="ru"><span>Викиновости</span></a></li><li id="t-wikibase" class="wb-otherproject-link wb-otherproject-wikibase-dataitem mw-list-item"><a href="https://www.wikidata.org/wiki/Special:EntityPage/Q575650" title="Ссылка на связанный элемент репозитория данных [g]" accesskey="g"><span>Элемент Викиданных</span></a></li>
+		</ul>
+		
+	</div>
+</div>
+
+</div>
+
+									</div>
+				
+	</div>
+</div>
+
+							</nav>
+						</div>
+					</div>
+				</div>
+				<div class="vector-column-end no-font-mode-scale">
+					<div class="vector-sticky-pinned-container">
+						<nav class="vector-page-tools-landmark" aria-label="Инструменты для страниц">
+							<div id="vector-page-tools-pinned-container" class="vector-pinned-container">
+				
+							</div>
+		</nav>
+						<nav class="vector-appearance-landmark" aria-label="Внешний вид">
+							<div id="vector-appearance-pinned-container" class="vector-pinned-container">
+				<div id="vector-appearance" class="vector-appearance vector-pinnable-element">
+	<div
+	class="vector-pinnable-header vector-appearance-pinnable-header vector-pinnable-header-pinned"
+	data-feature-name="appearance-pinned"
+	data-pinnable-element-id="vector-appearance"
+	data-pinned-container-id="vector-appearance-pinned-container"
+	data-unpinned-container-id="vector-appearance-unpinned-container"
+>
+	<div class="vector-pinnable-header-label">Внешний вид</div>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-pin-button" data-event-name="pinnable-header.vector-appearance.pin" aria-label="Move Внешний вид to sidebar">переместить в боковую панель</button>
+	<button class="vector-pinnable-header-toggle-button vector-pinnable-header-unpin-button" data-event-name="pinnable-header.vector-appearance.unpin" aria-label="Hide Внешний вид">скрыть</button>
+</div>
+
+
+</div>
+
+							</div>
+		</nav>
+					</div>
+				</div>
+				<div id="bodyContent" class="vector-body" aria-labelledby="firstHeading" data-mw-ve-target-container>
+					<div class="vector-body-before-content">
+							<div class="mw-indicators">
+		</div>
+
+						<div id="siteSub" class="noprint">Материал из Википедии — свободной энциклопедии</div>
+						<div id="contentSub"><div id="mw-content-subtitle"></div></div>
+						
+					</div>
+					
+					<div id="mw-content-text" class="mw-body-content"><div class="mw-content-ltr mw-parser-output" lang="ru" dir="ltr" data-mw-parsoid-version="0.25.0.0-alpha1" data-mw-html-version="2.8.0"><section data-mw-section-id="0" id="mwAQ"><div role="note" class="hatnote navigation-not-searchable noprint dabhide" about="#mwt1" typeof="mw:Transclusion" id="mwAg" data-mw='{"parts":[{"template":{"target":{"wt":"другие значения","href":"./Шаблон:Другие_значения"},"params":{"1":{"wt":"Rust"}},"i":0}}]}'>У этого термина существуют и другие значения, см. <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Rust" title="Rust" class="mw-disambig">Rust</a>.</div>
+<table class="infobox infobox-6a9088c96e1fec8b " style="" data-name="Язык программирования" about="#mwt2" typeof="mw:Transclusion" id="mwAw" data-mw='{"parts":[{"template":{"target":{"wt":"Карточка языка программирования","href":"./Шаблон:Карточка_языка_программирования"},"params":{},"i":0}}]}'><tbody><tr><th colspan="2" scope="colgroup" class="infobox-above " style="">Rust</th></tr><tr><td colspan="2" class="infobox-image " style=""> <span data-wikidata-claim-id="Q575650$af9d1494-4bcd-8f67-cc0e-ec1b58c75ce4" class="wikidata-claim" data-wikidata-property-id="P154"><span class="wikidata-snak wikidata-main-snak"><span typeof="mw:File/Frameless"><a href="https://ru.wikipedia.org/wiki/Файл:Rust_programming_language_black_logo.svg" class="mw-file-description"><img resource="https://ru.wikipedia.org/wiki/Файл:Rust_programming_language_black_logo.svg" src="//thumb.wikimedia.org/wikipedia/commons/thumb/d/d5/Rust_programming_language_black_logo.svg/120px-Rust_programming_language_black_logo.svg.png?utm_source=ru.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail" decoding="async" loading="lazy" srcset="//thumb.wikimedia.org/wikipedia/commons/thumb/d/d5/Rust_programming_language_black_logo.svg/250px-Rust_programming_language_black_logo.svg.png?utm_source=ru.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail 2x" alt="Изображение логотипа" data-file-width="106" data-file-height="106" data-file-type="drawing" height="80" width="80" class="mw-file-element"/></a></span></span></span> </td></tr>
+<tr>
+<th scope="row" class=" plainlist">Класс языка</th>
+<td class=" plainlist">
+<span data-wikidata-claim-id="Q575650$8cb82e3a-4083-8ae8-f711-725859b4c966" class="wikidata-claim" data-wikidata-property-id="P31"><span class="wikidata-snak wikidata-main-snak"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Язык_программирования" title="Язык программирования">язык программирования</a></span></span></td>
+</tr>
+<tr>
+<th scope="row" class=" plainlist">Появился в</th>
+<td class=" plainlist">
+<span data-wikidata-claim-id="Q575650$51afdb8e-4e0f-eb7b-8e03-cd1b747c92fc" class="wikidata-claim" data-wikidata-property-id="P571"><span class="wikidata-snak wikidata-main-snak"><span class="nowrap"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/2006_год" title="2006 год">2006</a></span></span><sup about="#mwt3" class="mw-ref reference" id="cite_ref-_b76b19b6b4729a4f_1-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_b76b19b6b4729a4f"},"body":{"id":"mw-reference-text-cite_note-_b76b19b6b4729a4f-1"}}'><a href="#cite_note-_b76b19b6b4729a4f-1" id="mwBA"><span class="mw-reflink-text" id="mwBQ"><span class="cite-bracket" id="mwBg">[</span>1<span class="cite-bracket" id="mwBw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/><sup about="#mwt5" class="mw-ref reference" id="cite_ref-_7304d0456c6aa265_2-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_7304d0456c6aa265"},"body":{"id":"mw-reference-text-cite_note-_7304d0456c6aa265-2"}}'><a href="#cite_note-_7304d0456c6aa265-2" id="mwCA"><span class="mw-reflink-text" id="mwCQ"><span class="cite-bracket" id="mwCg">[</span>2<span class="cite-bracket" id="mwCw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span></td>
+</tr>
+<tr>
+<th scope="row" class=" plainlist">Автор</th>
+<td class=" plainlist">
+<span data-wikidata-claim-id="Q575650$26f46e69-4f46-1745-7ee3-b802b4e8f519" class="wikidata-claim" data-wikidata-property-id="P287"><span class="wikidata-snak wikidata-main-snak"><style data-mw-deduplicate="TemplateStyles:r138326222" typeof="mw:Extension/templatestyles" about="#mwt7" data-mw='{"name":"templatestyles","attrs":{"src":"Module:Wikidata/redLink/styles.css"},"body":{"extsrc":""}}'>/* stub */</style><span class="ts-Wikidata-redLink plainlinks"><a rel="mw:ExtLink" href="https://ru.wikipedia.org/w/index.php?title=%D0%93%D1%80%D1%8D%D0%B9%D0%B4%D0%BE%D0%BD_%D0%A5%D0%BE%D1%80&amp;action=edit&amp;editintro=T:Нет_статьи/editintro&amp;preload=T:Нет_статьи/preload&amp;preloadparams%5B%5D=Q28937563&amp;preloadparams%5B%5D=%D0%93%D1%80%D1%8D%D0%B9%D0%B4%D0%BE%D0%BD+%D0%A5%D0%BE%D1%80&amp;preloadparams%5B%5D=%D0%9F%D0%B5%D1%80%D1%81%D0%BE%D0%BD%D0%B0" class="external text" data-mw-original-href="//ru.wikipedia.org/w/index.php?title=%D0%93%D1%80%D1%8D%D0%B9%D0%B4%D0%BE%D0%BD_%D0%A5%D0%BE%D1%80&amp;action=edit&amp;editintro=T:Нет_статьи/editintro&amp;preload=T:Нет_статьи/preload&amp;preloadparams%5B%5D=Q28937563&amp;preloadparams%5B%5D=%D0%93%D1%80%D1%8D%D0%B9%D0%B4%D0%BE%D0%BD+%D0%A5%D0%BE%D1%80&amp;preloadparams%5B%5D=%D0%9F%D0%B5%D1%80%D1%81%D0%BE%D0%BD%D0%B0">Грэйдон Хор</a></span><sup class="noprint"><a rel="mw:WikiLink/Interwiki" href="https://www.wikidata.org/wiki/Q28937563#sitelinks-wikipedia" title="d:Q28937563" class="extiw"><span>[вд]</span></a></sup></span></span></td>
+</tr>
+<tr>
+<th scope="row" class=" plainlist">Разработчик</th>
+<td class=" plainlist">
+<span data-wikidata-claim-id="Q575650$1112d112-4765-ba28-8975-a496cfa405c9" class="wikidata-claim" data-wikidata-property-id="P178"><span class="wikidata-snak wikidata-main-snak"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Mozilla" title="Mozilla"><span lang="Mozilla">Mozilla</span></a></span><sup about="#mwt8" class="mw-ref reference" id="cite_ref-_b76b19b6b4729a4f_1-1" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_b76b19b6b4729a4f"},"body":{"id":"mw-reference-text-cite_note-_b76b19b6b4729a4f-1"}}'><a href="#cite_note-_b76b19b6b4729a4f-1" id="mwDA"><span class="mw-reflink-text" id="mwDQ"><span class="cite-bracket" id="mwDg">[</span>1<span class="cite-bracket" id="mwDw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span>,<span typeof="mw:Entity"> </span><span data-wikidata-claim-id="Q575650$f5d0bdd6-4876-786e-fee3-ba10771b90c0" class="wikidata-claim" data-wikidata-property-id="P178"><span class="wikidata-snak wikidata-main-snak"><link rel="mw-deduplicated-inline-style" href="mw-data:TemplateStyles:r138326222" about="#mwt10" typeof="mw:Extension/templatestyles" data-mw='{"name":"templatestyles","attrs":{"src":"Module:Wikidata/redLink/styles.css"},"body":{"extsrc":""}}'/><span class="ts-Wikidata-redLink plainlinks"><a rel="mw:ExtLink" href="https://ru.wikipedia.org/w/index.php?title=%D0%93%D1%80%D1%8D%D0%B9%D0%B4%D0%BE%D0%BD_%D0%A5%D0%BE%D1%80&amp;action=edit&amp;editintro=T:Нет_статьи/editintro&amp;preload=T:Нет_статьи/preload&amp;preloadparams%5B%5D=Q28937563&amp;preloadparams%5B%5D=%D0%93%D1%80%D1%8D%D0%B9%D0%B4%D0%BE%D0%BD+%D0%A5%D0%BE%D1%80&amp;preloadparams%5B%5D=%D0%9F%D0%B5%D1%80%D1%81%D0%BE%D0%BD%D0%B0" class="external text" data-mw-original-href="//ru.wikipedia.org/w/index.php?title=%D0%93%D1%80%D1%8D%D0%B9%D0%B4%D0%BE%D0%BD_%D0%A5%D0%BE%D1%80&amp;action=edit&amp;editintro=T:Нет_статьи/editintro&amp;preload=T:Нет_статьи/preload&amp;preloadparams%5B%5D=Q28937563&amp;preloadparams%5B%5D=%D0%93%D1%80%D1%8D%D0%B9%D0%B4%D0%BE%D0%BD+%D0%A5%D0%BE%D1%80&amp;preloadparams%5B%5D=%D0%9F%D0%B5%D1%80%D1%81%D0%BE%D0%BD%D0%B0">Грэйдон Хор</a></span><sup class="noprint"><a rel="mw:WikiLink/Interwiki" href="https://www.wikidata.org/wiki/Q28937563#sitelinks-wikipedia" title="d:Q28937563" class="extiw"><span>[вд]</span></a></sup></span><sup about="#mwt11" class="mw-ref reference" id="cite_ref-_b76b19b6b4729a4f_1-2" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_b76b19b6b4729a4f"},"body":{"id":"mw-reference-text-cite_note-_b76b19b6b4729a4f-1"}}'><a href="#cite_note-_b76b19b6b4729a4f-1" id="mwEA"><span class="mw-reflink-text" id="mwEQ"><span class="cite-bracket" id="mwEg">[</span>1<span class="cite-bracket" id="mwEw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/><sup about="#mwt13" class="mw-ref reference" id="cite_ref-_38a1fdad89127c2b_3-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_38a1fdad89127c2b"},"body":{"id":"mw-reference-text-cite_note-_38a1fdad89127c2b-3"}}'><a href="#cite_note-_38a1fdad89127c2b-3" id="mwFA"><span class="mw-reflink-text" id="mwFQ"><span class="cite-bracket" id="mwFg">[</span>3<span class="cite-bracket" id="mwFw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span><span typeof="mw:Entity"> </span>и<span typeof="mw:Entity"> </span><span data-wikidata-claim-id="Q575650$4ab203bb-45dc-bd5e-97b7-0866e7cc2a39" class="wikidata-claim" data-wikidata-property-id="P178"><span class="wikidata-snak wikidata-main-snak"><link rel="mw-deduplicated-inline-style" href="mw-data:TemplateStyles:r138326222" about="#mwt15" typeof="mw:Extension/templatestyles" data-mw='{"name":"templatestyles","attrs":{"src":"Module:Wikidata/redLink/styles.css"},"body":{"extsrc":""}}'/><span class="ts-Wikidata-redLink plainlinks"><a rel="mw:ExtLink" href="https://ru.wikipedia.org/w/index.php?title=Rust_Foundation&amp;action=edit&amp;editintro=T:Нет_статьи/editintro&amp;preload=T:Нет_статьи/preload&amp;preloadparams%5B%5D=Q105394699&amp;preloadparams%5B%5D=Rust+Foundation&amp;preloadparams%5B%5D=%D0%A3%D0%BD%D0%B8%D0%B2%D0%B5%D1%80%D1%81%D0%B0%D0%BB%D1%8C%D0%BD%D0%B0%D1%8F+%D0%BA%D0%B0%D1%80%D1%82%D0%BE%D1%87%D0%BA%D0%B0" class="external text" data-mw-original-href="//ru.wikipedia.org/w/index.php?title=Rust_Foundation&amp;action=edit&amp;editintro=T:Нет_статьи/editintro&amp;preload=T:Нет_статьи/preload&amp;preloadparams%5B%5D=Q105394699&amp;preloadparams%5B%5D=Rust+Foundation&amp;preloadparams%5B%5D=%D0%A3%D0%BD%D0%B8%D0%B2%D0%B5%D1%80%D1%81%D0%B0%D0%BB%D1%8C%D0%BD%D0%B0%D1%8F+%D0%BA%D0%B0%D1%80%D1%82%D0%BE%D1%87%D0%BA%D0%B0">Rust Foundation</a></span><sup class="noprint"><a rel="mw:WikiLink/Interwiki" href="https://www.wikidata.org/wiki/Q105394699#sitelinks-wikipedia" title="d:Q105394699" class="extiw"><span>[вд]</span></a></sup></span><sup about="#mwt16" class="mw-ref reference" id="cite_ref-_3653b1a5420d91d7_4-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_3653b1a5420d91d7"},"body":{"id":"mw-reference-text-cite_note-_3653b1a5420d91d7-4"}}'><a href="#cite_note-_3653b1a5420d91d7-4" id="mwGA"><span class="mw-reflink-text" id="mwGQ"><span class="cite-bracket" id="mwGg">[</span>4<span class="cite-bracket" id="mwGw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span></td>
+</tr>
+<tr>
+<th scope="row" class=" plainlist"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Расширение_имени_файла" title="Расширение имени файла">Расширение</a> файлов</th>
+<td class=" plainlist">
+<span data-wikidata-claim-id="Q575650$a83044b9-4809-d1ea-4051-737c75b348fd" class="wikidata-claim" data-wikidata-property-id="P1195"><span class="wikidata-snak wikidata-main-snak"><code>.rs</code></span></span></td>
+</tr>
+<tr>
+<th scope="row" class=" plainlist"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Стадии_разработки_программного_обеспечения" title="Стадии разработки программного обеспечения">Выпуск</a></th>
+<td class=" plainlist">
+<span data-wikidata-property-id="P348" class="no-wikidata"><ul><li><span class="wikidata-claim" data-wikidata-property-id="P348" data-wikidata-claim-id="Q575650$f2f52809-4ce5-53f2-9002-e317c54fd77d"><span class="wikidata-snak wikidata-main-snak">1.100.0</span> (<span data-wikidata-hash="8d0a518fb36957f7499c86e0ee8aaf62be3dbb7f" class="wikidata-snak"><span class="nowrap"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/12_ноября" title="12 ноября">12 ноября</a> <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/2026_год" title="2026 год">2026</a></span></span>)<sup about="#mwt18" class="mw-ref reference" id="cite_ref-_baf38547fe2bef44_5-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_baf38547fe2bef44"},"body":{"id":"mw-reference-text-cite_note-_baf38547fe2bef44-5"}}'><a href="#cite_note-_baf38547fe2bef44-5" id="mwHA"><span class="mw-reflink-text" id="mwHQ"><span class="cite-bracket" id="mwHg">[</span>5<span class="cite-bracket" id="mwHw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span></li></ul></span></td>
+</tr>
+<tr>
+<th scope="row" class=" plainlist">Испытал влияние</th>
+<td class=" plainlist">
+<span data-wikidata-claim-id="Q575650$0f6f4cc7-431f-b4ff-fc1d-c64b2b0891b6" class="wikidata-claim" data-wikidata-property-id="P737"><span class="wikidata-snak wikidata-main-snak"><link rel="mw-deduplicated-inline-style" href="mw-data:TemplateStyles:r138326222" about="#mwt20" typeof="mw:Extension/templatestyles" data-mw='{"name":"templatestyles","attrs":{"src":"Module:Wikidata/redLink/styles.css"},"body":{"extsrc":""}}'/><span class="ts-Wikidata-redLink plainlinks"><a rel="mw:ExtLink" href="https://ru.wikipedia.org/w/index.php?title=Alef&amp;action=edit&amp;editintro=T:Нет_статьи/editintro&amp;preload=T:Нет_статьи/preload&amp;preloadparams%5B%5D=Q1895587&amp;preloadparams%5B%5D=Alef&amp;preloadparams%5B%5D=%D0%A3%D0%BD%D0%B8%D0%B2%D0%B5%D1%80%D1%81%D0%B0%D0%BB%D1%8C%D0%BD%D0%B0%D1%8F+%D0%BA%D0%B0%D1%80%D1%82%D0%BE%D1%87%D0%BA%D0%B0" class="external text" data-mw-original-href="//ru.wikipedia.org/w/index.php?title=Alef&amp;action=edit&amp;editintro=T:Нет_статьи/editintro&amp;preload=T:Нет_статьи/preload&amp;preloadparams%5B%5D=Q1895587&amp;preloadparams%5B%5D=Alef&amp;preloadparams%5B%5D=%D0%A3%D0%BD%D0%B8%D0%B2%D0%B5%D1%80%D1%81%D0%B0%D0%BB%D1%8C%D0%BD%D0%B0%D1%8F+%D0%BA%D0%B0%D1%80%D1%82%D0%BE%D1%87%D0%BA%D0%B0">Alef</a></span><sup class="noprint"><a rel="mw:WikiLink/Interwiki" href="https://www.wikidata.org/wiki/Q1895587#sitelinks-wikipedia" title="d:Q1895587" class="extiw"><span>[вд]</span></a></sup></span><sup about="#mwt21" class="mw-ref reference" id="cite_ref-_4a765839a375de2b_6-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_4a765839a375de2b"},"body":{"id":"mw-reference-text-cite_note-_4a765839a375de2b-6"}}'><a href="#cite_note-_4a765839a375de2b-6" id="mwIA"><span class="mw-reflink-text" id="mwIQ"><span class="cite-bracket" id="mwIg">[</span>6<span class="cite-bracket" id="mwIw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span>,<span typeof="mw:Entity"> </span><span data-wikidata-claim-id="Q575650$d74a5980-407f-5d0c-bf2d-bc67605f7625" class="wikidata-claim" data-wikidata-property-id="P737"><span class="wikidata-snak wikidata-main-snak"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/C++" title="C++"><span lang="C++">C++</span></a></span><sup about="#mwt23" class="mw-ref reference" id="cite_ref-_4a765839a375de2b_6-1" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_4a765839a375de2b"},"body":{"id":"mw-reference-text-cite_note-_4a765839a375de2b-6"}}'><a href="#cite_note-_4a765839a375de2b-6" id="mwJA"><span class="mw-reflink-text" id="mwJQ"><span class="cite-bracket" id="mwJg">[</span>6<span class="cite-bracket" id="mwJw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span>,<span typeof="mw:Entity"> </span><span data-wikidata-claim-id="Q575650$31a9d7dc-4260-de2a-44c4-18d1ff2b2015" class="wikidata-claim" data-wikidata-property-id="P737"><span class="wikidata-snak wikidata-main-snak"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/C_Sharp" title="C Sharp"><span lang="C#">C#</span></a></span><sup about="#mwt25" class="mw-ref reference" id="cite_ref-_4a765839a375de2b_6-2" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_4a765839a375de2b"},"body":{"id":"mw-reference-text-cite_note-_4a765839a375de2b-6"}}'><a href="#cite_note-_4a765839a375de2b-6" id="mwKA"><span class="mw-reflink-text" id="mwKQ"><span class="cite-bracket" id="mwKg">[</span>6<span class="cite-bracket" id="mwKw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span>,<span typeof="mw:Entity"> </span><span data-wikidata-claim-id="Q575650$cf8f0928-40f9-a2dd-5ccd-325e9537f269" class="wikidata-claim" data-wikidata-property-id="P737"><span class="wikidata-snak wikidata-main-snak"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Cyclone_(язык_программирования)" title="Cyclone (язык программирования)">Cyclone</a></span><sup about="#mwt27" class="mw-ref reference" id="cite_ref-_4a765839a375de2b_6-3" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_4a765839a375de2b"},"body":{"id":"mw-reference-text-cite_note-_4a765839a375de2b-6"}}'><a href="#cite_note-_4a765839a375de2b-6" id="mwLA"><span class="mw-reflink-text" id="mwLQ"><span class="cite-bracket" id="mwLg">[</span>6<span class="cite-bracket" id="mwLw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span>,<span typeof="mw:Entity"> </span><span data-wikidata-claim-id="Q575650$dcf696e9-45e1-59ea-2ce0-d39dda0fb718" class="wikidata-claim" data-wikidata-property-id="P737"><span class="wikidata-snak wikidata-main-snak"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Erlang" title="Erlang"><span lang="Erlang">Erlang</span></a></span><sup about="#mwt29" class="mw-ref reference" id="cite_ref-_4a765839a375de2b_6-4" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_4a765839a375de2b"},"body":{"id":"mw-reference-text-cite_note-_4a765839a375de2b-6"}}'><a href="#cite_note-_4a765839a375de2b-6" id="mwMA"><span class="mw-reflink-text" id="mwMQ"><span class="cite-bracket" id="mwMg">[</span>6<span class="cite-bracket" id="mwMw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span>,<span typeof="mw:Entity"> </span><span data-wikidata-claim-id="Q575650$da7b1079-4ff9-2a26-3255-191a4b18fbad" class="wikidata-claim" data-wikidata-property-id="P737"><span class="wikidata-snak wikidata-main-snak"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Haskell" title="Haskell"><span lang="Haskell">Haskell</span></a></span><sup about="#mwt31" class="mw-ref reference" id="cite_ref-_4a765839a375de2b_6-5" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_4a765839a375de2b"},"body":{"id":"mw-reference-text-cite_note-_4a765839a375de2b-6"}}'><a href="#cite_note-_4a765839a375de2b-6" id="mwNA"><span class="mw-reflink-text" id="mwNQ"><span class="cite-bracket" id="mwNg">[</span>6<span class="cite-bracket" id="mwNw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span>,<span typeof="mw:Entity"> </span><span data-wikidata-claim-id="Q575650$b831148e-4169-dcd3-2245-1319928ee5cc" class="wikidata-claim" data-wikidata-property-id="P737"><span class="wikidata-snak wikidata-main-snak"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Limbo" title="Limbo">Limbo</a></span><sup about="#mwt33" class="mw-ref reference" id="cite_ref-_4a765839a375de2b_6-6" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_4a765839a375de2b"},"body":{"id":"mw-reference-text-cite_note-_4a765839a375de2b-6"}}'><a href="#cite_note-_4a765839a375de2b-6" id="mwOA"><span class="mw-reflink-text" id="mwOQ"><span class="cite-bracket" id="mwOg">[</span>6<span class="cite-bracket" id="mwOw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span>,<span typeof="mw:Entity"> </span><span data-wikidata-claim-id="Q575650$224d1577-4209-0082-d2b3-1e79fb35bf2b" class="wikidata-claim" data-wikidata-property-id="P737"><span class="wikidata-snak wikidata-main-snak"><link rel="mw-deduplicated-inline-style" href="mw-data:TemplateStyles:r138326222" about="#mwt35" typeof="mw:Extension/templatestyles" data-mw='{"name":"templatestyles","attrs":{"src":"Module:Wikidata/redLink/styles.css"},"body":{"extsrc":""}}'/><span class="ts-Wikidata-redLink plainlinks"><a rel="mw:ExtLink" href="https://ru.wikipedia.org/w/index.php?title=Newsqueak&amp;action=edit&amp;editintro=T:Нет_статьи/editintro&amp;preload=T:Нет_статьи/preload&amp;preloadparams%5B%5D=Q262003&amp;preloadparams%5B%5D=Newsqueak&amp;preloadparams%5B%5D=%D0%A3%D0%BD%D0%B8%D0%B2%D0%B5%D1%80%D1%81%D0%B0%D0%BB%D1%8C%D0%BD%D0%B0%D1%8F+%D0%BA%D0%B0%D1%80%D1%82%D0%BE%D1%87%D0%BA%D0%B0" class="external text" data-mw-original-href="//ru.wikipedia.org/w/index.php?title=Newsqueak&amp;action=edit&amp;editintro=T:Нет_статьи/editintro&amp;preload=T:Нет_статьи/preload&amp;preloadparams%5B%5D=Q262003&amp;preloadparams%5B%5D=Newsqueak&amp;preloadparams%5B%5D=%D0%A3%D0%BD%D0%B8%D0%B2%D0%B5%D1%80%D1%81%D0%B0%D0%BB%D1%8C%D0%BD%D0%B0%D1%8F+%D0%BA%D0%B0%D1%80%D1%82%D0%BE%D1%87%D0%BA%D0%B0">Newsqueak</a></span><sup class="noprint"><a rel="mw:WikiLink/Interwiki" href="https://www.wikidata.org/wiki/Q262003#sitelinks-wikipedia" title="d:Q262003" class="extiw"><span>[вд]</span></a></sup></span><sup about="#mwt36" class="mw-ref reference" id="cite_ref-_4a765839a375de2b_6-7" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_4a765839a375de2b"},"body":{"id":"mw-reference-text-cite_note-_4a765839a375de2b-6"}}'><a href="#cite_note-_4a765839a375de2b-6" id="mwPA"><span class="mw-reflink-text" id="mwPQ"><span class="cite-bracket" id="mwPg">[</span>6<span class="cite-bracket" id="mwPw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span>,<span typeof="mw:Entity"> </span><span data-wikidata-claim-id="Q575650$eb977e8d-472a-c17f-c162-9b4154d4a48f" class="wikidata-claim" data-wikidata-property-id="P737"><span class="wikidata-snak wikidata-main-snak"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/OCaml" title="OCaml">OCaml</a></span><sup about="#mwt38" class="mw-ref reference" id="cite_ref-_4a765839a375de2b_6-8" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_4a765839a375de2b"},"body":{"id":"mw-reference-text-cite_note-_4a765839a375de2b-6"}}'><a href="#cite_note-_4a765839a375de2b-6" id="mwQA"><span class="mw-reflink-text" id="mwQQ"><span class="cite-bracket" id="mwQg">[</span>6<span class="cite-bracket" id="mwQw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span>,<span typeof="mw:Entity"> </span><span data-wikidata-claim-id="Q575650$fdb9758d-4d92-4fde-82de-f28da9a09c1d" class="wikidata-claim" data-wikidata-property-id="P737"><span class="wikidata-snak wikidata-main-snak"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Ruby" title="Ruby"><span lang="Ruby">Ruby</span></a></span><sup about="#mwt40" class="mw-ref reference" id="cite_ref-_4a765839a375de2b_6-9" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_4a765839a375de2b"},"body":{"id":"mw-reference-text-cite_note-_4a765839a375de2b-6"}}'><a href="#cite_note-_4a765839a375de2b-6" id="mwRA"><span class="mw-reflink-text" id="mwRQ"><span class="cite-bracket" id="mwRg">[</span>6<span class="cite-bracket" id="mwRw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span>,<span typeof="mw:Entity"> </span><span data-wikidata-claim-id="Q575650$fa1cbce3-48e7-d6c6-e1cd-add39211aa2e" class="wikidata-claim" data-wikidata-property-id="P737"><span class="wikidata-snak wikidata-main-snak"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Scheme" title="Scheme"><span lang="Scheme">Scheme</span></a></span><sup about="#mwt42" class="mw-ref reference" id="cite_ref-_4a765839a375de2b_6-10" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_4a765839a375de2b"},"body":{"id":"mw-reference-text-cite_note-_4a765839a375de2b-6"}}'><a href="#cite_note-_4a765839a375de2b-6" id="mwSA"><span class="mw-reflink-text" id="mwSQ"><span class="cite-bracket" id="mwSg">[</span>6<span class="cite-bracket" id="mwSw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span>,<span typeof="mw:Entity"> </span><span data-wikidata-claim-id="Q575650$d0649cfe-4c31-604b-3eae-bbf03fb01446" class="wikidata-claim" data-wikidata-property-id="P737"><span class="wikidata-snak wikidata-main-snak"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Standard_ML" title="Standard ML">SML</a></span><sup about="#mwt44" class="mw-ref reference" id="cite_ref-_4a765839a375de2b_6-11" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_4a765839a375de2b"},"body":{"id":"mw-reference-text-cite_note-_4a765839a375de2b-6"}}'><a href="#cite_note-_4a765839a375de2b-6" id="mwTA"><span class="mw-reflink-text" id="mwTQ"><span class="cite-bracket" id="mwTg">[</span>6<span class="cite-bracket" id="mwTw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span><span typeof="mw:Entity"> </span>и<span typeof="mw:Entity"> </span><span data-wikidata-claim-id="Q575650$359f5746-48f1-318d-e780-6050c82430e6" class="wikidata-claim" data-wikidata-property-id="P737"><span class="wikidata-snak wikidata-main-snak"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Swift_(язык_программирования)" title="Swift (язык программирования)"><span lang="Swift">Swift</span></a></span><sup about="#mwt46" class="mw-ref reference" id="cite_ref-_4a765839a375de2b_6-12" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_4a765839a375de2b"},"body":{"id":"mw-reference-text-cite_note-_4a765839a375de2b-6"}}'><a href="#cite_note-_4a765839a375de2b-6" id="mwUA"><span class="mw-reflink-text" id="mwUQ"><span class="cite-bracket" id="mwUg">[</span>6<span class="cite-bracket" id="mwUw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span></td>
+</tr>
+<tr>
+<th scope="row" class=" plainlist"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Лицензия_на_программное_обеспечение" title="Лицензия на программное обеспечение">Лицензия</a></th>
+<td class=" plainlist">
+<span data-wikidata-claim-id="Q575650$6733c85a-4e7e-8d3d-108f-e04ff11902d7" class="wikidata-claim" data-wikidata-property-id="P275"><span class="wikidata-snak wikidata-main-snak"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Apache_License_2.0" title="Apache License 2.0" class="mw-redirect">Apache License 2.0</a></span><sup about="#mwt48" class="mw-ref reference" id="cite_ref-_55da6edfcee17c1e_7-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_55da6edfcee17c1e"},"body":{"id":"mw-reference-text-cite_note-_55da6edfcee17c1e-7"}}'><a href="#cite_note-_55da6edfcee17c1e-7" id="mwVA"><span class="mw-reflink-text" id="mwVQ"><span class="cite-bracket" id="mwVg">[</span>7<span class="cite-bracket" id="mwVw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/><sup about="#mwt50" class="mw-ref reference" id="cite_ref-_46bbb290e8c2100f_8-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_46bbb290e8c2100f"},"body":{"id":"mw-reference-text-cite_note-_46bbb290e8c2100f-8"}}'><a href="#cite_note-_46bbb290e8c2100f-8" id="mwWA"><span class="mw-reflink-text" id="mwWQ"><span class="cite-bracket" id="mwWg">[</span>8<span class="cite-bracket" id="mwWw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span><span typeof="mw:Entity"> </span>и<span typeof="mw:Entity"> </span><span data-wikidata-claim-id="Q575650$6f040bfd-4fcf-dcd0-38bc-3c913dbf3031" class="wikidata-claim" data-wikidata-property-id="P275"><span class="wikidata-snak wikidata-main-snak"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Лицензия_MIT" title="Лицензия MIT">лицензия MIT</a></span><sup about="#mwt52" class="mw-ref reference" id="cite_ref-_55da6edfcee17c1e_7-1" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_55da6edfcee17c1e"},"body":{"id":"mw-reference-text-cite_note-_55da6edfcee17c1e-7"}}'><a href="#cite_note-_55da6edfcee17c1e-7" id="mwXA"><span class="mw-reflink-text" id="mwXQ"><span class="cite-bracket" id="mwXg">[</span>7<span class="cite-bracket" id="mwXw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/><sup about="#mwt54" class="mw-ref reference" id="cite_ref-_46bbb290e8c2100f_8-1" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_46bbb290e8c2100f"},"body":{"id":"mw-reference-text-cite_note-_46bbb290e8c2100f-8"}}'><a href="#cite_note-_46bbb290e8c2100f-8" id="mwYA"><span class="mw-reflink-text" id="mwYQ"><span class="cite-bracket" id="mwYg">[</span>8<span class="cite-bracket" id="mwYw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span></td>
+</tr>
+<tr>
+<th scope="row" class=" plainlist">Сайт</th>
+<td class=" plainlist">
+<span data-wikidata-claim-id="Q575650$1ca969f0-4efe-ebf7-a980-c43e4525aada" class="wikidata-claim" data-wikidata-property-id="P856"><span class="wikidata-snak wikidata-main-snak"><a rel="mw:ExtLink nofollow" href="https://rust-lang.org/" class="external text">rust-lang.org</a><span typeof="mw:Entity"> </span><small class="ref-info" title="на английском языке">(англ.)</small></span></span></td>
+</tr>
+<tr>
+<th scope="row" class=" plainlist">Платформа</th>
+<td class=" plainlist">
+<span data-wikidata-claim-id="Q575650$00f228cd-452f-b062-9568-bd3a044863fd" class="wikidata-claim" data-wikidata-property-id="P400"><span class="wikidata-snak wikidata-main-snak"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Windows" title="Windows"><span lang="Windows">Windows</span></a></span><sup about="#mwt56" class="mw-ref reference" id="cite_ref-_d28a1d897486820f_9-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_d28a1d897486820f"},"body":{"id":"mw-reference-text-cite_note-_d28a1d897486820f-9"}}'><a href="#cite_note-_d28a1d897486820f-9" id="mwZA"><span class="mw-reflink-text" id="mwZQ"><span class="cite-bracket" id="mwZg">[</span>9<span class="cite-bracket" id="mwZw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span>,<span typeof="mw:Entity"> </span><span data-wikidata-claim-id="Q575650$f26117d7-40b7-8b95-808d-e023d6f53962" class="wikidata-claim" data-wikidata-property-id="P400"><span class="wikidata-snak wikidata-main-snak"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Linux" title="Linux"><span lang="Linux">Linux</span></a></span><sup about="#mwt58" class="mw-ref reference" id="cite_ref-_d28a1d897486820f_9-1" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_d28a1d897486820f"},"body":{"id":"mw-reference-text-cite_note-_d28a1d897486820f-9"}}'><a href="#cite_note-_d28a1d897486820f-9" id="mwaA"><span class="mw-reflink-text" id="mwaQ"><span class="cite-bracket" id="mwag">[</span>9<span class="cite-bracket" id="mwaw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span>,<span typeof="mw:Entity"> </span><span data-wikidata-claim-id="Q575650$ea67cb26-44cb-f88c-c406-076f44169c38" class="wikidata-claim" data-wikidata-property-id="P400"><span class="wikidata-snak wikidata-main-snak"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/MacOS" title="MacOS"><span lang="macOS">macOS</span></a></span><sup about="#mwt60" class="mw-ref reference" id="cite_ref-_d28a1d897486820f_9-2" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_d28a1d897486820f"},"body":{"id":"mw-reference-text-cite_note-_d28a1d897486820f-9"}}'><a href="#cite_note-_d28a1d897486820f-9" id="mwbA"><span class="mw-reflink-text" id="mwbQ"><span class="cite-bracket" id="mwbg">[</span>9<span class="cite-bracket" id="mwbw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span>,<span typeof="mw:Entity"> </span><span data-wikidata-claim-id="Q575650$9accd6f7-4d0b-14a8-7461-19e16707ce86" class="wikidata-claim" data-wikidata-property-id="P400"><span class="wikidata-snak wikidata-main-snak"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/FreeBSD" title="FreeBSD">FreeBSD</a></span><sup about="#mwt62" class="mw-ref reference" id="cite_ref-_d28a1d897486820f_9-3" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_d28a1d897486820f"},"body":{"id":"mw-reference-text-cite_note-_d28a1d897486820f-9"}}'><a href="#cite_note-_d28a1d897486820f-9" id="mwcA"><span class="mw-reflink-text" id="mwcQ"><span class="cite-bracket" id="mwcg">[</span>9<span class="cite-bracket" id="mwcw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span>,<span typeof="mw:Entity"> </span><span data-wikidata-claim-id="Q575650$3c75b1f0-49d7-ffb5-45f3-36dc862839ab" class="wikidata-claim" data-wikidata-property-id="P400"><span class="wikidata-snak wikidata-main-snak"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/IOS" title="IOS"><span lang="iOS">iOS</span></a></span><sup about="#mwt64" class="mw-ref reference" id="cite_ref-_d28a1d897486820f_9-4" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_d28a1d897486820f"},"body":{"id":"mw-reference-text-cite_note-_d28a1d897486820f-9"}}'><a href="#cite_note-_d28a1d897486820f-9" id="mwdA"><span class="mw-reflink-text" id="mwdQ"><span class="cite-bracket" id="mwdg">[</span>9<span class="cite-bracket" id="mwdw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span>,<span typeof="mw:Entity"> </span><span data-wikidata-claim-id="Q575650$dbe692de-4021-dbc5-e557-89aa4fff780a" class="wikidata-claim" data-wikidata-property-id="P400"><span class="wikidata-snak wikidata-main-snak"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Android" title="Android"><span lang="Android">Android</span></a></span><sup about="#mwt66" class="mw-ref reference" id="cite_ref-_d28a1d897486820f_9-5" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_d28a1d897486820f"},"body":{"id":"mw-reference-text-cite_note-_d28a1d897486820f-9"}}'><a href="#cite_note-_d28a1d897486820f-9" id="mweA"><span class="mw-reflink-text" id="mweQ"><span class="cite-bracket" id="mweg">[</span>9<span class="cite-bracket" id="mwew">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span>,<span typeof="mw:Entity"> </span><span data-wikidata-claim-id="Q575650$265e9235-469a-b1f2-3eae-f947e9772375" class="wikidata-claim" data-wikidata-property-id="P400"><span class="wikidata-snak wikidata-main-snak"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Кроссплатформенность" title="Кроссплатформенность">кроссплатформенность</a></span><sup about="#mwt68" class="mw-ref reference" id="cite_ref-_d28a1d897486820f_9-6" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_d28a1d897486820f"},"body":{"id":"mw-reference-text-cite_note-_d28a1d897486820f-9"}}'><a href="#cite_note-_d28a1d897486820f-9" id="mwfA"><span class="mw-reflink-text" id="mwfQ"><span class="cite-bracket" id="mwfg">[</span>9<span class="cite-bracket" id="mwfw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span>,<span typeof="mw:Entity"> </span><span data-wikidata-claim-id="Q575650$8d4f7086-4d3a-bb04-e73c-9026221b9077" class="wikidata-claim" data-wikidata-property-id="P400"><span class="wikidata-snak wikidata-main-snak"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/WebAssembly" title="WebAssembly">WebAssembly</a></span><sup about="#mwt70" class="mw-ref reference" id="cite_ref-_d28a1d897486820f_9-7" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_d28a1d897486820f"},"body":{"id":"mw-reference-text-cite_note-_d28a1d897486820f-9"}}'><a href="#cite_note-_d28a1d897486820f-9" id="mwgA"><span class="mw-reflink-text" id="mwgQ"><span class="cite-bracket" id="mwgg">[</span>9<span class="cite-bracket" id="mwgw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span><span typeof="mw:Entity"> </span>и<span typeof="mw:Entity"> </span><span data-wikidata-claim-id="Q575650$ad32a431-4670-0f16-aee3-c18acd5a3be8" class="wikidata-claim" data-wikidata-property-id="P400"><span class="wikidata-snak wikidata-main-snak"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Redox" title="Redox">Redox</a></span><sup about="#mwt72" class="mw-ref reference" id="cite_ref-_d28a1d897486820f_9-8" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_d28a1d897486820f"},"body":{"id":"mw-reference-text-cite_note-_d28a1d897486820f-9"}}'><a href="#cite_note-_d28a1d897486820f-9" id="mwhA"><span class="mw-reflink-text" id="mwhQ"><span class="cite-bracket" id="mwhg">[</span>9<span class="cite-bracket" id="mwhw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span></td>
+</tr>
+<tr>
+<th scope="row" class=" plainlist"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Операционная_система" title="Операционная система">ОС</a></th>
+<td class=" plainlist">
+<span data-wikidata-claim-id="Q575650$62c98499-4d38-0c70-3975-f6a2701cb6fb" class="wikidata-claim" data-wikidata-property-id="P306"><span class="wikidata-snak wikidata-main-snak"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Кроссплатформенность" title="Кроссплатформенность">кроссплатформенность</a></span><sup about="#mwt74" class="mw-ref reference" id="cite_ref-_51fa9ce57f55d423_10-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"_51fa9ce57f55d423"},"body":{"id":"mw-reference-text-cite_note-_51fa9ce57f55d423-10"}}'><a href="#cite_note-_51fa9ce57f55d423-10" id="mwiA"><span class="mw-reflink-text" id="mwiQ"><span class="cite-bracket" id="mwig">[</span>10<span class="cite-bracket" id="mwiw">]</span></span></a></sup><link rel="mw:PageProp/Category" href="./Категория:Википедия:Статьи_с_источниками_из_Викиданных"/></span></td>
+</tr><tr><td colspan="2" class="infobox-below " style=";"><span data-wikidata-claim-id="Q575650$f47f4e75-4ab8-ef07-24eb-096cf642978e" class="wikidata-claim" data-wikidata-property-id="P373"><span class="wikidata-snak wikidata-main-snak"><span typeof="mw:File"><a href="https://ru.wikipedia.org/wiki/commons:Category:Rust_(programming_language)" title="commons:Category:Rust (programming language)"><img resource="https://ru.wikipedia.org/wiki/Файл:Commons-logo.svg" src="//thumb.wikimedia.org/wikipedia/commons/thumb/4/4a/Commons-logo.svg/20px-Commons-logo.svg.png?utm_source=ru.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail" decoding="async" loading="lazy" srcset="//thumb.wikimedia.org/wikipedia/commons/thumb/4/4a/Commons-logo.svg/40px-Commons-logo.svg.png?utm_source=ru.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail 2x" alt="Логотип Викисклада" data-file-width="1024" data-file-height="1376" data-file-type="drawing" height="20" width="15" class="mw-file-element"/></a></span> <a rel="mw:WikiLink/Interwiki" href="https://commons.wikimedia.org/wiki/Category:Rust%20(programming%20language)" title="commons:Category:Rust (programming language)" class="extiw">Медиафайлы на Викискладе</a></span></span></td></tr>
+</tbody></table><span class="mw-empty-elt" about="#mwt2"><link rel="mw:PageProp/Category" href="./Категория:Языки_программирования_по_алфавиту"/><link rel="mw:PageProp/Category" href="./Категория:Языки_программирования,_появившиеся_в_2006_году"/><link rel="mw:PageProp/Category" href="./Категория:ПРО:ИТ:Статьи_по_алфавиту"/><link rel="mw:PageProp/Category" href="./Категория:ПРО:ИТ:Последняя_правка:_в_текущем_году"/></span>
+<figure class="mw-default-size" typeof="mw:File/Thumb" id="mwjA"><a href="https://ru.wikipedia.org/wiki/Файл:Ferris.png" class="mw-file-description" id="mwjQ"><img resource="https://ru.wikipedia.org/wiki/Файл:Ferris.png" src="//thumb.wikimedia.org/wikipedia/commons/thumb/f/fd/Ferris.png/250px-Ferris.png?utm_source=ru.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail" decoding="async" loading="lazy" srcset="//upload.wikimedia.org/wikipedia/commons/f/fd/Ferris.png?utm_source=ru.wikipedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail_unscaled 2x" data-file-width="460" data-file-height="307" data-file-type="bitmap" height="167" width="250" class="mw-file-element" id="mwjg"/></a><figcaption id="mwjw">Ferris (Феррис) — неофициальный <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Маскот" title="Маскот" id="mwkA">маскот</a> языка Rust</figcaption></figure>
+<p id="mwkQ"><b id="mwkg">Rust</b> (Раст, <span typeof="mw:Nowiki mw:Transclusion" about="#mwt76" id="mwkw" data-mw='{"parts":[{"template":{"target":{"wt":"МФА2","href":"./Шаблон:МФА2"},"params":{"1":{"wt":"rʌst"}},"i":0}}]}'>[</span><span class="IPA" about="#mwt76"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Международный_фонетический_алфавит" title="Международный фонетический алфавит">rʌst</a></span><span typeof="mw:Nowiki" about="#mwt76">]</span>; <i about="#mwt77" typeof="mw:Transclusion" id="mwlA" data-mw='{"parts":[{"template":{"target":{"wt":"Tr-en","href":"./Шаблон:Tr-en"},"params":{"1":{"wt":"ржавчина"},"s":{"wt":"rust"}},"i":0}}]}'><span lang="en">rust</span></i><span typeof="mw:Entity" about="#mwt77"> </span><span about="#mwt77">с</span><span typeof="mw:Entity" about="#mwt77"> </span><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Английский_язык" title="Английский язык" about="#mwt77">англ.</a><span class="nowrap" about="#mwt77"><span typeof="mw:Entity"> </span>—</span><span typeof="mw:Entity" about="#mwt77"> </span><span about="#mwt77">«ржавчина»</span>) — <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Мультипарадигменный_язык_программирования" title="Мультипарадигменный язык программирования" id="mwlQ">мультипарадигменный</a> <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Компилируемый_язык_программирования" title="Компилируемый язык программирования" id="mwlg">компилируемый</a> <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Язык_программирования" title="Язык программирования" id="mwlw">язык программирования</a> общего назначения, сочетающий <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Парадигма_программирования" title="Парадигма программирования" id="mwmA">парадигмы</a> <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Функциональное_программирование" title="Функциональное программирование" id="mwmQ">функционального</a> и <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Процедурное_программирование" title="Процедурное программирование" id="mwmg">процедурного программирования</a> с <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Объектная_система?action=edit&amp;redlink=1" title="Объектная система (страница отсутствует)" class="new" typeof="mw:LocalizedAttrs" id="mwmw" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Объектная система"]}}'>объектной системой</a>, основанной на <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Типаж_(абстрактный_тип)" title="Типаж (абстрактный тип)" id="mwnA">типажах</a>. Управление памятью осуществляется через механизм «владения» с использованием <span data-interwiki-lang="en" data-interwiki-article="affine type" about="#mwt78" typeof="mw:Transclusion" id="mwnQ" data-mw='{"parts":[{"template":{"target":{"wt":"нп5","href":"./Шаблон:Нп5"},"params":{"1":{"wt":"аффинный тип"},"2":{"wt":"аффинных типов"},"3":{"wt":"en"},"4":{"wt":"affine type"}},"i":0}}]}'><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Аффинный_тип?action=edit&amp;redlink=1" title="Аффинный тип (страница отсутствует)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Аффинный тип"]}}'>аффинных типов</a></span><sup class="noprint" style="font-style:normal; font-weight:normal;" about="#mwt78" id="mwng"><a rel="mw:WikiLink/Interwiki" href="https://en.wikipedia.org/wiki/affine%20type" title="en:affine type" class="extiw"><span title="affine type — версия статьи «Аффинный тип» на английском языке">[англ.]</span></a></sup><sup about="#mwt80" class="mw-ref reference" id="cite_ref-kernel_in_rust_11-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"kernel_in_rust"}}'><a href="#cite_note-kernel_in_rust-11" id="mwnw"><span class="mw-reflink-text" id="mwoA"><span class="cite-bracket" id="mwoQ">[</span>11<span class="cite-bracket" id="mwog">]</span></span></a></sup>, что позволяет обходиться без системы <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Сборка_мусора" title="Сборка мусора" id="mwow">сборки мусора</a> во время исполнения программы. Rust <i id="mwpA">гарантирует</i> <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Безопасность_доступа_к_памяти" title="Безопасность доступа к памяти" id="mwpQ">безопасную работу с памятью</a> благодаря встроенной в компилятор системе статической проверки <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Ссылка_(программирование)" title="Ссылка (программирование)" id="mwpg">ссылок</a> (<span lang="en" style="font-style:italic;" about="#mwt79" typeof="mw:Transclusion" id="mwpw" data-mw='{"parts":[{"template":{"target":{"wt":"lang-en2","href":"./Шаблон:Lang-en2"},"params":{"1":{"wt":"borrow checker"}},"i":0}}]}'>borrow checker</span>). Имеются средства, позволяющие использовать приёмы <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Объектно-ориентированное_программирование" title="Объектно-ориентированное программирование" id="mwqA">объектно-ориентированного программирования</a><sup about="#mwt82" class="mw-ref reference" id="cite_ref-faq-design-patterns_12-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"faq-design-patterns"},"body":{"id":"mw-reference-text-cite_note-faq-design-patterns-12"}}'><a href="#cite_note-faq-design-patterns-12" id="mwqQ"><span class="mw-reflink-text" id="mwqg"><span class="cite-bracket" id="mwqw">[</span>12<span class="cite-bracket" id="mwrA">]</span></span></a></sup>.</p>
+
+<p id="mwrQ">Ключевые приоритеты языка: безопасность, скорость и <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Параллелизм_(информатика)" title="Параллелизм (информатика)" id="mwrg">параллелизм</a>. Rust пригоден для <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Системное_программирование" title="Системное программирование" id="mwrw">системного программирования</a> — в частности, он рассматривается как перспективный язык для разработки <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Ядро_операционной_системы" title="Ядро операционной системы" id="mwsA">ядер операционных систем</a><sup about="#mwt85" class="mw-ref reference" id="cite_ref-kernel_in_rust_11-1" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"kernel_in_rust"},"body":{"id":"mw-reference-text-cite_note-kernel_in_rust-11"}}'><a href="#cite_note-kernel_in_rust-11" id="mwsQ"><span class="mw-reflink-text" id="mwsg"><span class="cite-bracket" id="mwsw">[</span>11<span class="cite-bracket" id="mwtA">]</span></span></a></sup>. Rust сопоставим по скорости и возможностям с <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Си_(язык_программирования)" title="Си (язык программирования)" id="mwtQ">Си</a>/<a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/C++" title="C++" id="mwtg">C++</a>, однако даёт большую безопасность при работе с памятью, что обеспечивается встроенными в язык механизмами контроля ссылок. Производительности программ на Rust способствует использование «абстракций с нулевой стоимостью»<sup about="#mwt88" class="mw-ref reference" id="cite_ref-13" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-13"}}'><a href="#cite_note-13" id="mwtw"><span class="mw-reflink-text" id="mwuA"><span class="cite-bracket" id="mwuQ">[</span>13<span class="cite-bracket" id="mwug">]</span></span></a></sup>.</p>
+
+<p id="mwuw">После нескольких лет активной разработки первая стабильная версия (1.0) вышла 15 мая 2015 года, после чего новые версии выходят раз в 6 недель<sup about="#mwt90" class="mw-ref reference" id="cite_ref-14" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-14"}}'><a href="#cite_note-14" id="mwvA"><span class="mw-reflink-text" id="mwvQ"><span class="cite-bracket" id="mwvg">[</span>14<span class="cite-bracket" id="mwvw">]</span></span></a></sup>. Для версий языка, вышедших после 1.0, заявлена обратная совместимость<sup about="#mwt92" class="mw-ref reference" id="cite_ref-15" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-15"}}'><a href="#cite_note-15" id="mwwA"><span class="mw-reflink-text" id="mwwQ"><span class="cite-bracket" id="mwwg">[</span>15<span class="cite-bracket" id="mwww">]</span></span></a></sup>.</p>
+
+<p id="mwxA">Разрабатывается с 2010-х годов сообществом <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Mozilla" title="Mozilla" id="mwxQ">Mozilla Research</a> и финансировался фондом <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Mozilla_Foundation" title="Mozilla Foundation" id="mwxg">Mozilla Foundation</a>. С 2020 года планировалась передача интеллектуальной собственности и процессов развития и финансирования языка в организацию Rust Foundation<sup about="#mwt94" class="mw-ref reference" id="cite_ref-16" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-16"}}'><a href="#cite_note-16" id="mwxw"><span class="mw-reflink-text" id="mwyA"><span class="cite-bracket" id="mwyQ">[</span>16<span class="cite-bracket" id="mwyg">]</span></span></a></sup>. 8 февраля 2021 года пять компаний-учредителей (<a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Amazon_Web_Services" title="Amazon Web Services" id="mwyw">AWS</a>, <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Huawei" title="Huawei" id="mwzA">Huawei</a>, <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Google_(компания)" title="Google (компания)" id="mwzQ">Google</a>, <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Microsoft" title="Microsoft" id="mwzg">Microsoft</a> и <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Mozilla" title="Mozilla" id="mwzw">Mozilla</a>) официально объявили о создании Rust Foundation<sup about="#mwt96" class="mw-ref reference" id="cite_ref-17" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-17"}}'><a href="#cite_note-17" id="mw0A"><span class="mw-reflink-text" id="mw0Q"><span class="cite-bracket" id="mw0g">[</span>17<span class="cite-bracket" id="mw0w">]</span></span></a></sup><sup about="#mwt98" class="mw-ref reference" id="cite_ref-18" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-18"}}'><a href="#cite_note-18" id="mw1A"><span class="mw-reflink-text" id="mw1Q"><span class="cite-bracket" id="mw1g">[</span>18<span class="cite-bracket" id="mw1w">]</span></span></a></sup>.</p>
+
+<p id="mw2A">Десять лет подряд с 2016 по 2025 год Rust занимает первое место в списке самых любимых языков программирования («Most loved programming languages» / «Most admired programming languages») по версии ежегодного опроса разработчиков <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Stack_Overflow" title="Stack Overflow" id="mw2Q">Stack Overflow</a> Developer Survey<sup about="#mwt100" class="mw-ref reference" id="cite_ref-19" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-19"}}'><a href="#cite_note-19" id="mw2g"><span class="mw-reflink-text" id="mw2w"><span class="cite-bracket" id="mw3A">[</span>19<span class="cite-bracket" id="mw3Q">]</span></span></a></sup><sup about="#mwt102" class="mw-ref reference" id="cite_ref-20" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-20"}}'><a href="#cite_note-20" id="mw3g"><span class="mw-reflink-text" id="mw3w"><span class="cite-bracket" id="mw4A">[</span>20<span class="cite-bracket" id="mw4Q">]</span></span></a></sup><sup about="#mwt104" class="mw-ref reference" id="cite_ref-21" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-21"}}'><a href="#cite_note-21" id="mw4g"><span class="mw-reflink-text" id="mw4w"><span class="cite-bracket" id="mw5A">[</span>21<span class="cite-bracket" id="mw5Q">]</span></span></a></sup><sup about="#mwt106" class="mw-ref reference" id="cite_ref-22" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-22"}}'><a href="#cite_note-22" id="mw5g"><span class="mw-reflink-text" id="mw5w"><span class="cite-bracket" id="mw6A">[</span>22<span class="cite-bracket" id="mw6Q">]</span></span></a></sup><sup about="#mwt108" class="mw-ref reference" id="cite_ref-23" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-23"}}'><a href="#cite_note-23" id="mw6g"><span class="mw-reflink-text" id="mw6w"><span class="cite-bracket" id="mw7A">[</span>23<span class="cite-bracket" id="mw7Q">]</span></span></a></sup><sup about="#mwt110" class="mw-ref reference" id="cite_ref-24" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-24"}}'><a href="#cite_note-24" id="mw7g"><span class="mw-reflink-text" id="mw7w"><span class="cite-bracket" id="mw8A">[</span>24<span class="cite-bracket" id="mw8Q">]</span></span></a></sup><sup about="#mwt112" class="mw-ref reference" id="cite_ref-25" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-25"}}'><a href="#cite_note-25" id="mw8g"><span class="mw-reflink-text" id="mw8w"><span class="cite-bracket" id="mw9A">[</span>25<span class="cite-bracket" id="mw9Q">]</span></span></a></sup>.</p>
+
+<meta property="mw:PageProp/toc" id="mw9g" data-mw='{"autoGenerated":true}'/></section><section data-mw-section-id="1" id="mw9w" aria-labelledby="История"><div class="mw-heading mw-heading2"><h2 id="История"><span id=".D0.98.D1.81.D1.82.D0.BE.D1.80.D0.B8.D1.8F" typeof="mw:FallbackId"></span>История</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/w/index.php?title=Rust_(%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)&amp;veaction=edit&amp;section=1" title="Редактировать раздел «История»" class="mw-editsection-visualeditor"><span>править</span></a><span class="mw-editsection-divider"> | </span><a href="/w/index.php?title=Rust_(%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)&amp;action=edit&amp;section=1" title="Редактировать код раздела «История»"><span>править код</span></a><span class="mw-editsection-bracket">]</span></span></div>
+<p id="mw-A">Работа над языком была начата сотрудником <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Mozilla" title="Mozilla" id="mw-Q">Mozilla</a> <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Хор,_Грейдон?action=edit&amp;redlink=1" title="Хор, Грейдон (страница отсутствует)" class="new" typeof="mw:LocalizedAttrs" id="mw-g" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Хор, Грейдон"]}}'>Грейдоном Хором</a> в 2006 году. Автор дал проекту название Rust, по его словам, связанное с грибами семейства <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Пукциниевые_(порядок)" title="Пукциниевые (порядок)" id="mw-w">ржавчинные</a> (<span typeof="mw:Nowiki mw:Transclusion" about="#mwt113" id="mw_A" data-mw='{"parts":[{"template":{"target":{"wt":"lang-en","href":"./Шаблон:Lang-en"},"params":{"1":{"wt":"rust fungi"}},"i":0}}]}'></span><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Английский_язык" title="Английский язык" about="#mwt113">англ.</a><span typeof="mw:Entity" about="#mwt113"> </span><span lang="en" style="font-style:italic;" about="#mwt113" id="mw_Q">rust fungi</span>)<sup about="#mwt115" class="mw-ref reference" id="cite_ref-26" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-26"}}'><a href="#cite_note-26" id="mw_g"><span class="mw-reflink-text" id="mw_w"><span class="cite-bracket" id="mwAQA">[</span>26<span class="cite-bracket" id="mwAQE">]</span></span></a></sup>.</p>
+
+<p id="mwAQI">В 2009 году<sup about="#mwt117" class="mw-ref reference" id="cite_ref-proj-faq_27-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"proj-faq"},"body":{"id":"mw-reference-text-cite_note-proj-faq-27"}}'><a href="#cite_note-proj-faq-27" id="mwAQM"><span class="mw-reflink-text" id="mwAQQ"><span class="cite-bracket" id="mwAQU">[</span>27<span class="cite-bracket" id="mwAQY">]</span></span></a></sup> компания Mozilla начала отдельно спонсировать разработку Rust. Спустя год язык был официально представлен на Mozilla Summit 2010<sup about="#mwt119" class="mw-ref reference" id="cite_ref-future-tense_28-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"future-tense"},"body":{"id":"mw-reference-text-cite_note-future-tense-28"}}'><a href="#cite_note-future-tense-28" id="mwAQc"><span class="mw-reflink-text" id="mwAQg"><span class="cite-bracket" id="mwAQk">[</span>28<span class="cite-bracket" id="mwAQo">]</span></span></a></sup>. Изначальный компилятор, реализованный на <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/OCaml" title="OCaml" id="mwAQs">OCaml</a>, был заменён на новый, написанный на Rust и использовавший <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Low_Level_Virtual_Machine" title="Low Level Virtual Machine" class="mw-redirect" id="mwAQw">LLVM</a> для генерации машинного кода<sup about="#mwt121" class="mw-ref reference" id="cite_ref-rust-in-rust_29-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"rust-in-rust"},"body":{"id":"mw-reference-text-cite_note-rust-in-rust-29"}}'><a href="#cite_note-rust-in-rust-29" id="mwAQ0"><span class="mw-reflink-text" id="mwAQ4"><span class="cite-bracket" id="mwAQ8">[</span>29<span class="cite-bracket" id="mwARA">]</span></span></a></sup>; в следующем году новый компилятор впервые успешно <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Раскрутка_компилятора" title="Раскрутка компилятора" id="mwARE">скомпилировал сам себя</a><sup about="#mwt123" class="mw-ref reference" id="cite_ref-rust-compiles-rust_30-0" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{"name":"rust-compiles-rust"},"body":{"id":"mw-reference-text-cite_note-rust-compiles-rust-30"}}'><a href="#cite_note-rust-compiles-rust-30" id="mwARI"><span class="mw-reflink-text" id="mwARM"><span class="cite-bracket" id="mwARQ">[</span>30<span class="cite-bracket" id="mwARU">]</span></span></a></sup>.</p>
+
+<p id="mwARY">Первая официальная альфа-версия Rust (0.1) была выпущена в январе 2012 года<sup about="#mwt125" class="mw-ref reference" id="cite_ref-31" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-31"}}'><a href="#cite_note-31" id="mwARc"><span class="mw-reflink-text" id="mwARg"><span class="cite-bracket" id="mwARk">[</span>31<span class="cite-bracket" id="mwARo">]</span></span></a></sup>.</p>
+
+<p id="mwARs">В апреле 2013 года был запущен <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Servo_(движок)" title="Servo (движок)" id="mwARw">Servo</a> — экспериментальный проект компании Mozilla по разработке браузерного движка на Rust.<sup about="#mwt127" class="mw-ref reference" id="cite_ref-32" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-32"}}'><a href="#cite_note-32" id="mwAR0"><span class="mw-reflink-text" id="mwAR4"><span class="cite-bracket" id="mwAR8">[</span>32<span class="cite-bracket" id="mwASA">]</span></span></a></sup></p>
+
+<p id="mwASE">Первая стабильная версия Rust (1.0) вышла в мае 2015 года. Программные интерфейсы и возможности языка подверглись значительной ревизии, после которой по умолчанию оставлены только полностью готовые к применению возможности, реализация которых не будет изменяться в дальнейшем. Все остальные функции переведены в разряд экспериментальных и вынесены из поставки по умолчанию<sup about="#mwt129" class="mw-ref reference" id="cite_ref-33" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-33"}}'><a href="#cite_note-33" id="mwASI"><span class="mw-reflink-text" id="mwASM"><span class="cite-bracket" id="mwASQ">[</span>33<span class="cite-bracket" id="mwASU">]</span></span></a></sup>.</p>
+
+<p id="mwASY">В декабре 2022 года Rust стал первым языком, кроме <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Си_(язык_программирования)" title="Си (язык программирования)" id="mwASc">C</a> и <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Ассемблер_(язык_программирования)" title="Ассемблер (язык программирования)" class="mw-redirect" id="mwASg">ассемблера</a>, который поддерживается при разработке <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Ядро_Linux" title="Ядро Linux" id="mwASk">ядра Linux</a><sup about="#mwt131" class="mw-ref reference" id="cite_ref-34" rel="dc:references" typeof="mw:Extension/ref" data-mw='{"name":"ref","attrs":{},"body":{"id":"mw-reference-text-cite_note-34"}}'><a href="#cite_note-34" id="mwASo"><span class="mw-reflink-text" id="mwASs"><span class="cite-bracket" id="mwASw">[</span>34<span class="cite-bracket" id="mwAS0">]</span></span></a></sup>.</p>
+
+</section><section data-mw-section-id="2" id="mwAS4" aria-labelledby="Система_типов"><div class="mw-heading mw-heading2"><h2 id="Система_типов"><span id=".D0.A1.D0.B8.D1.81.D1.82.D0.B5.D0.BC.D0.B0_.D1.82.D0.B8.D0.BF.D0.BE.D0.B2" typeof="mw:FallbackId"></span>Система типов</h2><span class="mw-editsection"><span class="mw-editsection-bracket">[</span><a href="/w/index.php?title=Rust_(%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)&amp;veaction=edit&amp;section=2" title="Редактировать раздел «Система типов»" class="mw-editsection-visualeditor"><span>править</span></a><span class="mw-editsection-divider"> | </span><a href="/w/index.php?title=Rust_(%D1%8F%D0%B7%D1%8B%D0%BA_%D0%BF%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)&amp;action=edit&amp;section=2" title="Редактировать код раздела «Система типов»"><span>править код</span></a><span class="mw-editsection-bracket">]</span></span></div>
+<p id="mwAS8">Используется <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Сильная_типизация" title="Сильная типизация" class="mw-redirect" id="mwATA">сильная</a> <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Статическая_типизация" title="Статическая типизация" id="mwATE">статическая типизация</a>. Поддерживается <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Обобщённое_программирование" title="Обобщённое программирование" id="mwATI">обобщённое программирование</a> с поддержкой <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Параметрический_полиморфизм" title="Параметрический полиморфизм" id="mwATM">параметрического полиморфизма</a>, обеспечивается автоматический <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Вывод_типов" title="Вывод типов" id="mwATQ">вывод типов</a> для <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Локальная_переменная" title="Локальная переменная" id="mwATU">локальных переменных</a> (но не для параметров функций).</p>
+
+<p id="mwATY">Реализована поддержка <span data-interwiki-lang="en" data-interwiki-article="Unit type" about="#mwt132" typeof="mw:Transclusion" id="mwATc" data-mw='{"parts":[{"template":{"target":{"wt":"iw","href":"./Шаблон:Iw"},"params":{"1":{"wt":"Единичный тип"},"2":{"wt":"единичных типов"},"3":{"wt":"en"},"4":{"wt":"Unit type"}},"i":0}}]}'><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Единичный_тип?action=edit&amp;redlink=1" title="Единичный тип (страница отсутствует)" class="new" typeof="mw:LocalizedAttrs" data-mw-i18n='{"title":{"lang":"x-page","key":"red-link-title","params":["Единичный тип"]}}'>единичных типов</a></span><sup class="noprint" style="font-style:normal; font-weight:normal;" about="#mwt132" id="mwATg"><a rel="mw:WikiLink/Interwiki" href="https://en.wikipedia.org/wiki/Unit%20type" title="en:Unit type" class="extiw"><span title="Unit type — версия статьи «Единичный тип» на английском языке">[англ.]</span></a></sup> данных — типов, которые имеют ровно один экземпляр и не занимают места в памяти, примеры:</p>
+<ul id="mwATk"><li id="mwATo">пустой <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Кортеж_(информатика)" title="Кортеж (информатика)" id="mwATs">кортеж</a> <code id="mwATw">()</code>;</li>
+<li id="mwAT0">пустой <a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Массив_(программирование)" title="Массив (программирование)" class="mw-redirect" id="mwAT4">массив</a> (например, <code id="mwAT8">[u8; 0]</code>);</li>
+<li id="mwAUA"><a rel="mw:WikiLink" href="https://ru.wikipedia.org/wiki/Структура_(программирование)" title="Структура (программирование)" class="mw-redirect" id="mwAUE">структура</a> без полей (напр. <code id="mwAUI">struct Foo</code>);</li>
+<li id="mwAUM">структура с единичными типами (<code id="mwAUQ">struct Foo([u8; 0], ())</code>).</li></ul>
+
+<p id="mwAUU">Реализованы 

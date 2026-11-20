@@ -22,6 +22,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import threading
 import time
 
 from lib.git_runtime import GIT_STALL_SECONDS
@@ -31,6 +32,11 @@ from lib.project_mod.worktree_registry import is_registered
 from lib.project_mod.delivery_retry import input_fingerprint, retry_evidence, conflicted_paths, pin_receipt
 
 logger = get_logger(__name__)
+
+# Delivery rows of one project now prepare concurrently; these memos are
+# process-wide and only ever hold exact observations of immutable commits or
+# answers keyed by a task's own receipt.
+_MEMO_LOCK = threading.Lock()
 
 # Held conflicts whose last full recheck this process found unchanged, by
 # (canonical root, owner, task id): the receipt identity plus _hold_observation
@@ -90,14 +96,16 @@ def remembered_no_delta(row) -> bool:
     if not (baseline and checkpoint):
         return False
     key = (row.get('user_id'), str(row['project_root']), str(row.get('task_id') or ''))
-    known = _NO_DELTA_ANSWERS.get(key)
+    with _MEMO_LOCK:
+        known = _NO_DELTA_ANSWERS.get(key)
     if known is not None and known[:2] == (baseline, checkpoint):
         return known[2]
     # Two immutable commits: diff-tree reads no index.
     code = ic._git(Path(row['project_root']), ['diff-tree', '--quiet', baseline, checkpoint, '--'],
                    stall_seconds=GIT_STALL_SECONDS).returncode
     if code in (0, 1):  # identical or different; any other exit is a failure to ask again
-        _NO_DELTA_ANSWERS[key] = (baseline, checkpoint, code == 0)
+        with _MEMO_LOCK:
+            _NO_DELTA_ANSWERS[key] = (baseline, checkpoint, code == 0)
     return code == 0
 
 
@@ -124,13 +132,15 @@ def checkpoint_contained(row, tip: str = '') -> bool:
     if not (checkpoint and tip):
         return False
     key = (str(root), checkpoint)
-    known = _CONTAINED.get(key)
+    with _MEMO_LOCK:
+        known = _CONTAINED.get(key)
     if known is not None and known[0] == tip:
         return known[1]
     code = ic._git(root, ['merge-base', '--is-ancestor', checkpoint, tip],
                    stall_seconds=GIT_STALL_SECONDS).returncode
     if code in (0, 1):
-        _CONTAINED[key] = (tip, code == 0)
+        with _MEMO_LOCK:
+            _CONTAINED[key] = (tip, code == 0)
     return code == 0
 
 
@@ -315,7 +325,8 @@ def _pending_task_paths(root, source, baseline, checkpoint):
     re-applying it would only fail. `git apply --3way` cannot merge a creation
     patch onto an existing path (it reports "does not match index"), so a path
     the task creates that the source already holds with other bytes is an
-    add/add conflict named explicitly.
+    add/add conflict named explicitly, unless the branch held the task's exact
+    bytes for that path at some commit since the baseline (``_held_since``).
     """
     from lib import integration_control as ic
     paths = [path for path in ic._git(root, ['diff', '--no-renames', '--name-only', '-z',
@@ -327,7 +338,36 @@ def _pending_task_paths(root, source, baseline, checkpoint):
     pending = [path for path in paths if current.get(path) != wanted.get(path)]
     conflicts = [path for path in pending
                  if path not in before and path in current and path in wanted]
+    if conflicts:
+        held = _held_since(root, baseline, source, conflicts)
+        same = {path for path in conflicts if wanted[path][1] in held.get(path, ())}
+        pending = [path for path in pending if path not in same]
+        conflicts = [path for path in conflicts if path not in same]
     return pending, conflicts
+
+
+def _held_since(root, baseline, source, paths):
+    """Path -> every blob the branch held for it in ``baseline..source``.
+
+    A file the task created with bytes the branch also held is one file
+    written twice, not two versions: a Worker that copied its job scripts into
+    the shared folder, which the folder snapshot then committed (with another
+    mode), or the same file delivered by an earlier attempt. Taking those bytes
+    as the merge base, the task left the file unchanged and the branch's
+    version stands.
+    """
+    from lib import integration_control as ic
+    log = ic._git(root, ['--literal-pathspecs', 'log', '--no-renames', '--raw', '--no-abbrev',
+                         '--format=', f'{baseline}..{source}', '--', *paths], check=True,
+                  stall_seconds=GIT_STALL_SECONDS).stdout
+    held = {}
+    for line in log.splitlines():
+        if not line.startswith(':') or '\t' not in line:
+            continue
+        meta, path = line.split('\t', 1)
+        _old_mode, _new_mode, old_blob, new_blob, _status = meta[1:].split(' ')
+        held.setdefault(path, set()).update((old_blob, new_blob))
+    return held
 
 
 def _stageless_conflict_detail(root, pending, baseline, source, checkpoint):
@@ -736,14 +776,19 @@ def deliver_task_delta(row, receipt, save_receipt):
     hold_key, observation = (str(root), owner, task_id), None
     if changed and _held_conflict(receipt, landing=landing):
         observation = _hold_observation(root, changed, landing=landing)
-        if (observation is not None
-                and _UNCHANGED_HOLDS.get(hold_key) == (_hold_identity(row, receipt), *observation)):
-            return receipt
-    _UNCHANGED_HOLDS.pop(hold_key, None)
+        if observation is not None:
+            with _MEMO_LOCK:
+                unchanged = (_UNCHANGED_HOLDS.get(hold_key)
+                             == (_hold_identity(row, receipt), *observation))
+            if unchanged:
+                return receipt
+    with _MEMO_LOCK:
+        _UNCHANGED_HOLDS.pop(hold_key, None)
 
     def unchanged_hold(result):
         if observation is not None and _held_conflict(result, landing=landing):
-            _UNCHANGED_HOLDS[hold_key] = (_hold_identity(row, result), *observation)
+            with _MEMO_LOCK:
+                _UNCHANGED_HOLDS[hold_key] = (_hold_identity(row, result), *observation)
         return result
 
     def hold(latest, current):
@@ -766,7 +811,7 @@ def deliver_task_delta(row, receipt, save_receipt):
                 held = hold(latest, current)
                 if held is not None:
                     return held
-            if current.get('taskOutcome') != 'completed' or current.get('state') in {'delivered', 'preserved'}:
+            if current.get('taskOutcome') != 'completed' or current.get('state') in {'delivered', 'preserved', 'closed'}:
                 return current
             if (updates.get('reason') == 'workspace_busy'
                     and (current.get('retry') or {}).get('condition') == 'conflict_inputs_changed'):
@@ -787,7 +832,7 @@ def deliver_task_delta(row, receipt, save_receipt):
             if held is not None:
                 return latest, held, False
         if (current.get('taskOutcome') != 'completed'
-                or current.get('state') in {'delivered', 'preserved'}):
+                or current.get('state') in {'delivered', 'preserved', 'closed'}):
             return latest, current, False
         if ((current.get('repair') or {}) != repair
                 or latest.get('checkpoint_sha') != row['checkpoint_sha']

@@ -37,7 +37,7 @@ function typed(name, directory = 'frontend/src/conversation/application') {
   return module.exports;
 }
 function harness({cold = false, text = '', attachment = false, staleCleanup = false,
-  outgoing = null, busy = false, turns = 1} = {}) {
+  outgoing = null, busy = false, turns = 1, catalog = null} = {}) {
   const input = {value: text};
   const timers = [], writes = [], reconciliations = [];
   const settings = {searchMode: 'multi', fetchEnabled: false, codeExecEnabled: false,
@@ -52,7 +52,7 @@ function harness({cold = false, text = '', attachment = false, staleCleanup = fa
     persistConversationSettings: conv => writes.push({...conv}),
     reconcileConversationCatalogMetadata: id => reconciliations.push(id),
     config: {model: 'gpt-6-astra'}, activeConvId: null,
-    conversations: [{id: 'apk', title: 'APK', model: 'kimi-k3', projectPath: '/your-username/apk',
+    conversations: catalog || [{id: 'apk', title: 'APK', model: 'kimi-k3', projectPath: '/your-username/apk',
       _turnSnapshotRequired: cold}],
     projectState: {active: true, path: '/your-username/tofu'},
     pendingImages: attachment ? [{}] : [], pendingPdfTexts: [], pendingVideos: [],
@@ -93,7 +93,8 @@ function harness({cold = false, text = '', attachment = false, staleCleanup = fa
   vm.createContext(ctx);
   vm.runInContext([
     declarations('project_state.js', ['_hasProjectComposerDraft', '_conversationProjectController',
-      '_restoreConvProject', '_enrichConvProjectContext']),
+      '_restoreConvProject', '_enrichConvProjectContext', 'loadProjectStatus',
+      '_saveConvProjectPath', 'clearProject']),
     declarations('main.js', ['_conversationModelController', 'restoreConversationSettingsToComposer']),
     declarations('main/main_conv_lifecycle.js', ['_projectConversationNavigation', 'loadConversation']),
   ].join('\n'), ctx);
@@ -129,6 +130,58 @@ for (const cold of [false, true]) {
     });
   }
 }
+
+test('warm sidebar selection projects saved roots and requests enrichment once', async () => {
+  const h = harness();
+  let projections = 0, enrichments = 0;
+  h.ctx._updateProjectUI = () => { projections += 1; };
+  h.ctx.Api.project.status = async () => { enrichments += 1; return null; };
+  h.open(); await settle();
+  assert.equal(h.ctx.projectState.path, '/your-username/apk');
+  assert.equal(projections, 1);
+  assert.equal(enrichments, 1);
+});
+
+test('cold sidebar selection reprojects authoritative hydrated roots', async () => {
+  const h = harness({cold: true});
+  const roots = [];
+  h.ctx._updateProjectUI = () => roots.push(h.ctx.projectState.path);
+  h.open();
+  h.ctx.conversations[0].projectPath = '/authoritative-root';
+  h.release(); await settle();
+  assert.deepEqual(roots, ['/your-username/apk', '/authoritative-root']);
+  assert.equal(h.ctx.projectState.path, '/authoritative-root');
+});
+
+/* The same conversation can be visited again (A -> B -> A), so its ID is not
+ * a visit token: a late enrichment response from the first visit must not
+ * overwrite the current visit's newer branch context. */
+test('late first-visit enrichment cannot overwrite the current visit of the same conversation', async () => {
+  const pending = [];
+  const h = harness({catalog: [
+    {id: 'alpha', title: 'Alpha', projectPath: '/p/alpha', projectPaths: ['/p/alpha'],
+      _turnSnapshotRequired: false},
+    {id: 'beta', title: 'Beta', projectPath: '/p/beta', projectPaths: ['/p/beta'],
+      _turnSnapshotRequired: false},
+  ]});
+  const applied = [];
+  h.ctx.runtimeScope.applyProjectGitState = data => applied.push(data.gitBranch);
+  h.ctx.Api.project.status = id => new Promise(resolve => pending.push({id, resolve}));
+  h.ctx.loadConversation('alpha');
+  h.ctx.loadConversation('beta');
+  h.ctx.loadConversation('alpha');
+  assert.deepEqual(pending.map(request => request.id), ['alpha', 'beta', 'alpha']);
+  // The current A visit answers first and is a successful enrichment.
+  pending[2].resolve({gitBranch: 'alpha-current'});
+  await settle(); await settle();
+  assert.deepEqual(applied, ['alpha-current']);
+  assert.equal(h.ctx.activeConvId, 'alpha');
+  // The first A visit and the intervening B visit answer late.
+  pending[0].resolve({gitBranch: 'alpha-stale'});
+  pending[1].resolve({gitBranch: 'beta-stale'});
+  await settle(); await settle();
+  assert.deepEqual(applied, ['alpha-current']);
+});
 
 for (const cold of [false, true]) {
   test(`sidebar selection uses snapshot/stream queue without another full read (cold=${cold})`, async () => {
@@ -245,4 +298,102 @@ test('changed empty outgoing shell reconciles metadata but does not upload setti
   h.open(); h.flushTimers();
   assert.deepEqual(h.reconciliations, [null]);
   assert.deepEqual(h.writes, []);
+});
+
+for (const staleFirst of [true, false]) {
+  for (const replacement of ['revisit', 'choice', 'clear']) {
+    test(`status refresh rejects earlier view (${replacement}, staleFirst=${staleFirst})`, async () => {
+      const h = harness({catalog: [
+        {id: 'alpha', title: 'Alpha', projectPath: '/p/alpha'},
+        {id: 'beta', title: 'Beta', projectPath: '/p/beta'},
+      ]});
+      const pending = [], applied = [];
+      h.ctx.Api.project.status = id => new Promise(resolve => pending.push({id, resolve}));
+      h.ctx.runtimeScope.applyProjectGitState = data => applied.push(data.gitBranch);
+      h.ctx.loadConversation('alpha');
+      h.ctx.loadProjectStatus();
+      const oldStatus = pending[1];
+      if (replacement === 'revisit') {
+        h.ctx.loadConversation('beta');
+        h.ctx.loadConversation('alpha');
+      } else if (replacement === 'choice') {
+        h.ctx._saveConvProjectPath('/p/chosen', ['/p/extra'], ['/p/extra']);
+      } else {
+        await h.ctx.clearProject();
+      }
+      const expectedRoot = replacement === 'choice' ? '/p/chosen'
+        : replacement === 'clear' ? '' : '/p/alpha';
+      const current = pending.at(-1);
+      assert.deepEqual(pending.map(x => x.id), replacement === 'revisit'
+        ? ['alpha', 'alpha', 'beta', 'alpha'] : ['alpha', 'alpha', 'alpha']);
+      if (staleFirst) {
+        oldStatus.resolve({gitBranch: 'stale', path: '/foreign'});
+        await settle();
+        assert.deepEqual(applied, []);
+      }
+      current.resolve({gitBranch: 'current', path: '/foreign'});
+      await settle();
+      assert.deepEqual(applied, ['current']);
+      if (!staleFirst) {
+        oldStatus.resolve({gitBranch: 'stale', path: '/foreign'});
+        await settle();
+        assert.deepEqual(applied, ['current']);
+      }
+      assert.equal(h.ctx.projectState.path, expectedRoot);
+      if (replacement === 'choice') {
+        assert.equal(h.ctx.projectState.extraRoots[0].path, '/p/extra');
+        assert.equal(h.ctx.projectState.extraRoots[0].readOnly, true);
+      }
+    });
+  }
+}
+
+for (const staleFirst of [true, false]) {
+  test(`cold enrichment belongs to its hydration phase (staleFirst=${staleFirst})`, async () => {
+    const h = harness({cold: true});
+    const pending = [], applied = [];
+    h.ctx.Api.project.status = id => new Promise(resolve => pending.push({id, resolve}));
+    h.ctx.runtimeScope.applyProjectGitState = data => applied.push(data.gitBranch);
+    h.open();
+    h.ctx.loadProjectStatus();
+    h.ctx.conversations[0].projectPath = '/hydrated';
+    h.ctx.conversations[0].projectPaths = ['/hydrated', '/hydrated-extra'];
+    h.ctx.conversations[0].readOnlyPaths = ['/hydrated-extra'];
+    h.release(); await settle();
+    assert.deepEqual(pending.map(x => x.id), ['apk', 'apk', 'apk']);
+    const stale = () => {
+      pending[0].resolve({gitBranch: 'cold-stale'});
+      pending[1].resolve({gitBranch: 'status-stale'});
+    };
+    if (staleFirst) { stale(); await settle(); assert.deepEqual(applied, []); }
+    pending[2].resolve({gitBranch: 'hydrated-current', path: '/foreign'});
+    await settle();
+    assert.deepEqual(applied, ['hydrated-current']);
+    if (!staleFirst) { stale(); await settle(); }
+    assert.deepEqual(applied, ['hydrated-current']);
+    assert.equal(h.ctx.projectState.path, '/hydrated');
+    assert.equal(h.ctx.projectState.extraRoots[0].path, '/hydrated-extra');
+    assert.equal(h.ctx.projectState.extraRoots[0].readOnly, true);
+    h.ctx.loadProjectStatus();
+    pending[3].resolve({gitBranch: 'refreshed-current'});
+    await settle();
+    assert.deepEqual(applied, ['hydrated-current', 'refreshed-current']);
+    assert.equal(pending.length, 4);
+  });
+}
+
+test('rejected old hydration cannot supersede the current enrichment', async () => {
+  const h = harness({cold: true});
+  const pending = [], applied = [];
+  h.ctx.Api.project.status = id => new Promise(resolve => pending.push({id, resolve}));
+  h.ctx.runtimeScope.applyProjectGitState = data => applied.push(data.gitBranch);
+  h.open();
+  h.ctx._saveConvProjectPath('/chosen');
+  h.release(); await settle();
+  assert.equal(pending.length, 2);
+  assert.equal(h.ctx.projectState.path, '/chosen');
+  pending[1].resolve({gitBranch: 'chosen-current'});
+  pending[0].resolve({gitBranch: 'cold-stale'});
+  await settle();
+  assert.deepEqual(applied, ['chosen-current']);
 });

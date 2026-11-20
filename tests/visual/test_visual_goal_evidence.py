@@ -9,7 +9,7 @@ import pytest
 
 from lib.agent_core.output_settlement import seal_output_projection
 from lib.turn_projection_segments import projection_with_stable_segments
-from tests._runtime_sections import ROOT, native_module_path, runtime_section, runtime_section_path
+from tests._runtime_sections import ROOT, native_module_path, runtime_section
 
 pytestmark = pytest.mark.visual
 
@@ -79,7 +79,7 @@ def test_goal_history_and_inspector_survive_settlement_reload(
     }""")
     frame.add_script_tag(path=native_module_path(
         '.native/goal-evidence-surface.js', ROOT / 'frontend/src/conversation/index.ts'))
-    frame.add_script_tag(path=runtime_section_path('core/debug_panel.js'))
+    frame.add_script_tag(content=runtime_section('core/debug_panel.js'))
     frame.add_script_tag(content=runtime_section('core/request_inspector.js'))
     frame.add_script_tag(content=runtime_section('ui/tool_rounds.js'))
     frame.evaluate("""data => {
@@ -152,7 +152,7 @@ def test_goal_history_and_inspector_survive_settlement_reload(
     frame.locator('.thinking-block > summary').click()
     assert 'Verify carefully' in frame.locator('#chat').inner_text()
     assert frame.evaluate('surfaceErrors') == []
-    frame.evaluate("requestOnly=true; _riPayloads.cache.clear()")
+    frame.evaluate("requestOnly=true; Object.keys(_riPayloadCache).forEach(k=>delete _riPayloadCache[k])")
     frame.locator('.ri-tool-anchor').click()
     panel = frame.locator('.ri-state-panel')
     frame.wait_for_function("document.querySelector('.ri-state-panel')?.dataset.riKind==='request'")
@@ -167,7 +167,7 @@ def test_goal_history_and_inspector_survive_settlement_reload(
     reports = frame.evaluate('surfaceErrors')
     assert len(reports) == 1
     assert '[debugLog][warn] [ri] payload' in reports[0]['message']
-    assert json.dumps([ref['taskId'], 'state', ref['turn'], '1'], separators=(',', ':')) in reports[0]['message']
+    assert ':state:swarm-agent:original:1' in reports[0]['message']
     assert 'null (404 or error)' in reports[0]['message']
     screenshot = tmp_path / f'goal-evidence-{width}-{"late" if late_ref else "initial"}-ref.png'
     page.locator('#goal-evidence-fixture').screenshot(path=str(screenshot))
@@ -175,7 +175,7 @@ def test_goal_history_and_inspector_survive_settlement_reload(
     if width == 390 and not late_ref:
         anchor = frame.locator('.ri-tool-anchor')
         anchor.click()  # close the request fallback
-        frame.evaluate("roundReadFails=true; _riPayloads.cache.clear()")
+        frame.evaluate("roundReadFails=true; Object.keys(_riPayloadCache).forEach(k=>delete _riPayloadCache[k])")
         anchor.click()
         failed = frame.locator('.ri-state-panel')
         failed.locator('.ri-state-body .ri-retry').wait_for()

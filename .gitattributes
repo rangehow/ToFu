@@ -75,6 +75,13 @@ install.sh text eol=lf
 # Upstream tokenizer vocabularies, pinned by tiktoken's SHA-256: never
 # normalize their bytes or diff 5 MB of ranks.
 lib/token_counter/vocabularies/*.tiktoken binary
+# Golden-document corpus: inputs and expected outputs are pinned by sha256
+# in its manifest (docs/GOLDEN_DOCUMENTS.md); never normalize their bytes.
+tests/fixtures/golden_documents/inputs/** binary
+tests/fixtures/golden_documents/expected/** binary
 
 # Generated bundles are gitignored, but be defensive.
 static/js/bundle-*.js binary
+# Captured extractor inputs are pinned by golden.json; preserve exact bytes
+# (several pages contain CRLF) instead of the repository-wide LF text rule.
+packages/tofu-search/tests/fixtures/html_corpus/*.html binary

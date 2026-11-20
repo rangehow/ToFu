@@ -69,6 +69,23 @@ def _run(argv: list[str], environment: dict[str, str]) -> dict:
     return {'argv': argv, 'exit': completed.returncode, 'detail': output[-1] if output else ''}
 
 
+def _purge_pip(cache_root: str, environment: dict[str, str]) -> dict:
+    environment = {**environment, 'PIP_CACHE_DIR': os.path.join(cache_root, 'pip')}
+    arguments = ['-m', 'pip', 'cache', 'purge']
+    python = sys.executable
+    base_python = getattr(sys, '_base_executable', None)
+    if base_python and base_python != python:
+        # Probe in the same child environment and cwd as `-m pip`, without
+        # importing pip. Only a successful absence check permits a fallback.
+        probe = subprocess.run(
+            [python, '-c', 'from importlib.util import find_spec; '
+             'print("absent" if find_spec("pip") is None else "present")'],
+            env=environment, stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False)
+        if probe.returncode == 0 and probe.stdout.strip() == 'absent':
+            python = base_python
+    return _run([python, *arguments], environment)
+
+
 def prune(cache_root: str) -> list[dict]:
     """Run each tool's own prune on the caches under CACHE_ROOT; return the runs."""
     from lib.tools.process_environment import resolve_executable
@@ -80,8 +97,7 @@ def prune(cache_root: str) -> list[dict]:
     if uv and os.path.isdir(cache):
         runs.append(_run([uv, 'cache', 'prune', '--cache-dir', cache], environment))
     if os.path.isdir(os.path.join(root, 'pip')):
-        runs.append(_run([sys.executable, '-m', 'pip', 'cache', 'purge'],
-                         {**environment, 'PIP_CACHE_DIR': os.path.join(root, 'pip')}))
+        runs.append(_purge_pip(root, environment))
     for run in runs:
         logger.info('[tool-cache] %s exit=%s %s', ' '.join(run['argv'][1:]), run['exit'], run['detail'])
     return runs

@@ -16,6 +16,7 @@ source of truth for "what a DOI / arXiv id looks like".
 
 from __future__ import annotations
 
+import functools
 import re
 from dataclasses import asdict, dataclass, field
 from importlib import import_module
@@ -25,6 +26,7 @@ from tofu_search.log import get_logger
 # Leaf imports, not via the package: see search/vertical/base.py.
 _arxiv_v = import_module('tofu_search.search.vertical.arxiv')
 _doi_v = import_module('tofu_search.search.vertical.doi')
+_native = import_module('tofu_search._native_kernels').native
 logger = get_logger(__name__)
 
 __all__ = ['Citation', 'parse_bibtex', 'parse_references', 'extract_identifiers',
@@ -321,3 +323,38 @@ def extract_citations_from_text(text: str) -> list[Citation]:
             out.append(Citation(arxiv_id=ident, raw=_window(m.start(), m.end())))
 
     return out
+
+
+# The Python bodies above are the parity oracle; the native kernels (which
+# mirror the vertical DOI/arXiv patterns too) replace the public names when the
+# extension is installed. Non-str input and lone surrogates keep the oracle.
+PYTHON_KERNELS = {'extract_identifiers': extract_identifiers, 'parse_bibtex': parse_bibtex,
+                  'parse_references': parse_references,
+                  'extract_citations_from_text': extract_citations_from_text}
+if _native is not None:
+    def _native_or_oracle(name, native_parse):
+        oracle = PYTHON_KERNELS[name]
+
+        @functools.wraps(oracle)
+        def parse(text):
+            if type(text) is str:
+                try:
+                    return [Citation(*row) for row in native_parse(text)]
+                except UnicodeEncodeError:  # lone surrogates cannot cross into Rust
+                    pass
+            return oracle(text)
+        return parse
+
+    parse_bibtex = _native_or_oracle('parse_bibtex', _native.parse_bibtex)
+    parse_references = _native_or_oracle('parse_references', _native.parse_references)
+    extract_citations_from_text = _native_or_oracle('extract_citations_from_text',
+                                                    _native.extract_citations_from_text)
+
+    @functools.wraps(extract_identifiers)
+    def extract_identifiers(raw: str) -> tuple[str, str]:
+        if type(raw) is str:
+            try:
+                return _native.extract_identifiers(raw)
+            except UnicodeEncodeError:
+                pass
+        return PYTHON_KERNELS['extract_identifiers'](raw)

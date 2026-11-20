@@ -56,7 +56,6 @@ def _requests(task: dict[str, Any]) -> list:
     from lib.tasks_pkg.conversation_delivery import completion_conversation_id
     from lib.tasks_pkg.manager import task_user_id
     from lib.tasks_pkg.requirement_source import requirement_source
-    from lib.turn_lifecycle import turn_read_request
     requests = []
     if (task.get('convId') and not task.get('_parentTaskId')
             and not task.get('_transientRuntime')):
@@ -70,6 +69,7 @@ def _requests(task: dict[str, Any]) -> list:
             pass  # identity() refuses the same task itself, reading nothing.
     conversation_id = completion_conversation_id(task)
     if conversation_id and task.get('_turnId') and task.get('_attemptId'):
+        from lib.turn_lifecycle import turn_read_request
         requests.append(turn_read_request(conversation_id, task['_turnId'],
                                           user_id=task_user_id(task), include_projection=False))
     if not task.get('_principalContext'):
@@ -88,16 +88,12 @@ def _requests(task: dict[str, Any]) -> list:
 
 
 def _send(task: dict[str, Any]):
-    from lib.tasks_pkg.conversation_delivery import storage_free_runtime
-    if storage_free_runtime(task):
-        # The storage-free agent wheel does not ship lib.storage.
-        return None
-    from lib.storage import get_storage_client
-    from lib.storage.port import PrefetchedReads
     try:
         requests = _requests(task)
         if not requests:
             return None
+        from lib.storage import get_storage_client
+        from lib.storage.port import PrefetchedReads
         reads = PrefetchedReads(get_storage_client(), requests)
         reads.send_now()
     except Exception:

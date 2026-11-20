@@ -993,7 +993,12 @@ def _approval_meta_router_project(approval_meta, fn_args):
 
 
 def _approval_meta_repair_project(approval_meta, fn_args):
-    """``repair_project`` — opens and starts a repair conversation in another project."""
+    """Distinguish displacing a binding from opening a recovery conversation."""
+    if fn_args.get('action') == 'replace_own_binding':
+        _risk(approval_meta, ('Reason', fn_args.get('reason')),
+              note='Replace only the current project lead binding. No Turn starts, but grants pinned '
+                   'to the old binding lose authority. This action is audited.')
+        return
     _risk(
         approval_meta,
         ('Project', fn_args.get('project_path')),

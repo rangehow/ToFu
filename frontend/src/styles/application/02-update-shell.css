@@ -23,5 +23,16 @@
 .upd-retry-btn{margin-top:calc(var(--space-1) * 3.25);padding:calc(var(--space-1) * 2.25) calc(var(--space-1) * 4.5);background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border);border-radius:9px;font-size:var(--font-size-md);font-weight:600;cursor:pointer;transition:background-color .15s ease}
 .upd-retry-btn:hover{background:var(--bg-hover)}
 /* Version hero — current → latest */
+.upd-hero{display:flex;align-items:center;justify-content:center;gap:calc(var(--space-1) * 2.5);padding:var(--space-5) calc(var(--space-1) * 4.5);background:linear-gradient(180deg,var(--bg-tertiary),var(--bg-secondary));border:1px solid var(--border);border-radius:14px;margin-bottom:calc(var(--space-1) * 4.5)}
+.upd-ver{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--space-2);padding:var(--space-1)}
+.upd-ver-label{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--text-tertiary);font-weight:700}
+.upd-ver-num{font-size:var(--font-size-3xl);font-weight:800;font-variant-numeric:tabular-nums;color:var(--text-primary);line-height:1;letter-spacing:-0.01em}
 /* Up-to-date hero: collapse the duplicate "same version" pair into one clear
    statement — dim the arrow and de-emphasize the redundant latest column. */
+.upd-hero.up-to-date{gap:calc(var(--space-1) * 1.5)}
+.upd-hero.up-to-date .upd-arrow{opacity:.4}
+.upd-ver.latest .upd-ver-num{color:var(--accent)}
+.upd-hero.up-to-date .upd-ver.latest .upd-ver-num{color:var(--text-primary)}
+.upd-arrow{display:flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:50%;flex-shrink:0;color:var(--text-tertiary);background:var(--bg-hover)}
+.upd-arrow svg{width:16px;height:16px}
+.upd-hero:not(.up-to-date) .upd-arrow{color:var(--text-on-accent);background:var(--accent)}

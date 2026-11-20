@@ -37,6 +37,9 @@
 #    TOFU_SUPERVISOR_HOST      default 127.0.0.1
 #    TOFU_SUPERVISOR_PYTHON    interpreter used to launch server.py
 #    TOFU_SUPERVISOR_OWNER_PID optional ephemeral owner; unset for durable use
+#    TOFU_MANAGER_BINARY       Rust manager (packages/tofu-manager) to run instead
+#                              of supervisor.py; unset keeps the Python manager.
+#                              Phase 2 cutover of docs/RUST_REWRITE_EVIDENCE.md.
 
 set -euo pipefail
 umask 077  # manager/worker logs are owner-only by logging contract
@@ -46,6 +49,13 @@ umask 077  # manager/worker logs are owner-only by logging contract
 # all use the same physical path.
 BASE_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 PY="${TOFU_SUPERVISOR_PYTHON:-$(command -v python3)}"
+# The manager program: the Python supervisor until the Rust manager's parity
+# is proven and the owner cuts over by naming its binary.
+if [[ -n "${TOFU_MANAGER_BINARY:-}" ]]; then
+    MANAGER_ARGV=("$TOFU_MANAGER_BINARY" manager --source-root "$BASE_DIR")
+else
+    MANAGER_ARGV=("$PY" "$BASE_DIR/supervisor.py")
+fi
 UNIT_NAME="tofu-supervisor.service"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 UNIT_PATH="$UNIT_DIR/$UNIT_NAME"
@@ -172,7 +182,7 @@ cmd_watchdog() {
         fi
         local _t0
         _t0=$(date +%s)
-        "$PY" "$BASE_DIR/supervisor.py" &
+        "${MANAGER_ARGV[@]}" &
         _child=$!
         wait "$_child"
         local code=$?
@@ -282,7 +292,7 @@ cmd_stop_daemon() {
 
 cmd_run() {
     _check_projects
-    exec "$PY" "$BASE_DIR/supervisor.py"
+    exec "${MANAGER_ARGV[@]}"
 }
 
 cmd_install() {
@@ -303,7 +313,7 @@ cmd_install() {
         echo "[Service]"
         echo "Type=simple"
         echo "WorkingDirectory=$BASE_DIR"
-        echo "ExecStart=$PY $BASE_DIR/supervisor.py"
+        echo "ExecStart=${MANAGER_ARGV[*]}"
         echo "Restart=always"
         echo "RestartSec=2"
         [[ -n "${TOFU_SUPERVISOR_PROJECTS:-}" ]] && echo "Environment=TOFU_SUPERVISOR_PROJECTS=$TOFU_SUPERVISOR_PROJECTS"

@@ -1,20 +1,9 @@
 /* ===== migrated source: ui/send_button.js ===== */
 /* Composer send/stop control derived from authoritative turn state. */
-const TURN_STOP_CONFIRMATION_MS = 4000;
-
 function _activeConversationAttemptIds(conv) {
   return conv
     ? [...(runtimeScope.ConversationTurnRead?.activeAttemptIds?.(conv) || [])]
     : [];
-}
-
-function _releaseStopRequest(conv, attemptId, reason) {
-  if (!conv || conv._finishingAttemptId !== attemptId) return;
-  conv._finishingStream = false;
-  conv._finishingAttemptId = null;
-  updateSendButton();
-  renderConversationList();
-  if (reason && typeof showToast === 'function') showToast(reason, 'warning');
 }
 
 function _stopTranslation(conv) {
@@ -47,46 +36,16 @@ function _stopGenerationStartup(conv) {
   renderConversationList();
 }
 
-function _stopConversationAttempts(conv) {
-  const attemptIds = _activeConversationAttemptIds(conv);
-  if (!attemptIds.length) {
-    runtimeScope.ConversationTurnStore.hydrateConversation(conv).catch((error) =>
-      console.warn('[stop] authoritative refresh failed:', error));
-    return;
-  }
-  if (conv._finishingStream) return;
-  const latchAttemptId = attemptIds[0];
-  conv._finishingStream = true;
-  conv._finishingAttemptId = latchAttemptId;
-  updateSendButton();
-
-  Promise.allSettled(attemptIds.map((attemptId) =>
-    runtimeScope.ConversationTurnStore.abortAttempt(attemptId)))
-    .then((results) => {
-      const rejected = results.find((result) => result.status === 'rejected');
-      if (rejected) {
-        console.warn('[stop] attempt abort failed:', rejected.reason);
-        _releaseStopRequest(conv, latchAttemptId, '停止请求未确认，请重试');
-      }
-    });
-
-  setTimeout(() => {
-    if (conv._finishingAttemptId !== latchAttemptId) return;
-    _releaseStopRequest(conv, latchAttemptId, '仍在等待服务器确认停止');
-    runtimeScope.ConversationTurnStore.hydrateConversation(conv).catch((error) =>
-      console.warn('[stop] post-timeout refresh failed:', error));
-  }, TURN_STOP_CONFIRMATION_MS);
-}
-
 function updateSendButton() {
   const conv = getActiveConv();
   const translating = Boolean(conv?._translating);
   const startupConnecting = Boolean(conv?._genStartCtrl);
   const turnBusy = Boolean(conv && convIsBusy(conv));
   // A stopped startup still awaits its submission's answer; show it stopping.
-  const stopping = Boolean(conv?._finishingStream || conv?._genStartStop);
+  const turnStore = runtimeScope.ConversationTurnStore;
+  const attemptStop = conv && turnStore?.attemptStopState?.(conv);
   const stop = () => {
-    if (!conv || conv._finishingStream || conv._genStartStop) return;
+    if (!conv || conv._genStartStop) return;
     if (translating) {
       _stopTranslation(conv);
       return;
@@ -95,7 +54,7 @@ function updateSendButton() {
       _stopGenerationStartup(conv);
       return;
     }
-    _stopConversationAttempts(conv);
+    turnStore?.stopActiveAttempts?.(conv);
   };
   const state = updateComposerSendControls({
     document,
@@ -104,7 +63,7 @@ function updateSendButton() {
     translating,
     startupConnecting,
     turnBusy,
-    stopping,
+    stopping: Boolean(conv?._genStartStop || attemptStop),
     hasAttachmentDraft: pendingImages.length > 0
       || (typeof pendingPdfTexts !== 'undefined' && pendingPdfTexts.length > 0)
       || (typeof pendingVideos !== 'undefined' && pendingVideos.length > 0),
@@ -114,6 +73,7 @@ function updateSendButton() {
       sendTitle: t('paper.send'),
       stop: t('branch.stopGen'),
       stopping: t('stop.stopping'),
+      stopRefresh: !conv?._genStartStop && attemptStop === 'refresh' ? t('projectCoordination.refresh') : undefined,
     },
     onSend: sendMessage,
     onStop: stop,

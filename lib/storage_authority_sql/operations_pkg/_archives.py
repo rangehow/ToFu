@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import json
 import time
 from typing import Any
 
+import orjson
+
+from lib.agent_core.model_context_limits import MAX_ENTRY_BYTES, MAX_RESUME_ARCHIVE_CANDIDATES
 from lib.storage.errors import StorageError
 from lib.storage.protocol import validate_finite_json_numbers
-from lib.storage_authority_sql.adapters.base import Session
+from lib.storage_authority_sql.adapters.base import Session, utf8_byte_order
 from lib.storage_authority_sql.archived_message_codec import (
     decode_archived_message_sequence_from_storage,
     encode_archived_message_sequence_with_metrics,
@@ -108,6 +112,14 @@ def _decoded_messages(value: Any) -> list[dict[str, Any]]:
         ) from exc
 
 
+def _archive_metadata_integer(row: Mapping[str, Any], key: str) -> int:
+    # SQLite's integer affinity does not guarantee an integer storage class.
+    value = row[key]
+    if type(value) is not int or value < 0:
+        raise StorageError("database_integrity", f"Archive {key} is malformed")
+    return value
+
+
 def _metadata(row: Mapping[str, Any]) -> dict[str, Any]:
     summary = str(row["summary"] or "")
     task_model = str(row["model"] or "")
@@ -116,20 +128,20 @@ def _metadata(row: Mapping[str, Any]) -> dict[str, Any]:
         "schemaVersion": "tofu.compaction-archive/v3",
         "id": str(row["archive_id"]),
         "convId": str(row["conversation_id"]),
-        "createdAt": int(row["created_at_ms"]),
+        "createdAt": _archive_metadata_integer(row, "created_at_ms"),
         "snapshotKind": "pre_compaction_transcript",
         "trigger": str(row["trigger"] or "force"),
         "taskId": str(row["task_id"] or ""),
-        "roundNum": int(row["round_num"] or 0),
+        "roundNum": _archive_metadata_integer(row, "round_num"),
         "model": task_model,
         "taskModel": task_model,
-        "tokensBefore": int(row["tokens_before"] or 0),
-        "tokensAfter": int(row["tokens_after"] or 0),
+        "tokensBefore": _archive_metadata_integer(row, "tokens_before"),
+        "tokensAfter": _archive_metadata_integer(row, "tokens_after"),
         "tokenCountKind": "estimated",
-        "msgsBefore": int(row["msgs_before"] or 0),
-        "msgsAfter": int(row["msgs_after"] or 0),
+        "msgsBefore": _archive_metadata_integer(row, "msgs_before"),
+        "msgsAfter": _archive_metadata_integer(row, "msgs_after"),
         "reason": str(row["reason"] or ""),
-        "payloadSize": int(row["payload_size"] or 0),
+        "payloadSize": _archive_metadata_integer(row, "payload_size"),
         "payloadSizeUnit": "bytes",
         "summaryPreview": summary[:240],
         "hasSummary": bool(summary),
@@ -206,7 +218,7 @@ def _archive_create(session: Session, payload: Mapping[str, Any]) -> Any:
     return {"created": bool(inserted), "archiveId": archive_id}
 
 
-def _archive_list(session: Session, payload: Mapping[str, Any]) -> Any:
+def _archive_list(session: Session, payload: Mapping[str, Any], *, selection=False) -> Any:
     conversation_id, user_id = _identity(payload)
     scope = _archive_scope(session, payload, conversation_id, user_id)
     _require_owned_conversation(session, conversation_id, user_id)
@@ -217,13 +229,26 @@ def _archive_list(session: Session, payload: Mapping[str, Any]) -> Any:
         "reason,payload_size,SUBSTR(summary,1,240) AS summary,receipt_json "
         "FROM storage_compaction_archives "
         "WHERE conversation_id=? AND user_id=? AND archive_scope=? "
-        "ORDER BY created_at_ms,archive_id LIMIT ?",
+        f"ORDER BY created_at_ms,{utf8_byte_order(session, 'archive_id')} LIMIT ?",
         (conversation_id, user_id, scope, limit),
     )
-    return {"archives": [_metadata(row) for row in rows]}
+    return _decode_archive_evidence(selection, lambda: {"archives": [_metadata(row) for row in rows]})
 
 
-def _archive_get(session: Session, payload: Mapping[str, Any]) -> Any:
+def _decode_archive_evidence(selection, decode):
+    """Only decode failures in optional evidence are indeterminate, not SQL failures."""
+    try:
+        return decode()
+    except StorageError as exc:
+        if not selection or exc.code != 'database_integrity':
+            raise
+    except orjson.JSONDecodeError:
+        if not selection:
+            raise
+    return None
+
+
+def _archive_get(session: Session, payload: Mapping[str, Any], *, selection=False) -> Any:
     conversation_id, user_id = _identity(payload)
     scope = _archive_scope(session, payload, conversation_id, user_id)
     archive_id = _required_text(payload, "archive_id", 128)
@@ -257,11 +282,16 @@ def _archive_get(session: Session, payload: Mapping[str, Any]) -> Any:
     )
     if row is None:
         return None
+    return _decode_archive_evidence(selection, lambda: _archive_details(row, include_messages, include_post_messages))
+
+
+def _archive_details(row, include_messages, include_post_messages):
+    metadata = _metadata(row)
     archive = {
-        **_metadata(row),
+        **metadata,
         "summary": str(row["summary"] or ""),
         "receipt": _decoded_receipt(row),
-        "messagesCount": int(row["msgs_before"] or 0),
+        "messagesCount": metadata["msgsBefore"],
     }
     result: dict[str, Any] = {"archive": archive}
     if include_messages:
@@ -276,6 +306,32 @@ def _archive_get(session: Session, payload: Mapping[str, Any]) -> Any:
             None if stored_post is None else _decoded_messages(stored_post)
         )
     return result
+
+
+def resume_selection_inputs(session, identity):
+    """Capture the normal candidate order and hydrated records in the caller's snapshot."""
+    listing = _archive_list(session, {**identity, 'limit': MAX_RESUME_ARCHIVE_CANDIDATES + 1}, selection=True)
+    if listing is None:
+        return None
+    archives = listing['archives']
+    if len(archives) > MAX_RESUME_ARCHIVE_CANDIDATES:
+        return None  # The normal resume search is bounded; no absence proof.
+    items = []
+    remaining = MAX_ENTRY_BYTES - 2  # Array delimiters.
+    for metadata in reversed(archives):
+        if metadata['resultStatus'] != 'completed':
+            continue
+        item = _archive_get(session, {**identity, 'archive_id': metadata['id'],
+                                     'include_messages': False, 'include_post_messages': True}, selection=True)
+        if item is None:
+            return None
+        remaining -= bool(items) + len(json.dumps(
+            item, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
+        if remaining < 0:
+            return None
+        items.append(item)
+    # Only an empty scope is an absence witness; no usable input isn't one.
+    return items if items or not archives else None
 
 
 def _archive_update_summary(session: Session, payload: Mapping[str, Any]) -> Any:
@@ -348,7 +404,7 @@ def _archive_prune(session: Session, payload: Mapping[str, Any]) -> Any:
     rows = session.fetch_all(
         "SELECT archive_id FROM storage_compaction_archives "
         "WHERE conversation_id=? AND user_id=? AND archive_scope=? "
-        "ORDER BY created_at_ms DESC,archive_id DESC",
+        f"ORDER BY created_at_ms DESC,{utf8_byte_order(session, 'archive_id', descending=True)}",
         (conversation_id, user_id, scope),
     )
     stale_ids = [str(row["archive_id"]) for row in rows[keep:]]

@@ -1,6 +1,7 @@
-/** Atomic Provider commands. Builds detached endpoint payloads from the current
- * draft after joining the shared routing CAS chain. Confirmation UI and notices
- * belong to the view; this owner captures and validates the confirmed target.
+/** Atomic Provider commands. Immediate credential adds use canonical authority;
+ * other commands capture the current draft after joining the shared routing CAS
+ * chain. Confirmation UI and notices belong to the view; this owner captures and
+ * validates the confirmed target.
  * Backend Provider/secret transactions retain authority.
  */
 import type {ModelRoutingDocument, ProviderBundle, ProviderResponse, ProviderDeleteResponse,
@@ -11,6 +12,7 @@ import {createProviderSettingsProjection, type ProviderSettingsContext} from './
 type WriteBundle = ProviderBundle & {creators: never[]; models: never[]; credential_secrets?: Record<string, string>};
 interface MutationPorts {
   document(): Partial<ModelRoutingDocument> | null;
+  canonical(): Promise<{model_routing?: ModelRoutingDocument; revision?: number} | null>;
   mutate(send: (revision: number) => Promise<ModelRoutingMutationReceipt | {unchanged: true}>):
     Promise<ModelRoutingMutationResult>;
   save(providerId: string, bundle: WriteBundle, revision: number): Promise<ProviderResponse | null>;
@@ -67,8 +69,17 @@ class ProviderMutations {
   constructor(private readonly ports: MutationPorts) {}
 
   addCredential(providerId: string, accessId: string, secret: string): Promise<ModelRoutingMutationResult> {
-    return this.ports.mutate(async revision => {
-      const context = this.context(providerId, accessId);
+    return this.ports.mutate(async () => {
+      this.context(providerId, accessId);
+      const authority = await this.ports.canonical();
+      const revision = authority?.revision;
+      const document = authority?.model_routing;
+      const context = createProviderSettingsProjection(document, providerId).context(providerId);
+      if (!document || document.contract_version !== 'tofu.model-routing/v2' ||
+          typeof revision !== 'number' || !Number.isSafeInteger(revision) ||
+          !context || context.access.provider_access_id !== accessId) {
+        throw this.ports.selectionChanged();
+      }
       const bundle = bundleFrom(context);
       const credentialId = this.ports.newId();
       const models = new Map<string, {creator_id: string; model_id: string}>();
@@ -79,7 +90,8 @@ class ProviderMutations {
       }
       const credential: ModelRoutingCredentialMetadata = {
         credential_id: credentialId, provider_access_id: accessId, kind: 'api_key',
-        secret_reference: '', key_hint: '', enabled: true,
+        // Policy and activation are saved together after the new card is reviewed.
+        secret_reference: '', key_hint: '', enabled: false,
         authorization: {connection_ids: context.connections.map(item => item.row.connection_id),
           models: [...models.values()]}, quota_policy: {},
       };

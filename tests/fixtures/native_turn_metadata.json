@@ -1,0 +1,29 @@
+{
+  "turnId": "turn",
+  "presentationId": "optimistic-turn",
+  "conversationId": "metadata",
+  "laneId": "main",
+  "parentTurnId": null,
+  "ordinal": 0,
+  "actor": "assistant",
+  "kind": "reply",
+  "runId": "",
+  "status": "completed",
+  "currentAttemptId": "metadata-attempt",
+  "projectionRevision": 1,
+  "modelContextRevision": 1,
+  "settlement": {
+    "outcome": "completed",
+    "cause": "ingested",
+    "evidence": "external_authority",
+    "providerFinishReason": null,
+    "error": null,
+    "streamState": null,
+    "resumeOptions": [],
+    "coordinatorWorkerObservations": {
+      "assignment": {"attemptId": "worker-attempt", "resultRevision": 2, "deliveryStatus": "delivered"}
+    }
+  },
+  "createdAt": 1000,
+  "updatedAt": 1000
+}

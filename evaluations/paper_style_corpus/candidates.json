@@ -1,0 +1,616 @@
+{
+ "generated": "2026-11-18",
+ "bound_convention": "lint bound = top-group 25th percentile (more-is-better) or 75th percentile (less-is-better), training split",
+ "candidates": [
+  {
+   "id": "paper.style.abstract-number",
+   "kind": "checklist",
+   "text": "When the main result is quantitative, the abstract states it as a concrete number taken from the evidence.",
+   "origin": "paper-style corpus analysis (award/high-citation vs matched controls, evaluations/paper_style_corpus), 2026-11-18",
+   "evidence": [
+    "findings.json top_vs_accepted/abs_has_number: top 0.763 vs accepted 0.594, paired diff +0.169 [95% CI +0.0909, +0.237], dz +0.26, q 0.003, n=308 train pairs; held-out diff +0.0301 n=133"
+   ],
+   "exemplars": [
+    "To capture complex environment dynamics, NWM employs a Conditional Diffusion Transformer (CDiT), trained on a diverse collection of egocentric videos of both human and robotic agents, and scaled up to 1 billion parameters.",
+    "To study the ability of retrieval systems to meet such information needs, we construct QUEST, a dataset of 3357 natural language queries with implicit set operations, that map to a set of entities corresponding to Wikipedia documents.",
+    "Pangu also enables, for the first time, effective few-shot in-context learning for KBQA with large LMs such as Codex.1"
+   ],
+   "exemplar_sources": [
+    "A02391afc Navigation World Models",
+    "A048a8fe1 QUEST: A Retrieval Dataset of Entity-Seeking Queries with Implicit Set Operation",
+    "A05958a56 Don’t Generate, Discriminate: A Proposal for Grounding Language Models to Real-W"
+   ],
+   "testable_on_abstract_intro": true
+  },
+  {
+   "id": "paper.style.abstract-verbs",
+   "kind": "lint",
+   "text": "Write the abstract with verbs, not nominalisations: \"we measure how X changes\" rather than \"a measurement of the change of X\".",
+   "origin": "paper-style corpus analysis (award/high-citation vs matched controls, evaluations/paper_style_corpus), 2026-11-18",
+   "evidence": [
+    "findings.json top_vs_accepted/abs_nominal_per_k: top 65.8 vs accepted 71.9, paired diff -6.11 [95% CI -10.4, -1.59], dz -0.15, q 0.027, n=308 train pairs; held-out diff -5.9 n=133"
+   ],
+   "exemplars": [
+    "We describe an algorithm for MBR which gradually grows the number of samples used to estimate the utility while pruning hypotheses that are unlikely to have the highest utility according to confidence estimates obtained with bootstrap sampling.",
+    "We introduce a Navigation World Model (NWM), a controllable video generation model that predicts future visual observations based on past observations and navigation actions.",
+    "Theory of Mind (ToM)—the ability to reason about the mental states of other people—is a key element of our social intelligence."
+   ],
+   "exemplar_sources": [
+    "A007fd8af Faster Minimum Bayes Risk Decoding with Confidence-based Pruning",
+    "A02391afc Navigation World Models",
+    "A036488ca Minding Language Models’ (Lack of) Theory of Mind: A Plug-and-Play Multi-Charact"
+   ],
+   "testable_on_abstract_intro": true,
+   "metric": {
+    "name": "nominal_per_k",
+    "section": "abstract",
+    "op": "<=",
+    "value": 80.45,
+    "why": "75th percentile of award/high-citation papers, n=319"
+   }
+  },
+  {
+   "id": "paper.style.contributions-prose",
+   "kind": "checklist",
+   "text": "Do not pad the introduction with a generic bulleted contribution list; state the contributions in prose, and use a list only for genuinely distinct contributions.",
+   "origin": "paper-style corpus analysis (award/high-citation vs matched controls, evaluations/paper_style_corpus), 2026-11-18",
+   "evidence": [
+    "findings.json top_vs_accepted/ann_contrib_bulleted: top 0.244 vs accepted 0.43, paired diff -0.186 [95% CI -0.257, -0.111], dz -0.28, q 0.003, n=307 train pairs; held-out diff -0.197 n=132",
+    "findings.json top_vs_accepted/intro_contrib_list: top 0.591 vs accepted 0.708, paired diff -0.117 [95% CI -0.195, -0.0455], dz -0.18, q 0.013, n=308 train pairs; held-out diff -0.18 n=133"
+   ],
+   "exemplars": [],
+   "exemplar_sources": [],
+   "testable_on_abstract_intro": true
+  },
+  {
+   "id": "paper.style.intro-quantified",
+   "kind": "checklist",
+   "text": "The introduction quantifies the main result (the same headline number as the abstract), not only \"significant improvements\".",
+   "origin": "paper-style corpus analysis (award/high-citation vs matched controls, evaluations/paper_style_corpus), 2026-11-18",
+   "evidence": [
+    "findings.json top_vs_accepted/ann_intro_quantified: top 0.599 vs accepted 0.456, paired diff +0.143 [95% CI +0.0717, +0.221], dz +0.21, q 0.008, n=307 train pairs; held-out diff +0.0758 n=132",
+    "findings.json top_vs_accepted/intro_number_per_k: top 30.8 vs accepted 22.4, paired diff +8.45 [95% CI +3.86, +12.8], dz +0.21, q 0.005, n=308 train pairs; held-out diff +3.49 n=133"
+   ],
+   "exemplars": [
+    "It also achieves a top-1 accuracy of 87.3% on ImageNet-1K image classiﬁcation.",
+    "In two parallel experiments, we demonstrate that integrating awareness of story arcs enhances model diversity (outperforming vanilla prompting by 45%), whereas incorporating turning point information significantly improves narrative suspense and engagement (outperforming vanilla by 40%).",
+    "We show that it can be a viable approach for annotation quality estimation: it is able to provide similar statistical guarantees as confidence intervals while requiring up to 50% less samples."
+   ],
+   "exemplar_sources": [
+    "A068d2fb7 Swin Transformer: Hierarchical Vision Transformer using Shifted Windows",
+    "A092dfb4d Are Large Language Models Capable of Generating Human-Level Narratives?",
+    "A16fe4550 On Efficient and Statistical Quality Estimation for Data Annotation"
+   ],
+   "testable_on_abstract_intro": true
+  },
+  {
+   "id": "paper.style.caption-takeaway",
+   "kind": "checklist",
+   "text": "Every figure and table caption states its takeaway in a full sentence, not only what is plotted.",
+   "origin": "paper-style corpus analysis (award/high-citation vs matched controls, evaluations/paper_style_corpus), 2026-11-18",
+   "evidence": [
+    "findings.json top_vs_accepted/caption_takeaway: top 0.692 vs accepted 0.633, paired diff +0.0593 [95% CI +0.0191, +0.1], dz +0.16, q 0.026, n=299 train pairs; held-out diff +0.0218 n=126"
+   ],
+   "exemplars": [],
+   "exemplar_sources": [],
+   "testable_on_abstract_intro": false
+  },
+  {
+   "id": "paper.style.limitations-section",
+   "kind": "checklist",
+   "text": "A dedicated Limitations section names specific limitations of this work (settings not tested, assumptions), not generic caveats.",
+   "origin": "paper-style corpus analysis (award/high-citation vs matched controls, evaluations/paper_style_corpus), 2026-11-18",
+   "evidence": [
+    "findings.json top_vs_accepted/has_limitations: top 0.555 vs accepted 0.494, paired diff +0.0617 [95% CI +0.0195, +0.107], dz +0.16, q 0.018, n=308 train pairs; held-out diff +0.0752 n=133"
+   ],
+   "exemplars": [],
+   "exemplar_sources": [],
+   "testable_on_abstract_intro": false
+  },
+  {
+   "id": "paper.style.intro-findings-first-person",
+   "kind": "checklist",
+   "text": "The introduction states the main findings explicitly in first person (\"we show/find/demonstrate that ...\").",
+   "origin": "paper-style corpus analysis (award/high-citation vs matched controls, evaluations/paper_style_corpus), 2026-11-18",
+   "evidence": [
+    "findings.json top_vs_accepted/intro_first_person_findings: top 1.57 vs accepted 1.12, paired diff +0.456 [95% CI +0.191, +0.719], dz +0.19, q 0.008, n=308 train pairs; held-out diff +0.459 n=133"
+   ],
+   "exemplars": [
+    "Qualitatively, we observe improved video prediction and generation performance on single images (see Figure 1(c)).",
+    "However, current reading comprehension datasets for theory of mind reasoning are simplistic and lack diversity, leading to brittle downstream models which, as we show, fail in the presence of even slight out-of-distribution perturbations.",
+    "We show that simply using BERT-base with Pangu is sufficient for setting a new record on standard KBQA datasets, and larger LMs further bring substantial gains."
+   ],
+   "exemplar_sources": [
+    "A02391afc Navigation World Models",
+    "A036488ca Minding Language Models’ (Lack of) Theory of Mind: A Plug-and-Play Multi-Charact",
+    "A05958a56 Don’t Generate, Discriminate: A Proposal for Grounding Language Models to Real-W"
+   ],
+   "testable_on_abstract_intro": true
+  },
+  {
+   "id": "paper.style.intro-verbs",
+   "kind": "lint",
+   "text": "Write the introduction with agents and verbs (\"we show\", \"the model forgets\"), not chains of nominalisations.",
+   "origin": "paper-style corpus analysis (award/high-citation vs matched controls, evaluations/paper_style_corpus), 2026-11-18",
+   "evidence": [
+    "findings.json top_vs_accepted/intro_nominal_per_k: top 56.7 vs accepted 62, paired diff -5.22 [95% CI -8.06, -2.4], dz -0.20, q 0.005, n=308 train pairs; held-out diff -7.02 n=133"
+   ],
+   "exemplars": [
+    "Finally, by training NWM on action- and rewardfree video data, such as Ego4D, we demonstrate improved video prediction and generation performance in unseen environments.",
+    "However, current reading comprehension datasets for theory of mind reasoning are simplistic and lack diversity, leading to brittle downstream models which, as we show, fail in the presence of even slight out-of-distribution perturbations.",
+    "We show that simply using BERT-base with Pangu is sufficient for setting a new record on standard KBQA datasets, and larger LMs further bring substantial gains."
+   ],
+   "exemplar_sources": [
+    "A02391afc Navigation World Models",
+    "A036488ca Minding Language Models’ (Lack of) Theory of Mind: A Plug-and-Play Multi-Charact",
+    "A05958a56 Don’t Generate, Discriminate: A Proposal for Grounding Language Models to Real-W"
+   ],
+   "testable_on_abstract_intro": true,
+   "metric": {
+    "name": "nominal_per_k",
+    "section": "introduction",
+    "op": "<=",
+    "value": 68.81,
+    "why": "75th percentile of award/high-citation papers, n=327"
+   }
+  },
+  {
+   "id": "paper.style.teaser-figure",
+   "kind": "checklist",
+   "text": "Page 1 carries a teaser figure that shows the main idea or result.",
+   "origin": "paper-style corpus analysis (award/high-citation vs matched controls, evaluations/paper_style_corpus), 2026-11-18",
+   "evidence": [
+    "findings.json top_vs_accepted/page1_visual: top 0.425 vs accepted 0.344, paired diff +0.0812 [95% CI +0.013, +0.153], dz +0.13, q 0.082, n=308 train pairs; held-out diff +0.015 n=133"
+   ],
+   "exemplars": [],
+   "exemplar_sources": [],
+   "testable_on_abstract_intro": false
+  },
+  {
+   "id": "paper.style.related-work-late",
+   "kind": "checklist",
+   "text": "Related work comes after the method and results unless the method cannot be understood without it.",
+   "origin": "paper-style corpus analysis (award/high-citation vs matched controls, evaluations/paper_style_corpus), 2026-11-18",
+   "evidence": [
+    "findings.json top_vs_accepted/related_work_after_method: top 0.238 vs accepted 0.119, paired diff +0.119 [95% CI +0.0553, +0.187], dz +0.22, q 0.009, n=235 train pairs; held-out diff +0.0928 n=97"
+   ],
+   "exemplars": [],
+   "exemplar_sources": [],
+   "testable_on_abstract_intro": false
+  }
+ ],
+ "skeletons": {
+  "method": {
+   "n_top": 203,
+   "n_control": 255,
+   "abstract_moves": [
+    "context",
+    "problem",
+    "method",
+    "result"
+   ],
+   "abstract_move_stats": [
+    {
+     "move": "context",
+     "share": 0.71,
+     "median_position": 0.0,
+     "control_share": 0.82
+    },
+    {
+     "move": "problem",
+     "share": 0.55,
+     "median_position": 0.17,
+     "control_share": 0.67
+    },
+    {
+     "move": "method",
+     "share": 1.0,
+     "median_position": 0.33,
+     "control_share": 1.0
+    },
+    {
+     "move": "result",
+     "share": 0.98,
+     "median_position": 0.75,
+     "control_share": 0.99
+    }
+   ],
+   "intro_roles": [
+    "context",
+    "method",
+    "contributions"
+   ],
+   "intro_role_stats": [
+    {
+     "move": "context",
+     "share": 0.52,
+     "median_position": 0.0,
+     "control_share": 0.58
+    },
+    {
+     "move": "method",
+     "share": 0.57,
+     "median_position": 0.41,
+     "control_share": 0.55
+    },
+    {
+     "move": "contributions",
+     "share": 0.52,
+     "median_position": 1.0,
+     "control_share": 0.69
+    }
+   ],
+   "contribution_form_top": {
+    "numbered_inline": 53,
+    "none": 64,
+    "prose": 38,
+    "bulleted_list": 48
+   },
+   "contribution_form_control": {
+    "bulleted_list": 116,
+    "prose": 33,
+    "none": 37,
+    "numbered_inline": 69
+   },
+   "contribution_count_median": 3.0,
+   "abstract_exemplars": {
+    "context": {
+     "quote": "Minimum Bayes risk (MBR) decoding outputs the hypothesis with the highest expected utility over the model distribution for some utility function.",
+     "source": "A007fd8af Faster Minimum Bayes Risk Decoding with Confidence-based Pruning"
+    },
+    "problem": {
+     "quote": "However, the standard samplingbased algorithm for MBR is substantially more computationally expensive than beam search, requiring a large number of samples as well as a quadratic number of calls to the utility function, limiting its applicability.",
+     "source": "A007fd8af Faster Minimum Bayes Risk Decoding with Confidence-based Pruning"
+    },
+    "method": {
+     "quote": "We describe an algorithm for MBR which gradually grows the number of samples used to estimate the utility while pruning hypotheses that are unlikely to have the highest utility according to confidence estimates obtained with bootstrap sampling.",
+     "source": "A007fd8af Faster Minimum Bayes Risk Decoding with Confidence-based Pruning"
+    },
+    "result": {
+     "quote": "Using orders of magnitude less training data, we obtain relative improvements ranging from 8% up to 40% in Hits@3 across different knowledge graphs containing factual information.",
+     "source": "A037d4004 Complex Query Answering with Neural Link Predictors"
+    }
+   },
+   "contribution_exemplars": [
+    {
+     "quote": "We introduce a Navigation World Model (NWM) and propose a novel Conditional Diffusion Transformer (CDiT)",
+     "source": "A02391afc Navigation World Models"
+    },
+    {
+     "quote": "achieves signiﬁcantly better or equivalent predictive accuracy on a wide range of complex queries",
+     "source": "A037d4004 Complex Query Answering with Neural Link Predictors"
+    }
+   ]
+  },
+  "analysis_mechanism": {
+   "n_top": 41,
+   "n_control": 33,
+   "abstract_moves": [
+    "context",
+    "method",
+    "result",
+    "implication"
+   ],
+   "abstract_move_stats": [
+    {
+     "move": "context",
+     "share": 0.93,
+     "median_position": 0.0,
+     "control_share": 0.85
+    },
+    {
+     "move": "method",
+     "share": 0.98,
+     "median_position": 0.39,
+     "control_share": 0.88
+    },
+    {
+     "move": "result",
+     "share": 0.95,
+     "median_position": 0.57,
+     "control_share": 1.0
+    },
+    {
+     "move": "implication",
+     "share": 0.63,
+     "median_position": 1.0,
+     "control_share": 0.52
+    }
+   ],
+   "intro_roles": [
+    "context",
+    "contributions"
+   ],
+   "intro_role_stats": [
+    {
+     "move": "context",
+     "share": 0.54,
+     "median_position": 0.0,
+     "control_share": 0.61
+    },
+    {
+     "move": "contributions",
+     "share": 0.61,
+     "median_position": 0.4,
+     "control_share": 0.61
+    }
+   ],
+   "contribution_form_top": {
+    "prose": 12,
+    "bulleted_list": 14,
+    "numbered_inline": 6,
+    "none": 9
+   },
+   "contribution_form_control": {
+    "bulleted_list": 10,
+    "numbered_inline": 7,
+    "prose": 9,
+    "none": 7
+   },
+   "contribution_count_median": 3.0,
+   "abstract_exemplars": {
+    "context": {
+     "quote": "For many differentially private algorithms, such as the prominent noisy stochastic gradient descent (DP-SGD), the analysis needed to bound the privacy leakage of a single training run is well understood.",
+     "source": "A0baf0f9e Hyperparameter Tuning with Renyi Differential Privacy"
+    },
+    "method": {
+     "quote": "In this work, we ﬁrst illustrate how simply setting hyperparameters based on non-private training runs can leak private information.",
+     "source": "A0baf0f9e Hyperparameter Tuning with Renyi Differential Privacy"
+    },
+    "result": {
+     "quote": "Our results improve and extend the work of Liu and Talwar (STOC 2019).",
+     "source": "A0baf0f9e Hyperparameter Tuning with Renyi Differential Privacy"
+    },
+    "implication": {
+     "quote": "Our theoretical and quantitative results suggest that the numerical gaps between contrastive and noncontrastive methods in certain regimes can be closed given better network design choices and hyperparameter tuning.",
+     "source": "A157840ce On the duality between contrastive and non-contrastive self-supervised learning"
+    }
+   },
+   "contribution_exemplars": [
+    {
+     "quote": "We show that, under certain circumstances, the setting of hyperparamters can leak private information.",
+     "source": "A0baf0f9e Hyperparameter Tuning with Renyi Differential Privacy"
+    },
+    {
+     "quote": "We make a significant effort to unify several SOTA sample-contrastive and dimensioncontrastive methods and show that empirical performance gaps can be closed completely.",
+     "source": "A157840ce On the duality between contrastive and non-contrastive self-supervised learning"
+    }
+   ]
+  },
+  "benchmark_dataset": {
+   "n_top": 36,
+   "n_control": 33,
+   "abstract_moves": [
+    "context",
+    "problem",
+    "method",
+    "resource",
+    "implication",
+    "result"
+   ],
+   "abstract_move_stats": [
+    {
+     "move": "context",
+     "share": 0.89,
+     "median_position": 0.0,
+     "control_share": 0.64
+    },
+    {
+     "move": "problem",
+     "share": 0.53,
+     "median_position": 0.14,
+     "control_share": 0.73
+    },
+    {
+     "move": "method",
+     "share": 0.89,
+     "median_position": 0.33,
+     "control_share": 0.94
+    },
+    {
+     "move": "resource",
+     "share": 0.89,
+     "median_position": 0.5,
+     "control_share": 0.97
+    },
+    {
+     "move": "implication",
+     "share": 0.53,
+     "median_position": 0.75,
+     "control_share": 0.48
+    },
+    {
+     "move": "result",
+     "share": 0.94,
+     "median_position": 0.8,
+     "control_share": 0.94
+    }
+   ],
+   "intro_roles": [
+    "context",
+    "method",
+    "contributions"
+   ],
+   "intro_role_stats": [
+    {
+     "move": "context",
+     "share": 0.61,
+     "median_position": 0.0,
+     "control_share": 0.55
+    },
+    {
+     "move": "method",
+     "share": 0.5,
+     "median_position": 0.5,
+     "control_share": 0.58
+    },
+    {
+     "move": "contributions",
+     "share": 0.61,
+     "median_position": 0.83,
+     "control_share": 0.67
+    }
+   ],
+   "contribution_form_top": {
+    "prose": 10,
+    "none": 8,
+    "numbered_inline": 12,
+    "bulleted_list": 6
+   },
+   "contribution_form_control": {
+    "numbered_inline": 7,
+    "bulleted_list": 12,
+    "prose": 9,
+    "none": 5
+   },
+   "contribution_count_median": 3,
+   "abstract_exemplars": {
+    "context": {
+     "quote": "Formulating selective information needs results in queries that implicitly specify set operations, such as intersection, union, and difference.",
+     "source": "A048a8fe1 QUEST: A Retrieval Dataset of Entity-Seeking Queries with Implicit Set Operation"
+    },
+    "problem": {
+     "quote": "Information about pretraining corpora used to train the current best-performing language models is seldom discussed: commercial models rarely detail their data, and even open models are often released without accompanying training data or recipes to reproduce them.",
+     "source": "A16b0ab40 Dolma: an Open Corpus of Three Trillion Tokens for Language Model Pretraining Re"
+    },
+    "method": {
+     "quote": "To study the ability of retrieval systems to meet such information needs, we construct QUEST, a dataset of 3357 natural language queries with implicit set operations, that map to a set of entities corresponding to Wikipedia documents.",
+     "source": "A048a8fe1 QUEST: A Retrieval Dataset of Entity-Seeking Queries with Implicit Set Operation"
+    },
+    "resource": {
+     "quote": "Crowdworkers also assess the relevance of entities based on their documents and highlight attribution of query constraints to spans of document text.",
+     "source": "A048a8fe1 QUEST: A Retrieval Dataset of Entity-Seeking Queries with Implicit Set Operation"
+    },
+    "implication": {
+     "quote": "Our results indicate that fine-tuning the model on a diverse set of tasks and instructions leads to a reduced sensitivity to variations in instructions for each task1.",
+     "source": "A0b4d2450 MultiInstruct: Improving Multi-Modal Zero-Shot Learning via Instruction Tuning"
+    },
+    "result": {
+     "quote": "We show that stateof-the-art approaches struggle to solve these problems with the best model (GPT-4o) solving only 16.3% of the end-to-end set, and 46.1% of the scenarios.",
+     "source": "A671f2578 SUPER: Evaluating Agents on Setting Up and Executing Tasks from Research Reposit"
+    }
+   },
+   "contribution_exemplars": [
+    {
+     "quote": "We release the Dolma Corpus, a diverse, multisource collection of 3T tokens1 across over 4B documents acquired from 6 different data sources.",
+     "source": "A16b0ab40 Dolma: an Open Corpus of Three Trillion Tokens for Language Model Pretraining Re"
+    },
+    {
+     "quote": "We introduce NounAtlas, the first large-scale inventory of predicates for nominal SRL;",
+     "source": "A1e7e86f2 NounAtlas: Filling the Gap in Nominal Semantic Role Labeling"
+    }
+   ]
+  },
+  "empirical_study": {
+   "n_top": 22,
+   "n_control": 13,
+   "abstract_moves": [
+    "context",
+    "gap",
+    "method",
+    "result",
+    "implication"
+   ],
+   "abstract_move_stats": [
+    {
+     "move": "context",
+     "share": 0.91,
+     "median_position": 0.0,
+     "control_share": 0.77
+    },
+    {
+     "move": "gap",
+     "share": 0.64,
+     "median_position": 0.25,
+     "control_share": 0.38
+    },
+    {
+     "move": "method",
+     "share": 0.91,
+     "median_position": 0.35,
+     "control_share": 0.92
+    },
+    {
+     "move": "result",
+     "share": 1.0,
+     "median_position": 0.65,
+     "control_share": 1.0
+    },
+    {
+     "move": "implication",
+     "share": 0.73,
+     "median_position": 1.0,
+     "control_share": 0.54
+    }
+   ],
+   "intro_roles": [
+    "context",
+    "contributions"
+   ],
+   "intro_role_stats": [
+    {
+     "move": "context",
+     "share": 0.59,
+     "median_position": 0.0,
+     "control_share": 0.85
+    },
+    {
+     "move": "contributions",
+     "share": 0.5,
+     "median_position": 1.0,
+     "control_share": 0.46
+    }
+   ],
+   "contribution_form_top": {
+    "numbered_inline": 8,
+    "prose": 3,
+    "none": 7,
+    "bulleted_list": 4
+   },
+   "contribution_form_control": {
+    "bulleted_list": 4,
+    "numbered_inline": 3,
+    "none": 4,
+    "prose": 2
+   },
+   "contribution_count_median": 3,
+   "abstract_exemplars": {
+    "context": {
+     "quote": "Ontological knowledge, which comprises classes and properties and their relationships, is integral to world knowledge.",
+     "source": "A1da610ad Do PLMs Know and Understand Ontological Knowledge?"
+    },
+    "gap": {
+     "quote": "However, existing PLM-probing studies focus mainly on factual knowledge, lacking a systematic probing of ontological knowledge.",
+     "source": "A1da610ad Do PLMs Know and Understand Ontological Knowledge?"
+    },
+    "method": {
+     "quote": "In this paper, we focus on probing whether PLMs store ontological knowledge and have a semantic understanding of the knowledge rather than rote memorization of the surface form.",
+     "source": "A1da610ad Do PLMs Know and Understand Ontological Knowledge?"
+    },
+    "result": {
+     "quote": "We find that in moderation, adding multilingual data improves low-resource language modeling performance, similar to increasing low-resource dataset sizes by up to 33%.",
+     "source": "A69503f17 When Is Multilinguality a Curse? Language Modeling for 250 High- and Low-Resourc"
+    },
+    "implication": {
+     "quote": "However, both the memorizing and reasoning performances are less than perfect, indicating incomplete knowledge and understanding.",
+     "source": "A1da610ad Do PLMs Know and Understand Ontological Knowledge?"
+    }
+   },
+   "contribution_exemplars": [
+    {
+     "quote": "We construct a dataset that evaluates the ability of PLMs to memorize ontological knowledge and their capacity to draw inferences based on ontological entailment rules.",
+     "source": "A1da610ad Do PLMs Know and Understand Ontological Knowledge?"
+    },
+    {
+     "quote": "We systematically review Google Scholar, arXiv, and the ACL Anthology, and show that most of the 12 prior works that use the PCT to evaluate LLMs force models to comply with the PCT’s multiple-choice format (§3).",
+     "source": "A2b61e520 Political Compass or Spinning Arrow? Towards More Meaningful Evaluations for Val"
+    }
+   ]
+  },
+  "systems": {
+   "n_top": 1,
+   "n_control": 1,
+   "status": "insufficient top papers of this type (< 8)"
+  }
+ }
+}

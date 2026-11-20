@@ -79,6 +79,6 @@ export function visibleRange(offsets: Float64Array, top: number, height: number)
 export function rowSignature(row: HistoryRow): string {
   if (row.kind === 'group') return `${row.group}:${row.count}`;
   const task = row.task;
-  return JSON.stringify([task.key, task.title, task.formerTitles, task.status, task.dropped, task.onBoard, task.progress,
+  return JSON.stringify([task.key, task.title, task.formerTitles, task.status, task.dropped, task.onBoard, task.progress, task.reason,
     task.dueAt, task.dueOutcome, task.firstSeenAt, task.onBoard ? task.changedAt : task.lastSeenAt]);
 }

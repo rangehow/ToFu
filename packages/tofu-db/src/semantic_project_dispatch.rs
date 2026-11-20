@@ -199,6 +199,36 @@ pub(super) fn compile(
                     (true, true) => false,
                     _ => return Err(SemanticExecutionError::InvalidPayload),
                 };
+                if let Some(witnesses) = payload.get("turn_witnesses") {
+                    let witnesses = witnesses
+                        .as_array()
+                        .filter(|rows| rows.len() <= contract::COMMIT_CHANGES)
+                        .ok_or(SemanticExecutionError::InvalidPayload)?;
+                    let mut seen_turns = BTreeSet::new();
+                    for (index, witness) in witnesses.iter().enumerate() {
+                        let row = witness
+                            .as_object()
+                            .filter(|row| row.len() == 5)
+                            .ok_or(SemanticExecutionError::InvalidPayload)?;
+                        let conversation_id = identity(row.get("conversation_id"), false)?;
+                        let turn_id = identity(row.get("turn_id"), false)?;
+                        if !seen_turns.insert((conversation_id, turn_id)) {
+                            return Err(SemanticExecutionError::InvalidPayload);
+                        }
+                        steps.push(TransactionIrStep::TurnGet {
+                            conversation_id: conversation_id.to_owned(),
+                            turn_id: turn_id.to_owned(),
+                            include_projection: false,
+                            content_preview_chars: None,
+                            expected: Some((
+                                revision(row, "projection_revision")?,
+                                identity(row.get("attempt_id"), true)?.to_owned(),
+                                identity(row.get("status"), false)?.to_owned(),
+                            )),
+                            slot: changes.len() * 2 + index + 1,
+                        });
+                    }
+                }
                 let mut size = 0;
                 if !headless {
                     let expected = revision(&payload, "expected_revision")?;

@@ -7,6 +7,7 @@ import json
 import os
 import random
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -446,6 +447,7 @@ def load_definitions(
         if task_name != name or name in seen:
             raise ValueError(f"definition cache task identity mismatch: {name}")
         seen.add(name)
+        _restore_script_exec_bits(path)
         environment = config.get("environment", {})
         image = environment.get("docker_image")
         has_dockerfile = (path / "environment" / "Dockerfile").is_file()
@@ -468,6 +470,25 @@ def load_definitions(
             )
         )
     return tasks
+
+
+def _restore_script_exec_bits(task_path: Path) -> None:
+    """Give the owner exec permission on every shebang script of a cached task.
+
+    Harbor's package download drops file modes, so ``tests/test.sh`` and
+    ``solution/solve.sh`` arrive non-executable; runners that exec them (the
+    EnvSandbox Harbor-v2 ingress) refuse such a task. Idempotent.
+    """
+    for path in task_path.rglob("*"):
+        if path.is_symlink() or not path.is_file():
+            continue
+        mode = path.stat().st_mode
+        if mode & stat.S_IXUSR:
+            continue
+        with path.open("rb") as handle:
+            if handle.read(2) != b"#!":
+                continue
+        path.chmod(mode | stat.S_IXUSR)
 
 
 def _valid_asset(image: str, asset_dir: Path) -> dict[str, Any] | None:

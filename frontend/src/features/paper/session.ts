@@ -69,7 +69,6 @@ function clearPaperState(): void {
   state._paperHash = '';
   state._paperImages = [];
   state._paperTotalPages = 0;
-  state._babelTranslatedPages = {};
 }
 
 function restorePaperState(active: LooseObject): void {
@@ -85,7 +84,6 @@ function restorePaperState(active: LooseObject): void {
   state._paperReviewVenue = '';
   state._paperHash = active.paperHash || '';
   state._paperImages = Array.isArray(active.images) ? active.images : [];
-  state._babelTranslatedPages = active.babelCache || {};
   state._paperTotalPages = active.pageCount || 0;
 }
 
@@ -291,7 +289,7 @@ export function switchPaperTab(tab: string): void {
   }
 
   if (tab === 'qa') state._renderPaperQA?.();
-  if (tab === 'translate') state._initBabelPdfTab?.();
+  if (tab === 'fulltext') state._initFulltextTab?.();
   if (tab === 'podcast') state._initPodcastTab?.();
   if (tab === 'video') state._initVideoTab?.();
 }

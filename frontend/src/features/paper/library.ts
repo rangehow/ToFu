@@ -10,7 +10,7 @@ import {
 } from '../../core/browser-storage';
 import type { I18nKey } from '../../i18n';
 type JsonObject = Record<string, unknown>;
-export type PaperSaveScope = 'all' | 'metadata' | 'qa' | 'babel';
+export type PaperSaveScope = 'all' | 'metadata' | 'qa';
 
 interface PaperFolder extends JsonObject {
   id: string;
@@ -31,7 +31,6 @@ interface PaperEntry extends JsonObject {
   qaHistory?: JsonObject[];
   paperHash?: string;
   images?: unknown[];
-  babelCache?: JsonObject;
   createdAt?: number;
   pageCount?: number;
   recommendWhy?: string;
@@ -95,14 +94,13 @@ type PaperLibraryWindow = Window & {
   _paperReviewVenue?: string;
   _paperHash?: string;
   _paperImages?: unknown[];
-  _babelTranslatedPages?: JsonObject;
   _paperTotalPages?: number;
   _paperActiveTab?: string;
   _resetAllReportViews?: () => void;
   _showPaperLanding?: () => void;
   _updatePaperTitles?: () => void;
   _loadPaperPdf?: (url: string) => Promise<unknown>;
-  _destroyBabelRuntime?: () => void;
+  _destroyFulltextRuntime?: () => void;
   _cancelPaperDeepenJobs?: () => void;
   _cancelPaperNotes?: () => void;
   _switchPaperTab?: (tab: string) => void;
@@ -196,7 +194,6 @@ function releasePaperDetail(entry: PaperEntry): void {
   delete entry.parsedText;
   delete entry.qaHistory;
   delete entry.images;
-  delete entry.babelCache;
   delete entry._detailAccess;
   entry._detailLoaded = false;
 }
@@ -374,10 +371,6 @@ export function setActivePaperFolder(folderId?: string | null): void {
 function paperSaveFields(scope: PaperSaveScope): number {
   if (scope === 'metadata') return SAVE_METADATA;
   if (scope === 'qa') return SAVE_QA;
-  // Whole-paper translations are durable in paper_translations. Keep the
-  // scope so Babel can capture its current in-memory view without duplicating
-  // the artifact in paper_library on every cache hit or completion.
-  if (scope === 'babel') return 0;
   return SAVE_ALL;
 }
 
@@ -406,9 +399,6 @@ function paperSaveBody(
       paperHash: entry.paperHash || '',
       parsedText: (entry.parsedText || '').slice(0, 200000),
       images: Array.isArray(entry.images) ? entry.images.slice(0, 60) : [],
-      // Preserve one-time legacy migration compatibility. Subsequent Babel
-      // writes use the authoritative paper_translations artifact only.
-      babelCache: entry.babelCache || {},
     });
   }
   return body;
@@ -568,7 +558,7 @@ export function setActivePaperId(id?: string | null): void {
   if (String(shared._activePaperId || '') !== value) {
     destroyPodcastRuntime();
     destroyVideoRuntime();
-    shared._destroyBabelRuntime?.();
+    shared._destroyFulltextRuntime?.();
     shared._cancelPaperDeepenJobs?.();
     shared._cancelPaperNotes?.();
   }
@@ -614,7 +604,6 @@ export function persistRecommendedCard(
     qaHistory: [],
     paperHash: '',
     images: [],
-    babelCache: {},
     createdAt: Date.now(),
     pageCount: 0,
     recommendWhy: card.why || '',
@@ -661,7 +650,6 @@ export function createPaperEntry(
     qaHistory: [],
     paperHash: '',
     images: [],
-    babelCache: {},
     createdAt: Date.now(),
     pageCount: 0,
     folderId: shared._activePaperFolderId || '',
@@ -696,7 +684,6 @@ export function saveActivePaperState(
   entry.qaHistory = shared._paperQAHistory || [];
   entry.paperHash = shared._paperHash || '';
   entry.images = Array.isArray(shared._paperImages) ? shared._paperImages : [];
-  entry.babelCache = shared._babelTranslatedPages || {};
   entry.pageCount = shared._paperTotalPages || 0;
   entry._detailAccess = Date.now();
   const first = !entry._persisted;
@@ -732,7 +719,6 @@ export function deletePaperEntry(id: string): void {
   shared._paperReviewVenue = '';
   shared._paperHash = '';
   shared._paperImages = [];
-  shared._babelTranslatedPages = {};
   shared._showPaperLanding?.();
   shared._updatePaperTitles?.();
 }
@@ -764,7 +750,6 @@ export async function openPaperEntry(entry: PaperEntry): Promise<void> {
   shared._paperReviewVenue = '';
   shared._paperHash = entry.paperHash || '';
   shared._paperImages = Array.isArray(entry.images) ? entry.images : [];
-  shared._babelTranslatedPages = entry.babelCache || {};
   shared._paperTotalPages = entry.pageCount || 0;
   const report = document.getElementById('paperReportContent');
   if (report) {

@@ -7,15 +7,17 @@ import threading
 import time
 
 from lib.log import get_logger
-from lib.storage.errors import describe_storage_failure, is_transient_storage_error
+from lib.storage.errors import StorageError, describe_storage_failure, is_transient_storage_error
 
 logger = get_logger(__name__)
 
 
 class StorageCommitWakeSource:
-    def __init__(self, client_factory, *, watch_method, interval_ms, backoff_ms, thread_name):
+    def __init__(self, client_factory, *, watch_method, interval_ms, backoff_ms, thread_name,
+                 cancellable_factory=False):
         from tofu_db._request_cancellation import RequestCancellation
         self._factory, self._watch_method = client_factory, watch_method
+        self._cancellable_factory = cancellable_factory
         self._interval_ms, self._backoff_ms = interval_ms, backoff_ms
         self._thread_name = thread_name
         self._stop = threading.Event()
@@ -43,7 +45,11 @@ class StorageCommitWakeSource:
         return self.close
 
     def _watch(self, cursor):
-        response = getattr(self._factory(), self._watch_method)(cursor=cursor,
+        if self._cancellation.cancelled:
+            raise StorageError('database_unavailable', 'Storage watch cancelled', retryable=False)
+        client = (self._factory(cancellation=self._cancellation) if self._cancellable_factory
+                  else self._factory())
+        response = getattr(client, self._watch_method)(cursor=cursor,
             deadline_unix_ms=time.time_ns() // 1_000_000 + self._interval_ms,
             cancellation=self._cancellation)
         self._validate(response)

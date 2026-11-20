@@ -12,7 +12,8 @@ import pytest
 pytestmark = pytest.mark.visual
 
 
-def test_manual_detection_probes_enabled_models_without_saving_or_granting(browser, live_server, tmp_path):
+@pytest.mark.parametrize('credential_enabled', [True, False])
+def test_manual_detection_probes_enabled_models_without_saving_or_granting(browser, live_server, tmp_path, credential_enabled):
     from playwright.sync_api import expect
     from lib.model_routing import normalize_document
     from tests.model_routing.test_model_routing_contract import _full_document
@@ -20,6 +21,7 @@ def test_manual_detection_probes_enabled_models_without_saving_or_granting(brows
     document = _full_document()
     document['offerings'][0]['enabled'] = False
     document['credentials'][0]['authorization']['models'] = []
+    document['credentials'][0]['enabled'] = credential_enabled
     document = normalize_document(document)
     original = deepcopy(document)
     state = {'starts': [], 'writes': [], 'reads': 0, 'snapshot': {'status': 'none'}}
@@ -43,7 +45,7 @@ def test_manual_detection_probes_enabled_models_without_saving_or_granting(brows
         if url.path.endswith('/probe-cells/start'):
             body = request.post_data_json
             state['starts'].append(body)
-            wire = body['only']['model_ids'][0]
+            wire = body.get('only', {}).get('model_ids', ['alpha-wire-a'])[0]
             state['snapshot'] = {'status': 'done', 'probe_schema_version': 3,
                 'total': 1, 'done_count': 1, 'summary': {'ok': 1, 'disable': 0},
                 'cells': {'0::' + wire: {'status': 'ok', 'detail': 'HTTP 200; valid content',
@@ -114,6 +116,24 @@ def test_manual_detection_probes_enabled_models_without_saving_or_granting(brows
             assert document == original
 
         assert state['starts'] == []
+        if not credential_enabled:
+            # The backend decides bulk eligibility; the complete identity list
+            # must not become an explicit disabled-key selection.
+            with page.expect_request(lambda r: urlparse(r.url).path.endswith('/probe-cells/start')):
+                provider.locator('.stg-mx-probe').click()
+            expect(provider.locator('.stg-mx-probe')).to_be_enabled()
+            assert 'only' not in state['starts'][-1]
+            assert state['starts'][-1]['credential_ids'] == ['credential-a']
+            row = provider.locator('.is-alias[data-id="alpha-wire-a"]')
+            with page.expect_request(lambda r: urlparse(r.url).path.endswith('/probe-cells/start')):
+                row.locator('.stg-mx-probe-pip').click()
+            expect(provider.locator('.stg-mx-probe')).to_be_enabled()
+            assert state['starts'][-1]['only'] == {'key_idxs': [0], 'model_ids': ['alpha-wire-a']}
+            expect(provider.locator('.stg-key-toggle input').first).not_to_be_checked()
+            assert state['writes'] == []
+            assert document == original
+            assert errors == []
+            return
         # The design-system native checkbox is visually hidden; click its track.
         root.locator('.stg-mx-gtoggle .stg-toggle-track').click()
         expect(toggle).to_be_checked()

@@ -1219,3 +1219,79 @@ __all__ = [
     'set_document_scope', 'set_visual_enrichment', 'tool_available',
     'visual_enrichment_enabled',
 ]
+
+
+def verify_portable_original(document, *, user_id: int, digest: str, size: int) -> dict:
+    """Verify one digest hit's immutable bytes and return its transaction witness."""
+    from lib.artifacts.file_snapshot import read_project_snapshot
+
+    if not isinstance(document, dict):
+        raise KnowledgeIngestError('Imported original metadata is invalid')
+    doc_id = document.get('id')
+    stored_name = document.get('stored_name')
+    if (not isinstance(doc_id, str) or not doc_id
+            or not isinstance(stored_name, str) or not stored_name
+            or Path(stored_name).name != stored_name or stored_name in {'.', '..'}):
+        raise KnowledgeIngestError('Imported original metadata is invalid')
+    root = _source_root(user_id)
+    try:
+        snapshot = read_project_snapshot(str(root / stored_name), [str(root)], allow_empty=True)
+    except (OSError, ValueError) as exc:
+        raise KnowledgeIngestError('Imported original bytes are unavailable') from exc
+    if snapshot.size != size or snapshot.sha256 != digest:
+        raise KnowledgeIngestError('Imported original bytes do not match the archive')
+    return {'document_id': doc_id, 'stored_name': stored_name}
+
+
+def publish_portable_originals(originals, *, user_id: int, now: float, publish):
+    """Durably stage canonical original files for one caller-owned metadata commit.
+
+    No metadata is published by this helper. An unconfirmed storage outcome
+    retains files rather than risking deletion of a committed original.
+    """
+    # lib.storage is excluded from the storage-free agent wheel; admit it only
+    # when a caller actually publishes portable originals.
+    from lib.storage.errors import StorageError
+
+    publication = KnowledgePublicationAttempt()
+    paths = {}
+    documents = []
+    try:
+        for digest, raw in originals:
+            if hashlib.sha256(raw).hexdigest() != digest:
+                raise KnowledgeIngestError('Imported original hash mismatch')
+            doc_id = uuid.uuid4().hex
+            stored_name = _safe_source_name(digest, '.bin', doc_id)
+            paths[doc_id] = _write_source(raw, stored_name, user_id=user_id)
+            documents.append({'user_id': user_id, 'document_id': doc_id, 'document': {
+                'id': doc_id, 'sha256': digest, 'name': 'Imported original.bin',
+                'stored_name': stored_name, 'kind': '.bin', 'size_bytes': len(raw),
+                'method': 'portable_import', 'warnings_json': '[]',
+                'text_chars': 0, 'chunk_count': 0, 'pages': 0, 'scope': 'attachment',
+                'media_metadata_json': '{"status":"ready","mime_type":"application/octet-stream"}',
+                'created_at': now, 'updated_at': now, 'chunks': [], 'assets': [],
+            }})
+        if paths:
+            _sync_publication_directories(user_id=user_id, source=True, assets=False)
+        publication.begin_dispatch()
+        result = publish(documents)
+        retained = result['retained_document_ids']
+        if (not isinstance(retained, list) or any(
+                not isinstance(doc_id, str) or doc_id not in paths for doc_id in retained)
+                or len(set(retained)) != len(retained)):
+            raise KnowledgeIngestError('Invalid portable original publication receipt')
+    except BaseException as failure:
+        if isinstance(failure, StorageError) and (
+                failure.request_not_dispatched or failure.code == 'database_conflict'):
+            # Portable import conflicts reject the atomic transaction. Unlike
+            # transport/protocol failures, they cannot hide a committed batch.
+            _cleanup_candidate_files(list(paths.values()), reason='portable import rollback',
+                                     failure=failure)
+        else:
+            _rollback_publication_files(list(paths.values()), publication,
+                                        reason='portable import rollback', failure=failure)
+        raise
+    retained_ids = set(retained)
+    _unlink_files([path for doc_id, path in paths.items() if doc_id not in retained_ids],
+                  reason='unused portable originals')
+    return result

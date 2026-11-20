@@ -324,8 +324,13 @@ provider 尝试（网关挂起 2,000 s 后回 HTTP 504）、随后的退避和�
 - **首 token 证据丢失**：逻辑请求完成（成功）、`round_end`、下一逻辑请求或轮次开始、终态都会关闭仍开着的
   窗口，标 `truncated` + `attrs.firstTokenUnobserved:true`、`status:unknown`；运行中快照里仍在等的窗口为
   `running`。
-- **dispatcher 证据优先**：`round_usage.usage._dispatch.ttft_ms`（`ttft_measurement:measured`）是从结算尝试
-  开始到首个输出的权威偏移。该逻辑请求恰好一次 dispatch 且 observer 证据完整（
+- **dispatcher 证据优先**：`round_usage.usage._dispatch.ttft_ms` 的
+  `ttft_measurement:dispatcher_attempt_to_first_output_callback`（旧记录为 `measured`）表示从 dispatcher
+  本次尝试开始，到首次触发 thinking、text 或 tool-ready 回调的本地偏移。它不要求回调内容非空，
+  不从网络实际发送时刻起算，也不是上游首 token 时间。`first_content_at_unix_ns` 是由本地完成时刻和
+  偏移反推的投影，而非网络事件时戳。`unobserved_stream` 没有偏移；未观测的提前结束和非流式完成
+  只给上界，不作为该回调的观测。`queue_wait_ms` 只记 dispatcher 的 backpressure 等待，
+  可跨重试累计，不是供应商排队。该逻辑请求恰好一次 dispatch 且 observer 证据完整（
   `observerIsolation.providerDispatches == 1`，无丢弃/投递失败/flush 未完成/诊断失败）时，最后一个子尝试就是
   结算尝试，窗口终点取「子尝试开始 + `ttft_ms`」，夹在子尝试结束与原终点之内（只会提前、从不推迟
   已观测到的首 token），标 `attrs.firstTokenSource:dispatch`。

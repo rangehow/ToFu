@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
-import json
 import math
 import os
 from pathlib import Path
@@ -71,7 +70,7 @@ def _chat_sidecar_runtime():
     the shared helper's hard-coded SQLite authority.
     """
     from lib.storage import StorageRuntime, StorageSupervisor
-    from tests.support.sidecar_fixtures import installed_storage_runtime
+    from lib.storage.service import install_runtime_for_test
 
     backend = os.environ.get('TOFU_PERSONAL_STORAGE_BACKEND', 'sqlite')
     assert backend in {'sqlite', 'tofudb'}, f'Unsupported test backend: {backend}'
@@ -79,14 +78,16 @@ def _chat_sidecar_runtime():
     runtime = StorageRuntime(StorageSupervisor(
         project_root=root, backend=backend, startup_timeout=60,
     ), auto_restart=False)
-    # Give the process authority back: leaving None fenced every later
-    # browser test served by a session live_server.
+    install_runtime_for_test(runtime)
     try:
-        with installed_storage_runtime(runtime):
-            runtime.start()
-            yield runtime
+        runtime.start()
+        yield runtime
     finally:
-        shutil.rmtree(root, ignore_errors=True)
+        install_runtime_for_test(None)
+        try:
+            runtime.stop()
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
 
 
 @pytest.fixture()
@@ -892,22 +893,8 @@ def test_unknown_write_is_checked_against_real_file_publication_evidence(
     before_stage = staged.read_bytes() if staged.exists() else None
 
     def journal_bytes():
-        # Inspection holds the path's file lock while it reads, and every
-        # exclusive holder rewrites the lock file's best-effort holder
-        # diagnostics (docs/PROJECT_FILE_UNDO.md, "File locks"). The lock's
-        # commit state and every evidence file must stay byte-identical.
-        evidence = {}
-        for path in session.rglob('*'):
-            if not path.is_file():
-                continue
-            relative = path.relative_to(session)
-            if relative.parts[0] == 'file-locks':
-                state = json.loads(path.read_bytes() or b'{}')
-                state.pop('holder', None)
-                evidence[relative] = state
-            else:
-                evidence[relative] = (path.read_bytes(), path.stat().st_mtime_ns)
-        return evidence
+        return {path.relative_to(session): (path.read_bytes(), path.stat().st_mtime_ns)
+                for path in session.rglob('*') if path.is_file()}
 
     before_journal = journal_bytes()
     outcome, _ = inspect_prepared_write(reference_for(record),

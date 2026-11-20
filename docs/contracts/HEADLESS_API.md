@@ -534,7 +534,7 @@ Stable façades over higher-level features. Each is scope-gated.
 | Endpoint                                | Scope             | Purpose                                |
 |----------------------------------------|-------------------|----------------------------------------|
 | POST `/agents/paper/report`            | `agents:paper`    | Long-form paper report task            |
-| POST `/agents/paper/translate`         | `agents:paper`    | Babel-mode whole-paper translation     |
+| POST `/agents/paper/translate`         | `agents:paper`    | Whole-paper text translation           |
 | POST `/agents/translate`               | `agents:translate`| Generic chunked translation            |
 | POST `/agents/memory/search`           | `agents:memory`   | Memory similarity search               |
 | POST `/agents/browser/fetch`           | `agents:browser`  | Server-side URL fetch (with PDF/HTML)  |
@@ -1133,6 +1133,30 @@ print(resp.choices[0].message.content)
   `/api/v4/chat/completions` instead requires the structured creator/model
   identity shown in §3.1.
 * Streaming returns standard `chat.completion.chunk` SSE frames.
+* Task-backed responses (no `tools`) report in `model` the model that
+  answered, as OpenAI defines it, not the requested one. The source is the
+  task's paid `apiRounds` ledger: the last adopted response row (primary,
+  configured fallback, pool rescue or post-loop synthesis; refused, discarded,
+  compaction and child-fee rows excluded). When that differs from the request,
+  the body (or final chunk) adds `tofu: {requested_model, served_models}`, the
+  latter listing every answering model in first-use order; an unswitched
+  response retains its existing answer shape. Task-backed reasoning deltas
+  are withheld, including on unswitched turns: they carry no authoritative
+  per-event dispatch identity, and pool rescue announces itself only after
+  streaming. The terminal ledger attributes the answer, not individual reasoning
+  bytes from mixed rounds or failed attempts, so those bytes are not replayed
+  under the final model either. This deliberately trades live reasoning for
+  correct attribution without buffering another copy of task history. Native
+  event envelopes omit `model` rather than guess a serving identity; terminal
+  answer and finish chunks carry the verified ledger identity. If a switch
+  occurred but no answer row exists, the response fails (HTTP 500 / SSE
+  `error`) with code `model_attribution_unknown` instead of naming a guessed
+  model. `/v1/messages` uses the same ledger attribution and suppresses
+  unattributed reasoning in sync and streaming responses. Its immutable
+  `message_start` waits for terminal verification, followed by the answer,
+  tool calls and finish. Time to first message is therefore the full task
+  duration; heartbeat comments continue while waiting and disconnect cleanup
+  is unchanged. This reuses task storage, not a new response buffer.
 * `reasoning_effort=low|medium|high` maps to Tofu's thinking-depth ladder.
 * Explicit `tools` (including `[]`) selects one provider completion. The client
   owns execution: declarations never authorize Tofu tools, even when names

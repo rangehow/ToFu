@@ -169,7 +169,7 @@ def _create(actor: SchedulerActor, arguments: dict) -> str:
 
         def create():
             return manager.create_task(
-                name, schedule, encode_grant(grant), principal=actor.principal(),
+                name, schedule, encode_grant(grant), principal=actor.project_row_creation_principal(),
                 task_type=PROJECT_WAKE_TYPE, description=purpose, target_conv_id=actor.coordinator_id,
                 source_conv_id=actor.conversation_id, task_id=task_id)
     else:
@@ -181,7 +181,7 @@ def _create(actor: SchedulerActor, arguments: dict) -> str:
 
         def create():
             return manager.create_task(
-                name, schedule, command, principal=actor.principal(), task_type=task_type,
+                name, schedule, command, principal=actor.project_row_creation_principal(), task_type=task_type,
                 description=purpose, max_runtime=max_runtime, source_conv_id=actor.conversation_id,
                 creator_grant=grant, task_id=task_id)
     row = manager.get_task(task_id, user_id=actor.owner)

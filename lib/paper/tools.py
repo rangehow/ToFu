@@ -130,9 +130,9 @@ def _paper_unattended_excluded_names() -> frozenset[str]:
 
 def build_research_tool_schemas() -> list[dict]:
     """Build the current search/fetch schemas for research-only paper agents."""
-    from lib.tools.search import build_fetch_url_tool, build_search_tool
+    from lib.tools.search import build_fetch_url_tool, search_tool_for_request
 
-    return [build_search_tool(), build_fetch_url_tool()]
+    return [search_tool_for_request(), build_fetch_url_tool()]
 
 
 def build_paper_full_tool_context(*, cfg=None, owner_user_id=0):

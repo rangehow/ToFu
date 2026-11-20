@@ -202,6 +202,11 @@ def get_pick_decision() -> dict | None:
     return getattr(_state, 'pick_decision', None)
 
 
+def set_pick_decision(decision: dict | None) -> None:
+    """Install a pick decision on this thread, e.g. one an off-loop pick recorded."""
+    _state.pick_decision = decision
+
+
 def _hash_key(key_name):
     """Salted, truncated hash of a key NAME for the probe (key names are not
     secrets, but hashing keeps the dump uniform with the api-key hash and avoids

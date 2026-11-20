@@ -26,8 +26,28 @@ _REQUEST_DEADLINE_S = 900
 _TRANSIENT_ATTEMPTS = 4
 
 
+class ModelEndpointUnavailable(RuntimeError):
+    """The server endpoint stayed unreachable/overloaded through every retry."""
+
+
 def chat(messages, *, model: str | None = None, max_tokens: int = 4096,
          temperature: float = 0.2) -> tuple[str, dict]:
+    payload = request_completion(messages, model=model, max_tokens=max_tokens,
+                                 temperature=temperature)
+    choice = (payload.get('choices') or [{}])[0]
+    content = (choice.get('message') or {}).get('content') or ''
+    usage = dict(payload.get('usage') or {})
+    usage['model'] = payload.get('model')
+    # Production dispatch reports it (lib/llm/chat.py); the author
+    # refuses cut-off pages on it.
+    if choice.get('finish_reason'):
+        usage['finish_reason'] = choice['finish_reason']
+    return content, usage
+
+
+def request_completion(messages, *, model: str | None = None, max_tokens: int = 4096,
+                       temperature: float = 0.2, endpoint: str | None = None) -> dict:
+    """Return the compatible response before projecting away choice evidence."""
     body = json.dumps({
         'model': model or DEFAULT_MODEL, 'messages': messages,
         'max_tokens': int(max_tokens), 'temperature': float(temperature),
@@ -36,7 +56,8 @@ def chat(messages, *, model: str | None = None, max_tokens: int = 4096,
     last = None
     for attempt in range(_TRANSIENT_ATTEMPTS):
         request = urllib.request.Request(
-            ENDPOINT, data=body, headers={'Content-Type': 'application/json'})
+            ENDPOINT if endpoint is None else endpoint, data=body,
+            headers={'Content-Type': 'application/json'})
         try:
             with urllib.request.urlopen(
                     request, timeout=_REQUEST_DEADLINE_S) as response:
@@ -49,17 +70,9 @@ def chat(messages, *, model: str | None = None, max_tokens: int = 4096,
         except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
             last = exc
         else:
-            choice = (payload.get('choices') or [{}])[0]
-            content = (choice.get('message') or {}).get('content') or ''
-            usage = dict(payload.get('usage') or {})
-            usage['model'] = payload.get('model')
-            # Production dispatch reports it (lib/llm/chat.py); the author
-            # refuses cut-off pages on it.
-            if choice.get('finish_reason'):
-                usage['finish_reason'] = choice['finish_reason']
-            return content, usage
+            return payload
         time.sleep(5 * (attempt + 1))
-    raise RuntimeError(f'model endpoint failed: {last}')
+    raise ModelEndpointUnavailable(f'model endpoint failed: {last}')
 
 
 def _dispatch_chat(messages, *, max_tokens=4096, temperature=0,
@@ -81,3 +94,17 @@ def install(model: str | None = None) -> None:
         DEFAULT_MODEL = model
     import lib.llm_dispatch.api as api
     api.dispatch_chat = _dispatch_chat
+
+
+def install_endpoint(endpoint: str | None = None) -> None:
+    """Route in-process recipe model calls to ``endpoint`` (default: ENDPOINT)."""
+    global ENDPOINT
+    if endpoint:
+        os.environ['SLIDES_BENCH_ENDPOINT'] = endpoint
+        ENDPOINT = endpoint
+    install()
+
+
+def install_model_route(model: dict) -> None:
+    """``deliverable_launch`` route port: the contract's ``model.endpoint``."""
+    install_endpoint(model.get('endpoint'))

@@ -30,7 +30,7 @@ SCRIPTS = ROOT / 'packages' / 'tofu-core-rs' / 'scripts'
 @pytest.mark.parametrize('script', ['gen_wire_golden.py', 'gen_stream_golden.py', 'gen_catalog_golden.py',
                                     'gen_tool_schema_golden.py', 'gen_tool_search_golden.py', 'gen_recorded_golden.py'])
 def test_rust_core_fixture_matches_the_python_oracle(script):
-    if not (ROOT / 'bundles' / 'yourprovider' / 'gateway_profiles').is_dir():
+    if not (ROOT / 'bundles' / 'meituan' / 'gateway_profiles').is_dir():
         pytest.skip('the route corpus pins the tracked FRIDAY/CatPaw gateway profiles')
     env = {**os.environ, 'PYTHONPATH': str(ROOT)}
     result = subprocess.run([sys.executable, str(SCRIPTS / script), '--check'], cwd=ROOT, env=env,

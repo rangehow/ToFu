@@ -64,7 +64,7 @@ _EXTRA_KEEPERS = {
 
     # The internal canvas adapter is excluded publicly; keep its offline tests
     # private with that owner rather than publishing a dangling provider import.
-    'tests/evaluations/test_yourprovider_sandbox_submit_watch.py',
+    'tests/evaluations/test_meituan_sandbox_submit_watch.py',
     # Tests of other opensource-excluded private modules
     # (export_pkg._lists._OPENSOURCE_EXCLUDE_PATHS) stay private with them.
     'tests/router/test_watchdog_compute_patrol.py',
@@ -74,7 +74,7 @@ _EXTRA_KEEPERS = {
     'tests/export/test_export_content.py',
     'tests/export/test_export_preflight.py',
     'tests/export/test_export_structure.py',
-    'tests/evaluations/test_yourprovider_sandbox_score.py',
+    'tests/evaluations/test_meituan_sandbox_score.py',
     'tests/evaluations/test_owner_memory_benchmark.py',
     'tests/evaluations/test_owner_memory_failure_selection.py',
     'tests/evaluations/test_owner_memory_midtask.py',
@@ -145,8 +145,8 @@ _EXTRA_KEEPERS = {
     'figure_table_audit_probe.py',
     # ── Internal-only tooling: tracked on purpose, never public ─────────────
     # Syncs our template to the SSO-gated ModelPlaza catalog; exercised only by
-    # the internal bundles/yourprovider tier, useless to a public checkout.
-    'scripts/yourprovider_template_sync.py',
+    # the internal bundles/meituan tier, useless to a public checkout.
+    'scripts/meituan_template_sync.py',
     # ── Landing verification / lane tooling (docs/modules/project_integration.md)
     # Each is already negated in .gitignore because a clean clone needs it:
     # scripts/verify.py and scripts/test_execution.py are the `make test`
@@ -232,7 +232,7 @@ _KEEPER_PREFIXES = (
     # export_pkg._lists._OPENSOURCE_EXCLUDE_PATHS (docs/PUBLICATION_AUDIT.md
     # §6.2) until the private overlay owns them.
     'packages/tofu-mtsso-auth/',
-    'evaluations/swebench/yourprovider_sandbox/',
+    'evaluations/swebench/meituan_sandbox/',
     'evaluations/owner_memory/',
     'tests/compute_patrol/',
 )

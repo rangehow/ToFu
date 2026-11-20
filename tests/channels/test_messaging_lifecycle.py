@@ -1,7 +1,7 @@
 """The messaging platform lifecycle contract (docs/CHANNELS.md, "Messaging platform lifecycle").
 
 One contract for every platform (企业微信, QQ, 微信, 飞书 here; 大象's half lives with its
-adapter in bundles/yourprovider/tests/channels/test_dx_messaging_lifecycle.py): a connection another
+adapter in bundles/meituan/tests/channels/test_dx_messaging_lifecycle.py): a connection another
 server or client took over is reported as such and taken back with one owner
 action; a refused credential and a missing vault entry report their real reason;
 a save that fails partway never leaves the account naming a deleted secret; and a

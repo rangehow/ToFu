@@ -1007,7 +1007,7 @@ the same records.
 - Batch 6 window (16:04:38–22:35:09): list-price spend **$238.74**. Per-key upstream 429s were zero in the relay
   buckets; other retries: ...4861 MiniMax-M3 10, grok-4.6 2; ...6672 Doubao 1. Production 429s are separately logged:
   ...6672 `gemini-4-argon` 1 (the guard trip), ...6672 `kunlunbedrock.claude-opus-5.5-m17` 32; ...0733 32 opus and
-  1 deepseek-v4-flash-yourprovider; ...4861 gemini-3.8-flash-m17 2.
+  1 deepseek-v4-flash-meituan; ...4861 gemini-3.8-flash-m17 2.
 - No retry storm: the 16,248 keyless calls recorded under `?` are local relay failures after ...0733's retirement,
   not upstream retries; ...0733 upstream calls in this window were 111 and no new ...0733 trial was started.
 - Matrix remains incomplete; no deciding-cell claim is made.
@@ -1183,7 +1183,7 @@ the same records.
 - **deepseek-v4-flash on …4861 (coordinator 7cd8ab8f, c97e7a36, option b).**
   - Basis:
     - Production's DeepSeek use of …4861 today is 3 background calls (DailyReport backfill, Fetch:Extract) on the
-      wires deepseek-v4-pro-baidu and deepseek-v4-flash-yourprovider.
+      wires deepseek-v4-pro-baidu and deepseek-v4-flash-meituan.
     - FRIDAY limits per 'App:**4861在模型:<wire>'. On 11-13, Doubao's 'ended for the day' left every other 4861 model
       running, so daily quotas also behave per wire.
     - The lane's wire, deepseek-v4-flash, is a different wire.

@@ -331,7 +331,7 @@ part to the shared internal servers (below). `export.py --mode internal` and
 | Credential vault + its key | `data/config/` | same paths, mode 0600 |
 | All installed skill packages, vendored engines included | `.tofu/skills`, `data/skills` | same paths |
 | Shareable platform config | `features.json`, `pricing.json`, `private_hosts.json`, `site_packs/` | same paths |
-| YourProvider-tagged platform lessons | `data/memories`, `.tofu/memories` | same paths |
+| Meituan-tagged platform lessons | `data/memories`, `.tofu/memories` | same paths |
 | Internal MCP sources | sibling repos, `tools/github-batch-mcp` | `vendor/` |
 
 Deliberately NOT carried, each for a functional reason rather than a secrecy
@@ -348,7 +348,7 @@ live registration shipped the owner's personal and third-party servers to
 colleagues together with the personal tokens they authenticate with.
 Decision: a registration travels iff its command is the bare launcher of an
 internal MCP repo the export bundles under `vendor/`. The inventory is
-declared once, in `bundles/yourprovider/mcp_launchers/yourprovider.json`: every launcher
+declared once, in `bundles/meituan/mcp_launchers/meituan.json`: every launcher
 whose sources name `vendor/<launcher>` is bundled from the sibling
 `../<launcher>` checkout. The runtime launcher resolution, the export bundler
 and carry filter (`_BUNDLED_INTERNAL_MCP_REPOS` in `export_pkg/_lists.py` is
@@ -390,7 +390,7 @@ because a repository can be public or change visibility.
 
 `install.sh` additionally provisions the runtime those capabilities need —
 Node ≥22, `@datafe/llm-cli` + `@mtfe/mtsso-auth-official` + `@mtfe/mtskills`,
-and `mt-paas-sandbox-python-sdk` from YourProvider's own index — and then reports
+and `mt-paas-sandbox-python-sdk` from Meituan's own index — and then reports
 what is ready and what still needs a one-time sign-in.
 
 ### Carried skills and MCP registrations (verification)

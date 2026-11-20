@@ -62,7 +62,7 @@ def _episode(owner, reporter='shard-a'):
     delivered = []
     watch = QuotaWatch(clock=lambda: clock[0], deliver=delivered.append, reporter=reporter)
     slot = Slot(key_name=f'{CREDENTIAL}:deployment-claude', api_key=API_KEY, model='claude-opus-5.5',
-                capabilities={'text'}, provider_id='default', route_credential_id=CREDENTIAL)
+                capabilities={'text'}, provider_id='sankuai', route_credential_id=CREDENTIAL)
     rejection = RateLimitError('API HTTP 429: {"status":429,"message":"App:**0733在模型:claude-opus-5.5'
                                '每分钟请求次数超过限制","data":null}', status_code=429, is_shared_contention=True)
     original, quota_watch._WATCH = quota_watch._WATCH, watch
@@ -166,7 +166,7 @@ def test_quota_reports_never_raise_into_the_watch(world):
     from lib.router.watchdog.quota import report_quota_episode, resolve_quota_episode
     opened, _closed = _episode(world.owner)
     # An owner without a Watchdog records nothing; an unknown lane closes nothing.
-    assert report_quota_episode(world.owner + 1, provider_id='default', lane=opened['lane'],
+    assert report_quota_episode(world.owner + 1, provider_id='sankuai', lane=opened['lane'],
                                 credential=CREDENTIAL, key_tail='0733', model='claude-opus-5.5',
                                 opened_at_ms=1, detail='x', reporter='shard-a', dispatch=world.dispatch) is None
     assert resolve_quota_episode(world.owner, lane='0' * 16, reporter='shard-a', resolution='Recovered.') is False
@@ -207,7 +207,7 @@ def test_a_watchdog_dispatch_skips_an_appid_with_an_open_quota_alert(world, monk
 
     def slot(credential, deployment, latency):
         return Slot(key_name=f'{credential}:{deployment}', api_key=f'sk-{credential}', model='kimi-k3.1-pro',
-                    logical_model='kimi-k3.1-pro', capabilities={'text'}, provider_id='default',
+                    logical_model='kimi-k3.1-pro', capabilities={'text'}, provider_id='sankuai',
                     route_credential_id=credential, route_deployment_id=deployment, latency_ema=latency)
     throttled, quiet = slot(CREDENTIAL, 'dep-throttled', 100.0), slot('credential-quiet', 'dep-quiet', 9000.0)
     dispatcher = LLMDispatcher()
@@ -339,7 +339,7 @@ def test_only_a_watchdog_turn_dispatches_inside_the_appid_avoidance(world, monke
     for task in (watchdog_turn, worker_turn):
         result = _stream._watchdog_aware_dispatch_stream(task, {})
         assert result.message == {'role': 'assistant', 'content': 'ok'}
-    assert seen == [frozenset({('example-corp', CREDENTIAL)}), None]
+    assert seen == [frozenset({('sankuai', CREDENTIAL)}), None]
 
 
 # ── Settlement: alerts close on evidence when no holder's episode can close them ──
@@ -457,7 +457,7 @@ def test_quota_signals_no_open_alert_holds_are_superseded(world):
     from lib.router.watchdog.quota import QUOTA_ERROR_KIND, settle_quota_alerts
     from lib.router.watchdog.signals import TURN_FAULT_KINDS, FaultSignals
     signals = FaultSignals(world.owner)
-    legacy = [signals.record('quota', ['example-corp', f'lane-{n}', 1_794_960_000_000 + n],
+    legacy = [signals.record('quota', ['sankuai', f'lane-{n}', 1_794_960_000_000 + n],
                              {'role': 'quota', 'keyTail': '5409', 'model': 'kimi-k3.1-pro'},
                              {'kind': QUOTA_ERROR_KIND, 'detail': 'legacy', 'hint': ''})[0]
               for n in range(3)]

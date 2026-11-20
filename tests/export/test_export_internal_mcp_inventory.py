@@ -1,7 +1,7 @@
 """Internal MCP repos are declared once and bundled by every private export path.
 
 The inventory is the overlay launcher manifest
-(``bundles/yourprovider/mcp_launchers/yourprovider.json``): each launcher whose sources
+(``bundles/meituan/mcp_launchers/meituan.json``): each launcher whose sources
 name ``vendor/<launcher>`` is a sibling repo that personal and internal exports
 vendor, whose copied registration is made portable, and that install.sh warms
 on both install backends. Personal export never runs ``_create_skeleton`` (tar
@@ -29,7 +29,7 @@ __all__ = ['installer']
 pytestmark = pytest.mark.unit
 
 REPO = Path(__file__).resolve().parents[2]
-MANIFEST = REPO / 'bundles' / 'yourprovider' / 'mcp_launchers' / 'yourprovider.json'
+MANIFEST = REPO / 'bundles' / 'meituan' / 'mcp_launchers' / 'meituan.json'
 
 
 def _declared() -> tuple[str, ...]:
@@ -117,7 +117,7 @@ def test_opensource_skeleton_ships_no_internal_repo(siblings, tmp_path, monkeypa
 
 def _bundle_internal_mcps(project: Path) -> None:
     """Lay out what an internal export ships: the launcher manifest plus vendor/<repo>."""
-    manifest = project / 'bundles' / 'yourprovider' / 'mcp_launchers' / 'yourprovider.json'
+    manifest = project / 'bundles' / 'meituan' / 'mcp_launchers' / 'meituan.json'
     manifest.parent.mkdir(parents=True)
     shutil.copy(MANIFEST, manifest)
     for name in lists._BUNDLED_INTERNAL_MCP_REPOS:
@@ -161,7 +161,7 @@ def _select_conda_backend(tmp_path: Path, project: Path, env: dict) -> None:
 def _install(installer, tmp_path, backend: str, *, bundled: bool) -> tuple[Path, list[str]]:
     project, env = installer
     fake_bin = Path(env['PATH'].split(os.pathsep)[0])
-    # A Node >= 22 on PATH keeps the YourProvider runtime step off every package manager.
+    # A Node >= 22 on PATH keeps the Meituan runtime step off every package manager.
     _executable(fake_bin / 'node', 'echo 22\n')
     env.pop('TOFU_NODE', None)
     args = ['--non-interactive', '--no-update', '--no-launch', '--skip-playwright']

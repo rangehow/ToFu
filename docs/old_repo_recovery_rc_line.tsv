@@ -367,7 +367,7 @@ e763911b21	2026-11-13		merged	content: 171/172 added lines on the branch; the 1 
 34e63ef3fe	2026-11-13		merged	content: 0/8 added lines missing on HEAD	none (already on the branch)	export: tests/project_mod/test_lanes.py stays private with scripts/lane.py
 776eb3f2e3	2026-11-13		merged	content: 0/21 added lines missing on HEAD	none (already on the branch)	verification: a failing session stays in the reported evidence of a multi-session run
 4dbdc6f291	2026-11-13		merged	content: 0/1 added lines missing on HEAD	none (already on the branch)	export: ship benchmarks/anthropic_recount_rounds.py with its shipped self-check
-2d36b58e0f	2026-11-13		merged	content: 0/5 added lines missing on HEAD	none (already on the branch)	bundles(yourprovider): a selector face may carry only its own selector
+2d36b58e0f	2026-11-13		merged	content: 0/5 added lines missing on HEAD	none (already on the branch)	bundles(meituan): a selector face may carry only its own selector
 3bf3646848	2026-11-13		merged	content: 0/5 added lines missing on HEAD	none (already on the branch)	tests(approval): risk case for repair_project
 068110ad7f	2026-11-13		merged	content: 0/25 added lines missing on HEAD	none (already on the branch)	export: ship the 13 tracked scripts shipped tests, code and docs depend on
 b63e6e9416	2026-11-13		superseded	6/20 added lines missing on HEAD; 6 missing in v12r	superseded: registers TIKTOKEN_CACHE_DIR/DATA_GYM_CACHE_DIR for scripts/agent_loop_load_test.py, which no longer reads them	contracts(config-knobs): register five external and test-only variables
@@ -447,7 +447,7 @@ e1e34f2f75	2026-11-13		merged	content: 0/10 added lines missing on HEAD	none (al
 87199da23f	2026-11-13		merged	content: 0/8 added lines missing on HEAD	none (already on the branch)	export: tests/project_mod/test_lanes.py stays private with scripts/lane.py
 d8edf4df3e	2026-11-13		merged	content: 0/21 added lines missing on HEAD	none (already on the branch)	verification: a failing session stays in the reported evidence of a multi-session run
 c2124568ef	2026-11-13		merged	content: 0/1 added lines missing on HEAD	none (already on the branch)	export: ship benchmarks/anthropic_recount_rounds.py with its shipped self-check
-54f3723fe4	2026-11-13		merged	content: 0/5 added lines missing on HEAD	none (already on the branch)	bundles(yourprovider): a selector face may carry only its own selector
+54f3723fe4	2026-11-13		merged	content: 0/5 added lines missing on HEAD	none (already on the branch)	bundles(meituan): a selector face may carry only its own selector
 9bf16878b6	2026-11-13		merged	content: 0/5 added lines missing on HEAD	none (already on the branch)	tests(approval): risk case for repair_project
 f556f88acc	2026-11-13		merged	content: 0/25 added lines missing on HEAD	none (already on the branch)	export: ship the 13 tracked scripts shipped tests, code and docs depend on
 8fba6e5cc0	2026-11-13		superseded	6/20 added lines missing on HEAD; 6 missing in v12r	superseded: copy of b63e6e9416	contracts(config-knobs): register five external and test-only variables

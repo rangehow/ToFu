@@ -169,7 +169,7 @@ Findings on the areas the assignment singled out:
 | Tokenizers | tiktoken, deepseek_tokenizer, transformers (counting) | tiktoken-rs (already in `tofu-runtime`), HF tokenizers | mature | rust |
 | Git | `git` CLI through subprocesses (39 files); GitPython only in the Overleaf MCP server | git2 (already in `tofu-workspace`), gix, or keep the CLI | mature | rust (keep the CLI for porcelain parity) |
 | SQL Sidecar and Postgres | psycopg 3 (and legacy psycopg2), sqlite3 | tokio-postgres or sqlx; rusqlite already in `tofu-db` | mature | rust |
-| Channels | Feishu through `lark_oapi` (undeclared); WeCom, QQ, WeChat and GitHub are first-party HTTP adapters; 大象 (DX) is an out-of-tree bundle adapter with a Node bridge (`bundles/yourprovider/tofu_yourprovider/dx/bridge.mjs`) | open-lark is unofficial and stale; WeCom/QQ/WeChat have only hobby crates; octocrab for GitHub | Feishu partial, IM none, GitHub mature | rust over reqwest; bundle adapters keep running behind the existing stdio JSON-RPC channel protocol (`lib/channels/protocol/stdio.py`) |
+| Channels | Feishu through `lark_oapi` (undeclared); WeCom, QQ, WeChat and GitHub are first-party HTTP adapters; 大象 (DX) is an out-of-tree bundle adapter with a Node bridge (`bundles/meituan/tofu_meituan/dx/bridge.mjs`) | open-lark is unofficial and stale; WeCom/QQ/WeChat have only hobby crates; octocrab for GitHub | Feishu partial, IM none, GitHub mature | rust over reqwest; bundle adapters keep running behind the existing stdio JSON-RPC channel protocol (`lib/channels/protocol/stdio.py`) |
 | Evaluation harnesses | harbor, swebench, pptagent, slidedeckai, llm_mcp, ddgs, pssdk | n/a | none | black-box: they drive Tofu over its API and stay Python |
 | HTTP server | Quart, Hypercorn, h2, wsproto, werkzeug | axum, hyper, tower-http | mature | rust |
 | Validation | pydantic, jsonschema | serde, schemars, jsonschema | mature | rust |
@@ -189,11 +189,11 @@ managed Python runtime must stay available even when no Tofu code is Python:
 
 | Surface | Mechanism | Evidence |
 |---|---|---|
-| Skills (`.tofu/skills/*/scripts`, `bundles/yourprovider/skills`) | The model runs bundled scripts through `run_command` with the application interpreter; scripts import packages such as paramiko | `pyproject.toml` `app` extra (paramiko comment); `lib/skills/` only injects guide text; `lib/skills/automation/mtskills_cli.py:248` spawns Node |
+| Skills (`.tofu/skills/*/scripts`, `bundles/meituan/skills`) | The model runs bundled scripts through `run_command` with the application interpreter; scripts import packages such as paramiko | `pyproject.toml` `app` extra (paramiko comment); `lib/skills/` only injects guide text; `lib/skills/automation/mtskills_cli.py:248` spawns Node |
 | `run_command` and background commands | Arbitrary shell; the interpreter directory comes first on PATH | `lib/project_mod/run_command.py`; `lib/tools/process_environment.py:161` |
 | Scheduler `python` tasks | `[sys.executable, "-c", command]` | `lib/scheduler/manager.py:93,795-798` |
 | Hope/MLP queue-policy shims | Helper launched with `sys.executable` | `lib/tools/hope_queue_policy_launcher.py:158-163` |
-| In-process plugins | Entry-point groups `tofu.tools`, app plugins, `tofu.channel_adapters`, environment and compute providers, experiments, features | `lib/tools/registry/_plugins.py:48,76`; `lib/app/plugin_registry.py`; `bundles/yourprovider/pyproject.toml`; `plugins/tofu-trading` |
+| In-process plugins | Entry-point groups `tofu.tools`, app plugins, `tofu.channel_adapters`, environment and compute providers, experiments, features | `lib/tools/registry/_plugins.py:48,76`; `lib/app/plugin_registry.py`; `bundles/meituan/pyproject.toml`; `plugins/tofu-trading` |
 | Out-of-process channel adapters | stdio JSON-RPC (DX and future adapters) | `lib/channels/protocol/stdio.py`, `docs/CHANNEL_PROTOCOL.md` |
 | MCP servers | npx, uvx or python subprocesses | `lib/mcp/client/_bridge.py:1482-1556` |
 | Linear Git checkpoint gate | Runs `ruff` against the user's repository | `pyproject.toml` `test` extra (ruff comment) |
@@ -2043,7 +2043,7 @@ bytes, URL and headers for each:
   declared reasoning replay (`reasoning.context`, `include`);
 - CatPaw: the declared system identity and `X-Working-Dir`.
 
-The gateway traits come from the tracked `bundles/yourprovider/gateway_profiles`,
+The gateway traits come from the tracked `bundles/meituan/gateway_profiles`,
 recorded in the fixture and read by the Rust port as data (`route.rs`), so no
 hostname is compiled in. `tests/llm/test_core_rs_wire_oracle.py` fails when
 the Python oracle changes a recorded byte; `scripts/differential.py` runs that

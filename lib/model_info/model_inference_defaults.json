@@ -1230,7 +1230,7 @@
       ]
     },
     {
-      "creator_id": "yourprovider",
+      "creator_id": "meituan",
       "model_ids": [
         "LongCat-2.0"
       ],
@@ -1245,7 +1245,7 @@
       "evidence_url": "https://longcat.chat/platform/docs/api/chat.html"
     },
     {
-      "creator_id": "yourprovider",
+      "creator_id": "meituan",
       "model_ids": [
         "LongCat-2.5"
       ],

@@ -40,7 +40,7 @@ ROWS = [
     _route('anthropic', 'claude-opus-5.5',
            ['default', 'low', 'medium', 'high', 'xhigh', 'max'], 'medium', False),
     _route('moonshot', 'kimi-k3', ['default', 'low', 'high', 'max'], 'max', False),
-    _route('yourprovider', 'LongCat-2.5', ['default', 'off', 'enabled'], None, True),
+    _route('meituan', 'LongCat-2.5', ['default', 'off', 'enabled'], None, True),
 ]
 
 _RETAINED = {
@@ -181,7 +181,7 @@ const results = {};
 
   // Without a declared default rung the slider says Default and means it.
   const longcat = {id: 'longcat', model: 'LongCat-2.5',
-    modelRef: {creator_id: 'yourprovider', model_id: 'LongCat-2.5'}};
+    modelRef: {creator_id: 'meituan', model_id: 'LongCat-2.5'}};
   open(longcat, 'LongCat-2.5');
   assert.equal(input().getAttribute('aria-valuetext'), en['mobile.default']);
   assert.equal((await send(longcat)).overrides.thinkingDepth, 'default');

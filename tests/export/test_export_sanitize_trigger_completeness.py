@@ -102,7 +102,7 @@ class SanitizeTriggerCompletenessTest(unittest.TestCase):
 
         root = _Path(__file__).resolve().parents[2]
         rx = self._trigger_regex()
-        for ident in ('yourprovider' + '_overlay',):
+        for ident in ('meituan' + '_overlay',):
             found = subprocess.run(
                 ['git', 'grep', '-lF', '-e', ident], cwd=root,
                 capture_output=True, text=True, check=False)

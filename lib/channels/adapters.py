@@ -2,8 +2,8 @@
 
 Responsibility: resolve the implementation of a contract channel that the
 public core does not ship. Today that is 大象 (``dx``), whose adapter, bridge,
-SSO login and notification robot live in the YourProvider overlay
-(``tofu_yourprovider.dx``, docs/PUBLIC_CORE.md). Core keeps the channel-generic
+SSO login and notification robot live in the Meituan overlay
+(``tofu_meituan.dx``, docs/PUBLIC_CORE.md). Core keeps the channel-generic
 model, store, policy, ingress, outbox and tools and reaches the adapter only
 through the port below; without the overlay the channel is unavailable and
 its account commands answer ``channel_unavailable``.

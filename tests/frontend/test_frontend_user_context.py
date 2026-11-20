@@ -198,7 +198,7 @@ const inactive = [
     source: 'legacy_migration', status: 'superseded' },
 ];
 const sample = [
-  { id: 'ctx_a', type: 'identity', text: 'Works at YourProvider', source: 'manual' },
+  { id: 'ctx_a', type: 'identity', text: 'Works at Meituan', source: 'manual' },
   { id: 'ctx_b', type: 'work_rule', condition: 'submitting cluster jobs',
     action: 'use hope MCP', source: 'assistant' },
   { id: 'ctx_c', type: 'response_preference', text: 'Reply in Chinese',
@@ -239,7 +239,7 @@ const { document, check, report } = setup({
     check('grant_in_its_own_card', document.querySelector('.ctx-group-delegation_grant')
       .textContent.includes('Decide reversible steps yourself'));
     check('no_capacity_meter', !document.getElementById('prefsCharCount'));
-    check('identity_rendered', document.body.textContent.includes('Works at YourProvider'));
+    check('identity_rendered', document.body.textContent.includes('Works at Meituan'));
     check('rule_condition_rendered', document.body.textContent.includes('submitting cluster jobs'));
     check('rule_action_rendered', document.body.textContent.includes('use hope MCP'));
     check('response_preference_rendered', document.body.textContent.includes('Reply in Chinese'));
@@ -252,7 +252,7 @@ const { document, check, report } = setup({
     check('pending_kept_out_of_cards', !document.getElementById('prefsList')
       .textContent.includes('Reports in Chinese tables'));
 
-    _contextUpdateField(0, 'text', 'Works at YourProvider as an engineer');
+    _contextUpdateField(0, 'text', 'Works at Meituan as an engineer');
     check('edit_marks_dirty', document.getElementById('ctxDirtyState').textContent.length > 0);
     check('valid_edit_enables_save', document.getElementById('ctxSaveBtn').disabled === false);
     await savePreferences(document.getElementById('ctxSaveBtn'));
@@ -268,7 +268,7 @@ const { document, check, report } = setup({
     await settle(); await settle();
     check('confirm_saves_saved_items_plus_pending', saved.length === 2 &&
       saved[1].length === 5 && saved[1][4].id === 'ctx_p' &&
-      saved[1][0].text === 'Works at YourProvider as an engineer');
+      saved[1][0].text === 'Works at Meituan as an engineer');
     check('confirmed_moves_into_its_card', document.querySelector('.ctx-group-response_preference')
       .textContent.includes('Reports in Chinese tables'));
     check('confirm_leaves_editor_clean', document.getElementById('ctxSaveBtn').disabled === true);

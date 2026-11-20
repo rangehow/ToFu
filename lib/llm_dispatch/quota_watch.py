@@ -79,7 +79,7 @@ WINDOW_S = 60.0
 CLOSE_RECOVERED = 'recovered'
 CLOSE_LAPSED = 'lapsed'
 
-# The gateway's wording of those limits (example-corp AIGC validation stage):
+# The gateway's wording of those limits (sankuai AIGC validation stage):
 #   "App:**4861在模型:hy4每分钟请求次数超过限制"   requests per minute
 #   "App:**0733在模型:gpt-6-luna的tpm超过限制"     tokens per minute
 _MINUTE_LIMIT = re.compile(r'App:\*+([0-9A-Za-z]+)在模型:\S+?(每分钟请求次数超过限制|的tpm超过限制)')

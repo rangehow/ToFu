@@ -28,7 +28,7 @@ export interface DxRobotPorts {
 type RobotFix = 'group' | 'permission' | 'app' | 'credentials' | 'secretMissing' | 'network';
 
 // The setup step a refusal code asks the owner to redo: the dx adapter robot's
-// own codes (tofu_yourprovider/dx/robot.py), and robot_<code> for the open platform's
+// own codes (tofu_meituan/dx/robot.py), and robot_<code> for the open platform's
 // error codes. Other codes show their detail only.
 const ROBOT_FIXES: Readonly<Record<string, RobotFix>> = {
   robot_70003: 'group',

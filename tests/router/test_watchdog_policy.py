@@ -280,7 +280,7 @@ def test_every_channel_has_a_supervisor_that_reports_bridge_state():
         assert supervisor.bridge_state(OWNER) in {'not_hosted', 'stopped', 'running'}
 
 
-@pytest.mark.parametrize('module, entry', [pytest.param('tofu_yourprovider.dx.supervisor', 'reconcile_channel_bridges',
+@pytest.mark.parametrize('module, entry', [pytest.param('tofu_meituan.dx.supervisor', 'reconcile_channel_bridges',
                                                         marks=requires_dx),
                                            ('lib.channels.github.supervisor', 'reconcile_github_sessions')])
 def test_each_channel_supervisor_tick_reports_its_account_to_the_watchdog(monkeypatch, module, entry):

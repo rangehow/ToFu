@@ -22,7 +22,7 @@ pytestmark = pytest.mark.unit
 VAULT_SECRET = 'ghp_KnownVaultValue0123456789abcdefXYZ'
 VAULT_MARKER = '[redacted credential: GITHUB_TOKEN]'
 PROVIDER_KEY = 'appid/Provider+Key=0123456789abcdef'
-PROVIDER_MARKER = '[redacted credential: provider example-corp]'
+PROVIDER_MARKER = '[redacted credential: provider sankuai]'
 
 
 @pytest.fixture()
@@ -38,7 +38,7 @@ def known(tmp_path, monkeypatch):
     monkeypatch.setattr(redaction, '_model_routing_values', lambda owner: iter(()))
     vault.set_entry('github_token', VAULT_SECRET)
     config.write_text(json.dumps({'providers': [
-        {'id': 'default', 'api_keys': [PROVIDER_KEY, 'EMPTY']},
+        {'id': 'sankuai', 'api_keys': [PROVIDER_KEY, 'EMPTY']},
         {'id': 'oauth_codex', 'oauth': True, 'api_keys': ['oauth-managed']},
     ]}))
     return SimpleNamespace(vault=vault, config=config, redaction=redaction,

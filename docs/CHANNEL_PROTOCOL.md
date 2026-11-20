@@ -72,8 +72,8 @@ once, in the core, for every app.
 
 **Problem:** each adapter grew its own share of policy: the 大象 adapter
 chooses robot or owner and falls back on its own
-(`bundles/yourprovider/tofu_yourprovider/dx/adapter.py:1117`), runs the catch-up
-(`bundles/yourprovider/tofu_yourprovider/dx/adapter.py:1019`); the GitHub adapter ends its session on
+(`bundles/meituan/tofu_meituan/dx/adapter.py:1117`), runs the catch-up
+(`bundles/meituan/tofu_meituan/dx/adapter.py:1019`); the GitHub adapter ends its session on
 one failed list read (`lib/channels/github/adapter.py:202`); the bot
 platforms resend unknown sends; Feishu (`lib/feishu/`) has its own
 allowlist, model pipeline, in-memory deduplication
@@ -969,7 +969,7 @@ does it or does better), **reject**.
 | Behaviour | OpenClaw | Tofu | Verdict |
 |---|---|---|---|
 | Unknown send outcomes | Reconciliation answers sent, not_sent (only when a fresh send is provably safe) or unresolved, and missing or incomplete proof stops recovery; Telegram text retries only on 429 or a provably unstarted request (`openclaw:docs/plugins/sdk-channel-outbound.md`, `openclaw:docs/concepts/retry.md`) | The P4 ladder; a failed read leaves the item unknown and holds only its own thread (`lib/channels/outbox.py:522`) | **Adapt**: P4's evidence standard, `LookupResult`/`HistoryQuery` semantics, `reconciliation_read_failure` and `stalled_thread_isolation` (both pass) |
-| Another path after a failure | "Failure is not permission to send the same payload through another path" (`openclaw:docs/plugins/sdk-channel-outbound.md`, Durable sends) | 大象 reconciles a lost robot answer under the robot (`bundles/yourprovider/tofu_yourprovider/dx/robot.py:351`); P7 named only the fallback triggers | **Adopt**: P7 and `x-identities`; `unknown_keeps_its_identity` (pass for 大象) |
+| Another path after a failure | "Failure is not permission to send the same payload through another path" (`openclaw:docs/plugins/sdk-channel-outbound.md`, Durable sends) | 大象 reconciles a lost robot answer under the robot (`bundles/meituan/tofu_meituan/dx/robot.py:351`); P7 named only the fallback triggers | **Adopt**: P7 and `x-identities`; `unknown_keeps_its_identity` (pass for 大象) |
 | Recognizing own sends | A 30-second in-memory window of recent outbound IDs (`openclaw:src/channels/message/outbound-echo.ts:13`) | Durable echo registry, markers and `hostSent`; a displacement window, specified and not yet built (P12) | **Reject** the window: the 2026-11-09 replay came through a catch-up long after 30 s |
 | Durable ingress | The raw event is appended before the transport ack or cursor; transports are ack-gated, awaited-cursor or non-replay; QQ's resume sequence is saved after admission (`openclaw:docs/plugins/sdk-channel-plugins/durable-ingress.md`, `openclaw:docs/channels/qqbot.md`) | Recorded before routing, checkpoint after ingest (P2, C1); QQ's session and sequence only in memory (`lib/channels/qq/transport.py:164`) | **Adapt** in migration step 4: QQ's checkpoint carries them |
 | Replayed side effects | Non-repeatable effects keyed by event ID and effect name (`createIngressEffectOnce`, same durable-ingress page) | Receipts keyed `receipt:<event id>` (`lib/channels/autoreply.py:94`); Turn commands derived from event IDs (C4) | **Keep** |

@@ -12,11 +12,11 @@ import pytest
 from lib.channels.adapters import channel_adapter
 from lib.storage.errors import StorageError
 
-# The 大象 adapter lives in the YourProvider overlay (docs/PUBLIC_CORE.md). Loading
-# it through the adapter registry makes ``tofu_yourprovider`` importable when the
+# The 大象 adapter lives in the Meituan overlay (docs/PUBLIC_CORE.md). Loading
+# it through the adapter registry makes ``tofu_meituan`` importable when the
 # overlay is present; without it, tests that drive 大象 skip.
 DX_INSTALLED = channel_adapter('dx') is not None
-requires_dx = pytest.mark.skipif(not DX_INSTALLED, reason='the 大象 overlay (tofu_yourprovider) is not installed')
+requires_dx = pytest.mark.skipif(not DX_INSTALLED, reason='the 大象 overlay (tofu_meituan) is not installed')
 
 OWNER = 7
 ROUTER = 'router-conv'
@@ -27,18 +27,18 @@ OWNER_UID = '1001'
 def no_builtin_robot(monkeypatch, tmp_path):
     """No channel test sees an Internal package's built-in robot file (C6); tests opt in with their own."""
     if DX_INSTALLED:
-        monkeypatch.setattr('tofu_yourprovider.dx.robot.BUILTIN_CREDENTIAL_FILE', tmp_path / 'no-builtin-robot.json')
+        monkeypatch.setattr('tofu_meituan.dx.robot.BUILTIN_CREDENTIAL_FILE', tmp_path / 'no-builtin-robot.json')
 
 
 @pytest.fixture(autouse=True)
 def verified_launcher_node(monkeypatch):
     """No channel test runs the SSO adapter to verify the host's Node (C6): the launcher
-    seams see one verified Node. bundles/yourprovider/tests/channels/test_dx_runtime.py specifies the real check."""
+    seams see one verified Node. bundles/meituan/tests/channels/test_dx_runtime.py specifies the real check."""
     if not DX_INSTALLED:
         return None
-    from tofu_yourprovider.dx.runtime import BridgeNode
+    from tofu_meituan.dx.runtime import BridgeNode
     node = BridgeNode('/opt/node/bin/node', 'v22.23.4', (1, 2, 3, 4), 'TOFU_NODE')
-    for seam in ('tofu_yourprovider.dx.supervisor.bridge_node', 'tofu_yourprovider.dx.adapter.bridge_node'):
+    for seam in ('tofu_meituan.dx.supervisor.bridge_node', 'tofu_meituan.dx.adapter.bridge_node'):
         monkeypatch.setattr(seam, lambda environment: node)
     return node
 

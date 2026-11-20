@@ -1,7 +1,7 @@
 """Model-routing-only credentials are redacted like vault and config keys.
 
 Keys added in Settings exist only as sealed model-routing v2 secrets (the most
-used example-corp AppIds are such keys). The known-credential set reads them through
+used sankuai AppIds are such keys). The known-credential set reads them through
 the model-routing owner's own decrypting read for an explicit owner, keeps no
 plaintext, and refreshes when the owner's change stamp changes, which every
 durable commit or secret write rewrites in whichever process made it. The
@@ -32,10 +32,10 @@ def _document():
     document['models'].append({
         'creator_id': 'openai', 'model_id': 'gpt-test', 'display_name': 'GPT Test',
         'capabilities': ['text'], 'context_window': 200000, 'quality_rank': 1.0})
-    document['providers'].append({'provider_id': 'example-corp', 'name': 'example-corp', 'scope': 'owner'})
+    document['providers'].append({'provider_id': 'sankuai', 'name': 'sankuai', 'scope': 'owner'})
     document['provider_accesses'].append({
-        'provider_access_id': 'access', 'provider_id': 'example-corp',
-        'display_name': 'example-corp', 'enabled': True, 'quota_policy': {}})
+        'provider_access_id': 'access', 'provider_id': 'sankuai',
+        'display_name': 'sankuai', 'enabled': True, 'quota_policy': {}})
     document['connections'].append({
         'connection_id': 'conn', 'provider_access_id': 'access',
         'base_url': 'https://gw.example.test/v1', 'protocol': 'openai_chat',

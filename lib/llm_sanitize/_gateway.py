@@ -31,7 +31,7 @@ def gateway_blocked_term_sanitize(provider_id: str = '') -> bool:
 # ══════════════════════════════════════════════════════════
 #
 # A corporate gateway (declared by a gateway profile's blocked_term_sanitize
-# trait; FRIDAY in the YourProvider overlay) applies keyword-level content
+# trait; FRIDAY in the Meituan overlay) applies keyword-level content
 # filters that block entire requests when specific strings appear in the
 # prompt — even in benign contexts (e.g. news headlines, economic reports).
 # These are gateway-level blocks (HTTP 450) that cannot be bypassed.

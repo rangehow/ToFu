@@ -32,7 +32,7 @@ repeats an alert. ``events.jsonl`` records transitions and deliveries, and
 ``probes.jsonl`` every tick (the current and the previous day).
 
 Delivery: the 大象 notification robot posts into the bound command group
-(the installed dx adapter's robot, ``tofu_yourprovider.dx.robot``: client-credentials token, ``sendGroupMsgByRobot``)
+(the installed dx adapter's robot, ``tofu_meituan.dx.robot``: client-credentials token, ``sendGroupMsgByRobot``)
 with its secret read in place from the credential vault. It needs neither
 TofuDB nor the 大象 user session. It stays off until ``config.json`` enables
 it (docs/STORAGE_OPERATIONS.md, "Out-of-band outage alert"). With no enabled

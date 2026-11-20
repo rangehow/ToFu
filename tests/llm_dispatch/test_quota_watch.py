@@ -1,9 +1,9 @@
 """Production quota watch over recorded request sequences (lib/llm_dispatch/quota_watch.py).
 
-The example-corp AIGC gateway limits each AppId's requests and tokens per minute,
+The sankuai AIGC gateway limits each AppId's requests and tokens per minute,
 per model, and names that limit in its 429 body. The recorded sequence is the
 2026-11-09 13:37-13:43 dispatch log: translation and fetch extraction hit hy4's
-per-AppId minute limit on all four AppIds (and deepseek-v4-flash-yourprovider's on
+per-AppId minute limit on all four AppIds (and deepseek-v4-flash-meituan's on
 0733) while conversation rounds on claude-opus-5.5 and kimi-k3.1-pro were
 accepted. The watch must stay silent on that, and tell the owner's Watchdog
 once per episode when conversation rounds on one AppId and model are rejected
@@ -27,20 +27,20 @@ OWNER = 7
 
 # Recorded 2026-11-09 13:37:00-13:43:00: (second, caller, AppId tail, model, 429 kind).
 AUXILIARY_REJECTIONS = (
-    (30, 'Translate', '0733', 'hy4', 'rpm'), (31, 'Translate', '0733', 'deepseek-v4-flash-yourprovider', 'rpm'),
-    (34, 'Translate', '0733', 'hy4', 'rpm'), (35, 'Translate', '0733', 'deepseek-v4-flash-yourprovider', 'rpm'),
+    (30, 'Translate', '0733', 'hy4', 'rpm'), (31, 'Translate', '0733', 'deepseek-v4-flash-meituan', 'rpm'),
+    (34, 'Translate', '0733', 'hy4', 'rpm'), (35, 'Translate', '0733', 'deepseek-v4-flash-meituan', 'rpm'),
     (73, 'Fetch:Extract', '5409', 'hy4', 'rpm'), (92, 'Fetch:Extract', '4861', 'hy4', 'rpm'),
-    (94, 'Fetch:Extract', '0733', 'deepseek-v4-flash-yourprovider', 'rpm'),
+    (94, 'Fetch:Extract', '0733', 'deepseek-v4-flash-meituan', 'rpm'),
     (97, 'Fetch:Extract', '0733', 'kunlunbedrock.gpt-6.1-sol-m17', 'vendor_tpm'),
-    (110, 'Translate', '0733', 'deepseek-v4-flash-yourprovider', 'rpm'), (110, 'Translate', '4861', 'hy4', 'rpm'),
-    (148, 'Fetch:Extract', '4861', 'hy4', 'rpm'), (150, 'Translate', '0733', 'deepseek-v4-flash-yourprovider', 'rpm'),
+    (110, 'Translate', '0733', 'deepseek-v4-flash-meituan', 'rpm'), (110, 'Translate', '4861', 'hy4', 'rpm'),
+    (148, 'Fetch:Extract', '4861', 'hy4', 'rpm'), (150, 'Translate', '0733', 'deepseek-v4-flash-meituan', 'rpm'),
     (150, 'Translate', '4861', 'hy4', 'rpm'), (164, 'Fetch:Extract', '5409', 'hy4', 'rpm'),
     (175, 'Fetch:Extract', '6672', 'hy4', 'rpm'), (184, 'Fetch:Extract', '5409', 'hy4', 'rpm'),
-    (187, 'Fetch:Extract', '0733', 'deepseek-v4-flash-yourprovider', 'rpm'), (190, 'Fetch:Extract', '4861', 'hy4', 'rpm'),
-    (191, 'Fetch:Extract', '0733', 'deepseek-v4-flash-yourprovider', 'rpm'),
-    (215, 'Fetch:Extract', '0733', 'deepseek-v4-flash-yourprovider', 'rpm'), (217, 'Fetch:Extract', '0733', 'hy4', 'rpm'),
-    (230, 'Fetch:Extract', '0733', 'deepseek-v4-flash-yourprovider', 'rpm'), (230, 'Fetch:Extract', '4861', 'hy4', 'rpm'),
-    (263, 'Translate', '0733', 'hy4', 'rpm'), (310, 'Translate', '0733', 'deepseek-v4-flash-yourprovider', 'rpm'),
+    (187, 'Fetch:Extract', '0733', 'deepseek-v4-flash-meituan', 'rpm'), (190, 'Fetch:Extract', '4861', 'hy4', 'rpm'),
+    (191, 'Fetch:Extract', '0733', 'deepseek-v4-flash-meituan', 'rpm'),
+    (215, 'Fetch:Extract', '0733', 'deepseek-v4-flash-meituan', 'rpm'), (217, 'Fetch:Extract', '0733', 'hy4', 'rpm'),
+    (230, 'Fetch:Extract', '0733', 'deepseek-v4-flash-meituan', 'rpm'), (230, 'Fetch:Extract', '4861', 'hy4', 'rpm'),
+    (263, 'Translate', '0733', 'hy4', 'rpm'), (310, 'Translate', '0733', 'deepseek-v4-flash-meituan', 'rpm'),
     (343, 'Translate', '0733', 'hy4', 'rpm'), (346, 'Translate', '0733', 'hy4', 'rpm'),
 )
 # Accepted conversation rounds in the same window, per (AppId tail, model).
@@ -74,7 +74,7 @@ def _slot(tail, model):
     from lib.llm_dispatch.slot import Slot
     credential = CREDENTIALS[tail]
     return Slot(key_name=f'{credential}:deployment-{model}', api_key=_api_key(tail), model=model,
-                capabilities={'text'}, provider_id='default', route_credential_id=credential)
+                capabilities={'text'}, provider_id='sankuai', route_credential_id=credential)
 
 
 def _error(kind, tail, model):
@@ -187,7 +187,7 @@ def test_corroborated_production_rejections_alert_once_per_episode(env):
     [alert] = env.delivered
     public = _public(alert)
     assert public['kind'] == 'open' and public['owner'] == OWNER
-    assert (public['providerId'], public['keyTail'], public['model']) == ('example-corp', *CONTENDED)
+    assert (public['providerId'], public['keyTail'], public['model']) == ('sankuai', *CONTENDED)
     # Corroborated at 100 s: the round rejected at 99.5 s was accepted after a 2.4 s dispatcher hold.
     assert public['openedAtMs'] == _ms(100)
     evidence = public['evidence']
@@ -200,7 +200,7 @@ def test_corroborated_production_rejections_alert_once_per_episode(env):
     others = {entry['keyTail']: entry for entry in evidence['otherAppIds']}
     assert others == {'4861': {'keyTail': '4861', 'accepted': 8, 'rejected': 0},
                       '6672': {'keyTail': '6672', 'accepted': 3, 'rejected': 0}}
-    for fragment in ('…0733', 'claude-opus-5.5', 'example-corp', 'per-minute', 'held', '…4861'):
+    for fragment in ('…0733', 'claude-opus-5.5', 'sankuai', 'per-minute', 'held', '…4861'):
         assert fragment in public['detail']
 
 
@@ -281,7 +281,7 @@ def test_route_groups_and_the_configured_pool_share_one_lane_per_appid_and_model
     def routed(group):
         # A conversation round's request-scoped candidate: the group pin is its provider_id.
         return Slot(key_name=f'ephemeral_{group}', api_key=_api_key('0733'), model='claude-opus-5.5',
-                    capabilities={'text'}, provider_id=f'route-group-{group}', routing_provider_id='default',
+                    capabilities={'text'}, provider_id=f'route-group-{group}', routing_provider_id='sankuai',
                     routing_owner_user_id=OWNER, request_scoped=True, route_credential_id=credential)
 
     error = _error('rpm', *CONTENDED)
@@ -291,7 +291,7 @@ def test_route_groups_and_the_configured_pool_share_one_lane_per_appid_and_model
         env.clock[0] = T0 + 12
         env.module.observe_settlement(routed('a'), ttft_ms=900.0, queue_wait_ms=2000.0)
     [opened] = env.delivered
-    assert opened['providerId'] == 'example-corp' and opened['keyTail'] == '0733'
+    assert opened['providerId'] == 'sankuai' and opened['keyTail'] == '0733'
     # Auxiliary work on the configured slot of the same credential is the same quota: its rejection
     # 30 s later keeps the episode open past the next round of another request group.
     env.clock[0] = T0 + 40
@@ -453,7 +453,7 @@ def test_an_avoided_lane_lapses_at_the_provider_window_without_any_probe(env, mo
     assert [at for at, _ in timers] == [T0 + 11 + 60]
     env.clock[0] = T0 + 70
     _fire_due(env, timers)
-    assert len(env.delivered) == 1 and env.watch.open_appids() == {('example-corp', CREDENTIALS['0733'])}
+    assert len(env.delivered) == 1 and env.watch.open_appids() == {('sankuai', CREDENTIALS['0733'])}
     env.clock[0] = T0 + 71
     _fire_due(env, timers)
     [_, closed] = env.delivered
@@ -480,7 +480,7 @@ def test_the_hold_the_provider_named_extends_the_horizon(env, monkeypatch):
     _rejected_and_held(env, 10, retry_after_s=180.0)
     assert [at for at, _ in timers] == [T0 + 11 + 180]
     env.clock[0] = T0 + 120
-    assert env.watch.open_appids() == {('example-corp', CREDENTIALS['0733'])}
+    assert env.watch.open_appids() == {('sankuai', CREDENTIALS['0733'])}
     env.clock[0] = T0 + 191
     _fire_due(env, timers)
     assert [t['kind'] for t in env.delivered] == ['open', 'close']
@@ -521,7 +521,7 @@ def test_a_genuinely_ongoing_quota_stays_open(env, monkeypatch):
             env.clock[0] = T0 + second + 20
             env.module.observe_settlement(_slot(*CONTENDED), ttft_ms=900.0, queue_wait_ms=4000.0)
         _fire_due(env, timers)
-        assert env.watch.open_appids() == {('example-corp', CREDENTIALS['0733'])}
+        assert env.watch.open_appids() == {('sankuai', CREDENTIALS['0733'])}
     assert [t['kind'] for t in env.delivered] == ['open']
     # One pending timer at a time, never one per rejection.
     assert len(timers) == 1

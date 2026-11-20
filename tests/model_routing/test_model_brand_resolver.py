@@ -66,9 +66,9 @@ console.log(JSON.stringify({
   catalogLookupSpark: brand('muse-spark-1.2'),
   patternFallback: brand('meta/llama-3.1-8b-instruct'),
   patternFromUnmappedCreator: brand('kimi-k2'),
-  hostedDeepseek: brand('deepseek-v4-flash-yourprovider'),
-  yourproviderFamily: brand('LongCat-2.5'),
-  yourproviderProvider: brand('yourprovider'),
+  hostedDeepseek: brand('deepseek-v4-flash-meituan'),
+  meituanFamily: brand('LongCat-2.5'),
+  meituanProvider: brand('meituan'),
   unknownId: brand('totally-unknown-xyz'),
   emptyId: brand(''),
   nullId: brand(null),
@@ -91,8 +91,8 @@ console.log(JSON.stringify({
     assert values['patternFallback'] == 'meta'
     assert values['patternFromUnmappedCreator'] == 'kimi'
     assert values['hostedDeepseek'] == 'deepseek'
-    assert values['yourproviderFamily'] == 'yourprovider'
-    assert values['yourproviderProvider'] == 'yourprovider'
+    assert values['meituanFamily'] == 'meituan'
+    assert values['meituanProvider'] == 'meituan'
     assert values['unknownId'] == 'generic'
     assert values['emptyId'] == 'generic'
     assert values['nullId'] == 'generic'

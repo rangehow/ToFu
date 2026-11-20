@@ -916,7 +916,7 @@ variable, e.g. `GITHUB_TOKEN`) and every provider key in `server_config.json`
 `provider <id>`), plus, for an explicit owner, every model-routing v2 credential
 key of that owner (label `model-routing <credential_id>`; enabled or not; the
 `api_key` of a `tofu.credential-secret/v1` envelope or a raw `api_key` secret).
-Those keys exist only as sealed per-owner secrets (e.g. the example-corp AppIds added
+Those keys exist only as sealed per-owner secrets (e.g. the sankuai AppIds added
 in Settings), so they are read through the model-routing owner's own decrypting
 read, `lib/model_routing/known_secrets.owner_credential_keys(boundary)`; nothing
 else decrypts them for redaction. The owner is always explicit: the task owner

@@ -2,7 +2,7 @@
 
 A gateway profile may require a client identity at the head of the system
 prompt and a working-directory header. Every gateway here is synthetic; the
-CatPaw declaration is pinned in bundles/yourprovider/tests/test_catpaw_gateway_profile.py.
+CatPaw declaration is pinned in bundles/meituan/tests/test_catpaw_gateway_profile.py.
 """
 import json
 

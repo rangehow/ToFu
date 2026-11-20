@@ -712,7 +712,7 @@ def solve_page(
     """
     _validate_input(layout)
     fonts = FontLibrary(font_dirs)
-    columns = {column.column_id: column for column in layout.columns}
+    {column.column_id: column for column in layout.columns}
     blocks = layout.blocks
     outcomes: dict[str, BlockPlacement | LayoutRefusal] = {}
 

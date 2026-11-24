@@ -122,10 +122,62 @@ class DispatchFailurePolicy:
         self.state.last_err = error
         self._note_failure_cause(error)
 
+    def _record_account_health(self, slot, *, kind, reason, cooldown_seconds):
+        """Learn one account-scoped fact in the requesting owner's table only."""
+        from ._credential_outage import _bound_account_id
+        account_id = _bound_account_id(slot)
+        if not account_id:
+            return
+        from lib.identity import require_user_id
+        from lib.model_routing.health import HealthTarget, owner_health_registry
+        try:
+            owner = require_user_id(self.owner_user_id,
+                                    context='subscription account health')
+        except ValueError:
+            return
+        if slot.routing_owner_user_id != owner:
+            return
+        owner_health_registry(owner, slot.routing_tenant_id).record_failure(
+            HealthTarget('subscription_account', account_id, slot.oauth),
+            reason=f'{kind}:{reason}', cooldown_seconds=cooldown_seconds)
+
+    def _account_rejected(self, error, slot):
+        """A router-selected account generation was rejected: retire it, rotate.
+
+        The rejection zeroes this generation's sign-in expiry so later
+        compilations skip it; sibling accounts and API-key routes serve the
+        unchanged request. The legacy provider-token refresh does not apply
+        to an account-bound bearer.
+        """
+        from lib.oauth.account_dispatch import reject_bound_account
+        from lib.model_routing.domain import ModelRoutingError
+        from lib.storage.errors import StorageError
+        slot.release()
+        self._remember_failure(error)
+        try:
+            reject_bound_account(slot.subscription_account)
+        except (ModelRoutingError, StorageError):
+            logger.warning(
+                '%s account rejection could not be persisted; rotating on '
+                'learned health', self.log_prefix)
+        self._record_account_health(slot, kind='subscription_account_rejected',
+                                    reason='auth_rejected', cooldown_seconds=None)
+        self.state.note_account_exclusion(slot, self.dispatcher)
+        self.state.hard_attempts += 1
+        logger.warning(
+            '%s Subscription account rejected on %s — rotating to a sibling '
+            'account', self.log_prefix, slot.key_name)
+        self._retry_notice(slot, attempt=self.state.hard_attempts,
+                           reason='Subscription account needs reauthorization',
+                           status_code=401)
+        self._restart('account rejected — rotating account')
+        return 0.0
+
     def handle(self, error, slot, *, tag):
         """Settle one failed reservation; retry with a delay or raise unchanged."""
-        if getattr(slot, 'subscription_account', None) is not None:
-            # A bound invocation may not restart selection on any failure.
+        if (getattr(slot, 'subscription_account', None) is not None
+                and not getattr(slot, 'subscription_account_rotation', False)):
+            # A caller-pinned invocation may not restart selection on any failure.
             slot.release()
             if isinstance(error, PermissionError_) and error.status_code == 401:
                 from lib.oauth.account_dispatch import reject_bound_account
@@ -138,6 +190,9 @@ class DispatchFailurePolicy:
                     raise ModelAdmissionRefused('Selected Codex account rejected; status could not be saved') from exc
                 raise ModelAdmissionRefused('Selected Codex account needs reauthorization') from None
             raise error
+        if (getattr(slot, 'subscription_account_rotation', False)
+                and isinstance(error, PermissionError_) and error.status_code == 401):
+            return self._account_rejected(error, slot)
         if isinstance(error, LocalRequestPreparationError):
             return self._local_preparation(error, slot, tag)
         if isinstance(error, DispatchSharedContentionDeferred):
@@ -385,6 +440,10 @@ class DispatchFailurePolicy:
                 self.state._429_count,
             )
         if _is_subscription:
+            self._record_account_health(
+                slot, kind='subscription_quota_exhausted', reason='429',
+                cooldown_seconds=getattr(error, 'retry_after_s', None))
+            self.state.note_account_exclusion(slot, self.dispatcher)
             self._retry_notice(
                 slot,
                 attempt=self.state._429_count,
@@ -419,7 +478,10 @@ class DispatchFailurePolicy:
 
     def _permission(self, error, slot, tag):
         """Refresh OAuth once per request; 401 excludes the key, 403 only its pair."""
-        if slot.oauth and (not self._oauth_refresh_used):
+        from ._credential_outage import _bound_account_id
+        # An account-bound bearer refreshes inside its own snapshot resolution;
+        # the legacy single-login refresh is a different credential source.
+        if slot.oauth and (not self._oauth_refresh_used) and not _bound_account_id(slot):
             self._oauth_refresh_used = True
             if _force_oauth_token_refresh(slot.oauth, self.log_prefix, self.owner_user_id):
                 slot.release()

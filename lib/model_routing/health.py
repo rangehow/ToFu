@@ -36,11 +36,24 @@ class _HealthEntry:
     reason: str
 
 
+def _account_target(candidate) -> HealthTarget | None:
+    """The bound subscription account of one candidate, when it carries one."""
+    account_id = getattr(candidate, "subscription_account_id", "")
+    if not account_id:
+        return None
+    return HealthTarget(
+        "subscription_account", account_id, candidate.provider["provider_id"])
+
+
 def classify_failure(
     *, status_code: int | None = None, kind: str = "",
 ) -> str:
     """Map one typed failure to its narrowest truthful health scope."""
     normalized = str(kind or "").lower()
+    if normalized in {
+        "subscription_quota_exhausted", "subscription_account_rejected",
+    }:
+        return "subscription_account"
     if normalized in {
         "route_missing", "model_not_found", "deployment_not_found",
         "upstream_model_not_found",
@@ -87,6 +100,14 @@ class RouteHealthRegistry:
         kind: str = "",
     ) -> HealthTarget:
         scope = classify_failure(status_code=status_code, kind=kind)
+        if scope == "subscription_account":
+            account_id = getattr(candidate, "subscription_account_id", "")
+            if account_id:
+                return HealthTarget(
+                    scope, account_id, candidate.provider["provider_id"])
+            # An unbound subscription slot has no account identity to cool;
+            # its credential remains the narrowest truthful scope.
+            return HealthTarget("credential", candidate.credential["credential_id"])
         if scope == "connection":
             return HealthTarget(scope, candidate.connection["connection_id"])
         if scope == "credential":
@@ -138,6 +159,7 @@ class RouteHealthRegistry:
                 "connection": 30.0,
                 "credential": 300.0,
                 "credential_deployment": 600.0,
+                "subscription_account": 300.0,
             }.get(target.scope, 60.0)
             cooldown = (
                 min(max(float(cooldown_seconds), 0.0), self.ttl_seconds)
@@ -172,7 +194,7 @@ class RouteHealthRegistry:
 
     def record_success(self, candidate) -> None:
         """Clear only the exact successful path; unrelated faults survive."""
-        targets = (
+        targets = [
             HealthTarget("deployment", candidate.deployment["deployment_id"]),
             HealthTarget("connection", candidate.connection["connection_id"]),
             HealthTarget("credential", candidate.credential["credential_id"]),
@@ -181,7 +203,10 @@ class RouteHealthRegistry:
                 candidate.credential["credential_id"],
                 candidate.deployment["deployment_id"],
             ),
-        )
+        ]
+        account = _account_target(candidate)
+        if account is not None:
+            targets.append(account)
         with self._lock:
             for target in targets:
                 self._entries.pop(target, None)
@@ -200,7 +225,7 @@ class RouteHealthRegistry:
 
     def candidate_state(self, candidate) -> tuple[bool, float, list[str]]:
         now = self._clock()
-        targets = (
+        targets = [
             HealthTarget("deployment", candidate.deployment["deployment_id"]),
             HealthTarget("connection", candidate.connection["connection_id"]),
             HealthTarget("credential", candidate.credential["credential_id"]),
@@ -209,7 +234,10 @@ class RouteHealthRegistry:
                 candidate.credential["credential_id"],
                 candidate.deployment["deployment_id"],
             ),
-        )
+        ]
+        account = _account_target(candidate)
+        if account is not None:
+            targets.append(account)
         penalty = 0.0
         reasons: list[str] = []
         unavailable = False

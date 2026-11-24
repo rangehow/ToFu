@@ -128,6 +128,21 @@ class SubscriptionAccounts:
             raise _missing()
         return AccountBinding(authority.boundary, provider, row['account_id'], row['secret_reference'])
 
+    @staticmethod
+    def issued_for_account(authority, provider, account_id):
+        """Bind the exact account the compiler selected, from the same snapshot.
+
+        The grant authorization was already proven against this snapshot's
+        account fingerprints; outbound re-proves the bearer at send time.
+        """
+        if provider != 'codex' or ACCOUNT_FIELD not in authority.document:
+            raise _missing()
+        row = next((row for row in authority.document[ACCOUNT_FIELD]
+                    if row['provider'] == provider and row['account_id'] == account_id), None)
+        if row is None:
+            raise _missing()
+        return AccountBinding(authority.boundary, provider, row['account_id'], row['secret_reference'])
+
     def bind(self, boundary, provider, account_id):
         _, rows = self._read(boundary, provider)
         if account_id is None:

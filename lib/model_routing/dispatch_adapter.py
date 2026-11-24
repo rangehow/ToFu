@@ -358,9 +358,16 @@ def _prepare_and_publish_group(
         runnable_candidates.append(candidate)
         if oauth == 'codex':
             from lib.oauth.accounts import SubscriptionAccounts
-            binding = SubscriptionAccounts.issued_default(authority, oauth)
+            if candidate.subscription_account_id:
+                binding = SubscriptionAccounts.issued_for_account(
+                    authority, oauth, candidate.subscription_account_id)
+            else:
+                binding = SubscriptionAccounts.issued_default(authority, oauth)
             if binding is not None:
                 handle.slot.subscription_account = (binding, repository)
+                # Router-selected account generations may rotate to a sibling
+                # account on failure; caller-pinned bindings stay terminal.
+                handle.slot.subscription_account_rotation = True
 
     if not handles:
         if initialization_errors and isinstance(initialization_errors[0], ModelRoutingError):

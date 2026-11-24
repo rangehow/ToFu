@@ -40,16 +40,35 @@ def credential_source_outage(error):
         cause, (SubscriptionCredentialUnavailableError, SubscriptionLoginRequiredError)) else None
 
 
+def _bound_account_id(slot) -> str:
+    scoped = getattr(slot, 'subscription_account', None)
+    binding = scoped[0] if isinstance(scoped, tuple) and scoped else scoped
+    return getattr(binding, 'account_id', '') or ''
+
+
 def _shares_credential_source(slot, failed) -> bool:
     if slot.key_name == failed.key_name:
         return True
+    if bool(failed.oauth) and slot.oauth == failed.oauth:
+        failed_account = _bound_account_id(failed)
+        slot_account = _bound_account_id(slot)
+        if failed_account and slot_account:
+            # Distinct account generations issue distinct bearers; one
+            # account's outage says nothing about its siblings.
+            return (failed_account == slot_account
+                    and slot.routing_owner_user_id == failed.routing_owner_user_id
+                    and slot.routing_tenant_id == failed.routing_tenant_id)
+        if failed_account or slot_account:
+            # A bound generation and the legacy single-login resolver are
+            # different sources even under one credential row.
+            return False
     if (failed.route_credential_id
             and slot.route_credential_id == failed.route_credential_id
             and slot.routing_owner_user_id == failed.routing_owner_user_id
             and slot.routing_tenant_id == failed.routing_tenant_id):
         return True
-    # Within one request every slot of a subscription kind resolves its bearer
-    # through the same outbound login resolver for the requesting owner.
+    # Within one request every unbound slot of a subscription kind resolves
+    # its bearer through the same outbound login resolver for the owner.
     return bool(failed.oauth) and slot.oauth == failed.oauth
 
 
@@ -75,6 +94,14 @@ def _learned_credential(slot, owner):
     return owner, slot.routing_tenant_id, slot.route_credential_id
 
 
+def _learned_account(slot, owner):
+    """Owner-scoped bound account identity, or None for unbound slots."""
+    account_id = _bound_account_id(slot)
+    if owner is None or slot.routing_owner_user_id != owner or not account_id:
+        return None
+    return owner, slot.routing_tenant_id, account_id, slot.oauth
+
+
 class CredentialOutageRouting:
     """Request-local credential-source exclusions plus learned cooldowns."""
 
@@ -98,6 +125,14 @@ class CredentialOutageRouting:
             return set()
         cooled = set()
         for slot in self._slots():
+            account = _learned_account(slot, self._owner)
+            if account is not None:
+                owner, tenant, account_id, provider = account
+                registry = existing_owner_health_registry(owner, tenant)
+                if registry is not None and registry.target_unavailable(
+                        HealthTarget('subscription_account', account_id, provider)):
+                    cooled.add(slot.key_name)
+                continue
             learned = _learned_credential(slot, self._owner)
             if learned is None:
                 continue
@@ -138,8 +173,15 @@ class CredentialOutageRouting:
         self.failed_keys |= keys
         self.cooled_keys -= keys
         scope = classify_failure(kind=CREDENTIAL_SOURCE_UNAVAILABLE)
+        learned_accounts = {_learned_account(candidate, self._owner)
+                            for candidate in (slot, *sharing)} - {None}
+        for owner, tenant, account_id, provider in learned_accounts:
+            owner_health_registry(owner, tenant).record_failure(
+                HealthTarget('subscription_account', account_id, provider),
+                reason=f'{CREDENTIAL_SOURCE_UNAVAILABLE}:{reason}')
         learned = {_learned_credential(candidate, self._owner)
-                   for candidate in (slot, *sharing)} - {None}
+                   for candidate in (slot, *sharing)
+                   if _learned_account(candidate, self._owner) is None} - {None}
         for owner, tenant, credential_id in learned:
             owner_health_registry(owner, tenant).record_failure(
                 HealthTarget(scope, credential_id),
@@ -155,6 +197,14 @@ class CredentialOutageRouting:
         from lib.model_routing.health import (
             HealthTarget, existing_owner_health_registry, owner_health_learned)
         if not owner_health_learned():
+            return
+        account = _learned_account(slot, self._owner)
+        if account is not None:
+            owner, tenant, account_id, provider = account
+            registry = existing_owner_health_registry(owner, tenant)
+            if registry is not None:
+                registry.clear_target(
+                    HealthTarget('subscription_account', account_id, provider))
             return
         learned = _learned_credential(slot, self._owner)
         if learned is None:

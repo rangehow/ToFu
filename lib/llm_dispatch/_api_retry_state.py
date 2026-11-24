@@ -379,6 +379,24 @@ class DispatchRetryState:
         self.exclude_keys_durable.add(slot.key_name)
         self.hard_attempts += 1
 
+    def note_account_exclusion(self, slot, dispatcher):
+        """One account generation failed — durably exclude every slot bound to it.
+
+        Sibling accounts and API-key routes stay eligible: the exclusion is
+        scoped to the exact owner/tenant and account generation, never to the
+        shared credential row. An unbound slot falls back to its own key.
+        """
+        from ._credential_outage import _bound_account_id
+        account_id = _bound_account_id(slot)
+        if not account_id:
+            return
+        for candidate in getattr(dispatcher, 'slots', ()):
+            if (_bound_account_id(candidate) == account_id
+                    and candidate.routing_owner_user_id == slot.routing_owner_user_id
+                    and candidate.routing_tenant_id == slot.routing_tenant_id):
+                self.exclude_keys_durable.add(candidate.key_name)
+        self.exclude_keys_durable.add(slot.key_name)
+
     def note_credential_model_limit(self, slot, error):
         """The key's own per-model request limit: leave the pair for this call.
 

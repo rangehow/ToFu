@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 import heapq
+import time
 from typing import Any
 
 from .domain import ModelRef, ModelRoutingError, NativeModelSelection
@@ -39,6 +40,7 @@ class RouteCandidate:
     score: tuple[Any, ...]
     selection_reasons: tuple[str, ...] = ()
     codex_account_fingerprints: tuple[str, ...] = ()
+    subscription_account_id: str = ""
 
     @property
     def dispatch_capabilities(self) -> set[str]:
@@ -54,6 +56,28 @@ class RouteCandidate:
     @property
     def provider_id(self) -> str:
         return str(self.provider["provider_id"])
+
+
+def _eligible_accounts(
+    idx: Mapping[str, Any], account_fingerprints: tuple[str, ...],
+) -> list[tuple[str, bool]]:
+    """Inventory accounts authorized for this wire, default first, stable order.
+
+    Secret-free: reads only the normalized account rows (identity, default
+    flag, grant expiry), never token material. An account whose sign-in has
+    expired cannot serve, so it is not a rotation candidate.
+    """
+    if not account_fingerprints:
+        return [("", False)]
+    now = time.time()
+    rows = [
+        row for row in idx["document"].get("subscription_accounts", ())
+        if row.get("provider") == "codex"
+        and row.get("subject_fingerprint") in account_fingerprints
+        and float(row.get("expires_at") or 0.0) > now
+    ]
+    rows.sort(key=lambda row: (0 if row.get("is_default") else 1, row["account_id"]))
+    return [(row["account_id"], bool(row.get("is_default"))) for row in rows]
 
 
 def _pricing_allowed(offering: Mapping[str, Any], policy: RoutePolicy) -> bool:
@@ -417,55 +441,86 @@ def _iter_candidates(
                 if account_fingerprints and not policy.required_capabilities.issubset(partial.dispatch_capabilities):
                     reject("capabilities_missing")
                     continue
-                unavailable, health_penalty, health_reasons = (
-                    health.candidate_state(partial) if health is not None
-                    else (False, 0.0, [])
-                )
-                if unavailable:
-                    reject("health_unavailable")
-                    continue
-                pricing = offering.get("actual_pricing") or {}
-                price_score = float(pricing.get("input") or 0.0) + float(pricing.get("output") or 0.0)
-                preferred_rank = (
-                    0 if preferred_provider_id and provider["provider_id"] == preferred_provider_id
-                    else 1 if preferred_provider_id else 0
-                )
-                cache_rank = (
-                    0 if policy.cache_affinity_connection_id == connection["connection_id"]
-                    else 1
-                )
-                score = (
-                    preferred_rank,
-                    int(offering.get("priority", 100)),
-                    health_penalty,
-                    cache_rank,
-                    int(connection.get("priority", 100)),
-                    int(deployment.get("priority", 100)),
-                    float(connection.get("latency_ms") or offering.get("latency_ms") or 0.0),
-                    price_score,
-                    provider["provider_id"],
-                    deployment["deployment_id"],
-                    credential["credential_id"],
-                )
-                reasons = [
-                    "preferred_provider" if preferred_rank == 0 and preferred_provider_id else "eligible_provider",
-                    "cache_affinity" if cache_rank == 0 and policy.cache_affinity_connection_id else "score_ranked",
-                    *health_reasons,
-                ]
-                yield RouteCandidate(
-                    model=partial.model,
-                    provider=provider,
-                    provider_access=access,
-                    offering=offering,
-                    deployment=deployment,
-                    connection=connection,
-                    credential=credential,
-                    score=score,
-                    selection_reasons=tuple(reasons),
-                    codex_account_fingerprints=account_fingerprints,
-                )
-
-                if one_authorization_witness:
+                # A scoped grant names every account authorized for this wire;
+                # each eligible account becomes its own candidate so dispatch
+                # rotation reaches a sibling account, not the same bearer.
+                accounts = _eligible_accounts(idx, account_fingerprints)
+                if not accounts:
+                    # No inventory row proves the grant: retain the legacy
+                    # candidate so mint surfaces the typed account error.
+                    accounts = [("", False)]
+                witness_yielded = False
+                for account_id, account_default in accounts:
+                    scoped = (
+                        RouteCandidate(
+                            model=partial.model,
+                            provider=provider,
+                            provider_access=access,
+                            offering=offering,
+                            deployment=deployment,
+                            connection=connection,
+                            credential=credential,
+                            score=(),
+                            codex_account_fingerprints=account_fingerprints,
+                            subscription_account_id=account_id,
+                        ) if account_id else partial
+                    )
+                    unavailable, health_penalty, health_reasons = (
+                        health.candidate_state(scoped) if health is not None
+                        else (False, 0.0, [])
+                    )
+                    if unavailable:
+                        reject("health_unavailable")
+                        continue
+                    pricing = offering.get("actual_pricing") or {}
+                    price_score = float(pricing.get("input") or 0.0) + float(pricing.get("output") or 0.0)
+                    preferred_rank = (
+                        0 if preferred_provider_id and provider["provider_id"] == preferred_provider_id
+                        else 1 if preferred_provider_id else 0
+                    )
+                    cache_rank = (
+                        0 if policy.cache_affinity_connection_id == connection["connection_id"]
+                        else 1
+                    )
+                    score = (
+                        preferred_rank,
+                        int(offering.get("priority", 100)),
+                        health_penalty,
+                        cache_rank,
+                        int(connection.get("priority", 100)),
+                        int(deployment.get("priority", 100)),
+                        float(connection.get("latency_ms") or offering.get("latency_ms") or 0.0),
+                        price_score,
+                        provider["provider_id"],
+                        deployment["deployment_id"],
+                        credential["credential_id"],
+                        0 if account_default else 1,
+                        account_id,
+                    )
+                    reasons = [
+                        "preferred_provider" if preferred_rank == 0 and preferred_provider_id else "eligible_provider",
+                        "cache_affinity" if cache_rank == 0 and policy.cache_affinity_connection_id else "score_ranked",
+                        *health_reasons,
+                    ]
+                    if account_id:
+                        reasons.append("default_account" if account_default else "eligible_account")
+                    yield RouteCandidate(
+                        model=partial.model,
+                        provider=provider,
+                        provider_access=access,
+                        offering=offering,
+                        deployment=deployment,
+                        connection=connection,
+                        credential=credential,
+                        score=score,
+                        selection_reasons=tuple(reasons),
+                        codex_account_fingerprints=account_fingerprints,
+                        subscription_account_id=account_id,
+                    )
+                    if one_authorization_witness:
+                        witness_yielded = True
+                        break
+                if witness_yielded:
                     break
 
 

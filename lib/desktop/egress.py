@@ -298,22 +298,57 @@ def pin_egress_agent(owner_user_id: int, agent_id: str) -> str:
 #: Drives the multi-agent fallback order (G1, SUBSCRIPTION_RELAY_SCENARIOS
 #: §4.2): pinned first, then most-recently-successful, then last_seen.
 _last_success: dict = {}
+#: agent_id → (cooldown_until monotonic, consecutive failure streak).
+#: A device that failed at transport level sinks below healthy devices so a
+#: dead-but-online pin does not tax every request with a failed first attempt.
+#: Cooled devices stay in the chain (never hard-excluded): egress is the
+#: last-resort path and presence may be stale. A success clears the streak.
+_last_failure: dict = {}
 _success_lock = threading.Lock()
+_AGENT_FAIL_BASE_S = 5.0
+_AGENT_FAIL_CAP_S = 120.0
 
 
 def _note_success(agent_id: str) -> None:
     with _success_lock:
         _last_success[agent_id] = time.monotonic()
+        _last_failure.pop(agent_id, None)
+
+
+def _note_failure(agent_id: str) -> None:
+    """One transport-level device failure; repeats inside its cooldown are
+    the same outage and neither escalate nor extend it."""
+    now = time.monotonic()
+    with _success_lock:
+        previous = _last_failure.get(agent_id)
+        if previous is not None and previous[0] > now:
+            return
+        streak = 1 if previous is None else min(previous[1] + 1, 8)
+        cooldown = min(_AGENT_FAIL_BASE_S * (2 ** (streak - 1)), _AGENT_FAIL_CAP_S)
+        _last_failure[agent_id] = (now + cooldown, streak)
+
+
+def _agent_cooled(agent_id: str, now: float) -> bool:
+    entry = _last_failure.get(agent_id)
+    return entry is not None and entry[0] > now
 
 
 def _order_agents(agents: list, user_id: str) -> list:
-    """pinned → recent egress success → most-recently-seen."""
+    """healthy before cooled → pinned → recent egress success → last_seen.
+
+    A cooled pin yields to a healthy device: the pin is a preference, and a
+    dead-but-online pin must not tax every request with a failed first attempt.
+    Among cooled devices the pin still leads the last-resort tail.
+    """
     pinned = _pinned_agent(user_id)
+    now = time.monotonic()
     with _success_lock:
         snap = dict(_last_success)
+        cooled = {aid for aid, (until, _) in _last_failure.items() if until > now}
     return sorted(
         agents,
-        key=lambda a: (0 if a['agent_id'] == pinned else 1,
+        key=lambda a: (1 if a['agent_id'] in cooled else 0,
+                       0 if a['agent_id'] == pinned else 1,
                        -snap.get(a['agent_id'], 0.0),
                        -(a.get('last_seen') or 0.0)))
 
@@ -593,6 +628,7 @@ def open_stream(url: str, *, method: str = 'POST', headers: dict = None,
             cmd_id=cmd_id, ttl=_EGRESS_STREAM_TTL_S)
         if err:
             last_err = err
+            _note_failure(cand)
             logger.info('[Egress] stream enqueue to agent %s failed: %s '
                         '— trying next candidate', cand[:8], err)
             continue
@@ -609,6 +645,7 @@ def open_stream(url: str, *, method: str = 'POST', headers: dict = None,
             if reader._seq != 0:
                 raise
             last_err = e
+            _note_failure(cand)
             logger.info('[Egress] stream via agent %s produced no frames '
                         '(%s) — trying next candidate', cand[:8], e)
             cancel_stream(cmd_id, cand, user_id)

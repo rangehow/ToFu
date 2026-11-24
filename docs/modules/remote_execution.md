@@ -313,10 +313,16 @@ contract as local execution.
 
 `lib/desktop/egress.py` routes only the exact subscription-host allow-list or a
 declared adapter loopback port; the agent repeats the target check before opening
-a socket. Owner-scoped candidates order by explicit pin and recent health;
-failover is bounded and observable. The explicit pin is durable user state in the
-Storage Sidecar; the live device registry stays ephemeral transport, filtered by
-owner/online/`egress` capability before API display or pin acceptance. A retired
+a socket. Owner-scoped candidates order healthy devices before cooled ones, then by
+explicit pin, recent transport success, and `last_seen`; failover is bounded and
+observable. A device whose stream enqueue or zero-frame pre-meta connect failed
+enters a 5→15→30→60→120 s failure cooldown (repeats inside one cooldown are the
+same outage; a delivered answer clears it), so a dead-but-online pin yields to a
+healthy device instead of taxing every request with a failed first attempt.
+Cooled devices stay in the last-resort tail, never hard-excluded. The explicit
+pin is durable user state in the Storage Sidecar; the live device registry stays
+ephemeral transport, filtered by owner/online/`egress` capability before API
+display or pin acceptance. A retired
 per-installation JSON file is a read-once migration source only — an explicit
 Sidecar row (even empty) prevents it becoming a second authority.
 

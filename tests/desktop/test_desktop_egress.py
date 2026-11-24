@@ -248,12 +248,81 @@ class TestEgressHttp(unittest.TestCase):
         send.assert_not_called()
 
 
+class TestAgentFailureCooldown(unittest.TestCase):
+    """A transport-failed device sinks below healthy ones; success forgives."""
+
+    def tearDown(self):
+        with egress._success_lock:
+            egress._last_success.clear()
+            egress._last_failure.clear()
+
+    def test_failed_device_sinks_below_healthy_even_pinned(self):
+        a1 = _agent('a1', '1'); a2 = _agent('a2', '1', name='box2')
+        with mock.patch.object(egress, '_pinned_agent', return_value='a1'):
+            egress._note_failure('a1')
+            ordered = egress._order_agents([a1, a2], '1')
+            self.assertEqual([a['agent_id'] for a in ordered], ['a2', 'a1'])
+
+    def test_success_clears_cooldown(self):
+        egress._note_failure('a1')
+        self.assertTrue(egress._agent_cooled('a1', time.monotonic()))
+        egress._note_success('a1')
+        self.assertFalse(egress._agent_cooled('a1', time.monotonic()))
+
+    def test_cooldown_expiry_readmits(self):
+        egress._note_failure('a1')
+        with egress._success_lock:
+            _until, streak = egress._last_failure['a1']
+            egress._last_failure['a1'] = (time.monotonic() - 1, streak)
+        self.assertFalse(egress._agent_cooled('a1', time.monotonic()))
+
+    def test_same_outage_does_not_escalate(self):
+        egress._note_failure('a1')
+        with egress._success_lock:
+            first = egress._last_failure['a1']
+        egress._note_failure('a1')
+        with egress._success_lock:
+            self.assertEqual(egress._last_failure['a1'], first)
+
+    def test_streak_escalates_after_cooldown(self):
+        egress._note_failure('a1')
+        with egress._success_lock:
+            _until, streak = egress._last_failure['a1']
+            egress._last_failure['a1'] = (time.monotonic() - 1, streak)
+        egress._note_failure('a1')
+        with egress._success_lock:
+            until2, streak2 = egress._last_failure['a1']
+        self.assertEqual(streak2, 2)
+        self.assertGreater(until2 - time.monotonic(), 9)
+
+    def test_open_stream_enqueue_failure_notes_and_fails_over(self):
+        calls = []
+
+        def _enqueue(_type, _params, **kw):
+            agent = kw.get('target_agent_id')
+            calls.append(agent)
+            if agent == 'a1':
+                return None, 'agent offline'
+            return 'enq-' + agent, None
+
+        with mock.patch.object(egress, 'route_candidates', return_value=['a1', 'a2']), \
+             mock.patch('lib.desktop.enqueue_desktop_command', side_effect=_enqueue), \
+             mock.patch.object(egress.EgressStreamReader, 'wait_headers', return_value=None), \
+             mock.patch.object(egress, 'cancel_stream'):
+            egress.open_stream(
+                'https://chatgpt.com/backend-api/codex/responses', user_id='1')
+        self.assertEqual(calls, ['a1', 'a2'])
+        self.assertTrue(egress._agent_cooled('a1', time.monotonic()))
+        self.assertFalse(egress._agent_cooled('a2', time.monotonic()))
+
+
 class TestAgentFallback(unittest.TestCase):
     """G1 候选链 failover（SUBSCRIPTION_RELAY_SCENARIOS §4.2）。"""
 
     def tearDown(self):
         with egress._success_lock:
             egress._last_success.clear()
+            egress._last_failure.clear()
 
     def test_http_bridge_failure_fails_over(self):
         good = {'status': 200, 'headers': {}, 'body_b64': '', 'elapsed_ms': 5}

@@ -848,6 +848,12 @@ jobs:
             echo "::error::The macOS app did not emit TOFU_SMOKE_OK."
             exit 1
           }
+          # The smoke run writes runtime state (logs and a GENERATED
+          # flask_secret_key) inside the bundle. Remove it: the added files
+          # break the sealed code signature ("a sealed resource is missing or
+          # invalid", run 45323868228), and a runtime secret must never ship
+          # in the public DMG.
+          rm -rf dist/Tofu.app/Contents/MacOS/data dist/Tofu.app/Contents/MacOS/logs
 
       - name: Create DMG
         shell: bash

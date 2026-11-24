@@ -178,6 +178,26 @@ genuine human Turn of the same owner in the owner's bound Global Router and the
 text is identical; it rejects every other cross-conversation origin as before.
 The router's optional `note` is nonhuman context of that same request and never
 becomes authority. Forwarding is idempotent per (source turn, project).
+
+**Owner media rides the same input.** A verified human source Turn's canonical
+`/api/images/<f>` links and durable `attachments` refs are re-read owner-scoped
+by `forwarding.forwarded_source_media`, judged as a genuine human Turn (or, for
+a steered owner message, by its committed author), and placed on the recipient's
+one input Turn. Steered images come from the committed steer preview. Inline
+base64/data URLs, paths in Router notes and media from another conversation are
+never copied, so nonhuman evidence cannot mint a file read; the added media is
+context only. The recipient's model projection then shows them as a human
+attachment is shown, and the Project Router can attach them through the one lead
+attachment boundary. Problem (2026-11-24): the owner screenshot of 设置 → 服务商
+was named only in a Router note after `route_to_project`; both the Global Router
+and Project Router were refused `attachment_refused` when attaching it.
+Alternatives rejected: leaving note text as a fake image reference (it would let
+a Router-authored note grant reads), or a second mailbox-only message carrying
+the image (it could become its own synthetic Coordinator request). Specification:
+`tests/router/test_route_to_project.py::test_forwards_the_owner_images_and_media_refs_from_the_verified_source_turn`,
+`test_a_steered_owner_screenshot_reaches_the_forwarded_input`,
+`test_forwarded_media_survives_the_ordinary_turn_command`, and
+`tests/project_mod/test_lead_attachments.py::test_an_image_in_the_live_model_projection_is_attachable`.
 The Router's role text names the current request's source on every Turn whose
 input is the owner's own message (`project_coordination._request_lines`,
 resolved as delegation resolves it): `route_to_project(source_turn_id="<Turn>")`,

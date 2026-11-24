@@ -92,6 +92,52 @@ def test_forwards_the_owner_text_byte_identical_with_its_provenance(r):
     assert provisioned['settings'] == {'codeExecEnabled': True, 'searchMode': 'single'}
 
 
+def test_forwards_the_owner_images_and_media_refs_from_the_verified_source_turn(r):
+    """2026-11-24: a screenshot named only in a Router note reached no project."""
+    link = '/api/images/1795490773201_8db2cbc0.jpg'
+    media = {'attachmentId': 'media-1', 'kind': 'document', 'name': 'spec.pdf', 'status': 'ready'}
+    r.turns['human-1']['projection'].update({
+        'images': [
+            {'url': link, 'preview': '/proxy/15000' + link, 'mediaType': 'image/jpeg',
+             'caption': 'owner shot', 'sizeKB': 320, 'base64': 'inline-bytes'},
+            {'preview': 'data:image/png;base64,AAAA'},
+        ],
+        'attachments': [media],
+    })
+    result = r.route(project_path=r.project, source_turn_id='human-1')
+    [call] = r.calls
+    message = call['message']
+    assert message['content'] == TEXT
+    assert message['images'] == [{'preview': link, 'url': link, 'mediaType': 'image/jpeg',
+                                  'caption': 'owner shot', 'sizeKB': 320}]
+    assert 'inline-bytes' not in json.dumps(message) and 'data:image' not in json.dumps(message)
+    assert message['attachments'] == [media]
+    assert result['forwarded_from'] == {'conversationId': 'router', 'turnId': 'human-1'}
+
+
+def test_a_steered_owner_screenshot_reaches_the_forwarded_input(r, monkeypatch):
+    from lib.turn_initiation import steered_input_turn
+    link = '/api/images/steered-shot.png'
+    steer_id = 'steer-owner'
+    record = {'blockId': 'injection:user-steer:' + steer_id, 'commandId': steer_id,
+              'deliveryState': 'delivered', 'author': {'actor': 'human', 'text': TEXT},
+              'previews': [{'text': TEXT, 'images': [
+                  {'url': link, 'preview': link, 'caption': 'owner shot'}]}]}
+    r.turns['reply-1'] = {'conversationId': 'router', 'turnId': 'reply-1', 'actor': 'assistant',
+                          'projectionRevision': 9,
+                          'projection': {'content': 'Router reply text', '_userSteerInjects': [record]}}
+    steered = steered_input_turn(r.turns['reply-1'], steer_id)
+    monkeypatch.setattr(forwarding, '_current_steer_source',
+                        lambda task, scope, source_steer_id: steered if source_steer_id == steer_id else None)
+    result = r.route(project_path=r.project, source_steer_id=steer_id)
+    [call] = r.calls
+    assert call['message']['content'] == TEXT
+    assert call['message']['images'] == [{'preview': link, 'url': link, 'caption': 'owner shot'}]
+    assert 'attachments' not in call['message']
+    assert result['forwarded_from'] == {'conversationId': 'router', 'turnId': 'reply-1',
+                                        'steerId': steer_id}
+
+
 def test_replay_reuses_the_command_and_the_existing_project_router(r):
     first = r.route(project_path=r.project + '/', source_turn_id='human-1')
     second = r.route(project_path=r.project, source_turn_id='human-1')
@@ -203,3 +249,29 @@ def test_ordinary_turn_command_steers_a_busy_target_and_starts_an_idle_one(r, mo
     assert payload['inputTurn']['origin']['forwardedFrom'] == {'conversationId': 'router',
                                                               'turnId': 'human-1'}
     assert result['disposition'] == expected
+
+
+@pytest.mark.parametrize('lane', ['busy', 'idle'])
+def test_forwarded_media_survives_the_ordinary_turn_command(r, monkeypatch, lane):
+    from lib.scheduler import conversation_dispatch
+    link = '/api/images/owner-shot.png'
+    media = {'attachmentId': 'media-2', 'kind': 'document', 'name': 'evidence.pdf', 'status': 'ready'}
+    r.turns['human-1']['projection'].update({
+        'images': [{'url': link, 'preview': link}], 'attachments': [media]})
+    payloads = []
+
+    class Commands:
+        def create_turn(self, conversation, owner, payload, *, request_started_at):
+            payloads.append(deepcopy(payload))
+            return _Outcome({'steered': True, 'blockId': 'block'} if lane == 'busy'
+                            else {'attempt': {'taskId': 'project-task'}})
+
+    class Storage:
+        def query(self, operation, payload):
+            return {'metadata': {'settings': {'projectPath': r.project}}}
+    monkeypatch.setattr(conversation_dispatch, 'conversation_turn_commands', Commands())
+    monkeypatch.setattr(conversation_dispatch, 'get_storage_client', lambda: Storage())
+    route_to_project(r.task, r.scope, {'project_path': r.project, 'source_turn_id': 'human-1'})
+    [payload] = payloads
+    assert payload['inputTurn']['images'] == [{'preview': link, 'url': link}]
+    assert payload['inputTurn']['attachments'] == [media]

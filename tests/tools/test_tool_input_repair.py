@@ -2331,3 +2331,120 @@ def test_argument_warnings_join_the_result_without_breaking_json(
         assert json.loads(merged)['argument_warnings'] == [
             '$.title was shortened.']
     assert with_argument_warnings(content, []) is content
+
+# ═════════════════════════════════════════════════════════════════
+#  Value-driven fetch_url → read_files repair (ingest seam)
+# ═════════════════════════════════════════════════════════════════
+
+
+def _fetch_read_documents():
+    from lib.tools.contracts import compile_execution_contract_documents
+    from lib.tools.project import READ_FILES_TOOL
+    from lib.tools.search import build_fetch_url_tool
+    return compile_execution_contract_documents(
+        [build_fetch_url_tool(), READ_FILES_TOOL])
+
+
+_FULL_DOCS = object()
+
+
+def _ingest_fetch(args, *, name='fetch_url', known=None,
+                  documents=_FULL_DOCS):
+    import json
+    from lib.tool_input_repair import ingest_tool_call
+    return ingest_tool_call(
+        {'id': 'call-local', 'function': {
+            'name': name, 'arguments': json.dumps(args)}},
+        known_tools=({'fetch_url', 'read_files'} if known is None else known),
+        contract_documents_by_name=(
+            _fetch_read_documents() if documents is _FULL_DOCS else documents),
+        emit_audit=False,
+    )
+
+
+def test_fetch_url_file_uri_is_dispatched_as_read_files():
+    """The reported abstract error: a file:// URI in fetch_url must not cost
+    a whole refusal/re-emission round when read_files is admitted."""
+    call = _ingest_fetch({'url': 'file:///mnt/project/docs/a.md'})
+    assert call.parse_error is None
+    assert call.fn_name == 'read_files'
+    assert call.fn_args == {'path': '/mnt/project/docs/a.md'}
+    assert ('$', 'local_file_tool_redirect') in call.repair_log
+    assert any('dispatched as read_files' in note for note in call.warnings)
+
+
+def test_file_uri_percent_encoding_and_localhost_are_decoded():
+    encoded = _ingest_fetch({'url': 'file:///tmp/My%20Notes.md'})
+    assert encoded.fn_args == {'path': '/tmp/My Notes.md'}
+    localhost = _ingest_fetch({'url': 'file://localhost/tmp/notes.md'})
+    assert localhost.fn_args == {'path': '/tmp/notes.md'}
+
+
+def test_existing_bare_absolute_path_is_redirected(tmp_path):
+    local = tmp_path / 'notes.md'
+    local.write_text('local bytes', encoding='utf-8')
+    call = _ingest_fetch({'url': str(local)})
+    assert call.fn_name == 'read_files'
+    assert call.fn_args == {'path': str(local)}
+
+
+@pytest.mark.parametrize('url', [
+    'https://example.com/page',
+    'ftp://example.com/file',
+    'file://remote-host/etc/passwd',
+    'file:///tmp/a.md?x=1',
+    'file:///tmp/a.md#section',
+    '//example.com/page',
+    'docs/relative.md',
+    '/tofu-local-file-repair/no-such-file.md',
+    'file:///tmp/\x00nul.md',
+])
+def test_ambiguous_or_remote_targets_keep_fetch_url_authority(url):
+    call = _ingest_fetch({'url': url})
+    assert call.fn_name == 'fetch_url'
+    assert call.fn_args == {'url': url}
+    assert call.parse_error is None
+    assert call.repair_log == []
+
+
+def test_batch_urls_keep_fetch_url_authority():
+    call = _ingest_fetch({'urls': [{'url': 'file:///tmp/a.md'}]})
+    assert call.fn_name == 'fetch_url'
+    assert call.parse_error is None
+
+
+def test_extract_is_dropped_with_a_model_visible_warning():
+    call = _ingest_fetch({
+        'url': 'file:///tmp/notes.md', 'extract': 'summarize the file'})
+    assert call.fn_name == 'read_files'
+    assert call.fn_args == {'path': '/tmp/notes.md'}
+    assert any('`extract`' in note for note in call.warnings)
+
+
+def test_redirect_requires_both_visibility_and_execution_admission():
+    local = {'url': 'file:///tmp/notes.md'}
+    assert _ingest_fetch(local, known={'fetch_url'}).fn_name == 'fetch_url'
+    only_fetch = {'fetch_url': _fetch_read_documents()['fetch_url']}
+    assert _ingest_fetch(local, documents=only_fetch).fn_name == 'fetch_url'
+    # Legacy (no request-owned contract map) still redirects on visibility.
+    assert _ingest_fetch(local, documents=None).fn_name == 'read_files'
+
+
+def test_name_alias_then_value_redirect_converge_on_read_files():
+    call = _ingest_fetch({'url': 'file:///tmp/notes.md'}, name='WebFetch')
+    assert call.alias_kind == 'alias'
+    assert call.fn_name == 'read_files'
+    assert call.fn_args == {'path': '/tmp/notes.md'}
+
+
+def test_shared_predicate_only_redirects_fetch_url_calls():
+    from lib.tool_input_repair import (
+        local_file_fetch_path, redirect_local_file_fetch)
+    assert local_file_fetch_path({'url': 'file:///tmp/a.md'}) == '/tmp/a.md'
+    assert local_file_fetch_path(
+        {'url': 'file:///tmp/a.md', 'urls': [{'url': 'file:///tmp/b.md'}]}) is None
+    assert redirect_local_file_fetch(
+        'read_files', {'path': '/tmp/a.md'}, read_files_admitted=True) is None
+    assert redirect_local_file_fetch(
+        'fetch_url', {'url': 'file:///tmp/a.md'},
+        read_files_admitted=False) is None

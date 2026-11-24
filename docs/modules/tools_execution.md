@@ -107,6 +107,31 @@ value repairs inside a still-valid string (stripped tool-call markup); hiding
 the badge only in the browser leaves the audit counting defaults as repairs.
 Rounds recorded earlier keep their stored descriptor.
 
+**Local-file fetch repair (decision 2026-11-24) — Problem:** models put a
+`file:///...` URI (or the absolute path of an existing local file) in
+`fetch_url.url`; the HTTP authority rejects the scheme, so a whole model round
+was spent retransmitting the same bytes as `read_files`. **Decision:**
+`ingest_tool_call` applies one value-driven repair at Stage 4.2: a single-url
+`fetch_url` naming an unambiguous local file dispatches as
+`read_files(path=...)`, but only when both this request's live tool set and its
+request-owned v2 contract epoch admit `read_files`. The rewrite is logged as a
+`local_file_tool_redirect` repair, emits `tool_local_file_redirect`, and adds a
+model-visible warning (including that `extract` was dropped); the redirected
+call is validated against `read_files`' own contract, so root/path guards,
+freshness evidence, working-file witnesses and remote-worktree routing stay
+authoritative. Streaming pre-execution uses the same predicate to DEFER
+local-file targets instead of caching a speculative HTTP refusal; the
+post-stream ingest then performs the one redirect. Batch `urls`, non-local
+`file://host/...` authorities, query/fragmented URIs, relative paths and other
+schemes are untouched, and the existing handler/core scheme refusals remain as
+a backstop. Specs: `tests/tools/test_tool_input_repair.py`,
+`tests/tasks_pkg/test_streaming_fetch_url_delegation.py`. **Alternatives
+rejected:** reading the file inside `fetch_url`'s handler (duplicates the
+reader's admission/freshness authority and leaves the streaming path
+inconsistent); rewriting every local-looking string (guesses a file the model
+never named); changing `fetch_url`'s schema to accept local paths (makes the
+workaround the contract).
+
 **Display-only argument overflow (owner decision 2026-11-11) — Problem:** a
 whole call was refused when one free-text display field exceeded its
 `maxLength`: a 166-character `delegate_project_work.title` (limit 160) threw

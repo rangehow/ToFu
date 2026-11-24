@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 
 from lib.log import get_logger
+from lib.tool_input_repair import LOCAL_FILE_TOOL_REDIRECT
 from lib.tasks_pkg.tool_display import _build_tool_round_entry
 
 logger = get_logger(__name__)
@@ -30,6 +31,7 @@ _REPAIR_PATTERN_LABELS = {
     'zero_cursor_omission': 'treated zero cursor as the latest window',
     'codex_apply_patch': 'converted Codex apply_patch text',
     'truncate_max_length': 'shortened display text to its limit',
+    LOCAL_FILE_TOOL_REDIRECT: 'dispatched a local file through read_files',
 }
 
 
@@ -90,6 +92,11 @@ def _apply_repair_to_round(round_entry: dict, fn_name: str, fn_args: dict,
     and the settle frame may be a long command away.
     """
     round_entry['_repaired'] = repair_summary
+    # A value-driven repair can change the executed tool (file:// fetch_url →
+    # read_files). The early row was announced under the model's original name;
+    # settle it under the tool that actually ran.
+    if round_entry.get('toolName') != fn_name:
+        round_entry['toolName'] = fn_name
     try:
         tc_args_str = json.dumps(fn_args, ensure_ascii=False) if fn_args else '{}'
         _, fresh_entry, _ = _build_tool_round_entry(

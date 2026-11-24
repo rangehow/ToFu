@@ -19,6 +19,10 @@ from lib.log import audit_log, get_logger
 
 from lib.tool_input_repair._classify import classify_tool_call, resolve_tool_name
 from lib.tool_input_repair._concat import split_concatenated_tool_name
+from lib.tool_input_repair._local_file import (
+    LOCAL_FILE_TOOL_REDIRECT,
+    redirect_local_file_fetch,
+)
 from lib.tool_input_repair._rejection import (
     build_rejection_message,
     clear_rejection,
@@ -246,6 +250,9 @@ def ingest_tool_call(
        When the name IS real, :func:`clear_rejection` resets any prior streak.
     3. **Decode** malformed JSON conservatively.
     4. **Repair** only the curated syntax/shape patterns shared by every lane.
+    4b. **Value-driven redirect** — a ``fetch_url`` call naming a definitive
+        local file executes as ``read_files`` when that reader is admitted in
+        this request (shared predicate with streaming pre-execution).
     5. **Validate** the repaired value against the request-owned
        ``ToolContractV2`` document; this last step never guesses semantics.
 
@@ -263,7 +270,8 @@ def ingest_tool_call(
             passes through so the caller's own unknown-tool path handles it
             (e.g. a harness that wants the executor's raw error). Default True.
         emit_audit: When False, suppress the ``tool_name_aliased`` /
-            ``tool_hallucinated`` audit events (e.g. a dry-run / test).
+            ``tool_hallucinated`` / ``tool_local_file_redirect`` audit
+            events (e.g. a dry-run / test).
         contract_documents_by_name: Request-owned execution contracts. ``None``
             preserves the legacy read-compatible path; a supplied map fails
             closed when the selected tool has no valid v2 document.
@@ -472,6 +480,27 @@ def ingest_tool_call(
     if codex_patch_converted:
         repair_log.insert(0, ('$', 'codex_apply_patch'))
 
+    # ── Stage 4.2: value-driven local-file redirect ──
+    # fetch_url's authority is HTTP(S); a call that names a definitive local
+    # file belongs to the workspace reader. Both admission oracles must agree:
+    # known_tools is visibility, and a present v2 contract epoch is execution.
+    # The redirected call is then validated/clamped against read_files' own
+    # document, so its root/path guards and freshness evidence stay authoritative.
+    redirect_note = ''
+    if parse_error is None:
+        read_files_admitted = (
+            'read_files' in known
+            and (contract_documents_by_name is None
+                 or 'read_files' in contract_documents_by_name))
+        redirect = redirect_local_file_fetch(
+            fn_name, fn_args, read_files_admitted=read_files_admitted)
+        if redirect is not None:
+            fn_name, fn_args, redirect_note = redirect
+            repair_log.append(('$', LOCAL_FILE_TOOL_REDIRECT))
+            if emit_audit:
+                audit_log('tool_local_file_redirect', tool='fetch_url',
+                          resolved='read_files', model=model, conv_id=conv_id)
+
     # ── Stage 4.5: document-anchored bounds clamp (MCP / dynamic tools) ──
     # The static repair index exempts server-dynamic (MCP) schemas; the
     # request-owned contract document still knows their bounds, so clamp
@@ -486,6 +515,8 @@ def ingest_tool_call(
                            '(passing args through): %s', fn_name, e)
     warnings = (display_text_warnings(decoded_args, fn_args, repair_log)
                 if parse_error is None else [])
+    if redirect_note and parse_error is None:
+        warnings = [*warnings, redirect_note]
 
     # ── Stage 5a: retired arguments ──
     # Refused before the contract so the model learns the call that expresses

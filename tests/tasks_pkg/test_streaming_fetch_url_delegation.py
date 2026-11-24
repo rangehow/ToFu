@@ -222,3 +222,21 @@ class TestStreamingFetchUrlDelegation:
 
         assert content.startswith('Failed to fetch')
         assert round_entry['_cacheableResult'] is False
+
+def test_local_file_fetch_target_is_deferred_to_ingest(tmp_path):
+    """No speculative HTTP refusal is cached under fetch_url: the same
+    shared predicate defers local-file targets so post-stream ingest can
+    dispatch ONE canonical read_files call with a matching cache identity."""
+    from types import SimpleNamespace
+
+    from lib.tasks_pkg.streaming_tool_executor import _has_executable_target
+
+    assert _has_executable_target(
+        'fetch_url', {'url': 'file:///tmp/notes.md'}) is False
+    local = tmp_path / 'notes.md'
+    local.write_text('local bytes', encoding='utf-8')
+    assert _has_executable_target('fetch_url', {'url': str(local)}) is False
+    with patch('tofu_search.config.get_config', return_value=SimpleNamespace(
+            filter_enabled=False, filter_mode='')):
+        assert _has_executable_target(
+            'fetch_url', {'url': 'https://example.com/page'}) is True

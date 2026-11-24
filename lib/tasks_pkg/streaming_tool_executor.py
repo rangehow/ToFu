@@ -253,6 +253,13 @@ def _has_executable_target(fn_name: str, fn_args: dict) -> bool:
     "no URL provided" message instead.
     """
     if fn_name == 'fetch_url':
+        # A local file is read_files' authority, not an HTTP fetch. Defer it to
+        # post-stream ingest, whose redirect produces the same call identity for
+        # prefetch/cache as the canonical handler (no speculative refusal is
+        # cached under fetch_url). The predicate is shared with that redirect.
+        from lib.tool_input_repair import local_file_fetch_path
+        if local_file_fetch_path(fn_args) is not None:
+            return False
         # Extract needs the serial handler's model pass and canonical source
         # retention. A speculative raw-fetch cache hit skips that handler.
         if fn_args.get('extract'):

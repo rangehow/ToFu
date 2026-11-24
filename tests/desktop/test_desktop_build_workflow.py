@@ -78,6 +78,9 @@ _WORKFLOW = _ROOT / '.github' / 'workflows' / 'build-desktop.yml'
 #                                       actions/runner-images#13518
 #   macos-15-intel  available until 2027-08 — the LAST x86_64 macOS image
 #                                       actions/runner-images#13045
+#                   UNUSED by owner decision 2026-11-24: onnxruntime dropped
+#                   macOS Intel wheels, so the Intel release legs were removed
+#                   (kept here so a revert names the reason).
 #
 # `None` = no announced end-of-life. When GitHub announces one, put the date
 # here; this test will then start failing 90 days ahead of it.
@@ -190,16 +193,22 @@ def test_no_job_runs_on_a_retired_or_soon_retired_runner():
     )
 
 
-def test_both_macos_architectures_are_still_built():
-    """Intel + Apple Silicon, or Intel Macs cannot install Tofu at all.
+def test_macos_matrix_builds_apple_silicon_only():
+    """Owner decision 2026-11-24: macOS ships arm64 only.
 
-    The arch NAMES (used in the asset filenames the release gate asserts on)
-    are pinned here; the runner labels behind them are free to rotate.
+    onnxruntime — a hard transitive dependency of the version-pinned PDF trio
+    (pymupdf4llm -> pymupdf_layout -> onnxruntime) — no longer publishes macOS
+    Intel wheels, so the Intel Python bundle is unsatisfiable (run
+    44666015763). Intel Macs stay on v0.19.2 or install from source. The arch
+    NAME (used in the asset filenames the release gate asserts on) is pinned
+    here; the runner label behind it is free to rotate. Re-adding x86_64
+    requires a new owner decision AND a resolvable Intel dependency set.
     """
     wf = _workflow()
     include = (wf['jobs']['build-macos']['strategy']['matrix']['include'])
-    assert {e['arch'] for e in include} == {'arm64', 'x86_64'}, (
-        f'macOS matrix must build both arches, got {include}'
+    assert {e['arch'] for e in include} == {'arm64'}, (
+        f'macOS matrix must build arm64 only (owner decision 2026-11-24), '
+        f'got {include}'
     )
 
 
@@ -476,7 +485,7 @@ def test_no_separate_controlled_end_component_is_built_or_released():
     mod = _asset_mod()
     assert not hasattr(mod, 'AGENT_PLATFORM_ASSETS')
     assert len(mod.REQUIRED_PLATFORM_ASSETS) == (
-        len(mod.PLATFORM_ASSETS) + 2 + 2 * len(mod.PYTHON_BUNDLE_TARGETS) + 8)
+        len(mod.PLATFORM_ASSETS) + 2 + 2 * len(mod.PYTHON_BUNDLE_TARGETS) + 6)
 
 
 def test_release_still_requires_every_platform_leg():
@@ -1076,11 +1085,11 @@ def test_a_partial_release_is_rebuilt():
     """
     mod = _asset_mod()
     names = [n for n in _complete_names()
-             if not n.endswith('macos-x86_64.dmg')]
+             if not n.endswith('macos-arm64.dmg')]
     got, log = _run_version_gate_body(http_code='200',
                                       body_text=_release_json(names))
     assert got.get('should_release') == 'true', (
-        f'a release missing the Intel DMG must be rebuilt to repair it; got '
+        f'a release missing the macOS DMG must be rebuilt to repair it; got '
         f'{got!r}\nlog:\n{log}'
     )
 
@@ -1988,7 +1997,7 @@ def test_prebuilt_engine_assets_are_produced_before_release():
     assert job['strategy']['fail-fast'] is False
     targets = {row['target'] for row in job['strategy']['matrix']['include']}
     assert targets == {'x86_64-unknown-linux-musl', 'aarch64-unknown-linux-musl',
-                       'x86_64-apple-darwin', 'aarch64-apple-darwin'}
+                       'aarch64-apple-darwin'}
     build = next(step for step in job['steps']
                  if step.get('name') == 'Build and smoke the native release engine')
     assert 'scripts/build_tofudb_prebuilt.py' in build['run']

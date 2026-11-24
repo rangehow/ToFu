@@ -75,7 +75,7 @@ def _fake_size(tag, name):
 def _release(tag='v0.14.2', ver='0.14.2', sizes=None):
     """A probe payload whose asset names match the REAL platform globs."""
     sizes = sizes or {}
-    names = [f'Tofu-{ver}-macos-arm64.dmg', f'Tofu-{ver}-macos-x86_64.dmg',
+    names = [f'Tofu-{ver}-macos-arm64.dmg',
              f'Tofu-Setup-{ver}-win64.exe', f'Tofu-{ver}-linux-x86_64.tar.gz']
     return {'tag': tag,
             'assets': [{'name': n,
@@ -221,10 +221,12 @@ def test_find_for_platform_matches_the_shared_table(tmp_store):
           os_key='macos', arch='x86_64', label='macOS x86_64 DMG')
     rows = store.find_for_platform('windows', 'x86_64')
     assert [r['filename'] for r in rows] == ['Tofu-Setup-0.14.2-win64.exe']
-    # macOS with an UNKNOWN arch must offer BOTH DMGs — see the macOS trap
-    # documented in tests/server/test_platform_download.py.
+    # macOS ships arm64 only (owner decision 2026-11-24): even a locally
+    # seeded Intel DMG no longer matches a platform row, and an UNKNOWN
+    # arch offers the single macOS build. The UA "Intel" trap is moot while
+    # only one macOS row exists.
     both = store.find_for_platform('macos', '')
-    assert sorted(r['arch'] for r in both) == ['arm64', 'x86_64']
+    assert sorted(r['arch'] for r in both) == ['arm64']
     assert store.find_for_platform('plan9', '') == []
 
 
@@ -276,8 +278,8 @@ def test_refresh_downloads_every_matching_asset_once(tmp_store, fake_net):
     fake_net['probe'] = _release()
     assert mirror.refresh_now() is True
     arts = store.artifacts()
-    assert len(arts) == 4, arts
-    assert len(fake_net['downloads']) == 4
+    assert len(arts) == 3, arts
+    assert len(fake_net['downloads']) == 3
     for name, e in arts.items():
         assert e['source'] == 'mirrored'
         assert e['size'] > 0 and e['sha256']
@@ -300,7 +302,7 @@ def test_refresh_never_replaces_a_built_artifact_of_the_same_name(
           version='0.14.2')
     assert mirror.refresh_now() is True
     assert win not in fake_net['downloads']
-    assert len(fake_net['downloads']) == 3
+    assert len(fake_net['downloads']) == 2
     assert (tmp_store / win).read_bytes() == b'built' * 100
     assert store.artifacts()[win]['source'] == 'built'
 
@@ -372,14 +374,30 @@ def test_refresh_fetches_the_visitors_platform_first(tmp_store, fake_net):
     fake_net['probe'] = _release()
     assert mirror.refresh_now(prefer=('windows', 'x86_64')) is True
     assert fake_net['downloads'][0] == 'Tofu-Setup-0.14.2-win64.exe'
-    assert len(fake_net['downloads']) == 4
+    assert len(fake_net['downloads']) == 3
 
     fake_net['downloads'].clear()
     fake_net['probe'] = _release(tag='v0.15.0', ver='0.15.0')
     assert mirror.refresh_now(prefer=('macos', '')) is True
-    assert set(fake_net['downloads'][:2]) == {
-        'Tofu-0.15.0-macos-arm64.dmg', 'Tofu-0.15.0-macos-x86_64.dmg'}, (
-        'an unknown Mac chip prefers both DMGs')
+    assert fake_net['downloads'][0] == 'Tofu-0.15.0-macos-arm64.dmg', (
+        'an unknown Mac chip prefers the single macOS build (arm64)')
+
+
+@pytest.mark.unit
+def test_refresh_skips_assets_of_dropped_platforms(tmp_store, fake_net):
+    """An OLD release payload may still carry the Intel DMG (v0.19.2 shipped
+    it). The mirror downloads only assets matching the shared platform
+    table, so a dropped platform's asset is skipped, not mirrored."""
+    payload = _release()
+    intel = 'Tofu-0.14.2-macos-x86_64.dmg'
+    payload['assets'].append(
+        {'name': intel, 'url': f'https://example.test/v0.14.2/{intel}',
+         'size': _fake_size('v0.14.2', intel)})
+    fake_net['probe'] = payload
+    assert mirror.refresh_now() is True
+    assert intel not in fake_net['downloads']
+    assert intel not in store.artifacts()
+    assert len(fake_net['downloads']) == 3
 
 
 @pytest.mark.unit

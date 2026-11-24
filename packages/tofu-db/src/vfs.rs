@@ -665,13 +665,21 @@ impl Vfs for RealVfs {
             }
             // SAFETY: a successful statvfs initialized the complete structure.
             let info = unsafe { info.assume_init() };
-            let bytes_known = info.f_blocks > 0 && info.f_frsize > 0;
-            let inodes_known = info.f_files > 0;
+            // statvfs counter widths are platform-defined (macOS reports u32
+            // block/inode counts, Linux u64); normalize once so the capacity
+            // math compiles and saturates identically on every unix target.
+            let f_blocks: u64 = info.f_blocks.into();
+            let f_frsize: u64 = info.f_frsize.into();
+            let f_bavail: u64 = info.f_bavail.into();
+            let f_files: u64 = info.f_files.into();
+            let f_favail: u64 = info.f_favail.into();
+            let bytes_known = f_blocks > 0 && f_frsize > 0;
+            let inodes_known = f_files > 0;
             Ok(FilesystemCapacity {
-                total_bytes: bytes_known.then(|| info.f_blocks.saturating_mul(info.f_frsize)),
-                available_bytes: bytes_known.then(|| info.f_bavail.saturating_mul(info.f_frsize)),
-                total_inodes: inodes_known.then_some(info.f_files),
-                available_inodes: inodes_known.then_some(info.f_favail),
+                total_bytes: bytes_known.then(|| f_blocks.saturating_mul(f_frsize)),
+                available_bytes: bytes_known.then(|| f_bavail.saturating_mul(f_frsize)),
+                total_inodes: inodes_known.then_some(f_files),
+                available_inodes: inodes_known.then_some(f_favail),
             })
         }
         #[cfg(not(unix))]
@@ -1748,6 +1756,16 @@ impl SimulatedFile {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn real_vfs_filesystem_capacity_reports_positive_totals_for_a_live_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let capacity = RealVfs.filesystem_capacity(directory.path()).unwrap();
+        assert!(capacity.total_bytes.unwrap_or(0) > 0);
+        assert!(capacity.available_bytes.unwrap_or(0) > 0);
+        assert!(capacity.total_inodes.unwrap_or(0) > 0);
+        assert!(capacity.available_inodes.unwrap_or(0) > 0);
+    }
+
     #[test]
     fn observed_length_read_retains_actual_bounds_when_file_grows_or_shrinks() {
         let directory = tempfile::tempdir().unwrap();

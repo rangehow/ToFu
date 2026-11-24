@@ -23,8 +23,20 @@
   2026-11-20: the destination is the owner's personal repository, so
   `NiuTrans/ToFu` was removed from the driver's Open publication targets and
   is never pushed by this release.
+- Release matrix: macOS Intel (x86_64) is dropped. Owner decision 2026-11-24:
+  onnxruntime — a hard transitive dependency of the version-pinned PDF trio
+  (`pymupdf4llm` → `pymupdf_layout` → `onnxruntime`) — no longer publishes
+  macOS Intel wheels, so the Intel Python bundle cannot resolve. The Intel
+  DMG, `x86_64-apple-darwin` prebuilt engine and Intel Python-wheels legs are
+  removed from the release pipeline; Intel Macs stay on v0.19.2 (the last
+  release shipping Intel assets) or install from source.
 
 ### Fixed
+- The release pipeline builds again on the published tree: the frontend
+  contract-check job installs `jsonschema` and `pydantic` (their absence
+  failed the Vite graph step and stranded v0.19.3), and the tofu-db engine
+  compiles on macOS — `statvfs` block/inode counters are normalized to `u64`
+  (macOS reports `u32` widths, which broke the darwin prebuilt legs).
 - The browser extension recovers startup-configuration serialization after a
   storage read failure, carries the startup URL intent through preseed, rejects
   invalid stored types and fences stale configuration behind newer user intent.

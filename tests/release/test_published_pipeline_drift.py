@@ -58,11 +58,13 @@ then be permanently red for a legitimate reason, and a permanently-red guard
 gets muted, which is how a suite goes blind. Add such a file only with a
 transform-then-compare variant.
 
-WHY BOTH REMOTES
-----------------
-``export.py::_GIT_REPOS['opensource']`` pushes to TWO remotes: ``rangehow/ToFu``
-and ``NiuTrans/ToFu``. Both were measured at the same stale ``59bc8254``. A guard
-covering only the first would call the fleet clean while half of it was stale.
+WHY ONE REMOTE
+--------------
+Owner decision 2026-11-20 (CHANGELOG 0.19.3, commit f189c367): the single Open
+publication target is ``rangehow/ToFu``; ``NiuTrans/ToFu`` is not a publication
+target and is never pushed. This guard originally covered BOTH remotes because
+``export.py`` then pushed to both; keeping the second entry after the decision
+made the guard permanently red against a repo that is intentionally not updated.
 
 WHY A SKIP (AND NOT A PASS) WHEN OFFLINE
 -----------------------------------------
@@ -83,11 +85,10 @@ import pytest
 
 _ROOT = Path(__file__).resolve().parent.parent.parent
 
-# Repos that `export.py --push` publishes the opensource tree to, mirroring
-# _GIT_REPOS['opensource']['remotes'] (tokens stripped — this is a public read).
+# The single Open publication target (owner decision 2026-11-20; tokens
+# stripped — this is a public read).
 _PUBLISHED_REPOS = (
     ('rangehow/ToFu', 'main'),
-    ('NiuTrans/ToFu', 'main'),
 )
 
 # Files whose published copy must be byte-identical to the local source.

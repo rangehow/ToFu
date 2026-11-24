@@ -709,10 +709,11 @@ transport behavior, or runtime helper.
 
 The existing bounded catalog worker doubles stable-poll intervals up to one hour, but wakes at least five minutes before a stored Codex access token's expiry. A near-expiry idle poll uses the same cross-process OAuth singleflight refresh as requests, even when the model catalog is still fresh; transient catalog/provisioning errors retry within 15 minutes. An explicitly revoked or absent refresh token is never replayed and cannot be renewed without the user's authorization. An explicit logout stops the catalog worker and forgets staged rows only after credential deletion succeeds. Last-admitted catalog rows remain available during transient network/auth outages, whereas freshly fetched rows are not published until model-routing admission succeeds. The repair cannot override deliberately disabled provider access or an explicit capability/credential restriction; see `docs/MODEL_REGISTRATION.md`. Browser/code login commits share the refresh/logout transaction boundary, so an old refresh cannot overwrite a completed new login. Failed refresh fallback re-reads current credentials and current time; expiry crossed during a wait, logout, and replacement login never return the pre-refresh bearer. Problem: slow network operations outlive credential snapshots. Decision: reuse the existing transaction lock and revalidate fallback authority; alternatives rejected: a second credential store, recursively locking generic `save_token`, or trusting stale expiry. Specs: `test_oauth_token_store.py` login/refresh and expiry-boundary regressions.
 
-## Domestic coding subscriptions
+## Coding-plan subscriptions
 
-Settings → 订阅登录 also connects domestic coding plans. Mechanisms and terms
-were checked against each vendor's official documentation on 2026-11-06.
+Settings → 订阅登录 also connects coding plans. Mechanisms and terms were
+checked against each vendor's official documentation on 2026-11-06; the
+OpenCode Go facts were checked on 2026-11-24.
 
 **Kimi Code membership sign-in.** `lib/oauth/kimi.py` runs the RFC 8628 device
 grant of the open-source Kimi Code CLI (MIT, design note KLIP-14) against
@@ -747,6 +748,7 @@ credential.
 | Tencent Cloud Coding Plan | `tencent_coding_plan` | interactive use inside coding tools only, same exclusions |
 | Volcengine Ark Coding Plan | `ark_coding_plan` | personal development; plan quota applies only inside AI coding tools, not to API calls |
 | MiniMax M Plan | `minimax_mplan` | any OpenAI- or Anthropic-compatible tool; interactive personal use |
+| OpenCode Go | `opencode_go` | coding-agent traffic; identify the client and send a stable `x-opencode-session`; traffic is monitored for abuse that degrades other users |
 
 Never make Bailian, Tencent or Ark models the default for background jobs such
 as titles, translation or evaluations. Plan Offerings carry no price tier, so
@@ -755,6 +757,19 @@ Tofu has no interactive-only Offering policy yet, though: unpinned background
 dispatch is otherwise pool-wide (a capability request with no matching slot
 falls back to any text slot, and owner-wide auxiliary summaries consider every
 enabled text Offering), so a connected plan can still be selected for such work.
+
+OpenCode Go serves every paid Go text model through its OpenAI-compatible
+Chat Completions endpoint, so Tofu authors one face and lets Go translate to
+each model's native API. The `opencode_go` template declares
+`cache_affinity_opencode_session`; the common prompt-cache lineage key rides
+`x-opencode-session`. Go requires that stable session id for routing and
+prompt-cache reuse, and rejects a generation request without it, so cell probes
+mint a fresh one-request session. The template's roster omits free-tier models,
+which OpenCode serves only inside OpenCode (other harnesses receive HTTP 403).
+DeepSeek V4.1 Flash/V4 Pro and LongCat 2.5 need the workspace region set to
+Global, and Muse Spark contributor models need the workspace's
+training-permission setting. Go models whose creator facts are not registered
+yet stay drafts, as the plan-template rule above describes.
 
 Not integrated: Zhipu's GLM Coding Plan, whose terms name the permitted tools
 (Tofu is not one; outside them the plan quota does not apply and the account
@@ -768,9 +783,9 @@ Owner steps:
 - Kimi Code (membership Plus or above): Settings → 订阅登录 → Kimi Code →
   设备码登录; open the page shown on any device, sign in and confirm the code;
   the card then shows the connected model count.
-- Bailian, Tencent, Ark, MiniMax, or a Kimi Code console key: open the card's
-  获取 Key link and create the plan key; paste it into the card and press 连接;
-  pick a plan model in the composer for interactive work.
+- Bailian, Tencent, Ark, MiniMax, OpenCode Go, or a Kimi Code console key:
+  open the card's 获取 Key link and create the plan key; paste it into the card
+  and press 连接; pick a plan model in the composer for interactive work.
 
 Specifications: `tests/oauth/test_kimi_oauth.py` (device grant, refresh and
 expiry against a fake `auth.kimi.com`), `tests/oauth/test_kimi_subscription.py`

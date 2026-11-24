@@ -241,7 +241,7 @@ exists. The gate reads the declaration itself, because the closed-world
 Baidu DeepSeek V4 Pro wire rejects its content-part variants but accepts the
 same prompt with string content, so this declaration is Deployment-scoped.
 
-`lib/llm/cache_affinity.py` owns prompt-cache affinity. It derives one stable, non-identifying key per request lineage (a child invocation, else the conversation, else the task). Every carrier sends that key: Responses `prompt_cache_key`, Codex session headers, and the gateway headers a route declares through its `cache_affinity_*` features. The YourProvider faces declare `Mt-Session-Id`. Both outbound header assemblies add declared carriers, and an owner-configured header of the same name wins. The decision record is [LLM cost optimization §7](../LLM_COST_OPTIMIZATION.md#7-cache-affinity-carriers); specs are in `tests/llm/test_cache_affinity.py`.
+`lib/llm/cache_affinity.py` owns prompt-cache affinity. It derives one stable, non-identifying key per request lineage (a child invocation, else the conversation, else the task). Every carrier sends that key: Responses `prompt_cache_key`, Codex session headers, and the gateway headers a route declares through its `cache_affinity_*` features. The YourProvider faces declare `Mt-Session-Id`; the OpenCode Go template declares `x-opencode-session`. Both outbound header assemblies add declared carriers, and an owner-configured header of the same name wins. The decision record is [LLM cost optimization §7](../LLM_COST_OPTIMIZATION.md#7-cache-affinity-carriers); specs are in `tests/llm/test_cache_affinity.py`.
 
 Final request history uses one interface in `lib/llm/request_prefix.py`.
 It selects the wire history array for streaming evidence and compares

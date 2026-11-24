@@ -229,6 +229,55 @@ def test_probe_worker_sends_the_selector_only_to_the_pinned_cell():
     assert 'x-context-provider' not in by_wire['gpt-6.1-sol']['headers']
 
 
+def test_legacy_provider_profile_reaches_probe_context():
+    """Template-supply probes have no v2 request_contexts; the provider-level
+    profile must still carry a declared session carrier."""
+    from lib.provider.provider_probe import build_probe_work
+
+    work = build_probe_work(
+        {'id': 'opencode', 'base_url': 'https://opencode.ai/inference/go/openai/v1',
+         'protocol': 'openai',
+         'inference_profile': {'features': {
+             'cache_affinity_opencode_session': 'supported'}}},
+        [{'model_id': 'kimi-k3', 'capabilities': ['text']}], ['k1'])
+    assert work[0][7]['inference_profile'] == {'features': {
+        'cache_affinity_opencode_session': 'supported'}}
+
+
+def test_probe_worker_mints_the_declared_session_carrier():
+    """A gateway that requires a session header rejects diagnostics too."""
+    import lib.provider.provider_probe as pp
+
+    seen = {}
+
+    def _fake_probe(base_url, api_key, model_id, extra_headers, timeout,
+                    protocol='openai', oauth='', **kwargs):
+        seen.update(extra_headers or {})
+        return 'ok', 'HTTP 200'
+
+    task = {
+        'provider_id': 'opencode', 'status': 'running', 'started_at': 0,
+        'finished_at': None, 'total': 1, 'done_count': 0, 'cells': {},
+        'summary': {'ok': 0, 'disable': 0}, 'error': None, 'attempts': 1,
+        '_abort': False, '_base_url': 'https://opencode.ai/inference/go/openai/v1',
+        '_extra_headers': {}, '_protocol': 'openai', '_oauth': '',
+    }
+    work = [(0, 'k1', 'kimi-k3', 'kimi-k3', ['text'],
+             'https://opencode.ai/inference/go/openai/v1', 'openai',
+             {'extra_headers': {},
+              'inference_profile': {'features': {
+                  'cache_affinity_opencode_session': 'supported'}}})]
+
+    orig, orig_persist = pp.probe_cell_multi, pp.persist_probe_task
+    pp.probe_cell_multi, pp.persist_probe_task = _fake_probe, lambda t: None
+    try:
+        pp.run_cell_probe_task(task, work, timeout=5)
+    finally:
+        pp.probe_cell_multi, pp.persist_probe_task = orig, orig_persist
+
+    assert len(seen['x-opencode-session']) == 36
+
+
 def _plan(legacy: dict):
     from lib.model_routing.migration import plan_legacy_migration
     return plan_legacy_migration({'providers': [legacy]})

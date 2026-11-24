@@ -49,7 +49,7 @@ on:
         required: false
         type: string
       verify_macos_only:
-        description: 'Build and verify both macOS candidates; never create a tag or release.'
+        description: 'Build and verify the macOS (arm64) candidate; never create a tag or release.'
         type: boolean
         default: true
 
@@ -314,7 +314,11 @@ jobs:
       - name: Install frontend contract and browser-canary dependencies
         run: |
           set -euo pipefail
-          python -m pip install 'PyYAML>=6,<7' 'playwright>=1.56,<2'
+          # The contract-check generators (npm run check:frontend) import
+          # jsonschema and pydantic as well as yaml; a missing one fails the
+          # Vite graph step with ModuleNotFoundError (measured on run
+          # 44666015763, which stranded v0.19.3).
+          python -m pip install 'PyYAML>=6,<7' 'playwright>=1.56,<2' 'jsonschema>=4,<5' 'pydantic>=2,<3'
           python -m playwright install --with-deps chromium
       - name: Build and verify the Vite graph once
         run: |
@@ -664,17 +668,25 @@ jobs:
           retention-days: 30
 
   # ── macOS ────────────────────────────────────────────────────
-  # Build a NATIVE single-arch DMG per macOS architecture via a runner matrix:
-  #   - macos-15        → Apple Silicon (arm64)
-  #   - macos-15-intel  → Intel (x86_64)
+  # Build a NATIVE single-arch DMG for Apple Silicon (arm64) on macos-15.
   # We deliberately do NOT use PyInstaller target_arch='universal2': the
   # setup-python interpreter on the runners is single-arch, and several C
   # extensions we bundle (psycopg2-binary, pymupdf, lxml, cryptography) do not
   # publish universal2 wheels — so a universal2 build aborts at COLLECT with
-  # "<lib>.so is not a fat binary!" (pyinstaller#7354). Two native DMGs, each
-  # built with arch-matching wheels, is the reliable path. Previously only the
-  # arm64 DMG shipped (runs-on: macos-latest), so Intel Macs could not install
-  # Tofu at all.
+  # "<lib>.so is not a fat binary!" (pyinstaller#7354).
+  #
+  # ── Intel (x86_64) macOS was DROPPED — owner decision 2026-11-24 ──
+  # onnxruntime, a hard transitive dependency of the version-pinned PDF trio
+  # (pymupdf4llm==1.27.2.3 -> pymupdf_layout==1.27.2.3 -> onnxruntime), no
+  # longer publishes macOS Intel wheels, so the Intel Python bundle cannot
+  # resolve (measured on run 44666015763: "No solution found ... no wheels
+  # with a matching platform tag macosx_15_0_x86_64"). Alternatives rejected:
+  # a divergent older PDF stack for Intel only (breaks the pinned-trio
+  # policy and forks maintenance forever). Intel Macs stay on v0.19.2 (the
+  # last release shipping the Intel DMG) or install from source. The same
+  # decision removes the x86_64-apple-darwin tofudb-prebuilt leg and the
+  # macos-15-intel Python-wheels leg; scripts/release_assets.py is the
+  # authority for the resulting asset set.
   #
   # ── Runner labels are PERISHABLE — this matrix already died once ──
   # The legs were macos-14 (arm64) and macos-13 (x86_64). GitHub RETIRED
@@ -688,18 +700,14 @@ jobs:
   # macos-14 is on the same path (deprecation began 2026-07-06, unsupported
   # 2026-11-02), so it is moved off pre-emptively rather than after it starves.
   #
-  # tests/desktop/test_desktop_build_workflow.py pins both labels against a dated
+  # tests/desktop/test_desktop_build_workflow.py pins the labels against a dated
   # allowlist and FAILS BEFORE each one's retirement date — so the next
   # rotation is a red test on a normal working day, not a silent non-release.
-  # macos-15-intel is the LAST Intel image (available until 2027-08); after
-  # that, x86_64 macOS must be dropped or moved off GitHub-hosted runners.
   build-macos:
     name: macOS DMG (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     needs: [version, frontend-dist]
     if: needs.version.outputs.should_release == 'true'
-    # A cold Intel build reached 30 minutes; budget the build, smoke and
-    # uploads.
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -707,8 +715,6 @@ jobs:
         include:
           - runner: macos-15
             arch: arm64
-          - runner: macos-15-intel
-            arch: x86_64
     steps:
       - uses: actions/checkout@v4
 
@@ -1083,8 +1089,6 @@ jobs:
             target: aarch64-unknown-linux-musl
           - runner: macos-15
             target: aarch64-apple-darwin
-          - runner: macos-15-intel
-            target: x86_64-apple-darwin
     env:
       CC: gcc
       CXX: g++
@@ -1119,7 +1123,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-22.04, ubuntu-22.04-arm, macos-15, macos-15-intel, windows-latest]
+        runner: [ubuntu-22.04, ubuntu-22.04-arm, macos-15, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

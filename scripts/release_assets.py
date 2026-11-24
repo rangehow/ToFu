@@ -90,12 +90,15 @@ from pathlib import Path
 # it lived in one, which is the failure mode this whole module exists to
 # prevent. So the platform IS a field.
 #
-# ``arch`` is the architecture the asset RUNS ON, which for macOS is the one
-# fact a browser cannot tell us: Apple Silicon Macs report ``Intel Mac OS X``
-# in their UA string, so the two DMGs are indistinguishable without the
-# ``Sec-CH-UA-Arch`` client hint. Hence two separate entries rather than one
-# "macOS" row — the route offers both when it cannot know, and narrows to one
-# when the hint arrives.
+# ``arch`` is the architecture the asset RUNS ON. macOS ships Apple Silicon
+# (arm64) only: owner decision 2026-11-24 dropped the Intel (x86_64) DMG
+# because onnxruntime — a hard transitive dependency of the version-pinned
+# PDF trio (pymupdf4llm -> pymupdf_layout -> onnxruntime) — no longer
+# publishes macOS Intel wheels, so the Intel Python bundle is unsatisfiable.
+# Intel Macs stay on the last release that shipped them (v0.19.2) or install
+# from source. The UA string still says ``Intel Mac OS X`` on Apple Silicon,
+# so the ``Sec-CH-UA-Arch`` client hint remains the reliable arch source for
+# serving OLDER releases that carry both DMGs.
 #
 # ── Why a SIZE FLOOR is part of the same row ──
 # Counting filenames is not enough, and this was measured, not theorised. On
@@ -119,7 +122,6 @@ from pathlib import Path
 # which is why it belongs here rather than only in the workflow's shell fix.
 PLATFORM_ASSETS: tuple[tuple[str, str, str, str, int], ...] = (
     ('macos',   'arm64',  'macOS arm64 DMG',   'Tofu-*-macos-arm64.dmg',  119_000_000),
-    ('macos',   'x86_64', 'macOS x86_64 DMG',  'Tofu-*-macos-x86_64.dmg', 121_000_000),
     ('windows', 'x86_64', 'Windows installer', 'Tofu-Setup-*-win64.exe',   81_000_000),
     ('linux',   'x86_64', 'Linux archive',     'Tofu-*-linux-x86_64.tar.gz',    135_000_000),
     ('linux', 'arm64', 'Linux ARM64 archive', 'Tofu-*-linux-aarch64.tar.gz', 135_000_000),
@@ -152,7 +154,7 @@ REQUIRED_PLATFORM_ASSETS: tuple[tuple[str, str], ...] = tuple(
            for suffix in ('', '.sha256')),
     *tuple((f'Prebuilt TofuDB {target}{suffix}', f'tofu-db-*-{target}.tar.gz{suffix}')
            for target in ('x86_64-unknown-linux-musl', 'aarch64-unknown-linux-musl',
-                          'x86_64-apple-darwin', 'aarch64-apple-darwin')
+                          'aarch64-apple-darwin')
            for suffix in ('', '.sha256')),
     ('prebuilt frontend graph', 'frontend-dist-*.tar.gz'),
     ('prebuilt frontend SHA-256', 'frontend-dist-*.tar.gz.sha256'),

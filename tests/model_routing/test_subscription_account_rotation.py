@@ -35,9 +35,12 @@ SECRET_B = 'oauth_' + 'b' * 32
 
 @pytest.fixture(autouse=True)
 def _isolated_health():
+    from lib.subscription_quota import _reset_subscription_quota_cache_for_tests
     reset_owner_health_registries()
+    _reset_subscription_quota_cache_for_tests()
     yield
     reset_owner_health_registries()
+    _reset_subscription_quota_cache_for_tests()
 
 
 def _account_row(account_id, subject, secret, *, default=False, expires_at=None):
@@ -264,6 +267,73 @@ def test_auth_401_retires_account_and_rotates(dispatch_env, scoped_route):
     assert retired['expires_at'] == 0
     assert owner_health_registry(7).target_unavailable(
         HealthTarget('subscription_account', ACCOUNT_A, 'codex'))
+
+
+def _quota_snapshot(used, *, resets_at=None, captured_at=None, minutes=300):
+    window = {'used_percent': used, 'remaining_percent': round(100.0 - used, 3),
+              'window_minutes': minutes}
+    if resets_at is not None:
+        window['resets_at'] = resets_at
+    return {'provider': 'codex', 'source': 'response_headers',
+            'captured_at': int(time.time() if captured_at is None else captured_at),
+            'primary': window, 'secondary': None}
+
+
+def test_scoped_quota_cache_key():
+    from lib.subscription_quota import scoped_quota_cache_key
+    binding = AccountBinding(OwnerBoundary.create(7), 'codex', ACCOUNT_A, SECRET_A)
+    assert scoped_quota_cache_key('oauth_codex', (binding, None)) == f'oauth_codex:{ACCOUNT_A}'
+    assert scoped_quota_cache_key('oauth_codex', None) == 'oauth_codex'
+    assert scoped_quota_cache_key('codex', (binding, None)) == 'codex'
+    assert scoped_quota_cache_key('adapter:agent-1', (binding, None)) == 'adapter:agent-1'
+
+
+def test_per_account_quota_recording():
+    from lib.oauth.account_dispatch import scoped_account_dispatch
+    from lib.subscription_quota import latest_subscription_quota, record_codex_quota
+    binding = AccountBinding(OwnerBoundary.create(7), 'codex', ACCOUNT_A, SECRET_A)
+    slot = SimpleNamespace(subscription_account=(binding, None))
+    headers = {'x-codex-primary-used-percent': '42',
+               'x-codex-primary-window-minutes': '300'}
+    with scoped_account_dispatch(slot):
+        from lib.oauth.account_dispatch import current_account_dispatch
+        from lib.subscription_quota import scoped_quota_cache_key
+        usage = record_codex_quota(
+            headers, {}, cache_key=scoped_quota_cache_key(
+                'oauth_codex', current_account_dispatch()))
+    assert usage['_subscription_quota']['primary']['used_percent'] == 42.0
+    mine = latest_subscription_quota(cache_key=f'oauth_codex:{ACCOUNT_A}')
+    assert mine is not None and mine['primary']['used_percent'] == 42.0
+    assert latest_subscription_quota(cache_key='oauth_codex') is None
+
+
+def test_nearly_spent_default_yields_to_fresh_sibling(scoped_route):
+    repo, selection = scoped_route
+    quota = {ACCOUNT_A: _quota_snapshot(95.0, resets_at=int(time.time()) + 3600)}
+    candidates = compile_candidates(repo.document, selection, account_quota=quota)
+    assert [c.subscription_account_id for c in candidates] == [ACCOUNT_B, ACCOUNT_A]
+    assert 'quota_nearly_spent' in candidates[1].selection_reasons
+
+
+def test_exhausted_account_is_skipped(scoped_route):
+    repo, selection = scoped_route
+    quota = {ACCOUNT_A: _quota_snapshot(100.0, resets_at=int(time.time()) + 3600)}
+    rejections = {}
+    candidates = compile_candidates(repo.document, selection,
+                                    account_quota=quota, rejections=rejections)
+    assert [c.subscription_account_id for c in candidates] == [ACCOUNT_B]
+    assert rejections['account_quota_exhausted'] == 1
+
+
+def test_stale_projection_is_ignored(scoped_route):
+    repo, selection = scoped_route
+    rolled = {ACCOUNT_A: _quota_snapshot(100.0, resets_at=int(time.time()) - 60)}
+    candidates = compile_candidates(repo.document, selection, account_quota=rolled)
+    assert [c.subscription_account_id for c in candidates] == [ACCOUNT_A, ACCOUNT_B]
+    ancient = {ACCOUNT_A: _quota_snapshot(100.0, captured_at=time.time() - 7200,
+                                          minutes=60)}
+    candidates = compile_candidates(repo.document, selection, account_quota=ancient)
+    assert [c.subscription_account_id for c in candidates] == [ACCOUNT_A, ACCOUNT_B]
 
 
 def test_pinned_binding_stays_terminal(dispatch_env, scoped_route):

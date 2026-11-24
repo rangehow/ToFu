@@ -703,7 +703,11 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
     _quota_scope = ('oauth_codex' if oauth == 'codex' else
                     ('adapter:' + str(adapter.get('agent_id') or '')
                      if isinstance(adapter, dict) and adapter else 'codex'))
-    usage = record_codex_quota(resp.headers, usage, cache_key=_quota_scope)
+    from lib.oauth.account_dispatch import current_account_dispatch
+    from lib.subscription_quota import scoped_quota_cache_key
+    usage = record_codex_quota(
+        resp.headers, usage,
+        cache_key=scoped_quota_cache_key(_quota_scope, current_account_dispatch()))
     if _adapter and isinstance(usage, dict) and USAGE_QUOTA_KEY in usage:
         from lib.desktop import adapter as _adapter_service
         _adapter_service.note_adapter_quota_observed(

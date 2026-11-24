@@ -686,11 +686,14 @@ def _exchange(plan, key, session, payload, request, *, first_dispatch,
                 else:
                     _close_session(key, reason='terminal assistant response')
         if rate_limits:
+            from lib.oauth.account_dispatch import current_account_dispatch
             from lib.subscription_quota import (
-                codex_rate_limit_event_headers, record_codex_quota)
+                codex_rate_limit_event_headers, record_codex_quota,
+                scoped_quota_cache_key)
             result = result.with_usage(record_codex_quota(
                 codex_rate_limit_event_headers(rate_limits[0]),
-                dict(result.usage), cache_key='oauth_codex',
+                dict(result.usage),
+                cache_key=scoped_quota_cache_key('oauth_codex', current_account_dispatch()),
                 source='websocket_event'))
         return result
     except (AbortedError, ModelAdmissionRefused, ResponsesWebSocketUnavailable, _ChainReset):

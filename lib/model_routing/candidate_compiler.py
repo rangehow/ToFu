@@ -58,6 +58,39 @@ class RouteCandidate:
         return str(self.provider["provider_id"])
 
 
+def _account_quota_rank(
+    snapshot: Mapping[str, Any] | None, now: float,
+) -> tuple[bool, int]:
+    """One account's quota projection as (exhausted, rank).
+
+    Only windows that have not rolled and snapshots fresh enough to describe
+    the current window count; the provider's own 429 remains the authoritative
+    exhaustion signal, so a stale projection never hard-excludes an account.
+    """
+    if not isinstance(snapshot, Mapping):
+        return False, 0
+    age = now - float(snapshot.get('captured_at') or 0)
+    worst = 0.0
+    for name in ('primary', 'secondary'):
+        window = snapshot.get(name)
+        if not isinstance(window, Mapping):
+            continue
+        resets_at = window.get('resets_at')
+        if resets_at is not None and float(resets_at) <= now:
+            continue
+        minutes = window.get('window_minutes')
+        if minutes and age > float(minutes) * 60:
+            continue
+        if not minutes and age > 6 * 3600:
+            continue
+        worst = max(worst, float(window.get('used_percent') or 0.0))
+    if worst >= 100.0:
+        return True, 2
+    if worst >= 90.0:
+        return False, 1
+    return False, 0
+
+
 def _eligible_accounts(
     idx: Mapping[str, Any], account_fingerprints: tuple[str, ...],
 ) -> list[tuple[str, bool]]:
@@ -205,6 +238,7 @@ class RouteCandidateCompiler:
         excluded_credential_ids: Sequence[str] = (),
         rejections: dict[str, int] | None = None,
         max_candidates: int | None = None,
+        account_quota: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> list[RouteCandidate]:
         return _compile_candidates(
             self._indexes,
@@ -216,6 +250,7 @@ class RouteCandidateCompiler:
             excluded_credential_ids=excluded_credential_ids,
             rejections=rejections,
             max_candidates=max_candidates,
+            account_quota=account_quota,
         )
 
 
@@ -228,6 +263,7 @@ class RouteCandidateCompiler:
         original_provider_id: str = "",
         excluded_models: Sequence[ModelRef] = (),
         max_candidates: int | None = None,
+        account_quota: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> list[RouteCandidate]:
         """Choose quality-ranked model degradation after one model fully fails."""
         policy = policy or RoutePolicy()
@@ -248,7 +284,8 @@ class RouteCandidateCompiler:
                     None,
                     original_provider_id or failed_selection.preferred_provider_id,
                 )
-                yield from _iter_candidates(idx, selection, policy=policy, health=health)
+                yield from _iter_candidates(idx, selection, policy=policy, health=health,
+                                            account_quota=account_quota)
         return _rank_candidates(eligible_candidates(), max_candidates=max_candidates, key=lambda candidate: (
             0 if original_provider_id and candidate.provider_id == original_provider_id else 1,
             -float((candidate.model or {}).get("quality_rank") or 0.0),
@@ -268,6 +305,7 @@ def _compile_candidates(
     rejections: dict[str, int] | None = None,
     one_authorization_witness: bool = False,
     max_candidates: int | None = None,
+    account_quota: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> list[RouteCandidate]:
     return _rank_candidates(_iter_candidates(
         idx, selection, policy=policy, health=health,
@@ -276,6 +314,7 @@ def _compile_candidates(
         excluded_credential_ids=excluded_credential_ids,
         rejections=rejections,
         one_authorization_witness=one_authorization_witness,
+        account_quota=account_quota,
     ), max_candidates=max_candidates, key=lambda candidate: candidate.score)
 
 
@@ -303,6 +342,7 @@ def _iter_candidates(
     excluded_credential_ids: Sequence[str] = (),
     rejections: dict[str, int] | None = None,
     one_authorization_witness: bool = False,
+    account_quota: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> Iterator[RouteCandidate]:
     policy = policy or RoutePolicy()
     excluded_deployments = set(excluded_deployment_ids)
@@ -472,6 +512,11 @@ def _iter_candidates(
                     if unavailable:
                         reject("health_unavailable")
                         continue
+                    quota_exhausted, quota_rank = _account_quota_rank(
+                        (account_quota or {}).get(account_id), time.time())
+                    if quota_exhausted:
+                        reject("account_quota_exhausted")
+                        continue
                     pricing = offering.get("actual_pricing") or {}
                     price_score = float(pricing.get("input") or 0.0) + float(pricing.get("output") or 0.0)
                     preferred_rank = (
@@ -494,6 +539,7 @@ def _iter_candidates(
                         provider["provider_id"],
                         deployment["deployment_id"],
                         credential["credential_id"],
+                        quota_rank,
                         0 if account_default else 1,
                         account_id,
                     )
@@ -504,6 +550,8 @@ def _iter_candidates(
                     ]
                     if account_id:
                         reasons.append("default_account" if account_default else "eligible_account")
+                        if quota_rank:
+                            reasons.append("quota_nearly_spent")
                     yield RouteCandidate(
                         model=partial.model,
                         provider=provider,
@@ -535,6 +583,7 @@ def compile_candidates(
     excluded_credential_ids: Sequence[str] = (),
     rejections: dict[str, int] | None = None,
     max_candidates: int | None = None,
+    account_quota: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> list[RouteCandidate]:
     """Compile bounded runtime candidates; no configured Route entity exists."""
     return RouteCandidateCompiler(document).compile(
@@ -546,6 +595,7 @@ def compile_candidates(
         excluded_credential_ids=excluded_credential_ids,
         rejections=rejections,
         max_candidates=max_candidates,
+        account_quota=account_quota,
     )
 
 
@@ -558,10 +608,11 @@ def compile_model_fallback_candidates(
     original_provider_id: str = "",
     excluded_models: Sequence[ModelRef] = (),
     max_candidates: int | None = None,
+    account_quota: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> list[RouteCandidate]:
     """Choose quality-ranked model degradation after one model fully fails."""
     return RouteCandidateCompiler(document).compile_fallbacks(
         failed_selection, policy=policy, health=health,
         original_provider_id=original_provider_id, excluded_models=excluded_models,
-        max_candidates=max_candidates,
+        max_candidates=max_candidates, account_quota=account_quota,
     )

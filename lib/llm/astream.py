@@ -642,8 +642,11 @@ async def _async_stream_chat_once_impl(body, *, on_thinking=None, on_content=Non
                 acc.finalize(resp_trace=resp_trace))
             msg, finish_reason, usage = stream_result
             _quota_scope = 'oauth_codex' if oauth == 'codex' else 'codex'
+            from lib.oauth.account_dispatch import current_account_dispatch
+            from lib.subscription_quota import scoped_quota_cache_key
             usage = record_codex_quota(
-                resp.headers, usage, cache_key=_quota_scope)
+                resp.headers, usage,
+                cache_key=scoped_quota_cache_key(_quota_scope, current_account_dispatch()))
             if (isinstance(adapter, dict) and adapter
                     and isinstance(usage, dict) and USAGE_QUOTA_KEY in usage):
                 from lib.desktop import adapter as _adapter_service

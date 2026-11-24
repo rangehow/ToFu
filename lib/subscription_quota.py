@@ -5,7 +5,10 @@ response ``usage`` object reports tokens, while the subscription allowance is
 reported separately in ``x-codex-*`` response headers.  Keep those two facts
 separate.  This module projects the response headers into a small, durable
 ``usage['_subscription_quota']`` snapshot and retains the latest snapshot for
-the OAuth settings card.
+the OAuth settings card.  A bound account generation records under its own
+``oauth_codex:<account_id>`` key (``scoped_quota_cache_key``) so model routing
+can avoid one exhausted account without penalizing its siblings; legacy
+unbound and desktop-adapter scopes keep their provider-wide keys.
 
 The upstream percentage is account-wide and deliberately coarse.  The
 ``observed_delta_percent`` field is therefore only the difference between two
@@ -301,6 +304,23 @@ def record_codex_quota(
     return target
 
 
+def scoped_quota_cache_key(base_scope: str, scoped_account: object) -> str:
+    """Per-account quota identity when a bound account generation answered.
+
+    The provider-wide key conflates every linked account's windows; a bound
+    generation records under its own account id so routing can avoid one
+    exhausted account without penalizing its siblings. Legacy unbound and
+    desktop-adapter scopes keep their existing keys.
+    """
+    binding = (scoped_account[0]
+               if isinstance(scoped_account, tuple) and scoped_account
+               else scoped_account)
+    account_id = getattr(binding, 'account_id', '') or ''
+    if account_id and base_scope == 'oauth_codex':
+        return f'oauth_codex:{account_id}'
+    return base_scope
+
+
 def latest_subscription_quota(provider: str = 'codex', *,
                               now: float | None = None,
                               cache_key: str | None = None) -> dict | None:
@@ -333,6 +353,7 @@ __all__ = [
     'parse_codex_usage_payload',
     'record_codex_quota',
     'record_codex_usage_snapshot',
+    'scoped_quota_cache_key',
     'latest_subscription_quota',
     'clear_subscription_quota',
 ]

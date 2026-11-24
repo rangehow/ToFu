@@ -115,6 +115,28 @@ def issued_route_identity(candidate: RouteCandidate, boundary: OwnerBoundary, re
     }
 
 
+def _account_quota_snapshots(document: Mapping) -> dict:
+    """Latest per-account quota projections for this snapshot's linked accounts.
+
+    Secret-free runtime evidence: the transport records each bound generation's
+    windows under its own account id (lib/subscription_quota.py). Absent rows or
+    absent snapshots yield an empty mapping, leaving ranking unchanged.
+    """
+    rows = document.get('subscription_accounts') or ()
+    if not rows:
+        return {}
+    from lib.subscription_quota import latest_subscription_quota
+    snapshots = {}
+    for row in rows:
+        if row.get('provider') != 'codex':
+            continue
+        snapshot = latest_subscription_quota(
+            cache_key=f"oauth_codex:{row['account_id']}")
+        if snapshot is not None:
+            snapshots[row['account_id']] = snapshot
+    return snapshots
+
+
 def _select_route_candidates(
     authority: StoredAuthority,
     selection: NativeModelSelection,
@@ -130,11 +152,13 @@ def _select_route_candidates(
     # return documents that still need validation.
     compiler = RouteCandidateCompiler(
         authority.document, normalized=getattr(authority, 'normalized', False))
+    account_quota = _account_quota_snapshots(authority.document) or None
     primary_candidates = compiler.compile(
         selection, policy=policy, health=health,
         rejections=rejections,
         max_candidates=(None
-            if expected_route_identity is not None else max_candidates))
+            if expected_route_identity is not None else max_candidates),
+        account_quota=account_quota)
     if expected_route_identity is not None:
         primary_candidates = [candidate for candidate in primary_candidates
             if candidate_route_identity(candidate, authority.revision) == dict(expected_route_identity)]
@@ -169,6 +193,7 @@ def _select_route_candidates(
             original_provider_id=(selection.preferred_provider_id
                                   or primary_candidates[0].provider_id),
             max_candidates=(None if max_candidates is None else max_candidates - len(candidates)),
+            account_quota=account_quota,
         )
         emitted = {
             (candidate.deployment["deployment_id"],

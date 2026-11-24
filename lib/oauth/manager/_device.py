@@ -140,7 +140,9 @@ def start_device_flow(provider: str, *, owner_user_id: int) -> dict:
 
     Returns:
         dict with 'user_code', 'verification_url', 'interval',
-        'expires_in' — or {'error': ...} when the code could not be minted.
+        'expires_in' — or {'error': ..., 'reason': ...} when the code could
+        not be minted. ``reason`` is the machine-readable failure class
+        (e.g. 'egress_blocked') when the transport layer supplies one.
     """
     protocol = _DEVICE_PROTOCOLS.get(provider)
     if protocol is None:
@@ -170,7 +172,7 @@ def start_device_flow(provider: str, *, owner_user_id: int) -> dict:
         req = protocol.request(user_id=user_id, device_id=device_id)
     except OAuthExchangeError as e:
         return {'error': str(e), 'status_code': e.status_code,
-                'detail': e.detail}
+                'detail': e.detail, 'reason': e.reason}
 
     timeout = min(int(req['expires_in']), protocol.timeout())
     cancel = threading.Event()

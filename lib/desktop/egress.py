@@ -43,6 +43,9 @@ __all__ = [
     'ALLOWED_EGRESS_HOSTS',
     'EgressUnavailable',
     'EgressResponse',
+    'REASON_BLOCKED',
+    'REASON_NETWORK',
+    'REASON_RECOVERY_PENDING',
     'UnknownEgressAgent',
     'egress_agent_selection',
     'host_allowed',
@@ -88,17 +91,31 @@ def invalidate_probe_cache() -> int:
 _EGRESS_HTTP_TTL_S = 120
 
 
+#: Machine-readable failure classes carried by ``EgressUnavailable.reason``
+#: and passed through to clients (e.g. the device-login 503 payload) so a UI
+#: can give precise guidance without matching message text.
+REASON_BLOCKED = 'egress_blocked'    # every server route is policy/geo-rejected
+REASON_NETWORK = 'egress_network'    # transient transport outage, circuits cooling
+REASON_RECOVERY_PENDING = 'egress_recovery_pending'  # route manager owns a retry deadline
+
+
 class EgressUnavailable(RuntimeError):
     """No usable path to the provider: direct is blocked AND no suitable
     desktop agent is online. The message always carries user-actionable
-    guidance (start an agent / pick one in Settings)."""
+    guidance (start an agent / pick one in Settings); ``reason`` classifies
+    the outage for machine consumers (default: unclassified)."""
+
+    def __init__(self, message: str, *, reason: str = 'egress_unavailable'):
+        super().__init__(message)
+        self.reason = reason
 
 
 class EgressRecoveryPending(EgressUnavailable):
     """No eligible route yet; the shared route manager owns its retry deadline."""
 
     def __init__(self, retry_after_s: float):
-        super().__init__('Waiting for the configured network route to recover')
+        super().__init__('Waiting for the configured network route to recover',
+                         reason=REASON_RECOVERY_PENDING)
         self.retry_after_s = max(0.05, float(retry_after_s))
 
 
@@ -384,11 +401,12 @@ def route_candidates(url: str, *, user_id: str = '', cancelled=None) -> list:
                 'configured server proxy paths and no egress-capable desktop '
                 'agent is online — every route will be re-probed after its '
                 'short circuit cooldown; for an independent fallback, start the desktop '
-                'agent with --allow-egress')
+                'agent with --allow-egress', reason=REASON_NETWORK)
         raise EgressUnavailable(
             'server egress to this provider is blocked and no egress-capable '
             'desktop agent is online — start the desktop agent with '
-            '--allow-egress on a machine whose network can reach the provider')
+            '--allow-egress on a machine whose network can reach the provider',
+            reason=REASON_BLOCKED)
     return [a['agent_id'] for a in _order_agents(agents, user_id)]
 
 

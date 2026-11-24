@@ -110,7 +110,12 @@ async function readViteAuthoringDigest() {
  * sizes and alternatives: docs/FRONTEND_ARCHITECTURE.md, "First-paint
  * ceiling". Ratchet it back down when a structural saving lands. */
 const BUILD_MAIN_MAX_KIB = Math.max(1,
-  Number.parseInt(process.env.TOFU_BUILD_MAIN_MAX_KIB || '', 10) || 623);
+  // Owner decision 2026-11-24: 623 -> 630. The published v0.19.3 graph
+  // (622.4 KiB) predates the sanitized public source baseline; a faithful
+  // rebuild of unchanged HEAD sources measures 625.9 KiB (node 22.6 and
+  // 22.23 emit identical hashes), so the old ceiling rejected every build.
+  // See docs/FRONTEND_ARCHITECTURE.md, "First-paint ceiling".
+  Number.parseInt(process.env.TOFU_BUILD_MAIN_MAX_KIB || '', 10) || 630);
 
 async function runBundleBudget(manifest, artifactDir) {
   const { gzipSync } = await import('node:zlib');

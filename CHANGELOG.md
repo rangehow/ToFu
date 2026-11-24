@@ -37,6 +37,15 @@
   failed the Vite graph step and stranded v0.19.3), and the tofu-db engine
   compiles on macOS — `statvfs` block/inode counters are normalized to `u64`
   (macOS reports `u32` widths, which broke the darwin prebuilt legs).
+- The frontend graph rebuilds from the published source: 15 dead i18n keys
+  (the experiment settings panel markup is not part of the open tree) are
+  pruned from all seven locales and the contract regenerated, and the
+  first-paint budget ceiling is recalibrated 623 → 627 KiB because Node 22's
+  zlib-ng gzips the same startup graph ~3.5 KiB larger than the classic zlib
+  the ceiling was measured with (no bundle growth; see
+  docs/FRONTEND_ARCHITECTURE.md, "First-paint ceiling"). The release-pipeline
+  drift guard now checks the single Open publication target (owner decision
+  2026-11-20) instead of also pinning the retired NiuTrans mirror.
 - The browser extension recovers startup-configuration serialization after a
   storage read failure, carries the startup URL intent through preseed, rejects
   invalid stored types and fences stale configuration behind newer user intent.

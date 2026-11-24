@@ -20,7 +20,9 @@ what it can already read.
   reach the owner directly";
 - ``att_media_<id>``: one of the owner's own attachments (owner-scoped lookup);
 - ``/api/images/<file>``: an uploaded image this conversation's messages show,
-  including one the owner steered into the running Turn.
+  as a stored ``images`` entry or a model-facing ``content`` ``image_url`` block
+  (including its pinned ``_modelImageSources``), or in an owner message steered
+  into the running Turn. A path in arbitrary text is never evidence of an image.
 A file that carries a credential (``lib.conversations.attachment_secrets``) is refused too.
 Anything else is refused before any record is written. No size or count limit
 applies beyond the attachment platform's own. An attachment is context only:
@@ -56,7 +58,8 @@ class AttachmentRefused(PermissionError):
     recovery = ('Nothing was sent. Attach only files you can read: a path inside your workspace roots '
                 '(a lead: also any registered project root, or worker:<assignment_id>/<path> in its own '
                 'Worker\u2019s checkout), an att_media_<id> attachment of the owner, or an /api/images/ image '
-                'shown in this conversation, and never a file carrying a credential; then send again.')
+                'shown as an image in this conversation (not merely a path in text), and never a file '
+                'carrying a credential; then send again.')
 
 
 def _record(ref: dict) -> dict:
@@ -217,16 +220,43 @@ def _owner_steered_images(task: dict) -> list:
     return images
 
 
-def _conversation_images(task: dict) -> set[str]:
+def _image_refs(values: Any) -> set[str]:
+    """Canonical uploaded-image links in backend-authored image fields."""
     from lib.attachments import canonical_image_ref
     shown: set[str] = set()
-    images = [image for message in task.get('messages') or () if isinstance(message, dict)
-              for image in message.get('images') or ()]
-    for image in images + _owner_steered_images(task):
-        values = image.values() if isinstance(image, dict) else (image,)
-        for value in values:
-            if isinstance(value, str) and canonical_image_ref(value):
-                shown.add(canonical_image_ref(value))
+    for value in values or ():
+        fields = (value.get('url'), value.get('preview')) if isinstance(value, dict) else (value,)
+        for field in fields:
+            if isinstance(field, str):
+                canonical = canonical_image_ref(field)
+                if canonical:
+                    shown.add(canonical)
+    return shown
+
+
+def _message_image_refs(message: dict) -> set[str]:
+    """The images one stored or model-projected message actually carries."""
+    from lib.attachments import canonical_image_ref
+    shown = _image_refs(message.get('images')) | _image_refs(message.get('_modelImageSources'))
+    content = message.get('content')
+    for block in content if isinstance(content, list) else ():
+        if not isinstance(block, dict) or block.get('type') != 'image_url':
+            continue
+        payload = block.get('image_url')
+        url = payload.get('url') if isinstance(payload, dict) else payload
+        if isinstance(url, str):
+            canonical = canonical_image_ref(url)
+            if canonical:
+                shown.add(canonical)
+    return shown
+
+
+def _conversation_images(task: dict) -> set[str]:
+    shown: set[str] = set()
+    for message in task.get('messages') or ():
+        if isinstance(message, dict):
+            shown |= _message_image_refs(message)
+    shown |= _image_refs(_owner_steered_images(task))
     return shown
 
 

@@ -4846,13 +4846,27 @@ sending task's verified read roots, read without following symlinks
 dispatched (ROUTER.md R9, "Leads reach the owner directly"), and no file carrying a
 credential is admitted (`lib/conversations/attachment_secrets.py`); an `att_media_` reference must be one of the
 owner's own attachments (owner-scoped lookup); an image must be shown in the
-sender's conversation: in one of its messages, or in an owner message steered
-into the Turn the sender is running. A steer never enters the task's messages,
+sender's conversation as a stored `images` entry or a model-facing `content`
+`image_url` block (including the pinned `_modelImageSources` that survive a
+vision model replacing the URL with inline data), or in an owner message steered
+into the Turn the sender is running. A path quoted in text, including a Router
+note, is never an image shown here. A steer never enters the task's messages,
 so its images are read from its records (this executor's delivered ones and
 those committed to the live Turn), and only a record whose committed author is
 the owner's own input here counts (`require_human_turn`): nonhuman steers and
-Global Router forwards add none (2026-11-17: a Coordinator could not forward the
-screenshot the owner steered into its turn). The entire batch is checked before
+steers whose author was itself a Router forward add none (2026-11-17: a
+Coordinator could not forward the screenshot the owner steered into its turn).
+**Problem (2026-11-24).** The owner's screenshot was refused as an attachment
+in both the Global Router's own conversation and its forwarded Project Router
+request: the executor's live messages hold transformed image blocks, while a
+`route_to_project` forward carried only the owner words and a note naming the
+path. **Decision.** `lib/router/forwarding.py`'s `forwarded_source_media`
+re-reads the verified owner source Turn (or the committed owner steer preview)
+and places its canonical `/api/images/<f>` links and durable `attachments` refs
+on the forwarded input Turn. Inline payloads, nonhuman note text and media from
+any other conversation are not copied. The recipient sees the owner's images
+through the ordinary human-attachment projection and can attach or forward them
+by those refs; an attachment still grants no authority. The entire batch is checked before
 any new file is stored or existing attachment is promoted. File and image bytes
 are staged temporarily so retention uses the bytes that passed the checks, not
 another read of the source path. An invalid reference refuses the whole batch
@@ -4889,10 +4903,13 @@ Alternatives rejected:
 
 Verification: `tests/project_mod/test_lead_attachments.py` (real Sidecar: image,
 PDF, text and arbitrary binary delivery; refused outside, traversal, symlink,
-directory, missing, foreign-owner and unseen-image references; an owner-steered
-image admitted, a nonhuman, agent-authored or forwarded steer's refused) and
-`tests/project_mod/test_lead_attachment_delivery.py` (each message path and the
-contract mirror).
+directory, missing, foreign-owner, unseen-image and text-note references; live
+`content` blocks, pinned `_modelImageSources`, an owner-steered image and a
+nonhuman, agent-authored or forwarded steer), `tests/router/test_route_to_project.py`
+(source-Turn and steered-owner media on the one forwarded input and through the
+ordinary turn command), `tests/router/test_project_repair.py::test_a_repair_conversation_receives_the_owner_screenshot`,
+and `tests/project_mod/test_lead_attachment_delivery.py` (each message path and
+the contract mirror).
 
 Reuse or split: reuse the session for follow-ups of the same goal, including fixes
 the Coordinator would otherwise request with `decision=rework` (follow up before

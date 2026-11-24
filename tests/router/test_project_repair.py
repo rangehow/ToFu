@@ -130,6 +130,23 @@ def test_a_project_whose_lead_failed_gets_one_repair_conversation_with_the_owner
     assert len(repair.calls) == 1 and len(repair.created) == 1
 
 
+def test_a_repair_conversation_receives_the_owner_screenshot(repair):
+    """A repair forward uses the same verified owner media as route_to_project."""
+    repair.grant()
+    link = '/api/images/repair-shot.png'
+    repair.turns['owner-turn']['projection']['images'] = [
+        {'url': link, 'preview': link, 'caption': 'owner shot'}]
+    repair.lane = [(_turn('report', 'completed', cause='ingested', kind='ingested'), {}),
+                   (_turn('queued-input', 'completed', actor='human'), {}),
+                   (_turn('queued-reply', 'pending'), {'queueBinding': {'queueId': 'q'}}),
+                   (_turn('owner-input', 'completed', actor='human'), {}),
+                   *repair.lane]
+    result = repair.repair()
+    [call] = repair.calls
+    assert result['execution_started'] is True
+    assert call['message']['images'] == [{'preview': link, 'url': link, 'caption': 'owner shot'}]
+
+
 @pytest.mark.parametrize('newest', [
     pytest.param(None, id='never-worked'),
     pytest.param(_turn('reply', 'running'), id='running'),

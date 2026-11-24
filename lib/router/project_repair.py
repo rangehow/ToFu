@@ -266,8 +266,10 @@ def _open_repair_conversation(task: dict, scope: dict, arguments: dict, *, dispa
     try:
         _create_conversation(owner, project, conversation_id, arguments['title'], action_id, lead,
                              task.get('config') or {})
+        images, attachments = forwarding.forwarded_source_media(owner, router_id, forwarded)
         message = forwarding.forwarded_message(text, forwarded, note=arguments['note'], trigger=evidence,
-                                               router_id=router_id)
+                                               router_id=router_id, images=images,
+                                               attachments=attachments)
         if dispatch is None:
             from lib.scheduler.conversation_dispatch import dispatch_scheduled_turn as dispatch
         outcome = dispatch(conversation_id, message, {}, user_id=owner, command_id='router-repair:' + action_id,

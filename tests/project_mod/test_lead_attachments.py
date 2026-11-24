@@ -117,6 +117,54 @@ def test_an_owner_attachment_and_a_conversation_image_are_readable_references(le
     assert len(_admit(task, ['a.md', str(root / 'a.md')])) == 1
 
 
+@pytest.mark.parametrize('shape', ['content_blocks', 'pinned_sources'])
+def test_an_image_in_the_live_model_projection_is_attachable(lead, monkeypatch, tmp_path, shape):
+    """2026-11-24: both leads were refused although the owner screenshot was shown.
+
+    The executor reads content blocks, not the stored conversation's ``images``
+    field; a vision model pins them to data URIs and keeps the original sources.
+    """
+    from lib import attachments
+    from lib.tasks_pkg.conv_message_builder.api import image_content_blocks
+    task, _root = lead
+    images = tmp_path / 'images'
+    images.mkdir()
+    (images / 'shot.png').write_bytes(_png())
+    monkeypatch.setattr(attachments, '_images_dir', lambda: str(images))
+    link = '/api/images/shot.png'
+    blocks = image_content_blocks([{'url': link, 'preview': link}])
+    assert any(block.get('type') == 'image_url' for block in blocks)
+    if shape == 'content_blocks':
+        task['messages'] = [{'role': 'user', 'content': blocks}]
+    else:
+        pinned = [{'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,AA=='}}
+                  if block.get('type') == 'image_url' else block for block in blocks]
+        task['messages'] = [{'role': 'user', 'content': pinned, '_modelImageSources': [link]}]
+    [image] = _admit(task, [link])
+    assert image['mimeType'] == 'image/png'
+
+
+def test_an_image_path_in_a_router_note_is_not_an_attachment(lead, monkeypatch, tmp_path):
+    """A nonhuman note naming an upload is evidence text, not an image shown here."""
+    from lib import attachments
+    from lib.conversations.lead_attachments import AttachmentRefused
+    from lib.knowledge import list_documents
+    task, _root = lead
+    images = tmp_path / 'images'
+    images.mkdir()
+    (images / 'other.png').write_bytes(_png())
+    monkeypatch.setattr(attachments, '_images_dir', lambda: str(images))
+    task['messages'] = [
+        {'role': 'user', 'content': [
+            {'type': 'text', 'text': 'Router note (evidence): Screenshot: /api/images/other.png'}]},
+        {'role': 'user', 'content': 'metadata', 'images': [
+            {'caption': 'Screenshot: /api/images/other.png'}]},
+    ]
+    with pytest.raises(AttachmentRefused, match='not an image shown in this conversation'):
+        _admit(task, ['/api/images/other.png'])
+    assert not list_documents(user_id=OWNER)
+
+
 def test_denied_batch_does_not_promote_an_earlier_owned_draft(lead, isolated_knowledge):
     from lib.conversations.lead_attachments import AttachmentRefused
     from lib.media_attachments import ingest_document

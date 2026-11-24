@@ -8,6 +8,8 @@
   "catalog_mode": "curated",
   "catalog_source": {"url": "https://help.aliyun.com/zh/model-studio/text-generation-model/", "checked_at": "2026-09-23"},
   "offering_recipes": [
+    {"model_id": "qwen4-max", "display_name": "Qwen4 Max", "capabilities": ["text", "vision", "thinking", "cheap"], "context_window": 1000000,
+     "pricing": {"input": 1.50, "output": 4.50, "currency": "USD", "cacheWriteMul": 1.25, "cacheReadMul": 0.05, "name": "Qwen4 Max"}},
     {"model_id": "qwen3.8-omni-flash", "capabilities": ["text", "vision", "video", "thinking", "cheap"], "context_window": 1000000},
     {"model_id": "qwen3.8-max", "capabilities": ["text", "vision", "thinking", "cheap"]},
     {"model_id": "qwen3.7-plus", "capabilities": ["text", "vision", "thinking", "cheap"]},

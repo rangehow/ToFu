@@ -589,9 +589,32 @@ asks callers to return `reasoning_content` within a tool-call loop and accepts
 only `auto` and `none` for `tool_choice`, so the profile declares
 `preserve_history: replay` (see "Declared inference profiles"). `hy4` is a substring of
 `hy4-preview`, so the Hy4 release and context needles follow the preview's;
-the preview's own reasoning profile stays unregistered. OpenRouter's public
-catalogue lists `tencent/hy4`, and the dynamic feed carries that wire.
-Specification: `tests/model_routing/test_hy4_registration.py`.
+the preview (released 2026-08-28) shares the registered `no_think`/`high`
+profile and its 2026-08-28 release needle precedes the GA `hy4` needle.
+OpenRouter's public catalogue lists `tencent/hy4`, and the dynamic feed carries
+that wire. Specification: `tests/model_routing/test_hy4_registration.py`.
+
+Qwen4-Max, Muse Spark 1.2, MiniMax M3.1 Flash and Hy3 (checked 2026-11-24)
+complete the OpenCode Go roster. Qwen4-Max (GA 2026-11-16) has a 1M context,
+text/image/video input, $1.50/$4.50 per million input/output (implicit cache
+read $0.075), and `reasoning_effort` `low`/`high`/`xhigh` defaulting to `high`;
+`none` disables thinking, so the profile registers `none` as the disabled rung
+and `replay` for preserved thinking. Its official page gives 131,072 output
+tokens without thinking and 262,144 combined thinking+answer. Muse Spark 1.2
+(2026-08-05) has a 1,048,576 context, text/image/video/audio/PDF input,
+$1.25/$4.25 (cache $0.15), and `reasoning_effort` `minimal` through `xhigh`
+(default `high`; `max` is 1.3-only and `none` is rejected). MiniMax M3.1 Flash
+(GA 2026-10-19) has a 1M context, text/image/video input, $0.15/$0.60 (cache
+$0.015), always-on thinking with `reasoning_effort` `low` through `max`
+(default `max`), and requires preserved thinking in multi-turn tool loops. Hy3
+(GA 2026-07-06) has a 256K context, $0.132/$0.528 (cache $0.033), and
+`reasoning_effort` `no_think`/`low`/`high`; the model card defaults to
+`no_think`, while Tofu's registered enabled default is `high` and `off`
+resolves to `no_think`. Sources: QwenCloud's latest-model and thinking pages,
+Meta Model API's Muse Spark/pricing/reasoning pages, MiniMax's Anthropic-SDK
+and pricing pages, Tencent's Hy3 GitHub/announcement and Hy4 Preview FAQ, and
+the Tencent Cloud TokenHub pay-as-you-go rate table. Specification:
+`tests/model_routing/test_opencode_go_model_registration.py`.
 
 LongCat-2.5 knowledge and YourProvider gateway supply (checked 2026-11-06): the
 LongCat API [change log](https://longcat.chat/platform/docs/change-log) makes

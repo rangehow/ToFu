@@ -159,7 +159,7 @@ from lib.tool_input_repair._rejection import (
 )
 from lib.tool_input_repair._local_file import (
     LOCAL_FILE_TOOL_REDIRECT,
-    local_file_fetch_path,
+    local_file_fetch_paths,
     redirect_local_file_fetch,
 )
 from lib.tool_input_repair._ingest import (
@@ -188,7 +188,7 @@ __all__ = [
     'report_hallucinated', 'report_tool_name_aliased', 'RepairLog',
     'ingest_tool_call', 'IngestedToolCall', 'contract_rejection_text',
     'with_argument_warnings',
-    'LOCAL_FILE_TOOL_REDIRECT', 'local_file_fetch_path',
+    'LOCAL_FILE_TOOL_REDIRECT', 'local_file_fetch_paths',
     'redirect_local_file_fetch',
     # private symbols imported by the test-suite
     '_salvage_object_array', '_array_item_schema', '_try_schema_array_salvage',

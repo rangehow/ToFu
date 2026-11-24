@@ -69,3 +69,34 @@ def test_early_announced_row_is_settled_under_the_executed_tool():
 
     assert round_entry['toolName'] == 'read_files'
     assert round_entry['toolArgs'] == '{"path": "/mnt/project/docs/a.md"}'
+
+@pytest.mark.unit
+def test_all_local_batch_parses_as_one_read_files_batch():
+    from lib.tasks_pkg.tool_dispatch._parse import parse_tool_calls
+    from lib.tools.contracts import compile_execution_contract_documents
+    from lib.tools.project import READ_FILES_TOOL
+    from lib.tools.search import build_fetch_url_tool
+
+    catalog = [build_fetch_url_tool(), READ_FILES_TOOL]
+    task = {
+        'id': 'local-file-batch', 'convId': 'local-file-batch',
+        'model': 'test', 'events': [], 'events_lock': threading.Lock(),
+        'toolRounds': [], 'aborted': False, 'config': {},
+        '_executable_tool_catalog': catalog,
+        '_toolContractDocumentsByName': compile_execution_contract_documents(catalog),
+    }
+    message = {'content': '', 'tool_calls': [{
+        'id': 'call-batch', 'type': 'function', 'function': {
+            'name': 'fetch_url', 'arguments': json.dumps({'urls': [
+                {'url': 'file:///tmp/a.md'}, {'url': 'file:///tmp/b.md'}]})}}]}
+
+    parsed, _ = parse_tool_calls(
+        message, task, round_num=0, tool_round_num=0, project_enabled=False)
+    tc, fn_name, _tc_id, fn_args, _rn, round_entry, parse_error = parsed[0]
+
+    assert parse_error is None
+    assert fn_name == 'read_files'
+    assert fn_args == {'reads': [{'path': '/tmp/a.md'}, {'path': '/tmp/b.md'}]}
+    assert tc['function']['name'] == 'read_files'
+    assert round_entry['status'] != 'rejected'
+    assert 'local_file_tool_redirect' in round_entry['_repaired']['patterns']

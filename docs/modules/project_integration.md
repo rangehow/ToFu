@@ -1801,12 +1801,12 @@ identity cache spans operations. During one settlement, lane and Worker WIP save
 successful `(HEAD, tree)` capture per realpath instead of walking the same checkout twice;
 they still create distinct commits and keep their own ref/CAS rules. The capture cache is
 settlement-local and failures are never cached. Alternatives rejected: sharing WIP commits
-would mix restoration provenance; a cross-round cache could save stale bytes. Specifications:
-`test_new_resolves_the_current_repository_once_per_invocation` and
-`test_round_settlement_shares_one_capture_between_lane_and_worker`.
-`lane.py list` shows every lane with its divergence and
-uncommitted files. Specifications: `tests/project_mod/test_lanes.py` and the lane purpose
-case in `tests/server/test_local_placement.py`.
+would mix restoration provenance; a cross-round cache could save stale bytes. The CLI seam is
+specified by `test_new_resolves_the_repository_once_and_prepares_the_next_spare` in
+`tests/project_mod/test_lane_cli.py`. `lane.py list` shows every lane with its divergence and
+uncommitted files. Specifications: `tests/project_mod/test_lane_cli.py` (command dispatch,
+one-repository resolution, detached spawn) and the lane purpose case in
+`tests/server/test_local_placement.py`.
 
 **Platform Workers work in their bound task worktree; lanes serve the shared checkout
 (2026-11-13).** Problem: AGENTS.md, and the Coordinator briefs that repeat it, sent every
@@ -1852,10 +1852,9 @@ a recycled spare resets the branch; containment in the main checkout's branch is
 that no commit is lost, so a lane landed with `git_land --keep` is empty too); removing every
 empty lane at once (a lane just created is empty too; whether it is still wanted is its
 creator's call, so removal names one branch). Specifications:
-`test_a_lane_without_work_is_removed_with_its_branch`,
-`test_a_lane_with_work_is_refused_and_left_as_it_was`, `test_only_a_lane_is_removed` and
-`test_the_command_line_removes_a_lane_without_work_and_refuses_one_with_work` in
-`tests/project_mod/test_lanes.py`.
+`tests/project_mod/test_lane_cli.py` pins the command's delegation and typed-refusal exit;
+the containment, saved-work and dirty-file checks are `lanes.remove_lane`'s own
+pre-change refusals.
 
 **Lanes and task checkouts leave the root overlay for the local temporary disk (owner
 decision 2026-11-12, option A).** Problem: lanes were placed under `~/.local/state/tofu/lanes`,
@@ -1919,8 +1918,7 @@ Alternatives rejected:
 - deleting the lanes already on the overlay (live lanes hold uncommitted work).
 
 Specifications: the container cases in `tests/server/test_local_placement.py`,
-`test_spares_an_earlier_placement_left_are_retired_when_the_next_spare_is_prepared` in
-`tests/project_mod/test_lanes.py` and
+the detached spawn in `tests/project_mod/test_lane_cli.py` and
 `test_spares_an_earlier_placement_left_are_retired_by_the_next_pass` in
 `tests/storage/test_task_spares.py`.
 
@@ -1935,6 +1933,27 @@ the shared checkout. Alternatives rejected: a new environment variable (a second
 authority); the path shape alone (other checkouts can share it); admitting lane writes
 from Workers (it would bypass task-owned delivery). Specification:
 `test_a_bound_platform_worker_is_sent_to_its_worktree_instead_of_a_lane`.
+
+**The lane CLI owner is tracked, not a private script (decision 2026-11-24).**
+Problem: a recovered checkout had no `scripts/lane.py`, yet AGENTS.md,
+`scripts/AGENTS.md`, CHANGELOG.md, the lane owner's own refusal text and
+`ensure_next_spare`'s detached spawn all named it. That CLI is a
+track-but-export-excluded keeper (the clean-clone allow-list in
+`tests/meta/test_gitignore_covers_export_excludes.py`); the export/recovery
+dropped it, so every detached `prepare-spare` spawned a missing path, its
+failure landed only in `.preparation.log`, and no lane ever recycled a prepared
+spare. Decision: `lib/project_mod.lane_cli` is the tracked CLI owner and
+`ensure_next_spare` spawns `python -m lib.project_mod.lane_cli prepare-spare`;
+`scripts/lane.py` is restored as a thin wrapper so the documented command
+spelling keeps working. An exported tree may omit the wrapper without losing
+any runtime behavior. `new` resolves its `Repository` once and passes it
+through creation and spare scheduling; `new`, `restore` and `save` apply the
+bound-Worker refusal, while `list`, `remove` and `prepare-spare` remain
+read/maintenance commands. Specification: `tests/project_mod/test_lane_cli.py`.
+Alternatives rejected: spawning the private script again (one export later the
+same silent failure returns); rewriting every guide reference to `-m` (churns
+the shared guidance and breaks operator muscle memory); dropping the keeper
+entry (a clean clone would no longer have the documented command).
 
 After a landing, `git_land` reports which conversations' unlanded work changes the landed
 files and leaves each of them a notice through the

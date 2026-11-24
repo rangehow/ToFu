@@ -17,9 +17,11 @@ Responsibility
 Entry points
     ``create_lane``, ``restore_lane``, ``remove_lane``, ``retire_lane``, ``save_wip``,
     ``save_task_lanes``, ``list_lanes``, ``drop_wip``, ``repository``,
-    ``is_lane``, ``bound_task_checkout``, ``prepare_spare``, ``ensure_next_spare``. CLI:
-    ``scripts/lane.py`` (``new`` and ``restore`` call ``ensure_next_spare``);
-    ``scripts/git_land.py`` retires a landed lane.
+    ``is_lane``, ``bound_task_checkout``, ``prepare_spare``, ``ensure_next_spare``.
+    CLI: ``lib.project_mod.lane_cli`` (``python -m``, wrapped for the documented
+    command spelling by the export-excluded ``scripts/lane.py``); ``new`` and
+    ``restore`` call ``ensure_next_spare``; ``scripts/git_land.py`` retires a
+    landed lane.
 
 Dependencies: the git executable; ``serverctl_pkg.local_placement``
 (``PURPOSE_LANES``); ``managed_repository`` (the content policy a capture
@@ -555,17 +557,19 @@ def prepare_spare(path) -> str:
 def ensure_next_spare(path, repo: Repository | None = None) -> bool:
     """Start preparing the next lane's checkout when none is ready or being prepared.
 
-    Runs ``scripts/lane.py prepare-spare`` detached, so the caller returns at
-    once and the next lane recycles instead of checking out the whole tree.
-    Its output goes to ``.preparation.log`` in the lane root.
+    Runs ``python -m lib.project_mod.lane_cli prepare-spare`` detached, so the
+    caller returns at once and the next lane recycles instead of checking out
+    the whole tree. The CLI owner is tracked in every checkout; the private
+    ``scripts/lane.py`` wrapper is export-excluded and must not be a runtime
+    dependency. Output goes to ``.preparation.log`` in the lane root.
     """
     repo = repo or repository(path)
     root = lane_root(repo)
     if any(root.glob(f'{_SPARE_PREFIX}*')) or _preparation_in_progress(root):
         return False
-    script = Path(__file__).resolve().parents[2] / 'scripts' / 'lane.py'
     with open(root / '.preparation.log', 'w', encoding='utf-8') as log:
-        subprocess.Popen([sys.executable, str(script), 'prepare-spare'], cwd=str(repo.top),
-                         stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-                         start_new_session=True)
+        subprocess.Popen(
+            [sys.executable, '-m', 'lib.project_mod.lane_cli', 'prepare-spare'],
+            cwd=str(repo.top), stdin=subprocess.DEVNULL, stdout=log,
+            stderr=subprocess.STDOUT, start_new_session=True)
     return True

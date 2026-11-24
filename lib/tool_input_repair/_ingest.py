@@ -481,8 +481,9 @@ def ingest_tool_call(
         repair_log.insert(0, ('$', 'codex_apply_patch'))
 
     # ── Stage 4.2: value-driven local-file redirect ──
-    # fetch_url's authority is HTTP(S); a call that names a definitive local
-    # file belongs to the workspace reader. Both admission oracles must agree:
+    # fetch_url's authority is HTTP(S); a call whose EVERY target is a
+    # definitive local file belongs to the workspace reader. Both admission
+    # oracles must agree:
     # known_tools is visibility, and a present v2 contract epoch is execution.
     # The redirected call is then validated/clamped against read_files' own
     # document, so its root/path guards and freshness evidence stay authoritative.

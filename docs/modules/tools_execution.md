@@ -111,9 +111,11 @@ Rounds recorded earlier keep their stored descriptor.
 `file:///...` URI (or the absolute path of an existing local file) in
 `fetch_url.url`; the HTTP authority rejects the scheme, so a whole model round
 was spent retransmitting the same bytes as `read_files`. **Decision:**
-`ingest_tool_call` applies one value-driven repair at Stage 4.2: a single-url
-`fetch_url` naming an unambiguous local file dispatches as
-`read_files(path=...)`, but only when both this request's live tool set and its
+`ingest_tool_call` applies one value-driven repair at Stage 4.2: a
+`fetch_url` whose EVERY target is an unambiguous local file dispatches as
+`read_files` — one target becomes `path=...`, an all-local `urls` batch
+becomes `reads=[{path}, ...]` — but only when both this request's live tool
+set and its
 request-owned v2 contract epoch admit `read_files`. The rewrite is logged as a
 `local_file_tool_redirect` repair, emits `tool_local_file_redirect`, and adds a
 model-visible warning (including that `extract` was dropped); the redirected
@@ -121,10 +123,12 @@ call is validated against `read_files`' own contract, so root/path guards,
 freshness evidence, working-file witnesses and remote-worktree routing stay
 authoritative. Streaming pre-execution uses the same predicate to DEFER
 local-file targets instead of caching a speculative HTTP refusal; the
-post-stream ingest then performs the one redirect. Batch `urls`, non-local
-`file://host/...` authorities, query/fragmented URIs, relative paths and other
-schemes are untouched, and the existing handler/core scheme refusals remain as
-a backstop. Specs: `tests/tools/test_tool_input_repair.py`,
+post-stream ingest then performs the one redirect. A mixed `urls` batch (some
+remote), non-local `file://host/...` authorities, query/fragmented URIs,
+relative paths and other schemes are untouched, and the existing handler/core
+scheme refusals remain as a backstop. Specs:
+`tests/tools/test_tool_input_repair.py`,
+`tests/tasks_pkg/test_local_file_fetch_dispatch.py`,
 `tests/tasks_pkg/test_streaming_fetch_url_delegation.py`. **Alternatives
 rejected:** reading the file inside `fetch_url`'s handler (duplicates the
 reader's admission/freshness authority and leaves the streaming path

@@ -250,7 +250,7 @@ recycled local checkout per unit of work, its saved uncommitted state
 `serverctl_pkg/local_placement.py`). Contracts: "Landing verification" and
 "Lanes" in `docs/modules/project_integration.md`. Verify
 `test_integration_radar.py`, `test_landing_verification.py`,
-`test_impact_selection.py`, `test_lanes.py` and both `test_git_land_*` suites.
+`test_impact_selection.py`, `test_lane_cli.py` and both `test_git_land_*` suites.
 
 `task_spares.py` owns the prepared checkouts task workspaces take instead of
 checking out a whole tree, the recycling of retired task checkouts into them,

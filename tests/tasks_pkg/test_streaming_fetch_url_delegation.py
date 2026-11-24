@@ -240,3 +240,13 @@ def test_local_file_fetch_target_is_deferred_to_ingest(tmp_path):
             filter_enabled=False, filter_mode='')):
         assert _has_executable_target(
             'fetch_url', {'url': 'https://example.com/page'}) is True
+
+def test_all_local_batch_is_also_deferred_to_ingest():
+    """The shared predicate must cover the batch rewrite too, or streaming
+    caches speculative HTTP refusals for a call ingest will turn into reads."""
+    from lib.tasks_pkg.streaming_tool_executor import _has_executable_target
+
+    assert _has_executable_target('fetch_url', {'urls': [
+        {'url': 'file:///tmp/a.md'}, {'url': 'file:///tmp/b.md'}]}) is False
+    assert _has_executable_target('fetch_url', {'urls': [
+        {'url': 'file:///tmp/a.md'}, {'url': 'https://example.com'}]}) is True

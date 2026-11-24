@@ -151,7 +151,8 @@ _EXTRA_KEEPERS = {
     # Each is already negated in .gitignore because a clean clone needs it:
     # scripts/verify.py and scripts/test_execution.py are the `make test`
     # front door, scripts/benchmark_verification.py measures that selector,
-    # scripts/lane.py creates/recycles the per-unit-of-work checkouts,
+    # scripts/lane.py wraps the tracked lane CLI owner
+    # (lib/project_mod/lane_cli, which detached spare preparation spawns),
     # scripts/inspect_context.py reads a turn's composed context, and
     # scripts/gen_command_control.py regenerates the execution-control
     # protocol constants from contracts/command_control_v1.json. The public
@@ -167,10 +168,9 @@ _EXTRA_KEEPERS = {
     'scripts/migrate_host.py',  # names this site's proxy hosts; private with its test
     'scripts/inspect_context.py',
     'scripts/gen_command_control.py',
-    # It path-loads scripts/lane.py above, a shared-checkout development
-    # script that stays private; a test of a private script stays private too
-    # (export._lists.OPENSOURCE_EXTRA_EXCLUDE_FILES).
-    'tests/project_mod/test_lanes.py',
+    # The private tests/project_mod/test_lanes.py suite was lost with the
+    # wrapper in the recovery. Its command seam is now specified by the shipped
+    # tests/project_mod/test_lane_cli.py, so that keeper entry is gone.
     # This install's My Context audit: one owner's entry hashes and Turn ids.
     # The owner's own server reads it once to inherit his legacy entries;
     # Internal and Open exports drop it and inherit them unconfirmed.

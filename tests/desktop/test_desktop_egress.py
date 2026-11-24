@@ -77,6 +77,34 @@ class TestRouteRequest(unittest.TestCase):
                 egress.route_request('https://api.anthropic.com/v1/messages',
                                      user_id='1')
 
+    def test_outage_reason_codes(self):
+        # Clients branch on reason, never message text: a persistent policy
+        # block, a transient outage and a managed recovery deadline are
+        # distinct guidance classes (device-login 503 payload).
+        from lib.desktop.egress import EgressRecoveryPending
+        with mock.patch.object(egress, '_probe_host', return_value='geo_blocked'), \
+             self._agents([]):
+            with self.assertRaises(EgressUnavailable) as ctx:
+                egress.route_request('https://api.anthropic.com/v1/x',
+                                     user_id='1')
+            self.assertEqual(ctx.exception.reason, 'egress_blocked')
+        with mock.patch.object(egress, '_probe_host', return_value='network_fail'), \
+             self._agents([]), \
+             mock.patch('lib.proxy.subscription_route_recovery_delay',
+                        return_value=None):
+            with self.assertRaises(EgressUnavailable) as ctx:
+                egress.route_request('https://api.anthropic.com/v1/x',
+                                     user_id='1')
+            self.assertEqual(ctx.exception.reason, 'egress_network')
+        with mock.patch.object(egress, '_probe_host', return_value='network_fail'), \
+             self._agents([]), \
+             mock.patch('lib.proxy.subscription_route_recovery_delay',
+                        return_value=7.0):
+            with self.assertRaises(EgressRecoveryPending) as ctx:
+                egress.route_request('https://api.anthropic.com/v1/x',
+                                     user_id='1')
+            self.assertEqual(ctx.exception.reason, 'egress_recovery_pending')
+
     def test_geo_block_with_agent_returns_egress_target(self):
         with mock.patch.object(egress, '_probe_host', return_value='geo_blocked'), \
              self._agents([_agent(user_id='1')]):

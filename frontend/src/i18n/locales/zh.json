@@ -3999,6 +3999,8 @@
   "settings.oauthCopied": "✓ 已复制",
   "settings.oauthCopyCode": "复制",
   "settings.oauthCopyLink": "复制链接",
+  "settings.oauthDeviceEgressBlocked": "服务器到 OpenAI 的网络出口被屏蔽（代理出口地区不受支持或被拒绝），且没有在线的桌面代理。浏览器授权的令牌交换走同一出口，同样无法完成。请在 设置 → 网络 更换可用的代理出口，或在能访问 OpenAI 的机器上启动桌面代理（--allow-egress）后重试。服务器诊断：{error}",
+  "settings.oauthDeviceEgressNetwork": "服务器网络暂时无法访问 OpenAI，将改用浏览器授权；若令牌交换仍失败，请稍后重试设备码登录。服务器诊断：{error}",
   "settings.oauthDeviceFallback": "服务器当前无法获取 OpenAI 设备码。将改用浏览器授权：完成后复制 localhost:1455 地址栏中的完整网址并粘贴回 Tofu。",
   "settings.oauthDeviceHint": "远程服务器推荐：在任意设备（含手机）的浏览器打开授权页，输入下面的码完成连接，15 分钟内有效：",
   "settings.oauthDeviceLogin": "设备码登录",

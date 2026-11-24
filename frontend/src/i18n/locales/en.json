@@ -3999,6 +3999,8 @@
   "settings.oauthCopied": "✓ Copied",
   "settings.oauthCopyCode": "Copy",
   "settings.oauthCopyLink": "Copy Link",
+  "settings.oauthDeviceEgressBlocked": "The server's network egress to OpenAI is blocked (the proxy exit region is unsupported or rejected) and no desktop agent is online. Browser authorization cannot complete either — its token exchange uses the same egress. Switch to a working proxy exit in Settings → Network, or start the desktop agent (--allow-egress) on a machine that can reach OpenAI, then retry. Server diagnosis: {error}",
+  "settings.oauthDeviceEgressNetwork": "The server temporarily cannot reach OpenAI. Switching to browser authorization; if the token exchange still fails, retry device-code login shortly. Server diagnosis: {error}",
   "settings.oauthDeviceFallback": "The server cannot obtain an OpenAI device code right now. Switching to browser authorization: after approval, copy the complete localhost:1455 address-bar URL back into Tofu.",
   "settings.oauthDeviceHint": "Recommended for remote servers: open the verification page in ANY device's browser (phone included) and enter this code — valid for 15 minutes:",
   "settings.oauthDeviceLogin": "Device code login",

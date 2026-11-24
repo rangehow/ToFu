@@ -2407,10 +2407,46 @@ def test_ambiguous_or_remote_targets_keep_fetch_url_authority(url):
     assert call.repair_log == []
 
 
-def test_batch_urls_keep_fetch_url_authority():
+def test_all_local_batch_becomes_a_read_files_batch():
+    """Every batch target is a definite local file: one reader call covers
+    all of them, so no target is silently dropped or fetched over HTTP."""
+    call = _ingest_fetch({'urls': [
+        {'url': 'file:///tmp/a.md'},
+        {'url': 'file:///tmp/My%20Notes.md'},
+    ]})
+    assert call.parse_error is None
+    assert call.fn_name == 'read_files'
+    assert call.fn_args == {'reads': [
+        {'path': '/tmp/a.md'}, {'path': '/tmp/My Notes.md'}]}
+    assert ('$', 'local_file_tool_redirect') in call.repair_log
+    assert any('2 local-file targets' in note for note in call.warnings)
+
+
+def test_one_entry_batch_uses_the_scalar_reader_form():
+    """A single-entry batch keeps remote-worktree compatibility: the reader
+    refuses its `reads` batch there, but accepts a scalar `path`."""
     call = _ingest_fetch({'urls': [{'url': 'file:///tmp/a.md'}]})
+    assert call.fn_name == 'read_files'
+    assert call.fn_args == {'path': '/tmp/a.md'}
+
+
+def test_mixed_batch_keeps_fetch_url_authority():
+    call = _ingest_fetch({'urls': [
+        {'url': 'file:///tmp/a.md'},
+        {'url': 'https://example.com/page'},
+    ]})
     assert call.fn_name == 'fetch_url'
     assert call.parse_error is None
+    assert call.repair_log == []
+
+
+def test_batch_with_an_ambiguous_target_keeps_fetch_url_authority():
+    call = _ingest_fetch({'urls': [
+        {'url': 'file:///tmp/a.md'},
+        {'url': 'file://remote-host/etc/passwd'},
+    ]})
+    assert call.fn_name == 'fetch_url'
+    assert call.repair_log == []
 
 
 def test_extract_is_dropped_with_a_model_visible_warning():
@@ -2439,12 +2475,42 @@ def test_name_alias_then_value_redirect_converge_on_read_files():
 
 def test_shared_predicate_only_redirects_fetch_url_calls():
     from lib.tool_input_repair import (
-        local_file_fetch_path, redirect_local_file_fetch)
-    assert local_file_fetch_path({'url': 'file:///tmp/a.md'}) == '/tmp/a.md'
-    assert local_file_fetch_path(
-        {'url': 'file:///tmp/a.md', 'urls': [{'url': 'file:///tmp/b.md'}]}) is None
+        local_file_fetch_paths, redirect_local_file_fetch)
+    assert local_file_fetch_paths({'url': 'file:///tmp/a.md'}) == ['/tmp/a.md']
+    assert local_file_fetch_paths({'urls': [
+        {'url': 'file:///tmp/a.md'}, {'url': 'file:///tmp/b.md'}]}) == [
+            '/tmp/a.md', '/tmp/b.md']
+    assert local_file_fetch_paths({
+        'url': 'file:///tmp/a.md', 'urls': [{'url': 'https://x/y'}]}) is None
+    assert local_file_fetch_paths({'urls': [{'url': 'https://x/y'}]}) is None
+    assert local_file_fetch_paths({'urls': []}) is None
     assert redirect_local_file_fetch(
         'read_files', {'path': '/tmp/a.md'}, read_files_admitted=True) is None
     assert redirect_local_file_fetch(
         'fetch_url', {'url': 'file:///tmp/a.md'},
         read_files_admitted=False) is None
+
+
+def test_existing_tilde_path_is_read_through_the_reader_expansion(monkeypatch, tmp_path):
+    """read_files itself expands `~`; the repair passes the original spelling
+    so the reader's own owner scope stays authoritative."""
+    import os
+    from lib.tool_input_repair import local_file_fetch_paths
+
+    home = tmp_path / 'home'
+    home.mkdir()
+    (home / 'notes.md').write_text('local bytes', encoding='utf-8')
+    monkeypatch.setenv('HOME', str(home))
+    assert local_file_fetch_paths({'url': '~/notes.md'}) == ['~/notes.md']
+    assert local_file_fetch_paths({'url': '~/missing.md'}) is None
+    if hasattr(os.path, 'expanduser'):
+        call = _ingest_fetch({'url': '~/notes.md'})
+        assert call.fn_name == 'read_files'
+        assert call.fn_args == {'path': '~/notes.md'}
+
+
+def test_encoded_traversal_is_passed_to_the_reader_guard_verbatim():
+    """The repair never normalizes paths: read_files owns root containment."""
+    from lib.tool_input_repair import local_file_fetch_paths
+    assert local_file_fetch_paths(
+        {'url': 'file:///%2e%2e/etc/passwd'}) == ['/../etc/passwd']

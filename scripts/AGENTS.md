@@ -50,10 +50,11 @@ an undocumented second source of product policy.
   input/output scopes live in `lib/project_mod/generated_integration.py`. Its
   private merge checkout lives in `lib/project_mod/landing_verification.py`
   (also the CI merged-result check) and landing notices in
-  `lib/project_mod/integration_radar.py`. `lane.py` creates one branch plus a
-  recycled local checkout per unit of work (`lib/project_mod/lanes.py`). Verify
+  `lib/project_mod/integration_radar.py`. `lane.py` is the thin wrapper over
+  `lib/project_mod/lane_cli`; together they create one branch plus a recycled
+  local checkout per unit of work (`lib/project_mod/lanes.py`). Verify
   both `test_git_land_*.py` suites, `test_landing_verification.py`,
-  `test_impact_selection.py`, `test_lanes.py`, `test_integration_radar.py` and
+  `test_impact_selection.py`, `test_lane_cli.py`, `test_integration_radar.py` and
   the generated task-delta test in `test_integration_delivery.py`.
   Landing removes the worktree, so first let any swarm worker that still uses
   it finish (or stop it). In a FUSE worktree, `Entry '<path>' not uptodate.

@@ -103,3 +103,21 @@ def test_shipped_profile_compiles_the_documented_effort_controls(depth, effort):
                       thinking_depth=depth, inference_profile=profile)
     assert body['reasoning_effort'] == effort
     assert 'thinking' not in body
+
+
+def test_preview_release_and_thinking_profile_are_registered():
+    from lib.llm.body import build_body
+    from lib.model_info import release_date
+    from lib.model_routing.domain import ModelRef
+    from lib.model_routing.model_defaults import current_model_defaults
+
+    assert release_date('hy4-preview') == '2026-08-28'
+    ref = ModelRef.from_value({'creator_id': 'tencent', 'model_id': 'hy4-preview'})
+    profile, _previous = current_model_defaults().resolve(ref)
+    reasoning = profile['reasoning']
+    assert reasoning['supported_efforts'] == ['no_think', 'high']
+    assert reasoning['default_effort'] == 'high'
+    assert reasoning['disabled_effort'] == 'no_think'
+    body = build_body('hy4-preview', [{'role': 'user', 'content': 'hi'}],
+                      thinking_depth='off', inference_profile=profile)
+    assert body['reasoning_effort'] == 'no_think'

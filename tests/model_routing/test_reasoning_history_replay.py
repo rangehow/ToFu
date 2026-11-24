@@ -24,15 +24,15 @@ def _profile(**reasoning):
 
 
 @pytest.mark.parametrize('model', [
-    'hy4', 'tencent/hy4', 'glm-5.3', 'glm-5.2', 'zai-org/glm-5.3', 'kimi-k2.7-code',
-    'deepseek-v4-flash', 'deepseek-v4-pro',
+    'hy4', 'hy4-preview', 'tencent/hy4', 'glm-5.3', 'glm-5.2', 'zai-org/glm-5.3', 'kimi-k2.7-code',
+    'deepseek-v4-flash', 'deepseek-v4-pro', 'qwen4-max', 'MiniMax-M3.1-Flash',
 ])
 def test_maintained_declarations_require_replay(model):
     assert requires_replay(model)
 
 
 @pytest.mark.parametrize('model', [
-    'gpt-6.1-sol', 'claude-opus-5.5', 'hy4-preview', 'qwen3.8-max', 'unseen-model-9000',
+    'gpt-6.1-sol', 'claude-opus-5.5', 'qwen3.8-max', 'unseen-model-9000',
 ])
 def test_models_without_a_declaration_do_not(model):
     assert not requires_replay(model)

@@ -73,7 +73,8 @@
     {
       "creator_id": "tencent",
       "model_ids": [
-        "hy4"
+        "hy4",
+        "hy4-preview"
       ],
       "inference_profile": {
         "source": "official",
@@ -91,7 +92,7 @@
         }
       },
       "evidence_url": "https://intl.cloud.tencent.com/zh/document/product/1300/80637",
-      "checked_at": "2026-11-05",
+      "checked_at": "2026-11-24",
       "previous_profiles": [
         {
           "source": "official",
@@ -108,6 +109,36 @@
           }
         }
       ]
+    },
+    {
+      "creator_id": "tencent",
+      "model_ids": [
+        "hy3-preview",
+        "hy3"
+      ],
+      "inference_profile": {
+        "source": "official",
+        "reasoning": {
+          "support": "supported",
+          "wire_format": "reasoning_effort",
+          "can_disable": true,
+          "supported_efforts": [
+            "no_think",
+            "low",
+            "high"
+          ],
+          "default_effort": "high",
+          "disabled_effort": "no_think",
+          "effort_map": {
+            "medium": "high",
+            "xhigh": "high",
+            "max": "high",
+            "ultra": "high"
+          }
+        }
+      },
+      "evidence_url": "https://github.com/Tencent-Hunyuan/Hy3",
+      "checked_at": "2026-11-24"
     },
     {
       "creator_id": "moonshot",
@@ -318,7 +349,8 @@
     {
       "creator_id": "meta",
       "model_ids": [
-        "muse-spark-1.3"
+        "muse-spark-1.3",
+        "muse-spark-1.2"
       ],
       "inference_profile": {
         "source": "official",
@@ -333,7 +365,7 @@
             "high",
             "xhigh"
           ],
-          "default_effort": "medium",
+          "default_effort": "high",
           "effort_map": {
             "max": "xhigh",
             "ultra": "xhigh"
@@ -344,7 +376,9 @@
             "temperature"
           ]
         }
-      }
+      },
+      "evidence_url": "https://dev.meta.ai/docs/reasoning",
+      "checked_at": "2026-11-24"
     },
     {
       "creator_id": "meta",
@@ -613,6 +647,37 @@
     {
       "creator_id": "alibaba",
       "model_ids": [
+        "qwen4-max"
+      ],
+      "inference_profile": {
+        "source": "official",
+        "reasoning": {
+          "support": "supported",
+          "wire_format": "reasoning_effort",
+          "can_disable": true,
+          "supported_efforts": [
+            "none",
+            "low",
+            "high",
+            "xhigh"
+          ],
+          "default_effort": "high",
+          "disabled_effort": "none",
+          "preserve_history": "replay",
+          "effort_map": {
+            "minimal": "low",
+            "medium": "high",
+            "max": "xhigh",
+            "ultra": "xhigh"
+          }
+        }
+      },
+      "evidence_url": "https://docs.qwencloud.com/developer-guides/text-generation/thinking",
+      "checked_at": "2026-11-24"
+    },
+    {
+      "creator_id": "alibaba",
+      "model_ids": [
         "qwen3.8-max",
         "qwen3.8-max-0902",
         "qwen3.7-plus",
@@ -872,7 +937,8 @@
     {
       "creator_id": "minimax",
       "model_ids": [
-        "MiniMax-M3.1-Flash-Preview"
+        "MiniMax-M3.1-Flash-Preview",
+        "MiniMax-M3.1-Flash"
       ],
       "inference_profile": {
         "source": "official",
@@ -887,10 +953,19 @@
             "xhigh",
             "max"
           ],
-          "default_effort": "max"
+          "default_effort": "max",
+          "preserve_history": "replay"
+        },
+        "sampling": {
+          "omit": [
+            "temperature",
+            "top_p",
+            "top_k"
+          ]
         }
       },
-      "evidence_url": "https://platform.minimax.io/docs/api-reference/text-anthropic-api"
+      "evidence_url": "https://platform.minimax.io/docs/api-reference/text-anthropic-api",
+      "checked_at": "2026-11-24"
     },
     {
       "creator_id": "google",

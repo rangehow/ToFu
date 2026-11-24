@@ -8,7 +8,10 @@
   "catalog_mode": "curated",
   "catalog_source": {"url": "https://dev.meta.ai/docs/models", "checked_at": "2026-09-09"},
   "offering_recipes": [
-    {"model_id": "muse-spark-1.3", "capabilities": ["text", "vision", "thinking", "cheap"], "rpm": 30},
+    {"model_id": "muse-spark-1.3", "capabilities": ["text", "vision", "thinking", "cheap"], "context_window": 1048576, "rpm": 30,
+     "pricing": {"input": 1.25, "output": 4.25, "currency": "USD", "cacheWriteMul": 1.00, "cacheReadMul": 0.12, "name": "Muse Spark 1.3"}},
+    {"model_id": "muse-spark-1.2", "capabilities": ["text", "vision", "thinking", "cheap"], "context_window": 1048576, "rpm": 30,
+     "pricing": {"input": 1.25, "output": 4.25, "currency": "USD", "cacheWriteMul": 1.00, "cacheReadMul": 0.12, "name": "Muse Spark 1.2"}},
     {"model_id": "muse-ember-1.0", "capabilities": ["text", "vision", "video", "thinking", "cheap"]}
   ]
 }

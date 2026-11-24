@@ -173,8 +173,9 @@ def test_plan_offerings_carry_no_price_tier(templates, key):
 def test_subscription_templates_never_author_model_facts(templates):
     rows = {(row['creator_id'], row['model_id']): row
             for row in official_model_directory(list(templates.values()))}
-    # The plan's 256K cap stays an Offering limit: the Model keeps its window.
+    # The plan's caps stay Offering limits: the Model keeps its own window.
     assert rows[('moonshot', 'kimi-k3.1-pro')]['context_window'] == 1048576
+    assert rows[('minimax', 'MiniMax-M3.1-Flash')]['context_window'] == 1000000
     assert not any(model_id in {'kimi-k2.8-preview', 'kimi-k3.1-pro-highspeed',
-                                'doubao-seed-evolving', 'MiniMax-M3.1-Flash'}
+                                'doubao-seed-evolving'}
                    for _creator, model_id in rows)

@@ -8,6 +8,8 @@
   "catalog_mode": "curated",
   "catalog_source": {"url": "https://platform.minimax.io/docs/api-reference/text-anthropic-api", "checked_at": "2026-10-10"},
   "offering_recipes": [
+    {"model_id": "MiniMax-M3.1-Flash", "capabilities": ["text", "vision", "video", "thinking", "cheap"], "context_window": 1000000, "rpm": 60,
+     "pricing": {"input": 0.15, "output": 0.60, "currency": "USD", "cacheWriteMul": 1.00, "cacheReadMul": 0.10, "name": "MiniMax M3.1 Flash"}},
     {"model_id": "MiniMax-M3.1-Flash-Preview", "capabilities": ["text", "vision", "video", "thinking", "cheap"], "rpm": 60},
     {"model_id": "MiniMax-M3", "capabilities": ["text", "vision", "video", "thinking", "cheap"], "rpm": 60},
     {"model_id": "MiniMax-M2.7", "capabilities": ["text", "thinking", "cheap"], "rpm": 60},

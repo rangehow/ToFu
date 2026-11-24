@@ -497,8 +497,9 @@ declares `cache_affinity_opencode_session`; the shared lineage key is sent as
 plan to answer at all. Cell probes mint a fresh one-request session instead of
 borrowing a live conversation's key. The roster omits free-tier models because
 OpenCode documents those as available only inside OpenCode, while other
-harnesses receive HTTP 403. Models whose creator facts are not yet registered
-remain drafts until admission has release, pricing and reasoning evidence.
+harnesses receive HTTP 403. All 27 roster models, including Qwen4-Max,
+Muse Spark 1.2, MiniMax M3.1 Flash, Hy3 and Hy4 Preview, have official Model
+facts and admit as `ready`.
 
 
 `kimi_code` maps Kimi's plan wire names onto the maintained Moonshot
@@ -510,10 +511,14 @@ sourced facts are registered ([MODEL_REGISTRATION.md](MODEL_REGISTRATION.md)).
 On 2026-11-06 the maintained catalogue lacked `deepseek-v4.1-flash`,
 `deepseek-v4.1-flash-economy`, `doubao-seed-2.0-mini`, `doubao-seed-2.1-lite`,
 `doubao-seed-2.1-pro`, `doubao-seed-evolving`, `kimi-k2.5`, `kimi-k2.8-preview`,
-`kimi-k3.1-pro-highspeed`, `MiniMax-M3.1-Flash`, `qwen3.5-plus` and
-`qwen3.6-plus`. Terms per plan and the owner's steps live in
-[auth_providers_billing.md](modules/auth_providers_billing.md#domestic-coding-subscriptions);
-the specification is `tests/providers/test_subscription_plan_templates.py`.
+`kimi-k3.1-pro-highspeed`, `qwen3.5-plus` and `qwen3.6-plus`. On 2026-11-24 the
+OpenCode Go roster's `qwen4-max`, `muse-spark-1.2`, `MiniMax-M3.1-Flash`,
+`hy3` and `hy4-preview` were registered from official creator/provider
+documentation, so every model in `opencode_go` now admits as `ready`. Terms per
+plan and the owner's steps live in
+[auth_providers_billing.md](modules/auth_providers_billing.md#coding-plan-subscriptions);
+the specifications are `tests/providers/test_subscription_plan_templates.py`
+and `tests/model_routing/test_opencode_go_model_registration.py`.
 
 ## Migration guardrails
 

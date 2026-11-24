@@ -151,6 +151,8 @@ _RULES: tuple[tuple[str, str], ...] = (
     ('kimi-k2-6', '2026-03'),
     ('kimi-k2-thinking', '2025-11'),
     # ── Alibaba Qwen ─────────────────────────────────────────────
+    # Qwen4-Max GA 2026-11-16 (qwen.ai/blog + QwenCloud latest-model page).
+    ('qwen4-max', '2026-11-16'),
     # qwen3.8-omni-flash GA 2026-09-18 (qwen.ai/blog + qwencloud model page).
     ('qwen3-8-omni-flash', '2026-09-18'),
     # qwen3.8-27b on Model Studio (Beijing + Singapore) 2026-08-17 per the
@@ -170,6 +172,8 @@ _RULES: tuple[tuple[str, str], ...] = (
     ('mimo-v2-6', '2026-09-22'),
     # M3.1-Flash-Preview: live on platform.minimax.io by 2026-10-10 (Anthropic-compat
     # docs + agent.minimax.cn M Plan promo); M Plan / MiniMax Code only at launch.
+    # M3.1-Flash GA 2026-10-19 (MiniMax launch post + API pricing page).
+    ('minimax-m3-1-flash', '2026-10-19'),
     ('minimax-m3-1', '2026-10'),
     ('minimax-m3', '2026-06'),
     ('minimax-m2-7', '2026-03'),
@@ -181,11 +185,15 @@ _RULES: tuple[tuple[str, str], ...] = (
     ('doubao-seed-2-1', '2026-06'),
     ('doubao-seed-2-0', '2026-02'),
     # ── Tencent Hunyuan ──────────────────────────────────────────
-    ('hy4-preview', '2026-07'),
+    # Hy4 Preview released 2026-08-28 (Tencent Cloud International FAQ).
+    ('hy4-preview', '2026-08-28'),
     # Hy4 (Tencent announcement 2026-11-04; live on TokenHub that day). The
     # needle is a substring of hy4-preview, so it must follow the preview's.
     ('hy4', '2026-11-04'),
     ('hy3-preview', '2026-04'),
+    # Hy3 GA 2026-07-06 (Tencent announcement); the preview needle precedes
+    # its substring.
+    ('hy3', '2026-07-06'),
     # ── Meituan LongCat ──────────────────────────────────────────
     # 2601/2603 in the flash ids are the vendor iteration stamps.
     # LongCat API change log: 2.5-Preview 2026-09-25, 2.5 GA 2026-11-02;
@@ -199,6 +207,8 @@ _RULES: tuple[tuple[str, str], ...] = (
     # muse-spark-1.3 was listed on the Meta Model API catalogue
     # 2026-09-02 (standard + contributor SKUs same day).
     ('muse-spark-1-3', '2026-09-02'),
+    # Muse Spark 1.2 released 2026-08-05 (Meta launch announcement).
+    ('muse-spark-1-2', '2026-08-05'),
     # Muse Ember released 2026-11-09 on Muse Code and the Meta Model API as
     # muse-ember-1.0 (research.meta.ai blog index + launch post).
     ('muse-ember-1-0', '2026-11-09'),

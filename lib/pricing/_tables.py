@@ -226,6 +226,9 @@ MODEL_PRICING = {
     # 3.8-max ¥12/¥36 per 1M (cache hit ¥1.5 → cacheReadMul 0.125); 3.7-plus row uses the
     # >256K tier ¥6/¥24 (≤256K tier unverified); 3.8-flash ¥0.8/¥2.7 (read mul unverified —
     # family convention 0.20).
+    # Qwen4-Max (GA 2026-11-16, QwenCloud international): $1.50/$4.50 per 1M,
+    # implicit cache read $0.075 → readMul 0.05; explicit 5m write 1.25x.
+    'qwen4-max':                 {'input': 1.50, 'output': 4.50, 'cacheWriteMul': 1.25, 'cacheReadMul': 0.05, 'name': 'Qwen4 Max'},
     'qwen3.8-max':               {'input': 1.66, 'output': 4.97, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.125, 'name': 'Qwen 3.8 Max'},
     'qwen3.7-plus':              {'input': 0.83, 'output': 3.31, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'Qwen 3.7 Plus'},
     'qwen3.8-flash':             {'input': 0.11, 'output': 0.37, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.20, 'name': 'Qwen 3.8 Flash'},
@@ -338,6 +341,8 @@ MODEL_PRICING = {
     # Launch 50%-off promo made permanent 2026-07: $0.30/$1.20 (≤512K; >512K tier $0.60/$2.40);
     # cache read $0.06 → cacheReadMul 0.20.
     'MiniMax-M3':                {'input': 0.30, 'output': 1.20, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.20, 'name': 'MiniMax M3'},
+    # M3.1 Flash (GA 2026-10-19): $0.15/$0.60 per 1M, cache read $0.015 → 0.10.
+    'MiniMax-M3.1-Flash':        {'input': 0.15, 'output': 0.60, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'MiniMax M3.1 Flash'},
     'MiniMax-M2':                {'input': 0.30, 'output': 1.20, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'MiniMax M2'},
     'MiniMax-M2.1':              {'input': 0.30, 'output': 1.20, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'MiniMax M2.1'},
     'MiniMax-M2.1-highspeed':    {'input': 0.30, 'output': 2.40, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'MiniMax M2.1 HS'},
@@ -421,6 +426,8 @@ MODEL_PRICING = {
     # exchange for Meta training on prompts/completions (vendor-documented).
     'muse-spark-1.3':              {'input': 1.25, 'output': 4.25, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.12, 'name': 'Muse Spark 1.3'},
     'muse-spark-1.3-contributor':  {'input': 0.10, 'output': 0.20, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.02, 'name': 'Muse Spark 1.3 (Contributor)'},
+    'muse-spark-1.2':              {'input': 1.25, 'output': 4.25, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.12, 'name': 'Muse Spark 1.2'},
+    'muse-spark-1.2-contributor':  {'input': 0.10, 'output': 0.20, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.02, 'name': 'Muse Spark 1.2 (Contributor)'},
     # Muse Ember (2026-11-09): $0.10/$0.50 per 1M up to 200K input tokens, cached
     # input $0.004 (readMul 0.04); a longer request bills $0.30/$1.50 (cached $0.012)
     # in full, not only past 200K. No contributor tier.
@@ -452,6 +459,9 @@ MODEL_PRICING = {
     'hy4':                       {'input': 0.829,'output': 2.486,'cacheWriteMul': 1.00, 'cacheReadMul': 0.05, 'name': 'Hunyuan Hy4'},
     # ── Tencent Hunyuan ── cheapest tier (≤16K): ¥1.2/¥4 per 1M = $0.166/$0.553 @ 7.24
     'hy3-preview':               {'input': 0.166,'output': 0.553,'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'Hunyuan HY3 Preview'},
+    # hy3 GA (2026-07-06): TokenHub USD list $0.132/$0.528 per 1M, cache hit
+    # $0.033 → readMul 0.25 (Tencent Cloud pay-as-you-go table, checked 2026-11-24).
+    'hy3':                       {'input': 0.132,'output': 0.528,'cacheWriteMul': 1.00, 'cacheReadMul': 0.25, 'name': 'Hunyuan Hy3'},
     # ── Thinking Machines ── inkling-2-small (2026-11-05): Tinker serverless inference
     # (Beta) is the only first-party paid API: $0.30 input, $0.03 cached input (readMul
     # 0.10), $1.00 output per 1M; no cache-write price is published. The pricing page's

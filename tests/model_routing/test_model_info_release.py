@@ -26,10 +26,15 @@ def test_canonical_ids_resolve_to_vendor_dates() -> None:
     assert release_date('gemini-4-carbon') == '2026-11-10'  # Gemini API changelog
     assert release_date('gemini-4-hydrogen') == '2026-11-12'  # model page + changelog
     assert release_date('hy4') == '2026-11-04'
-    assert release_date('hy4-preview') == '2026-07'  # not Hy4's 2026-11-04
+    assert release_date('hy4-preview') == '2026-08-28'  # not Hy4's 2026-11-04
+    assert release_date('hy3') == '2026-07-06'
+    assert release_date('hy3-preview') == '2026-04'
 
+    assert release_date('qwen4-max') == '2026-11-16'
+    assert release_date('muse-spark-1.2') == '2026-08-05'
     assert release_date('muse-spark-1.3') == '2026-09-02'  # listed 2026-09-02
     assert release_date('muse-ember-1.0') == '2026-11-09'  # launch post
+    assert release_date('MiniMax-M3.1-Flash') == '2026-10-19'
     assert release_date('inkling-2-small') == '2026-11-05'  # model card
 
 
@@ -105,6 +110,7 @@ def test_wire_respellings_hit_the_trained_model_rule() -> None:
 
     # Contributor SKU rides the same-day listing rule.
     assert release_date('muse-spark-1.3-contributor') == '2026-09-02'
+    assert release_date('muse-spark-1.2-contributor') == '2026-08-05'
 
 
 def test_unknown_models_return_none_instead_of_guessing() -> None:

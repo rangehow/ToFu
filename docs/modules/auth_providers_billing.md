@@ -768,8 +768,9 @@ mint a fresh one-request session. The template's roster omits free-tier models,
 which OpenCode serves only inside OpenCode (other harnesses receive HTTP 403).
 DeepSeek V4.1 Flash/V4 Pro and LongCat 2.5 need the workspace region set to
 Global, and Muse Spark contributor models need the workspace's
-training-permission setting. Go models whose creator facts are not registered
-yet stay drafts, as the plan-template rule above describes.
+training-permission setting. All 27 roster models now have official Model
+facts; Qwen4-Max, Muse Spark 1.2, MiniMax M3.1 Flash, Hy3 and Hy4 Preview were
+registered on 2026-11-24, so every plan Deployment admits as `ready`.
 
 Not integrated: Zhipu's GLM Coding Plan, whose terms name the permitted tools
 (Tofu is not one; outside them the plan quota does not apply and the account

@@ -1,30 +1,44 @@
 #!/usr/bin/env bash
 # Read-only native release gate for the actual post-staple distribution image.
+#
+# Two modes, selected by the team-id argument:
+#   <10-char team id>  full Developer ID trust: designated-requirement signature,
+#                      notarization ticket, Gatekeeper assessment (signed release).
+#   unsigned           signing-paused release (owner decision recorded in
+#                      CHANGELOG 0.19.3 "Known issues"): integrity, layout,
+#                      identity, version and architecture only. No Developer ID
+#                      trust is claimed or inferred; the ad-hoc app signature is
+#                      still verified for integrity.
 set -euo pipefail
 
 if [[ $# != 4 || "$(uname -s)" != Darwin ]]; then
-  echo 'Usage (macOS only): verify_macos_dmg.sh <dmg> <arm64|x86_64> <version> <team-id>' >&2
+  echo 'Usage (macOS only): verify_macos_dmg.sh <dmg> <arm64|x86_64> <version> <team-id|unsigned>' >&2
   exit 1
 fi
 dmg="$1"
 arch="$2"
 version="$3"
 team="$4"
-if [[ ! -s "$dmg" || ! "$arch" =~ ^(arm64|x86_64)$ || -z "$version" || ! "$team" =~ ^[A-Z0-9]{10}$ ]]; then
+unsigned=false
+[[ "$team" == unsigned ]] && unsigned=true
+if [[ ! -s "$dmg" || ! "$arch" =~ ^(arm64|x86_64)$ || -z "$version" ]] ||
+   { ! $unsigned && [[ ! "$team" =~ ^[A-Z0-9]{10}$ ]]; }; then
   echo 'Invalid or missing macOS release verification input.' >&2
   exit 1
 fi
 
-# An ad-hoc signature or a certificate from a different team is not release trust.
-requirement="anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"$team\""
 hdiutil verify "$dmg"
-codesign --verify --strict --verbose=2 -R "$requirement" "$dmg"
-xcrun stapler validate "$dmg"
-if [[ "$(LC_ALL=C spctl --status)" != 'assessments enabled' ]]; then
-  echo 'Gatekeeper assessments must be enabled on the verification runner.' >&2
-  exit 1
+if ! $unsigned; then
+  # An ad-hoc signature or a certificate from a different team is not release trust.
+  requirement="anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"$team\""
+  codesign --verify --strict --verbose=2 -R "$requirement" "$dmg"
+  xcrun stapler validate "$dmg"
+  if [[ "$(LC_ALL=C spctl --status)" != 'assessments enabled' ]]; then
+    echo 'Gatekeeper assessments must be enabled on the verification runner.' >&2
+    exit 1
+  fi
+  spctl --assess --type open --context context:primary-signature --ignore-cache --no-cache --verbose=2 "$dmg"
 fi
-spctl --assess --type open --context context:primary-signature --ignore-cache --no-cache --verbose=2 "$dmg"
 
 mount="$(mktemp -d "${TMPDIR:-/tmp}/tofu-dmg.XXXXXXXX")"
 attached=false
@@ -50,8 +64,13 @@ for executable in "$app/Contents/MacOS/Tofu" "$app/Contents/Frameworks/tofu-db";
     exit 1
   fi
 done
-codesign --verify --deep --strict --all-architectures --verbose=2 -R "$requirement" "$app"
-spctl --assess --type execute --ignore-cache --no-cache --verbose=2 "$app"
+if $unsigned; then
+  # PyInstaller ad-hoc signs arm64 bundles; verify integrity without claiming trust.
+  codesign --verify --deep --strict --all-architectures --verbose=2 "$app"
+else
+  codesign --verify --deep --strict --all-architectures --verbose=2 -R "$requirement" "$app"
+  spctl --assess --type execute --ignore-cache --no-cache --verbose=2 "$app"
+fi
 # Fail the gate on detach failure as well; never publish a success receipt from a partial run.
 cleanup
 trap - EXIT

@@ -121,6 +121,7 @@
           "support": "supported",
           "wire_format": "thinking_type",
           "can_disable": false,
+          "supported_efforts": [],
           "preserve_history": "keep_all",
           "thinking_extra": {
             "keep": "all"
@@ -863,7 +864,8 @@
         "reasoning": {
           "support": "supported",
           "wire_format": "reasoning_split",
-          "can_disable": false
+          "can_disable": false,
+          "supported_efforts": []
         }
       }
     },

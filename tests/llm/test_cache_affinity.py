@@ -19,6 +19,7 @@ from lib.llm.cache_affinity import (
     cache_affinity_evidence,
     cache_affinity_key,
     merge_cache_affinity_headers,
+    probe_affinity_headers,
 )
 from lib.llm.route_features import route_feature
 from lib.tasks_pkg.wire_fingerprint import routing_fingerprint
@@ -48,9 +49,9 @@ def _round(scope, *, profile=DECLARED, user='inspect the cache'):
     return body
 
 
-def _plan(body, base_url=FRIDAY_ANTHROPIC):
+def _plan(body, base_url=FRIDAY_ANTHROPIC, api_protocol='anthropic'):
     return prepare_request(body, base_url=base_url, api_key='test-key',
-                           api_protocol='anthropic')
+                           api_protocol=api_protocol)
 
 
 def _header(plan, name):
@@ -113,6 +114,53 @@ def test_declared_carrier_is_added_and_an_owner_header_wins():
         merge_cache_affinity_headers(untouched, profile, protocol='anthropic',
                                      oauth=oauth, key=request_key)
         assert untouched == {}
+
+
+OPENCODE_SESSION = 'cache_affinity_opencode_session'
+OPENCODE_DECLARED = {'features': {OPENCODE_SESSION: 'supported'}}
+
+
+@pytest.mark.parametrize('protocol',
+                         ['openai', 'anthropic', 'responses', 'openai_responses'])
+def test_opencode_go_session_carrier_is_declared_on_every_wire_face(protocol):
+    assert route_feature(OPENCODE_DECLARED, OPENCODE_SESSION,
+                         protocol=protocol) is True
+    assert route_feature({'features': {}}, OPENCODE_SESSION,
+                         protocol=protocol) is False
+    # Subscription routes speak first-party dialects, never gateway carriers.
+    assert route_feature(OPENCODE_DECLARED, OPENCODE_SESSION,
+                         protocol=protocol, oauth='codex') is False
+
+    key = cache_affinity_key({'_conv_id': 'conv-1'})
+    headers = {}
+    merge_cache_affinity_headers(headers, OPENCODE_DECLARED, protocol=protocol,
+                                 oauth='', key=key)
+    assert headers == {'x-opencode-session': key}
+
+    owner = {'X-OpenCode-Session': 'pinned-by-owner'}
+    merge_cache_affinity_headers(owner, OPENCODE_DECLARED, protocol=protocol,
+                                 oauth='', key=key)
+    assert owner == {'X-OpenCode-Session': 'pinned-by-owner'}
+
+
+def test_opencode_go_session_carrier_reaches_the_prepared_request():
+    body = _round('conv-1', profile=OPENCODE_DECLARED)
+    plan = _plan(body, base_url='https://opencode.ai/inference/go/openai/v1',
+                 api_protocol='openai')
+    assert _header(plan, 'x-opencode-session') == cache_affinity_key(
+        {CACHE_AFFINITY_SCOPE_KEY: 'conv-1'})
+    assert 'conv-1' not in json.dumps(plan.body.wire_body(), ensure_ascii=False)
+
+
+def test_probe_affinity_headers_mint_one_request_sessions():
+    first = probe_affinity_headers(OPENCODE_DECLARED, protocol='openai')
+    second = probe_affinity_headers(OPENCODE_DECLARED, protocol='openai')
+    assert first['x-opencode-session'] != second['x-opencode-session']
+    assert len(first['x-opencode-session']) == 36
+    assert probe_affinity_headers(None, protocol='openai') == {}
+    # Subscription routes speak first-party dialects, never gateway carriers.
+    assert probe_affinity_headers(OPENCODE_DECLARED, protocol='openai',
+                                  oauth='codex') == {}
 
 
 def test_one_lineage_rides_one_session_id_and_identity_stays_off_the_wire():

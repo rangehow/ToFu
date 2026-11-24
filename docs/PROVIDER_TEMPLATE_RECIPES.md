@@ -485,6 +485,21 @@ interchangeable with the same vendor's pay-as-you-go keys and base URLs.
 | `tencent_coding_plan` | `https://api.lkeap.cloud.tencent.com/coding/v3` | [Tencent Cloud Coding Plan](https://cloud.tencent.com.cn/document/product/1823/130092) |
 | `ark_coding_plan` | `https://ark.cn-beijing.volces.com/api/coding/v3` | [Ark Coding Plan](https://ark.volcengine.com/region:cn-beijing/docs/coding-plan-personal-plan-overview) |
 | `minimax_mplan` | `https://api.minimax.cn/v1` | [MiniMax M Plan](https://platform.minimax.cn/docs/m-plan/faq) |
+| `opencode_go` | `https://opencode.ai/inference/go/openai/v1` | [OpenCode Go](https://opencode.ai/docs/console/go/) |
+
+`opencode_go` uses OpenCode's Chat Completions face. The Go page states that
+every API serves every paid Go text model and translates the request to the
+model's native family, so one authored face covers the mixed roster (for
+example Claude Haiku, GPT Luna and the open-weight models). The template
+declares `cache_affinity_opencode_session`; the shared lineage key is sent as
+`x-opencode-session`. Go rejects a request without that header (HTTP 400
+`MissingSessionID`), so the carrier is required for routing, caching and the
+plan to answer at all. Cell probes mint a fresh one-request session instead of
+borrowing a live conversation's key. The roster omits free-tier models because
+OpenCode documents those as available only inside OpenCode, while other
+harnesses receive HTTP 403. Models whose creator facts are not yet registered
+remain drafts until admission has release, pricing and reasoning evidence.
+
 
 `kimi_code` maps Kimi's plan wire names onto the maintained Moonshot
 identities (`k3.1-pro` → `kimi-k3.1-pro`, `k3-256k` and `k3` → `kimi-k3`,

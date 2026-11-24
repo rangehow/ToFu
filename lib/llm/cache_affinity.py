@@ -28,7 +28,7 @@ feature on that provider template's face. A carrier header the owner configured
 in ``extra_headers`` wins, compared case-insensitively.
 
 Entry points: :func:`cache_affinity_key`, :func:`merge_cache_affinity_headers`,
-:func:`cache_affinity_evidence`.
+:func:`probe_affinity_headers`, :func:`cache_affinity_evidence`.
 Dependencies: ``lib.llm.route_features`` (declared route capabilities).
 """
 from __future__ import annotations
@@ -50,6 +50,14 @@ CACHE_AFFINITY_HEADER_CARRIERS = {
     # to pick the vendor, then the account; without it consecutive rounds
     # land on different accounts. 学城 2762588777 《Claude 模型接入推荐实践》 §5.1.
     'cache_affinity_mt_session_id': 'Mt-Session-Id',
+    # OpenCode Go (https://opencode.ai/docs/console/go/, "Where can I use it?"):
+    # a coding-agent client must send a stable session id on every request so
+    # the gateway can keep a conversation on one route and reuse its prompt
+    # cache. Go rejects a request without it (HTTP 400 ``MissingSessionID``),
+    # so this carrier is required, not an optimization. The header carries the
+    # same conversation lineage key as the other carriers; it is not a Tofu
+    # identifier.
+    'cache_affinity_opencode_session': 'x-opencode-session',
 }
 
 #: Carriers whose hop picks the upstream cache domain from the lineage key
@@ -111,6 +119,18 @@ def merge_cache_affinity_headers(headers: dict, profile, *, protocol: str,
             profile, protocol=protocol, oauth=oauth, key=key).items():
         if name.lower() not in present:
             headers[name] = value
+
+
+def probe_affinity_headers(profile, *, protocol: str, oauth: str = '') -> dict:
+    """Carrier headers for one diagnostic request, or ``{}``.
+
+    A probe has no conversation lineage. It still must satisfy a gateway that
+    requires a session header, so it mints a fresh UUID instead of borrowing
+    (and thereby rotating) a live conversation's key. A declared carrier the
+    gateway does not require is harmless here: it names a one-request session.
+    """
+    return cache_affinity_headers(profile, protocol=protocol, oauth=oauth,
+                                  key=str(uuid.uuid4()))
 
 
 def affinity_lineage_digest(key: str) -> str:

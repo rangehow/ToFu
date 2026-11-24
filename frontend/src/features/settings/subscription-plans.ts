@@ -1,4 +1,4 @@
-/** Settings → Subscription sign-in plan-key cards (domestic coding plans).
+/** Settings → Subscription sign-in plan-key cards (vendor coding plans).
  * Entry: subscriptionPlans.refresh/close. One card per provider template of
  * category 'subscription' — the template is the only roster and endpoint
  * source. Connect hands the compiled template and the pasted key to the

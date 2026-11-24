@@ -326,6 +326,23 @@ display or pin acceptance. A retired
 per-installation JSON file is a read-once migration source only — an explicit
 Sidecar row (even empty) prevents it becoming a second authority.
 
+When no route remains, `EgressUnavailable.reason` classifies the outage for
+machine consumers: `egress_blocked` (every server route is policy/geo-rejected),
+`egress_network` (transient transport outage, circuits cooling) and
+`egress_recovery_pending` (the route manager owns a retry deadline). The
+device-login route passes the class through its 503 payload beside the
+actionable error text, and the Settings OAuth panel branches on it. Problem:
+the 503 carried only human text, which the panel discarded while auto-falling
+back to browser authorization — whose token exchange rides the SAME server
+routes, so a persistent egress block sent the user into a doomed loop
+(2026-11-24: a latency-selected HK proxy exit that OpenAI rejects). Decision:
+a blocked outage shows the server diagnosis and stops; a transient outage keeps
+the browser callback-copy fallback, which can complete once routes recover.
+Alternatives rejected: client string-matching on the error text; an
+unconditional fallback. Specs: `tests/desktop/test_desktop_egress.py`
+(reason codes), `tests/oauth/test_oauth_codex_device_flow.py` (propagation),
+`tests/frontend/test_settings_oauth_lifecycle_browser.py` (panel behavior).
+
 The authenticated owner is captured at each HTTP/task boundary and propagated
 through dispatch, preflight, OAuth callback/device workers, token refresh, and
 provider probes. No transport layer guesses a personal owner: an ownerless

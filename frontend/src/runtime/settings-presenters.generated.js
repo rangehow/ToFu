@@ -5059,6 +5059,9 @@ function _oauthDeviceLogin(provider) {
           if (body && typeof body.status_code !== 'undefined') {
             err._statusCode = body.status_code;
           }
+          if (body && typeof body.reason === 'string') {
+            err._reason = body.reason;
+          }
           throw err;
         });
       }
@@ -5091,11 +5094,22 @@ function _oauthDeviceLogin(provider) {
       if (!view.isCurrent()) return;
       if (deviceBtn) { deviceBtn.disabled = false; deviceBtn.textContent = t('settings.oauthDeviceLogin'); }
       if (e && (e._httpStatus === 503 || e._statusCode === 0)) {
-        // Deviceauth must be minted by the server. When every server/agent
-        // route is down, fall back to the browser-network PKCE flow instead
-        // of ending on a raw HTTP 400/503. The remote callback-copy box makes
-        // the fixed localhost redirect usable without any local listener.
-        Promise.resolve(showAlert(t('settings.oauthDeviceFallback'))).then(
+        // Deviceauth must be minted by the server, and the browser flow's
+        // token exchange rides the SAME server routes. Classify the outage
+        // by the server's machine-readable reason: a persistent egress block
+        // cannot be worked around by the browser flow, so show the actionable
+        // diagnosis and stop; a transient network outage may recover while the
+        // user completes browser auth, so keep the callback-copy fallback for
+        // that case (and for legacy servers that send no reason).
+        if (e._reason === 'egress_blocked') {
+          showAlert(t('settings.oauthDeviceEgressBlocked', { error: e.message }));
+          return;
+        }
+        var fallbackMsg = (e._reason === 'egress_network' ||
+                           e._reason === 'egress_recovery_pending')
+          ? t('settings.oauthDeviceEgressNetwork', { error: e.message })
+          : t('settings.oauthDeviceFallback');
+        Promise.resolve(showAlert(fallbackMsg)).then(
           function() { if (view.isCurrent()) _oauthLogin(provider); },
           function() { if (view.isCurrent()) _oauthLogin(provider); });
         return;

@@ -108,6 +108,10 @@ export const MODEL_BRAND_ICONS: Readonly<Record<string, string>> = Object.freeze
   // the `.stg-brand-icon svg { fill: currentColor }` rule (same pattern as
   // openbmb's hardcoded blue).
   longcat: '<svg viewBox="0 0 24 24" fill-rule="evenodd"><path clip-rule="evenodd" fill="#29E154" d="M.507 19.883a.507.507 0 01-.489-.642L4.29 3.745a1.013 1.013 0 011.533-.578l5.622 3.687a1.013 1.013 0 001.11 0L18.2 3.165a1.013 1.013 0 011.532.58l4.25 15.497a.506.506 0 01-.49.64H18.07a6.297 6.297 0 001.53-4.115v-.177a6.09 6.09 0 00-1.513-4.017l-.697-3.495a.438.438 0 00-.694-.266L14.07 9.781a.748.748 0 01-.654.121 5.156 5.156 0 00-2.833 0 .746.746 0 01-.653-.121L7.302 7.81a.435.435 0 00-.688.269l-.675 3.652a5.36 5.36 0 00-1.539 3.76v.333c0 1.474.527 2.9 1.488 4.02l.032.038H.507z"/><path d="M9.213 16.843h1.52v-3.546h-1.29l-.23 3.546zm5.573 0h-1.52v-3.546h1.29l.23 3.546z" fill="#fff"/></svg>',
+  // OpenCode — the console favicon's terminal-frame mark (opencode.ai/favicon.svg):
+  // a white frame and recessed inner block on the brand's near-black square,
+  // reduced to the frame so it reads as a coherent badge on either theme.
+  opencode: '<svg viewBox="0 0 24 24"><path fill-rule="evenodd" d="M18 4.5H6v15h12v-15ZM16 7.5H8v9h8v-9Z" fill="currentColor"/></svg>',
   // CatPaw (mcli Credit-Hub gateway): paw print — four toes + pad.
   catpaw: '<svg viewBox="0 0 24 24"><g fill="currentColor"><circle cx="6.2" cy="9.4" r="1.9"/><circle cx="9.8" cy="6.2" r="1.9"/><circle cx="14.2" cy="6.2" r="1.9"/><circle cx="17.8" cy="9.4" r="1.9"/><ellipse cx="12" cy="15.8" rx="4.8" ry="4"/></g></svg>',
   // 'local' = self-hosted vLLM / SGLang / Ollama box. Stylized server stack.
@@ -149,6 +153,7 @@ export const MODEL_BRAND_COLORS: Readonly<Record<string, string>> = Object.freez
   scaleway: '#777777', chutes: '#777777', featherless: '#777777', nanogpt: '#777777',
   ovhcloud: '#777777', aihubmix: '#777777', demonroute: '#777777', xiaomi: '#FF6900',
   longcat: '#29E154',
+  opencode: '#888888',
   catpaw: '#F97316',
   generic: '#888',
 });

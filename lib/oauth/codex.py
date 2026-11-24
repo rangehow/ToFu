@@ -178,10 +178,16 @@ def codex_device_request_user_code(user_id: str = '') -> dict:
         OAuthExchangeError: on network failure or an upstream non-2xx.
     """
     url = CODEX_OAUTH_CONFIG['device_usercode_url']
+    from lib.desktop.egress import EgressUnavailable
     try:
         resp = _oauth_http_post_json(
             url, {'client_id': CODEX_OAUTH_CONFIG['client_id']},
             timeout=30, user_id=user_id)
+    except EgressUnavailable as e:
+        logger.error('[Codex OAuth] device usercode request failed: %s', e)
+        raise OAuthExchangeError(
+            'Could not reach OpenAI device login: %s' % e,
+            status_code=0, reason=e.reason) from e
     except Exception as e:
         logger.error('[Codex OAuth] device usercode request failed: %s', e)
         raise OAuthExchangeError(
@@ -233,10 +239,16 @@ def codex_device_poll_token(device_auth_id: str, user_code: str,
         OAuthExchangeError: on network failure or a non-pending error.
     """
     url = CODEX_OAUTH_CONFIG['device_token_url']
+    from lib.desktop.egress import EgressUnavailable
     try:
         resp = _oauth_http_post_json(
             url, {'device_auth_id': device_auth_id, 'user_code': user_code},
             timeout=30, user_id=user_id)
+    except EgressUnavailable as e:
+        logger.warning('[Codex OAuth] device poll failed: %s', e)
+        raise OAuthExchangeError(
+            'Could not reach OpenAI device login: %s' % e,
+            status_code=0, reason=e.reason) from e
     except Exception as e:
         logger.warning('[Codex OAuth] device poll failed: %s', e)
         raise OAuthExchangeError(

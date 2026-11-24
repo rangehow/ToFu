@@ -30,6 +30,8 @@ PLANS = {
                         'https://ark.volcengine.com/region:cn-beijing/apikey'),
     'minimax_mplan': ('https://api.minimax.cn/v1',
                       'https://platform.minimax.cn/console/plan'),
+    'opencode_go': ('https://opencode.ai/inference/go/openai/v1',
+                    'https://opencode.ai/console/go'),
 }
 
 
@@ -116,6 +118,43 @@ def test_tencent_plan_keeps_the_documented_lowercase_wire_for_minimax():
     offering = offerings[wire['offering_id']]
     assert offering['context_window'] == 196608
     assert wire['max_output_tokens'] == 32768
+
+
+def test_opencode_go_pins_the_go_gateway_and_session_carrier(templates):
+    bundle = compile_provider_template_bundle('opencode_go')
+    connection = bundle['connections'][0]
+    assert (connection['base_url'], connection['protocol']) == (
+        'https://opencode.ai/inference/go/openai/v1', 'openai')
+    assert (connection['inference_profile']['features']
+            ['cache_affinity_opencode_session'] == 'supported')
+    offerings = {row['offering_id']: row for row in bundle['offerings']}
+    by_wire = {row['wire_model_id']: offerings[row['offering_id']]
+               for row in bundle['deployments']}
+    # The Go plan's published wire IDs, including lower-case spellings of
+    # creator identities and contributor SKUs mapped onto the public Model.
+    assert {'deepseek-v4.1-flash', 'deepseek-v4-pro', 'glm-5.3',
+            'gpt-5.6-luna', 'gpt-6-luna', 'claude-haiku-5-5',
+            'kimi-k3', 'kimi-k3.1-pro', 'minimax-m3', 'longcat-2.5',
+            'muse-spark-1.3-contributor'} <= set(by_wire)
+    assert by_wire['minimax-m3']['model']['model_id'] == 'MiniMax-M3'
+    assert by_wire['longcat-2.5']['model']['model_id'] == 'LongCat-2.5'
+    assert (by_wire['muse-spark-1.3-contributor']['model']['model_id']
+            == 'muse-spark-1.3')
+    # Go publishes only max for Kimi K3; the route must not offer a rung the
+    # plan does not list.
+    assert by_wire['kimi-k3']['inference_profile']['reasoning'][
+        'supported_efforts'] == ['max']
+
+    from lib.llm.route_features import route_feature
+    from lib.model_routing.inference import resolve_inference_profile
+    deployment = next(row for row in bundle['deployments']
+                      if row['wire_model_id'] == 'kimi-k3')
+    profile = resolve_inference_profile(
+        offering=by_wire['kimi-k3'], connection=connection,
+        deployment=deployment)
+    assert route_feature(
+        profile, 'cache_affinity_opencode_session', protocol='openai') is True
+
 
 
 @pytest.mark.parametrize('key', sorted(PLANS))

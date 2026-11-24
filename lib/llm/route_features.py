@@ -35,6 +35,7 @@ _FEATURE_PROTOCOLS = {
 # lib.llm.cache_affinity.CACHE_AFFINITY_HEADER_CARRIERS.
 _GATEWAY_FEATURES = frozenset({
     'cache_affinity_mt_session_id',
+    'cache_affinity_opencode_session',
 })
 # Declarative facts of every OAuth-subscription dialect: the protocol
 # extensions its installed wire adapter provides without a profile declaration,

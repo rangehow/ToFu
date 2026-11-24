@@ -331,7 +331,8 @@ def probe_cell_connection_headers(item: tuple, *, default_url: str,
 def _live_prober(*, base_url: str, protocol: str, faces: dict,
                  api_key: str, extra_headers: dict,
                  recipes: list[dict],
-                 default_face_headers: dict | None = None) -> dict[str | tuple, str]:
+                 default_face_headers: dict | None = None,
+                 inference_profile: dict | None = None) -> dict[str | tuple, str]:
     """Return recipe admission verdicts and exact per-cell serving evidence.
 
     ``extra_headers`` are the credential envelope's headers and ride every
@@ -340,14 +341,20 @@ def _live_prober(*, base_url: str, protocol: str, faces: dict,
     only cells sent to the default endpoint. Exact evidence requires the
     final prepared values of all explicit headers; unobserved requests
     can inform recipe admission but cannot pass a deployment.
+
+    ``inference_profile`` is the template's provider-level declaration. It
+    supplies carriers every face inherits (for example OpenCode Go's required
+    session header), so a probe answers the same wire contract as dispatch.
     """
     from lib.provider.provider_probe import build_probe_work, probe_one_cell
 
-    provider = {'base_url': base_url, 'protocol': protocol, 'faces': faces}
+    provider = {'base_url': base_url, 'protocol': protocol, 'faces': faces,
+                'inference_profile': dict(inference_profile or {})}
     models = [recipe_probe_entry(recipe) for recipe in recipes]
     work = build_probe_work(provider, models, [api_key])
     verdicts: dict[str | tuple, str] = {}
 
+    from lib.llm.cache_affinity import probe_affinity_headers
     from lib.observability import InstrumentedThreadPoolExecutor
     with InstrumentedThreadPoolExecutor(max_workers=_PROBE_WORKERS,
             metric_pool='template-supply', thread_name_prefix='template-supply') as pool:
@@ -356,8 +363,15 @@ def _live_prober(*, base_url: str, protocol: str, faces: dict,
             _idx, key, root, wire, _caps, url, proto = item[:7]
             face_headers = probe_cell_connection_headers(
                 item, default_url=base_url, default_face_headers=default_face_headers)
-            # As in dispatch, credential headers override face headers.
-            sent_headers = merge_header_layers(face_headers, extra_headers)
+            cell_profile = ((item[7].get('inference_profile') or {})
+                            if len(item) > 7 else {})
+            # As in dispatch, credential headers override face headers, and a
+            # gateway-required session header rides the same declared carrier.
+            sent_headers = {
+                **probe_affinity_headers(cell_profile or inference_profile,
+                                         protocol=proto),
+                **merge_header_layers(face_headers, extra_headers),
+            }
             evidence = []
 
             def observe(headers, evidence=evidence, root=root, wire=wire, url=url, proto=proto):
@@ -1187,7 +1201,8 @@ def sync_template_supply(*, boundary=None, repository=None,
             verdicts = prober(
                 base_url=base_url, protocol=protocol, faces=faces,
                 api_key=api_key, extra_headers=secret_headers,
-                default_face_headers=default_face_headers, recipes=missing)
+                default_face_headers=default_face_headers, recipes=missing,
+                inference_profile=template.get('inference_profile') or {})
         except Exception as exc:
             logger.warning(
                 'template supply: probe failed for %s: %s',

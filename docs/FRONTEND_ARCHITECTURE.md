@@ -487,7 +487,7 @@ budgets count these roots and their shared static dependencies once under the
 existing ceilings. A dynamic import changes scheduling, not budget ownership.
 
 **First-paint ceiling.** `scripts/build_frontend.mjs` (`BUILD_MAIN_MAX_KIB`)
-fails a build whose `main.ts` startup set exceeds 627 KiB gzip. **Problem:** the
+fails a build whose `main.ts` startup set exceeds 630 KiB gzip. **Problem:** the
 ceiling went from 620 to 622 KiB on 2026-11-13, when the office world became the
 default landing. On that tree (R4c, 0c5f338e8b), `main.ts` is 620.1 KiB. The
 live-payload memory fix (shared payload mirrors, the swarm receipt test, the
@@ -500,19 +500,33 @@ ends the `错误代码：5` crashes. **Alternatives rejected:** loading the
 crash-origin module lazily, because a dynamic import changes scheduling, not
 budget ownership, and an always-loaded per-owner dynamic import is architecture
 debt (see Paper's `panel-owners.ts` below); shipping the memory fix without crash
-detection, which leaves those crashes unrecorded. **Recalibration 623 → 627
-(2026-11-24):** Node 22 ships the motley/zlib-ng compression backend, whose
-level-9 gzip output for the SAME startup graph is ~3.5 KiB larger than the
-classic zlib the 623 ceiling was measured with (the committed v0.19.3 graph
-measures 625.9 KiB under node 22.6 and 622.4 KiB under classic zlib; the
-i18n-pruned graph 626.0 KiB). No bundle growth occurred — the measuring
-toolchain changed, and the published graph could no longer pass its own budget
-on any current Node. The ceiling follows the toolchain so the ratchet keeps
-failing real growth. **Alternatives rejected:** pinning CI to an older Node
-(regressive, and the compression backend follows the runtime, not the lockfile);
-switching the budget to raw bytes (loses the transfer-size semantics the
-ceiling exists to guard). Ratchet the ceiling down when a structural saving
-lands.
+detection, which leaves those crashes unrecorded. Ratchet the ceiling down when
+a structural saving lands.
+
+**Ceiling rebase (owner decision 2026-11-24): 623 → 630 KiB.** Problem: the
+published v0.19.3 startup graph measures 622.4 KiB, but a faithful rebuild of
+the *unchanged* public HEAD sources measures 625.9 KiB — the release artifact
+predates the sanitized public source baseline, so the 623 ceiling rejected
+every fresh build (node 22.6 and 22.23.5 emit byte-identical hashes; the
+dependency lock has not changed since v0.19.2). The measuring backend also
+shifted: Node 22's motley/zlib-ng gzips the SAME graph ~3.5 KiB larger than the
+classic zlib the 623 calibration used (committed graph: 622.4 KiB classic vs
+625.9 KiB node 22; i18n-pruned graph 626.0 KiB), so even the unchanged artifact
+cannot pass the old ceiling on current Node. Alternatives rejected for the
+toolchain shift: pinning CI to an older Node (regressive; the compression
+backend follows the runtime, not the lockfile); switching the budget to raw
+bytes (loses the transfer-size semantics the ceiling guards). The OAuth device-login egress
+diagnosis change (2026-11-24) adds only ~0.1 KiB and cannot publish without a
+rebuild: the i18n delivery copies are embedded in the Vite graph, and startup
+validation refuses stale chunks. Decision: raise the build ceiling to 630 KiB
+(owner-approved) and publish the rebuilt graph; the publication-baseline drift
+itself stays with the release-drift work. Alternatives rejected: landing the
+i18n sources without a rebuild (breaks startup artifact validation); trimming
+unrelated drifted sources to shave bytes (cross-owner, hides the drift);
+holding the fix until the drift is resolved (blocks an unrelated delivery).
+The separate `scripts/frontend_budget.py` CI ceilings (561/1026/1270/142/120)
+are stale against the committed graph at baseline and belong to that same
+release-drift repair, not to this decision.
 
 Self-hosted font delivery uses lossless WOFF2 generated from the retained TTF
 sources: the nine converted files total 259,548 bytes instead of 771,600 bytes.

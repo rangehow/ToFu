@@ -108,9 +108,15 @@ async function readViteAuthoringDigest() {
  * client (the office itself stays a lazy chunk). 623 (2026-11-14): cross-tab
  * crash detection, so that a crashed tab the owner closed is still recorded;
  * sizes and alternatives: docs/FRONTEND_ARCHITECTURE.md, "First-paint
- * ceiling". Ratchet it back down when a structural saving lands. */
+ * ceiling". 627 (2026-11-24): NOT bundle growth — Node 22's zlib (motley /
+ * zlib-ng) gzips the SAME startup graph ~3.5 KiB larger than the classic zlib
+ * the 623 ceiling was calibrated on (committed graph: 625.9 KiB under node
+ * 22.6, 622.4 under classic zlib; pruned graph 626.0). The ceiling is
+ * recalibrated to the measuring toolchain so the ratchet keeps catching real
+ * growth instead of failing every build. Ratchet it back down when a
+ * structural saving lands. */
 const BUILD_MAIN_MAX_KIB = Math.max(1,
-  Number.parseInt(process.env.TOFU_BUILD_MAIN_MAX_KIB || '', 10) || 623);
+  Number.parseInt(process.env.TOFU_BUILD_MAIN_MAX_KIB || '', 10) || 627);
 
 async function runBundleBudget(manifest, artifactDir) {
   const { gzipSync } = await import('node:zlib');

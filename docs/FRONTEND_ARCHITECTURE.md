@@ -487,7 +487,7 @@ budgets count these roots and their shared static dependencies once under the
 existing ceilings. A dynamic import changes scheduling, not budget ownership.
 
 **First-paint ceiling.** `scripts/build_frontend.mjs` (`BUILD_MAIN_MAX_KIB`)
-fails a build whose `main.ts` startup set exceeds 623 KiB gzip. **Problem:** the
+fails a build whose `main.ts` startup set exceeds 627 KiB gzip. **Problem:** the
 ceiling went from 620 to 622 KiB on 2026-11-13, when the office world became the
 default landing. On that tree (R4c, 0c5f338e8b), `main.ts` is 620.1 KiB. The
 live-payload memory fix (shared payload mirrors, the swarm receipt test, the
@@ -500,8 +500,19 @@ ends the `错误代码：5` crashes. **Alternatives rejected:** loading the
 crash-origin module lazily, because a dynamic import changes scheduling, not
 budget ownership, and an always-loaded per-owner dynamic import is architecture
 debt (see Paper's `panel-owners.ts` below); shipping the memory fix without crash
-detection, which leaves those crashes unrecorded. Ratchet the ceiling down when a
-structural saving lands.
+detection, which leaves those crashes unrecorded. **Recalibration 623 → 627
+(2026-11-24):** Node 22 ships the motley/zlib-ng compression backend, whose
+level-9 gzip output for the SAME startup graph is ~3.5 KiB larger than the
+classic zlib the 623 ceiling was measured with (the committed v0.19.3 graph
+measures 625.9 KiB under node 22.6 and 622.4 KiB under classic zlib; the
+i18n-pruned graph 626.0 KiB). No bundle growth occurred — the measuring
+toolchain changed, and the published graph could no longer pass its own budget
+on any current Node. The ceiling follows the toolchain so the ratchet keeps
+failing real growth. **Alternatives rejected:** pinning CI to an older Node
+(regressive, and the compression backend follows the runtime, not the lockfile);
+switching the budget to raw bytes (loses the transfer-size semantics the
+ceiling exists to guard). Ratchet the ceiling down when a structural saving
+lands.
 
 Self-hosted font delivery uses lossless WOFF2 generated from the retained TTF
 sources: the nine converted files total 259,548 bytes instead of 771,600 bytes.

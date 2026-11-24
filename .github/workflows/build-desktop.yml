@@ -783,8 +783,13 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "$MACOS_CERT_P12" || -z "$MACOS_CERT_PASSWORD" ]]; then
-            echo '::error::Developer ID signing requires MACOS_CERT_P12 and MACOS_CERT_PASSWORD.'
-            exit 1
+            # Signing-paused release (CHANGELOG 0.19.3 "Known issues": macOS
+            # packages ship unsigned while Developer ID signing is paused).
+            # An empty identity selects the unsigned path in the notarize and
+            # verify steps below; it never silently downgrades a SIGNED build.
+            echo '::notice::Developer ID signing paused (no certificate secrets); building an unsigned DMG.'
+            echo 'TOFU_MACOS_SIGN_IDENTITY=' >> "$GITHUB_ENV"
+            exit 0
           fi
           umask 077
           work="$(mktemp -d "${RUNNER_TEMP}/tofu-sign.XXXXXXXX")"
@@ -880,6 +885,10 @@ jobs:
           MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
         run: |
           set -euo pipefail
+          if [[ -z "${TOFU_MACOS_SIGN_IDENTITY:-}" ]]; then
+            echo '::notice::Signing paused; shipping the unsigned DMG without signature, notarization or stapling.'
+            exit 0
+          fi
           if [[ -z "$MACOS_NOTARY_APPLE_ID" || -z "$MACOS_NOTARY_PASSWORD" || ! "$MACOS_NOTARY_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]; then
             echo '::error::Notarization requires MACOS_NOTARY_APPLE_ID, MACOS_NOTARY_TEAM_ID and MACOS_NOTARY_PASSWORD.'
             exit 1
@@ -910,7 +919,9 @@ jobs:
         run: |
           set -euo pipefail
           dmg="Tofu-${APP_VERSION}-macos-${ARCH}.dmg"
-          bash scripts/verify_macos_dmg.sh "$dmg" "$ARCH" "$APP_VERSION" "$MACOS_NOTARY_TEAM_ID"
+          team="$MACOS_NOTARY_TEAM_ID"
+          if [[ -z "${TOFU_MACOS_SIGN_IDENTITY:-}" ]]; then team=unsigned; fi
+          bash scripts/verify_macos_dmg.sh "$dmg" "$ARCH" "$APP_VERSION" "$team"
           shasum -a 256 "$dmg" > "${dmg}.verified.sha256"
 
       - name: Upload native-verified macOS DMG
@@ -1172,15 +1183,28 @@ jobs:
           VER: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
+          # Derive the expected DMG set from the ONE platform authority
+          # (scripts/release_assets.py) — a hand-typed arch list here drifted
+          # the moment Intel macOS left the matrix (owner decision 2026-11-24).
+          mapfile -t expected < <(VER="$VER" python3 - <<'PY'
+          import importlib.util, os
+          spec = importlib.util.spec_from_file_location('ra', 'scripts/release_assets.py')
+          mod = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(mod)
+          ver = os.environ['VER']
+          for os_key, arch, _label, pattern, _floor in mod.PLATFORM_ASSETS:
+              if os_key == 'macos':
+                  print(pattern.replace('*', ver))
+          PY
+          )
           cd release-assets
           shopt -s nullglob globstar
           images=(**/*.dmg)
-          if [[ ${#images[@]} != 2 ]]; then
-            echo '::error::Expected exactly the two native-verified macOS DMGs.'
+          if [[ ${#images[@]} != ${#expected[@]} ]]; then
+            echo "::error::Expected exactly ${#expected[@]} native-verified macOS DMG(s): ${expected[*]}"
             exit 1
           fi
-          for arch in arm64 x86_64; do
-            dmg="Tofu-${VER}-macos-${arch}.dmg"
+          for dmg in "${expected[@]}"; do
             if ! shasum -a 256 "$dmg" | cmp - "${dmg}.verified.sha256"; then
               echo "::error::DMG is absent or does not match the native verification receipt: ${dmg}"
               exit 1

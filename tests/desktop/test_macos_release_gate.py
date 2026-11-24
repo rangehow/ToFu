@@ -41,7 +41,9 @@ case "$tool:$1" in
         esac ;;
     lipo:-archs) if [[ "$FAULT" == arch ]]; then echo x86_64; else echo arm64; fi ;;
     codesign:--verify)
-        [[ "$*" == *'anchor apple generic'* && "$*" == *'leaf[subject.OU] = "R3L3AS3APP"'* ]]
+        if [[ "$*" == *'anchor apple generic'* ]]; then
+            [[ "$*" == *'leaf[subject.OU] = "R3L3AS3APP"'* ]] || exit 1
+        fi
         case "${*: -1}" in
             *.app) [[ "$*" == *'--deep --strict --all-architectures'* && "$FAULT" != app_signature ]] ;;
             *.dmg) [[ "$FAULT" != dmg_signature ]] ;;
@@ -124,14 +126,26 @@ def test_notary_stage_requires_accepted_result_before_stapling(tmp_path, native_
             assert trace.index('codesign --timestamp') < trace.index('xcrun notarytool submit') < trace.index('xcrun stapler staple')
 
 
+def _macos_archs():
+    """The macOS arch set from the ONE platform authority, not hand-typed."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('_ra_gate', ROOT / 'scripts/release_assets.py')
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return [arch for os_key, arch, *_ in mod.PLATFORM_ASSETS if os_key == 'macos']
+
+
 @pytest.mark.parametrize('fault', ['none', 'changed', 'missing_receipt', 'wrong_version', 'extra_image'])
 def test_release_promotes_only_exact_native_verified_dmg_bytes(tmp_path, fault):
     jobs = yaml.safe_load((ROOT / '.github/workflows/build-desktop.yml').read_text())['jobs']
     gate = next(s for s in jobs['release']['steps'] if s.get('name') == 'Check native-verified macOS bytes')
+    # The step derives the expected DMG set from scripts/release_assets.py at
+    # the checkout root, exactly as the release job runs it.
+    (tmp_path / 'scripts').symlink_to(ROOT / 'scripts')
     assets = tmp_path / 'release-assets'
     assets.mkdir()
     version = '0.19.1' if fault == 'wrong_version' else '0.19.2'
-    for arch in ('arm64', 'x86_64'):
+    for arch in _macos_archs():
         image = assets / f'Tofu-{version}-macos-{arch}.dmg'
         content = arch.encode()
         image.write_bytes(content[::-1] if fault == 'changed' else content)
@@ -143,3 +157,49 @@ def test_release_promotes_only_exact_native_verified_dmg_bytes(tmp_path, fault):
     proc = subprocess.run(['bash', '-c', gate['run']], env={**os.environ, 'VER': '0.19.2'},
                           cwd=tmp_path, capture_output=True, text=True, timeout=10)
     assert (proc.returncode == 0) == (fault == 'none'), proc.stdout + proc.stderr
+
+
+@pytest.mark.parametrize(('fault', 'ok'), [
+    ('none', True), ('corrupt', False), ('layout', False), ('version', False), ('arch', False),
+])
+def test_unsigned_gate_verifies_integrity_without_claiming_trust(tmp_path, native_tools, fault, ok):
+    """Signing-paused release (CHANGELOG 0.19.3): team 'unsigned' keeps integrity,
+    layout, identity, version, arch and the ad-hoc app signature — and never
+    asserts Developer ID trust, notarization or Gatekeeper assessment."""
+    dmg = tmp_path / 'Tofu-0.19.2-macos-arm64.dmg'
+    dmg.write_bytes(b'synthetic DMG')
+    proc = subprocess.run(['bash', str(ROOT / 'scripts/verify_macos_dmg.sh'), str(dmg),
+                           'arm64', '0.19.2', 'unsigned'],
+                          env={**native_tools, 'FAULT': fault}, capture_output=True, text=True, timeout=10)
+    assert (proc.returncode == 0) == ok, proc.stderr
+    trace = (tmp_path / 'trace').read_text()
+    assert 'spctl' not in trace and 'stapler' not in trace
+    assert 'anchor apple generic' not in trace
+    if ok:
+        assert 'codesign --verify --deep --strict --all-architectures' in trace
+    assert ('hdiutil attach' in trace) == ('hdiutil detach' in trace)
+
+
+def test_notary_stage_skips_when_signing_paused(tmp_path, native_tools):
+    jobs = yaml.safe_load((ROOT / '.github/workflows/build-desktop.yml').read_text())['jobs']
+    notarize = next(s for s in jobs['build-macos']['steps'] if 'notarytool submit' in s.get('run', ''))
+    env = {**native_tools, 'APP_VERSION': '0.19.3', 'ARCH': 'arm64',
+           'TOFU_MACOS_SIGN_IDENTITY': ''}
+    proc = subprocess.run(['bash', '-c', notarize['run']], env=env, cwd=tmp_path,
+                          capture_output=True, text=True, timeout=10)
+    assert proc.returncode == 0, proc.stderr
+    assert not (tmp_path / 'trace').exists()
+
+
+def test_identity_step_selects_unsigned_when_cert_secrets_absent(tmp_path, native_tools):
+    jobs = yaml.safe_load((ROOT / '.github/workflows/build-desktop.yml').read_text())['jobs']
+    step = next(s for s in jobs['build-macos']['steps']
+                if s.get('name') == 'Load Developer ID Application signing identity')
+    gh_env = tmp_path / 'gh_env'
+    env = {**native_tools, 'MACOS_CERT_P12': '', 'MACOS_CERT_PASSWORD': '',
+           'GITHUB_ENV': str(gh_env), 'RUNNER_TEMP': str(tmp_path)}
+    proc = subprocess.run(['bash', '-c', step['run']], env=env, cwd=tmp_path,
+                          capture_output=True, text=True, timeout=10)
+    assert proc.returncode == 0, proc.stderr
+    assert 'TOFU_MACOS_SIGN_IDENTITY=' in gh_env.read_text()
+    assert not (tmp_path / 'trace').exists()

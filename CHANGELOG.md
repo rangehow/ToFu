@@ -40,12 +40,19 @@
 - The frontend graph rebuilds from the published source: 15 dead i18n keys
   (the experiment settings panel markup is not part of the open tree) are
   pruned from all seven locales and the contract regenerated, and the
-  first-paint budget ceiling is recalibrated 623 → 627 KiB because Node 22's
+  first-paint budget ceiling is recalibrated 623 → 630 KiB because Node 22's
   zlib-ng gzips the same startup graph ~3.5 KiB larger than the classic zlib
   the ceiling was measured with (no bundle growth; see
   docs/FRONTEND_ARCHITECTURE.md, "First-paint ceiling"). The release-pipeline
   drift guard now checks the single Open publication target (owner decision
   2026-11-20) instead of also pinning the retired NiuTrans mirror.
+- The macOS release leg honors the paused signing state: without Developer ID
+  certificate secrets it builds and verifies an unsigned DMG (integrity,
+  layout, identity, version, architecture and the ad-hoc app signature) instead
+  of failing the job, matching the "Known issues" note above. Signed builds
+  keep the full trust gate unchanged. The release job's macOS byte gate now
+  derives the expected DMG set from `scripts/release_assets.py` rather than a
+  hand-typed two-arch list that the Intel removal had outdated.
 - The browser extension recovers startup-configuration serialization after a
   storage read failure, carries the startup URL intent through preseed, rejects
   invalid stored types and fences stale configuration behind newer user intent.

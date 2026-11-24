@@ -1197,6 +1197,7 @@ def build_probe_work(
 
     base_url = provider.get('base_url') or ''
     protocol = (provider.get('protocol') or 'openai') or 'openai'
+    provider_profile = dict(provider.get('inference_profile') or {})
     if maximum_cells is not None:
         maximum_cells = int(maximum_cells)
         if maximum_cells <= 0:
@@ -1229,14 +1230,19 @@ def build_probe_work(
                               or 'openai')
                 face_headers = dict(face.extra_headers or {}) if face.ok else {}
                 if request_contexts is None:
-                    if face_headers:
+                    context = None
+                    if face_headers or provider_profile:
                         # Only a face that actually requires a selector
                         # carries one — sending it on another face is
-                        # rejected upstream.
+                        # rejected upstream. The provider profile carries
+                        # carriers every face inherits.
+                        context = {'extra_headers': {**provider_headers,
+                                                     **face_headers}}
+                        if provider_profile:
+                            context['inference_profile'] = provider_profile
+                    if context is not None:
                         work.append((key_idx, api_key, root, mid, caps,
-                                     cell_url, cell_proto,
-                                     {'extra_headers': {**provider_headers,
-                                                        **face_headers}}))
+                                     cell_url, cell_proto, context))
                     else:
                         work.append((key_idx, api_key, root, mid, caps,
                                      cell_url, cell_proto))
@@ -1250,6 +1256,8 @@ def build_probe_work(
                     context = {
                         'extra_headers': {**connection['extra_headers'],
                                           **credential['extra_headers']},
+                        'inference_profile': dict(
+                            connection.get('inference_profile') or {}),
                         'oauth': credential['oauth'],
                         'adapter': connection['adapter'],
                     }
@@ -1425,9 +1433,18 @@ def run_cell_probe_task(task: dict, work: list, timeout: int, *, on_complete=Non
         cell_base_url = item[5] if len(item) > 5 and item[5] else base_url
         cell_protocol = item[6] if len(item) > 6 and item[6] else protocol
         context = item[7] if len(item) > 7 else {}
-        cell_headers = context.get('extra_headers', extra_headers)
+        cell_headers = dict(context.get('extra_headers', extra_headers) or {})
         cell_oauth = context.get('oauth', oauth)
         cell_adapter = context.get('adapter', adapter)
+        # A gateway that requires a session header rejects diagnostics too.
+        # Probes mint a fresh one-request session; an explicitly configured
+        # header of the same name still wins.
+        from lib.llm.cache_affinity import probe_affinity_headers
+        cell_headers = {
+            **probe_affinity_headers(context.get('inference_profile'),
+                                     protocol=cell_protocol, oauth=cell_oauth),
+            **cell_headers,
+        }
         cell_attempts = attempts
         cell_timeout = timeout
         probe_fn = None

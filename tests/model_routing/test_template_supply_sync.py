@@ -827,6 +827,38 @@ def test_template_probe_merges_face_and_credential_headers(monkeypatch, cell_hea
     assert envelope == before
 
 
+def test_template_probe_mints_the_declared_session_carrier(monkeypatch):
+    from lib.model_routing import template_supply
+    from lib.provider import provider_probe
+
+    work = (0, 'synthetic-key', 'model', 'wire', [],
+            'https://opencode.ai/inference/go/openai/v1', 'openai')
+    monkeypatch.setattr(provider_probe, 'build_probe_work', lambda *a, **k: [work])
+    received = []
+
+    def probe(url, key, wire, headers, timeout, **kwargs):
+        received.append(dict(headers))
+        return 'ok', ''
+
+    monkeypatch.setattr(provider_probe, 'probe_one_cell', probe)
+    template_supply._live_prober(
+        base_url='https://opencode.ai/inference/go/openai/v1',
+        protocol='openai', faces={}, api_key='synthetic-key',
+        extra_headers={}, recipes=[],
+        inference_profile={'features': {
+            'cache_affinity_opencode_session': 'supported'}})
+    assert len(received[0]['x-opencode-session']) == 36
+
+    received.clear()
+    template_supply._live_prober(
+        base_url='https://opencode.ai/inference/go/openai/v1',
+        protocol='openai', faces={}, api_key='synthetic-key',
+        extra_headers={'x-opencode-session': 'pinned-by-owner'}, recipes=[],
+        inference_profile={'features': {
+            'cache_affinity_opencode_session': 'supported'}})
+    assert received[0]['x-opencode-session'] == 'pinned-by-owner'
+
+
 _PLAN_DEFAULT_URL = 'https://gw.invalid/v1/native'
 _PLAN_OWNER_URL = 'https://gw.invalid/v1/owner'
 _PLAN_SELECTOR = {'x-context-provider': 'kunlun'}

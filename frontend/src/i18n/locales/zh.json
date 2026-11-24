@@ -3980,7 +3980,7 @@
   "settings.oauthCatpawLoginWaiting": "已打开 CatPaw 登录页 — 完成登录后将自动接入，无需其他操作…",
   "settings.oauthCatpawReady": "可一键接入",
   "settings.oauthCatpawUnavailable": "未检测到本机 CLI",
-  "settings.subscriptionPlansTitle": "国内编程套餐（套餐 API Key）",
+  "settings.subscriptionPlansTitle": "编程套餐（套餐 API Key）",
   "settings.subscriptionPlansDesc": "粘贴套餐专属 API Key 即可接入。多数套餐条款只允许在编程工具中交互使用，请勿把这些模型设为后台任务的默认模型。",
   "settings.subscriptionPlanKeyPlaceholder": "粘贴套餐 API Key",
   "settings.subscriptionPlanConnect": "连接",

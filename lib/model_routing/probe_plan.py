@@ -244,6 +244,8 @@ def matrix_probe_plan(
                     **dict(connection.get("extra_headers") or {}),
                     **dict(deployment.get("extra_headers") or {}),
                 },
+                "inference_profile": dict(
+                    connection.get("inference_profile") or {}),
                 "adapter": dict(connection.get("adapter") or {}),
             }
         rows = wires_by_offering.setdefault(deployment["offering_id"], [])
@@ -272,6 +274,8 @@ def matrix_probe_plan(
                 "base_url": primary["base_url"],
                 "protocol": primary.get("protocol") or "openai",
                 "extra_headers": dict(primary.get("extra_headers") or {}),
+                "inference_profile": dict(
+                    primary.get("inference_profile") or {}),
                 "adapter": dict(primary.get("adapter") or {}),
             }
         models.append(entry)

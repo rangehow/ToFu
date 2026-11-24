@@ -52,7 +52,10 @@
   of failing the job, matching the "Known issues" note above. Signed builds
   keep the full trust gate unchanged. The release job's macOS byte gate now
   derives the expected DMG set from `scripts/release_assets.py` rather than a
-  hand-typed two-arch list that the Intel removal had outdated.
+  hand-typed two-arch list that the Intel removal had outdated. The macOS
+  smoke test removes the runtime state it seeds inside the bundle (logs and a
+  generated `flask_secret_key`): the added files broke the sealed signature,
+  and a runtime secret must never ship in the public DMG.
 - The browser extension recovers startup-configuration serialization after a
   storage read failure, carries the startup URL intent through preseed, rejects
   invalid stored types and fences stale configuration behind newer user intent.

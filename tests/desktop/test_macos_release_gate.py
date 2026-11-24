@@ -203,3 +203,25 @@ def test_identity_step_selects_unsigned_when_cert_secrets_absent(tmp_path, nativ
     assert proc.returncode == 0, proc.stderr
     assert 'TOFU_MACOS_SIGN_IDENTITY=' in gh_env.read_text()
     assert not (tmp_path / 'trace').exists()
+
+
+def test_smoke_step_removes_runtime_state_from_the_bundle(tmp_path):
+    """The smoke run seeds logs and a GENERATED secret inside the bundle; they
+    must not survive into the DMG — added files break the sealed signature and
+    a runtime secret must never ship in a public artifact (run 45323868228)."""
+    jobs = yaml.safe_load((ROOT / '.github/workflows/build-desktop.yml').read_text())['jobs']
+    step = next(s for s in jobs['build-macos']['steps']
+                if s.get('name') == 'Smoke test the built macOS binary')
+    macos = tmp_path / 'dist/Tofu.app/Contents/MacOS'
+    macos.mkdir(parents=True)
+    binary = macos / 'Tofu'
+    binary.write_text('#!/usr/bin/env bash\n'
+                      'mkdir -p "$(dirname "$0")/data/config" "$(dirname "$0")/logs"\n'
+                      'echo generated > "$(dirname "$0")/data/config/flask_secret_key"\n'
+                      'echo log > "$(dirname "$0")/logs/app.log"\n'
+                      'echo TOFU_SMOKE_OK\n', encoding='utf-8')
+    binary.chmod(0o755)
+    proc = subprocess.run(['bash', '-c', step['run']], cwd=tmp_path,
+                          capture_output=True, text=True, timeout=10)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert not (macos / 'data').exists() and not (macos / 'logs').exists()

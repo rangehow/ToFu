@@ -99,6 +99,7 @@ This module is a FACADE over a cohesively-split package (CLAUDE.md §3.1):
     _classify.py   — tool-NAME alias resolution + hallucination classification
     _rejection.py  — repeat-rejection breaker + rejection message + audit
     _ingest.py     — the unified ingest_tool_call seam + IngestedToolCall
+    _local_file.py — local-file fetch_url predicate + read_files dispatch repair
 
 Every public symbol (and the private symbols the test-suite imports) is
 re-exported here so all existing ``from lib.tool_input_repair import X`` call
@@ -156,6 +157,11 @@ from lib.tool_input_repair._rejection import (
     report_invalid,
     report_tool_name_aliased,
 )
+from lib.tool_input_repair._local_file import (
+    LOCAL_FILE_TOOL_REDIRECT,
+    local_file_fetch_path,
+    redirect_local_file_fetch,
+)
 from lib.tool_input_repair._ingest import (
     IngestedToolCall,
     contract_rejection_text,
@@ -182,6 +188,8 @@ __all__ = [
     'report_hallucinated', 'report_tool_name_aliased', 'RepairLog',
     'ingest_tool_call', 'IngestedToolCall', 'contract_rejection_text',
     'with_argument_warnings',
+    'LOCAL_FILE_TOOL_REDIRECT', 'local_file_fetch_path',
+    'redirect_local_file_fetch',
     # private symbols imported by the test-suite
     '_salvage_object_array', '_array_item_schema', '_try_schema_array_salvage',
 ]

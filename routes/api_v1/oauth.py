@@ -235,8 +235,12 @@ def oauth_test():
         'redirect: the user '
         'enters the displayed code at the verification URL in ANY browser. '
         'It requires one working server proxy/direct/desktop-agent route; a '
-        'transport outage is returned as 503 so the UI can fall back to the '
-        'browser callback-copy flow. '
+        'transport outage is returned as 503 with a machine-readable '
+        '``reason`` (egress_blocked = every server route is policy/geo-rejected, '
+        'egress_network / egress_recovery_pending = transient outage) plus the '
+        'actionable ``error`` text, so the UI can show precise guidance and '
+        'only fall back to the browser callback-copy flow when recovery is '
+        'possible. '
         'Completion is observed via the regular /api/v1/oauth/status '
         'projection (device.user_code + status transitions).'
     ),
@@ -267,8 +271,10 @@ def oauth_device_login():
             provider, owner_user_id=owner_user_id)
         if 'error' in result:
             # A transport outage is not a malformed login request. Preserve
-            # the upstream status_code=0 detail and use 503 so clients can
-            # select the browser-network fallback without string matching.
+            # the upstream status_code=0 detail and use 503; the passthrough
+            # ``reason`` lets clients classify the outage without string
+            # matching (a persistent egress block must not auto-fall back to
+            # the browser flow, whose token exchange rides the same routes).
             http_status = 503 if result.get('status_code') in (0, '0') else 400
             return api_payload(result, http_status)
         return api_ok(result)

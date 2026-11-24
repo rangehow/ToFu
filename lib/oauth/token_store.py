@@ -145,13 +145,17 @@ class OAuthExchangeError(Exception):
 
     Carries the real HTTP status and a human-readable detail so the route
     layer can surface the ACTUAL upstream reason (e.g. a 403 geo-block)
-    instead of a generic "code may have expired" message.
+    instead of a generic "code may have expired" message. ``reason`` is an
+    optional machine-readable failure class (e.g. the egress layer's
+    ``egress_blocked``) that clients may branch on without string matching.
     """
 
-    def __init__(self, message: str, *, status_code: int = 0, detail: str = ''):
+    def __init__(self, message: str, *, status_code: int = 0, detail: str = '',
+                 reason: str = ''):
         super().__init__(message)
         self.status_code = status_code
         self.detail = detail or message
+        self.reason = reason
 
 
 def token_path(provider: str) -> str:

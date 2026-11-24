@@ -1,4 +1,5 @@
 """Real Settings controls retire login feedback and resume device observation."""
+import time
 from urllib.parse import urlparse
 
 import pytest
@@ -6,7 +7,7 @@ import pytest
 pytestmark = pytest.mark.visual
 
 
-@pytest.mark.parametrize('scenario', ['login_prepare_retired', 'reuse_settles_retired', 'device_reopen', 'status_unavailable'])
+@pytest.mark.parametrize('scenario', ['login_prepare_retired', 'reuse_settles_retired', 'device_reopen', 'status_unavailable', 'device_egress_blocked', 'device_egress_network'])
 def test_settings_oauth_opening_lifetime(browser, live_server, scenario):
     from playwright.sync_api import expect
 
@@ -42,6 +43,16 @@ def test_settings_oauth_opening_lifetime(browser, live_server, scenario):
             pending.append(route)
             return None
         if parsed.path == '/api/v4/oauth/device-login':
+            if scenario in ('device_egress_blocked', 'device_egress_network'):
+                reason = ('egress_blocked' if scenario == 'device_egress_blocked'
+                          else 'egress_network')
+                text = ('server egress to this provider is blocked and no '
+                        'egress-capable desktop agent is online'
+                        if reason == 'egress_blocked'
+                        else 'subscription egress is temporarily unreachable')
+                return route.fulfill(status=503, json={
+                    'ok': False, 'error': text, 'detail': text,
+                    'status_code': 0, 'reason': reason})
             state['device'] = True
             return route.fulfill(json={'data': {'status': 'started', 'user_code': 'SYNTH-CODE',
                 'verification_url': 'https://example.invalid/device'}, 'meta': {}})
@@ -59,6 +70,34 @@ def test_settings_oauth_opening_lifetime(browser, live_server, scenario):
         page.get_by_role('button', name='ChatGPT', exact=True).click()
         login = page.locator('#oauthCodexLoginBtn')
         expect(login).to_be_enabled()
+        if scenario in ('device_egress_blocked', 'device_egress_network'):
+            page.locator('#oauthCodexDeviceBtn').click()
+            message = page.locator('.app-dialog-message')
+            expect(message).to_be_visible(timeout=10000)
+            if scenario == 'device_egress_blocked':
+                # Precise diagnosis: the server's reason class plus its own
+                # actionable text, and NO auto-fallback to the browser flow
+                # whose token exchange rides the same blocked egress.
+                expect(message).to_contain_text('egress to OpenAI is blocked')
+                expect(message).to_contain_text('--allow-egress')
+                expect(message).to_contain_text('server egress to this provider is blocked')
+                page.locator('.app-dialog-ok').click()
+                expect(page.locator('.app-dialog-overlay')).to_have_count(0)
+                page.wait_for_timeout(200)
+                assert not pending
+                expect(page.locator('#oauthCodexDeviceBtn')).to_be_enabled()
+            else:
+                # A transient outage keeps the callback-copy fallback: the
+                # routes may recover while the user completes browser auth.
+                expect(message).to_contain_text('temporarily cannot reach OpenAI')
+                expect(message).to_contain_text('subscription egress is temporarily unreachable')
+                page.locator('.app-dialog-ok').click()
+                deadline = time.time() + 5
+                while not pending and time.time() < deadline:
+                    page.wait_for_timeout(50)
+                assert len(pending) == 1
+            assert not errors
+            return
         if scenario == 'status_unavailable':
             feedback = page.locator('#oauthStatusFeedback')
             expect(feedback).to_have_text('Loading…')

@@ -117,6 +117,18 @@ class TestUserCodeRequest(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 403)
         self.assertIn('region block', str(ctx.exception))
 
+    def test_egress_outage_carries_reason(self):
+        from lib.desktop.egress import EgressUnavailable
+        from lib.oauth.codex import codex_device_request_user_code
+        with mock.patch('lib.oauth.codex._oauth_http_post_json',
+                        side_effect=EgressUnavailable(
+                            'server egress to this provider is blocked',
+                            reason='egress_blocked')):
+            with self.assertRaises(OAuthExchangeError) as ctx:
+                codex_device_request_user_code()
+        self.assertEqual(ctx.exception.status_code, 0)
+        self.assertEqual(ctx.exception.reason, 'egress_blocked')
+
 
 class TestDevicePoll(unittest.TestCase):
     def tearDown(self):
@@ -147,6 +159,16 @@ class TestDevicePoll(unittest.TestCase):
             with self.assertRaises(OAuthExchangeError) as ctx:
                 codex_device_poll_token('d', 'u')
         self.assertEqual(ctx.exception.status_code, 500)
+
+    def test_egress_outage_carries_reason(self):
+        from lib.desktop.egress import EgressRecoveryPending
+        from lib.oauth.codex import codex_device_poll_token
+        with mock.patch('lib.oauth.codex._oauth_http_post_json',
+                        side_effect=EgressRecoveryPending(7.0)):
+            with self.assertRaises(OAuthExchangeError) as ctx:
+                codex_device_poll_token('d', 'u')
+        self.assertEqual(ctx.exception.status_code, 0)
+        self.assertEqual(ctx.exception.reason, 'egress_recovery_pending')
 
 
 class TestExchangeRedirectOverride(unittest.TestCase):
@@ -190,6 +212,16 @@ class TestExchangeRedirectOverride(unittest.TestCase):
 class TestManagerDeviceFlow(unittest.TestCase):
     def tearDown(self):
         _reset_flows()
+
+    def test_mint_failure_returns_reason(self):
+        with mock.patch('lib.oauth.codex.codex_device_request_user_code',
+                        side_effect=OAuthExchangeError(
+                            'Could not reach OpenAI device login: blocked',
+                            status_code=0, reason='egress_blocked')):
+            out = mgr.start_device_flow('codex', owner_user_id=1)
+        self.assertEqual(out['status_code'], 0)
+        self.assertEqual(out['reason'], 'egress_blocked')
+        self.assertIn('blocked', out['error'])
 
     def test_happy_path_completes_and_provisions(self):
         fake_token = {'email': 'u@x.com', 'access_token': 'at'}
@@ -461,6 +493,7 @@ class TestDeviceLoginRoute(unittest.TestCase):
                 'error': 'subscription egress temporarily unreachable',
                 'status_code': 0,
                 'detail': '',
+                'reason': 'egress_network',
             }
             with mock.patch('lib.oauth.manager.start_device_flow',
                             return_value=failure):
@@ -470,6 +503,7 @@ class TestDeviceLoginRoute(unittest.TestCase):
             self.assertEqual(resp.status_code, 503)
             body = json.loads(await resp.get_data(as_text=True))
             self.assertEqual(body['status_code'], 0)
+            self.assertEqual(body['reason'], 'egress_network')
 
         asyncio.run(_run())
 

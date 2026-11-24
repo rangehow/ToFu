@@ -503,6 +503,24 @@ debt (see Paper's `panel-owners.ts` below); shipping the memory fix without cras
 detection, which leaves those crashes unrecorded. Ratchet the ceiling down when a
 structural saving lands.
 
+**Ceiling rebase (owner decision 2026-11-24): 623 → 630 KiB.** Problem: the
+published v0.19.3 startup graph measures 622.4 KiB, but a faithful rebuild of
+the *unchanged* public HEAD sources measures 625.9 KiB — the release artifact
+predates the sanitized public source baseline, so the 623 ceiling rejected
+every fresh build (node 22.6 and 22.23.5 emit byte-identical hashes; the
+dependency lock has not changed since v0.19.2). The OAuth device-login egress
+diagnosis change (2026-11-24) adds only ~0.1 KiB and cannot publish without a
+rebuild: the i18n delivery copies are embedded in the Vite graph, and startup
+validation refuses stale chunks. Decision: raise the build ceiling to 630 KiB
+(owner-approved) and publish the rebuilt graph; the publication-baseline drift
+itself stays with the release-drift work. Alternatives rejected: landing the
+i18n sources without a rebuild (breaks startup artifact validation); trimming
+unrelated drifted sources to shave bytes (cross-owner, hides the drift);
+holding the fix until the drift is resolved (blocks an unrelated delivery).
+The separate `scripts/frontend_budget.py` CI ceilings (561/1026/1270/142/120)
+are stale against the committed graph at baseline and belong to that same
+release-drift repair, not to this decision.
+
 Self-hosted font delivery uses lossless WOFF2 generated from the retained TTF
 sources: the nine converted files total 259,548 bytes instead of 771,600 bytes.
 Glyph maps, glyph order, advance widths and vertical metrics are preserved;
